@@ -242,6 +242,9 @@ async def accept_channel_event(
                 route=route,
                 shared_session_id=session.id,
                 reply_session_id=reply.id,
+                attachments=event.attachments,
+                saved_content=saved_content,
+                model_content=content,
             )
             return AcceptedChannelEvent(replayed=False, personal=await admit_personal_original(original))
         await charge_conversation_quota(sender)

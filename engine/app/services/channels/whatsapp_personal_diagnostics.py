@@ -39,6 +39,7 @@ DropReason = Literal[
     "text",
     "quoted_or_forwarded",
     "timestamp",
+    "media",
 ]
 ErrorKind = Literal["validation", "json", "timeout", "parent_rejected", "closed", "database", "crypto", "http", "other"]
 
@@ -103,7 +104,7 @@ class Diagnostic(Frame):
     rpc_id: UUID | None = None
     count: int | None = Field(default=None, ge=0, le=1000000)
     dropped: int | None = Field(default=None, ge=0, le=1000000)
-    drop_reasons: list[DropReason] | None = Field(default=None, max_length=9)
+    drop_reasons: list[DropReason] | None = Field(default=None, max_length=10)
     event_kind: Literal["notify", "append"] | None = None
     has_request_id: bool | None = None
     elapsed_ms: int | None = Field(default=None, ge=0, le=86400000)

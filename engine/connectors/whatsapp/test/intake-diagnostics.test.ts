@@ -35,7 +35,8 @@ const cases: readonly (readonly [DropReason, WAMessage])[] = [
   ['missing_content', { ...selfMessage('X', text), message: null }],
   ['stub', selfMessage('X', text, { messageStubType: 1 })],
   ['content_shape', selfMessage('X', { conversation: 'x', senderKeyDistributionMessage: {} })],
-  ['text', selfMessage('X', { imageMessage: { caption: 'x' } })],
+  ['text', selfMessage('X', { conversation: '' })],
+  ['media', selfMessage('X', { imageMessage: { caption: 'x' } })],
   ['quoted_or_forwarded', selfMessage('X', { extendedTextMessage: { text: 'x', contextInfo: { isForwarded: true } } })],
   ['timestamp', selfMessage('X', text, { messageTimestamp: -1 })],
 ];
@@ -71,9 +72,9 @@ test('the intake diagnostic carries bounded drop metadata and no message materia
   store.peer.close();
 });
 
-test('the diagnostic schema accepts only the fixed reason enum and at most nine entries', () => {
+test('the diagnostic schema accepts only the fixed reason enum and at most ten entries', () => {
   const base = { type: 'diagnostic', stage: 'intake', event: 'finished' };
-  const reasons = ['not_notify', 'identity_unavailable', 'non_self', 'missing_content', 'stub', 'content_shape', 'text', 'quoted_or_forwarded', 'timestamp'];
+  const reasons = ['not_notify', 'identity_unavailable', 'non_self', 'missing_content', 'stub', 'content_shape', 'text', 'quoted_or_forwarded', 'timestamp', 'media'];
   assert.ok(diagnosticSchema.safeParse({ ...base, drop_reasons: reasons, event_kind: 'append', has_request_id: false }).success);
   assert.equal(diagnosticSchema.safeParse({ ...base, drop_reasons: [...reasons, 'text'] }).success, false);
   assert.equal(diagnosticSchema.safeParse({ ...base, drop_reasons: ['15551234567@s.whatsapp.net'] }).success, false);

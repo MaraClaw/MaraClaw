@@ -1,7 +1,8 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { BridgeFault, MAX_FRAME_BYTES } from "./protocol.js";
+import { BridgeFault, MAX_FRAME_BYTES, messagePayload } from "./protocol.js";
 import type { ChildFrame, ChildPayload, Json, ParentFrame } from "./protocol.js";
 import { diagnostic, safeCategory } from "./diagnostics.js";
+import { mediaPayload } from './media_protocol.js';
 
 type Pending = { readonly resolve: (value: Json) => void; readonly reject: (error: BridgeFault) => void; readonly onClose: () => void; readonly timer: NodeJS.Timeout };
 export class Peer {
@@ -15,6 +16,10 @@ export class Peer {
   }
   emit(payload: ChildPayload, id = randomUUID()): void {
     if (!this.active) throw new BridgeFault();
+    switch (payload.type) {
+      case 'message': messagePayload.parse(payload); break;
+      case 'media_chunk': case 'media_end': case 'media_error': mediaPayload.parse(payload); break;
+    }
     const frame: ChildFrame = { ...payload, id, token: this.token };
     const line = JSON.stringify(frame);
     if (Buffer.byteLength(line) > MAX_FRAME_BYTES) throw new BridgeFault();
