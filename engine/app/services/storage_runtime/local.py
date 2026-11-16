@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import cast, override
 
 import aiofiles
@@ -25,6 +25,7 @@ from app.services.storage_runtime.base import (
     content_hash_bytes,
 )
 from app.services.storage_runtime.bounded import open_regular_file, read_bounded
+from app.services.storage_runtime.local_create import delete_contained_entry, publish_complete_file
 from app.services.storage_runtime.local_snapshot import read_file_snapshot
 from app.services.storage_runtime.utils import normalize_storage_key
 
@@ -128,13 +129,8 @@ class LocalStorageBackend(StorageBackend):
 
     @override
     async def delete(self, key: str) -> None:
-        path = self._full_path(key)
-        if not path.exists():
-            return
-        if path.is_dir():
-            await self.delete_tree(key)
-        else:
-            path.unlink()
+        with suppress(FileNotFoundError):
+            await anyio.to_thread.run_sync(delete_contained_entry, self.root.resolve(), normalize_storage_key(key))
 
     @override
     async def delete_tree(self, key: str) -> None:
@@ -209,7 +205,9 @@ class LocalStorageBackend(StorageBackend):
     async def create_bytes_if_absent(
         self, key: str, data: bytes, content_type: str | None = None
     ) -> ConditionalWriteResult:
-        stat = await anyio.to_thread.run_sync(_publish_complete_file, self._full_path(key), data)
+        stat = await anyio.to_thread.run_sync(
+            publish_complete_file, self.root.resolve(), normalize_storage_key(key), data
+        )
         if stat is None:
             return ConditionalWriteResult(ok=False, conflict=True)
         file_hash = content_hash_bytes(data)
@@ -268,22 +266,3 @@ def _read_file_bounded(path: Path, max_bytes: int, offset: int | None = None) ->
             _ = stream.seek(offset)
             return read_bounded(stream, max_bytes, range_read=True)
         return read_bounded(stream, max_bytes)
-
-
-def _publish_complete_file(path: Path, data: bytes) -> os.stat_result | None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with NamedTemporaryFile(dir=path.parent, prefix=".storage-create-", delete=False) as temporary:
-        temporary_path = Path(temporary.name)
-        try:
-            temporary.write(data)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-            stat = os.fstat(temporary.fileno())
-            temporary.close()
-            try:
-                os.link(temporary_path, path)
-            except FileExistsError:
-                return None
-            return stat
-        finally:
-            temporary_path.unlink(missing_ok=True)

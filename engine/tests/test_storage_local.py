@@ -113,11 +113,16 @@ async def test_local_key_is_invisible_until_complete_publication(tmp_path: Path,
     original_link = os.link
     payload = b"complete upload" * 10_000
 
-    def pause_publication(source: Path, destination: Path) -> None:
-        assert source.read_bytes() == payload
+    def pause_publication(
+        source: str, destination: str, *, src_dir_fd: int, dst_dir_fd: int, follow_symlinks: bool
+    ) -> None:
+        with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src_dir_fd), "rb") as stream:
+            assert stream.read() == payload
         publication_ready.set()
         assert publish.wait(timeout=10)
-        original_link(source, destination)
+        original_link(
+            source, destination, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd, follow_symlinks=follow_symlinks
+        )
 
     async def create() -> None:
         assert (await storage.create_bytes_if_absent("report.txt", payload)).ok
@@ -140,7 +145,7 @@ async def test_local_atomic_create_cleans_temporary_files_on_failure(
 ):
     storage = LocalStorageBackend(str(tmp_path))
 
-    def fail(*args) -> None:
+    def fail(*args, **kwargs) -> None:
         raise OSError("injected storage failure")
 
     monkeypatch.setattr(os, failure_stage, fail)
