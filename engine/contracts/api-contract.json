@@ -18048,24 +18048,10 @@
                 "type": "null"
               }
             ]
-          },
-          "secret_token": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/TelegramSecretToken"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "title": "TelegramChannelConfigUpdate",
         "type": "object"
-      },
-      "TelegramSecretToken": {
-        "pattern": "^[A-Za-z0-9_-]{1,256}$",
-        "type": "string"
       },
       "TemplateCreate": {
         "properties": {
@@ -21114,6 +21100,113 @@
         "title": "WorkspaceDraftEvent",
         "type": "object"
       },
+      "ZaloPersonalDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "connected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connected At"
+          },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          },
+          "heartbeat_failures": {
+            "default": 0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Heartbeat Failures",
+            "type": "integer"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "account_in_use",
+                  "identity_ambiguous",
+                  "protocol_error",
+                  "login_failed",
+                  "auth_store_failed",
+                  "transport_failed",
+                  "qr_expired",
+                  "qr_declined",
+                  "lease_expired"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "session_replaced",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error At"
+          },
+          "reconnect_attempts": {
+            "default": 0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Reconnect Attempts",
+            "type": "integer"
+          },
+          "retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry At"
+          }
+        },
+        "title": "ZaloPersonalDiagnostics",
+        "type": "object"
+      },
       "ZaloPersonalQR": {
         "additionalProperties": false,
         "properties": {
@@ -21198,6 +21291,16 @@
             ],
             "title": "Attempt Id"
           },
+          "diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZaloPersonalDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "error_code": {
             "anyOf": [
               {
@@ -21259,6 +21362,11 @@
                 "type": "null"
               }
             ]
+          },
+          "resumable": {
+            "default": false,
+            "title": "Resumable",
+            "type": "boolean"
           },
           "revision": {
             "default": 0,
@@ -50081,7 +50189,6 @@
       "TeamsChannelPayload",
       "TelegramBotToken",
       "TelegramChannelConfigUpdate",
-      "TelegramSecretToken",
       "TemplateCreate",
       "TemplateOut",
       "TenantChoice",
@@ -50128,6 +50235,7 @@
       "WhatsAppChannelPayload",
       "WorkReportOut",
       "WorkspaceDraftEvent",
+      "ZaloPersonalDiagnostics",
       "ZaloPersonalQR",
       "ZaloPersonalRelink",
       "ZaloPersonalStart",

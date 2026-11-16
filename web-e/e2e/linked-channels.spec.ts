@@ -4,20 +4,35 @@ import { channelApiRoot, channelsPath } from './channels-fixture'
 import { prepareLinkedChannels } from './linked-channels-fixture'
 import { originalToken, replacementToken, replacementUser, writeFromOtherTab } from './session-fencing-fixture'
 
-test('Telegram saving is write-only configuration with explicit operator webhook registration', async ({ page }) => {
+test('Telegram saves with only a bot token and clears the write-only input', async ({ page }) => {
   const fixture = await prepareLinkedChannels(page)
   await page.goto(channelsPath)
   const telegram = page.getByRole('article', { name: 'Telegram bot', exact: true })
+  await expect(telegram.locator('form input')).toHaveCount(1)
+  await expect(telegram.getByLabel('Webhook secret token', { exact: true })).toHaveCount(0)
   await telegram.getByLabel('Bot token', { exact: true }).fill('synthetic-bot-token')
-  await telegram.getByLabel('Webhook secret token', { exact: true }).fill('synthetic-webhook-secret')
   await telegram.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(telegram.getByLabel('Bot token', { exact: true })).toHaveValue('')
-  await expect(telegram.getByLabel('Webhook secret token', { exact: true })).toHaveValue('')
-  expect(fixture.telegramWrites).toEqual([{ bot_token: 'synthetic-bot-token', secret_token: 'synthetic-webhook-secret' }])
-  await expect(telegram).toContainText('Configuration saved; connection not verified.')
-  await expect(telegram).toContainText('Saving here does not register the webhook.')
+  expect(fixture.telegramWrites).toEqual([{ bot_token: 'synthetic-bot-token' }])
+  await expect(telegram).toContainText('Configuration saved.')
+  await expect(telegram).not.toContainText('connection not verified')
+  await expect(telegram).toContainText('registers the webhook automatically')
   await expect(telegram.getByLabel('Webhook URL', { exact: true })).toHaveValue('https://synthetic.test/api/telegram/webhook/agent')
-  await expect(telegram).toContainText('setWebhook')
+  await expect(telegram).not.toContainText('setWebhook')
+})
+
+test('Telegram setup failure retains the token and does not show saved configuration', async ({ page }) => {
+  await prepareLinkedChannels(page)
+  await page.route(`**${channelApiRoot}/telegram-channel`, (route) => route.request().method() === 'POST'
+    ? route.fulfill({ status: 502, json: { detail: 'Telegram webhook registration failed' } })
+    : route.fallback())
+  await page.goto(channelsPath)
+  const telegram = page.getByRole('article', { name: 'Telegram bot', exact: true })
+  await telegram.getByLabel('Bot token', { exact: true }).fill('synthetic-bot-token')
+  await telegram.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Unable to save. Check the fields and supply fresh, unmasked credentials when replacing them.', { exact: true })).toBeVisible()
+  await expect(telegram.getByLabel('Bot token', { exact: true })).toHaveValue('synthetic-bot-token')
+  await expect(telegram).not.toContainText('Configuration saved.')
 })
 
 test('Zalo starts local PNG pairing expires relinks and disconnects with the current generation', async ({ page }) => {
@@ -104,7 +119,7 @@ test('a retired member code response cannot disclose a code in the replacement s
 for (const width of [390, 1440, 1920]) for (const theme of ['light', 'dark']) {
   test(`linked channels reflow at ${width} in ${theme}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 1000 })
-    await prepareLinkedChannels(page, { qr: true })
+    const fixture = await prepareLinkedChannels(page, { qr: true })
     await page.addInitScript((theme) => localStorage.setItem('maraclaw-theme', theme), theme)
     await page.goto(channelsPath)
     const telegram = page.getByRole('article', { name: 'Telegram bot', exact: true })
@@ -113,6 +128,17 @@ for (const width of [390, 1440, 1920]) for (const theme of ['light', 'dark']) {
     await expect(zalo.getByRole('img', { name: 'Zalo pairing QR' })).toBeVisible()
     await page.evaluate(() => scrollTo(0, 0))
     await page.screenshot({ path: info.outputPath(`channels-${width}-${theme}-after.png`), fullPage: true })
+    await telegram.getByLabel('Bot token', { exact: true }).fill('synthetic-bot-token')
+    await telegram.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(telegram).toContainText('Configuration saved.')
+    await expect(telegram.locator('form input')).toHaveCount(1)
+    expect(fixture.telegramWrites).toEqual([{ bot_token: 'synthetic-bot-token' }])
+    await page.evaluate(() => {
+      for (const element of document.querySelectorAll('*')) {
+        if (element.scrollTop) element.scrollTop = 0
+      }
+    })
+    await page.screenshot({ path: info.outputPath(`telegram-saved-${width}-${theme}.png`) })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   })
 }

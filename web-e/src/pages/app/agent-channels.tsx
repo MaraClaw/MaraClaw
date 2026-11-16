@@ -107,8 +107,8 @@ function ChannelCard({ agentId, channel, path, onSaved }: { readonly agentId: st
   if (query.isError) return <div className="space-y-2"><RequestErrorToast error={query.error} message="Unable to load configuration." /><Button variant="outline" onClick={scope.effect(() => void query.refetch())}>{translate("Retry configuration")}</Button></div>
   return (
     <div className="space-y-3">
-      {query.data ? <p className="text-sm text-muted-foreground">{translate("Configuration saved; connection not verified.")}</p> : null}
-      {channel.channel_type === 'telegram' ? <p className="max-w-prose text-lg text-muted-foreground sm:text-sm">{owned('Create a bot with BotFather and save its bot token and a webhook secret token here. An operator must then call Telegram setWebhook with the displayed webhook URL and the same secret_token. Saving here does not register the webhook. Private messages only.')}</p> : null}
+      {query.data ? <p className="text-sm text-muted-foreground">{translate(channel.channel_type === 'telegram' ? "Configuration saved." : "Configuration saved; connection not verified.")}</p> : null}
+      {channel.channel_type === 'telegram' ? <p className="max-w-prose text-lg text-muted-foreground sm:text-sm">{translate('Create a bot with BotFather and save its bot token. MaraClaw generates the webhook secret and registers the webhook automatically. Private messages only.')}</p> : null}
       {channel.channel_type === 'google_chat' ? <p className="text-sm text-muted-foreground">
         {googleChatCredentialsConfigured(query.data) ? translate("Service account credentials configured.") : translate("No service account credentials configured. Inbound-only setup is available.")}
         {' '}{translate("Leave credentials untouched to keep the stored account. Supply fresh JSON only to add or replace it.")}</p> : null}

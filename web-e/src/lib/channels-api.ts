@@ -68,7 +68,6 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
   ],
   telegram: [
     { key: 'bot_token', label: 'Bot token', secret: true },
-    { key: 'secret_token', label: 'Webhook secret token', secret: true },
   ],
 }
 

@@ -12,7 +12,6 @@ class TelegramChannelConfigUpdate(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     bot_token: TelegramBotToken | None = Field(default=None, repr=False)
-    secret_token: TelegramSecretToken | None = Field(default=None, repr=False)
 
 
 class TelegramCredentials(BaseModel):
@@ -79,3 +78,10 @@ class TelegramSendResponse(BaseModel):
     result: TelegramSentMessage | None = None
     error_code: int | None = None
     parameters: TelegramResponseParameters | None = None
+
+
+class TelegramSetWebhookResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
+
+    ok: bool
+    result: bool | None = None

@@ -24,7 +24,7 @@ for (const command of [{ kind: 'start', generation: null }, { kind: 'start', gen
       assert.equal(init?.signal, ctx.signal)
       return Response.json(status)
     })
-    assert.deepEqual(await changeZaloPersonalConnection(id, command, ctx), status)
+    assert.deepEqual(await changeZaloPersonalConnection(id, command, ctx), { ...status, resumable: false, diagnostics: null })
   })
 }
 

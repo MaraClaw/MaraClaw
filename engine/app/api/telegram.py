@@ -1,12 +1,8 @@
-"""Creator configuration and authenticated Telegram Bot API webhooks.
-
-After saving credentials, explicitly call Telegram setWebhook with the returned
-HTTPS webhook URL, the configured secret_token and allowed_updates=["message"].
-Saving or reading a configuration never registers a webhook with Telegram.
-"""
+"""Creator configuration with automatic registration and authenticated Telegram webhooks."""
 
 import hmac
 from collections.abc import Callable, Coroutine
+from pathlib import Path
 from typing import override
 from uuid import UUID
 
@@ -15,29 +11,28 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
+from app.config import get_settings
 from app.core.domain.channels import ChannelType
 from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
 from app.core.security import get_current_user
-from app.core.stored_credentials import StoredCredentialError
 from app.dao.channel_config_dao import channel_config_dao
-from app.dao.channel_sender_link_dao import channel_sender_link_dao
 from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
-from app.schemas.telegram import TelegramChannelConfigUpdate, TelegramCredentials, TelegramUpdate, TelegramWebhookReply
+from app.schemas.telegram import TelegramChannelConfigUpdate, TelegramUpdate, TelegramWebhookReply
+from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels.config import (
     delete_channel_config,
-    get_channel_config,
     require_channel_config_metadata,
     require_channel_creator,
-    upsert_channel_config,
 )
 from app.services.channels.redact import channel_config_out
 from app.services.channels.sender_links import consume_link_command, parse_link_command
 from app.services.channels.submissions import ChannelEventConflictError, accept_channel_event
 from app.services.channels.telegram import telegram_event
+from app.services.channels.telegram_setup import configure_telegram, telegram_webhook_url
 
 
 class _SecretSafeRoute(APIRoute):
@@ -63,40 +58,9 @@ async def configure_telegram_channel(
     agent_id: UUID, data: TelegramChannelConfigUpdate, current_user: UserRecord = Depends(get_current_user)
 ) -> ChannelConfigOut:
     _ = await require_channel_creator(current_user, agent_id)
-    existing = None
-    if data.bot_token is None or data.secret_token is None:
-        try:
-            existing = await get_channel_config(agent_id, ChannelType.TELEGRAM)
-        except StoredCredentialError:
-            raise HTTPException(422, "Replace both Telegram credentials") from None
-    try:
-        credentials = TelegramCredentials.model_validate(
-            {
-                "bot_token": data.bot_token
-                if data.bot_token is not None
-                else existing.app_secret
-                if existing
-                else None,
-                "secret_token": data.secret_token
-                if data.secret_token is not None
-                else existing.verification_token
-                if existing
-                else None,
-            }
-        )
-    except ValidationError:
-        raise HTTPException(422, "Valid bot_token and secret_token are required") from None
-    async with channel_config_dao.session():
-        config = await upsert_channel_config(
-            agent_id=agent_id,
-            channel_type=ChannelType.TELEGRAM,
-            app_id=credentials.bot_token.partition(":")[0],
-            app_secret=credentials.bot_token,
-            verification_token=credentials.secret_token,
-            extra_config={},
-        )
-        await channel_sender_link_dao.invalidate_other_accounts(config.id, credentials.bot_token.partition(":")[0])
-    return channel_config_out(config)
+    async with setup_workspace_lock(Path(get_settings().AGENT_DATA_DIR) / f"telegram-{agent_id}"):
+        _ = await require_channel_creator(current_user, agent_id)
+        return channel_config_out(await configure_telegram(agent_id, data))
 
 
 @router.get("/agents/{agent_id}/telegram-channel", response_model=ChannelConfigOut)
@@ -109,20 +73,19 @@ async def get_telegram_channel(
 
 @router.get("/agents/{agent_id}/telegram-channel/webhook-url", response_model=None)
 async def get_telegram_webhook_url(
-    agent_id: UUID, request: Request, current_user: UserRecord = Depends(get_current_user)
+    agent_id: UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> WebhookUrlResponse:
-    from app.services.platform_service import platform_service
-
     _ = await require_channel_creator(current_user, agent_id)
     config = await require_channel_config_metadata(agent_id, ChannelType.TELEGRAM)
-    public_base = await platform_service.get_public_base_url(request)
-    return {"webhook_url": f"{public_base}/api/channel/telegram/{config.id}/webhook"}
+    return {"webhook_url": await telegram_webhook_url(config.id)}
 
 
 @router.delete("/agents/{agent_id}/telegram-channel", status_code=204, response_model=None)
 async def delete_telegram_channel(agent_id: UUID, current_user: UserRecord = Depends(get_current_user)) -> None:
     _ = await require_channel_creator(current_user, agent_id)
-    await delete_channel_config(agent_id, ChannelType.TELEGRAM)
+    async with setup_workspace_lock(Path(get_settings().AGENT_DATA_DIR) / f"telegram-{agent_id}"):
+        _ = await require_channel_creator(current_user, agent_id)
+        await delete_channel_config(agent_id, ChannelType.TELEGRAM)
 
 
 @router.post("/channel/telegram/{config_id}/webhook", response_model=None)

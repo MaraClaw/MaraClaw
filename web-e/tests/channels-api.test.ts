@@ -122,14 +122,14 @@ test('catalog completion after owner replacement is rejected', async (t) => {
 test('Telegram saves fresh write-only credentials through the generic canonical route', async (t) => {
   const provider = CHANNELS.find((item) => item.key === 'telegram')
   assert.ok(provider)
-  const body = channelDraftBody('telegram', { bot_token: 'synthetic-token', secret_token: 'synthetic-webhook-secret' })
+  const body = channelDraftBody('telegram', { bot_token: 'synthetic-token' })
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     assert.equal(String(input), `/api/agents/${id}/telegram-channel`)
     assert.equal(init?.method, 'POST')
-    assert.deepEqual(JSON.parse(String(init?.body)), body)
+    assert.deepEqual(JSON.parse(String(init?.body)), { bot_token: 'synthetic-token' })
     return Response.json({ ...stored, channel_type: 'telegram' })
   })
   assert.equal((await saveChannel({ agentId: id, path: provider.path }, body, { owner: authSession.capture(), signal: new AbortController().signal })).channel_type, 'telegram')
   assert.deepEqual(channelDraftBody('telegram', {}), {})
-  assert.throws(() => channelDraftBody('telegram', { secret_token: '***' }), ZodError)
+  assert.throws(() => channelDraftBody('telegram', { bot_token: '***' }), ZodError)
 })

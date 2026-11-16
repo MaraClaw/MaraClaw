@@ -19,7 +19,7 @@ class _TelegramBotURL(httpx.URL):
 
     @override
     def __str__(self) -> str:
-        return "https://api.telegram.org/bot[redacted]/sendMessage"
+        return f"https://api.telegram.org/bot[redacted]/{self.path.rsplit('/', 1)[-1]}"
 
     @override
     def __repr__(self) -> str:

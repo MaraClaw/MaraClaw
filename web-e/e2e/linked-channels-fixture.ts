@@ -14,9 +14,9 @@ export const linkedCatalog: readonly ChannelCapability[] = [
 ]
 export const generation = '11111111-1111-4111-8111-111111111111'
 export const nextGeneration = '22222222-2222-4222-8222-222222222222'
-export const disconnected: ZaloPersonalStatus = { mode: 'personal_qr', generation: null, attempt_id: null, revision: 0, state: 'disconnected', expires_at: null, qr: null, account_hint: null, error_code: null }
+export const disconnected: ZaloPersonalStatus = { mode: 'personal_qr', generation: null, attempt_id: null, revision: 0, state: 'disconnected', expires_at: null, qr: null, account_hint: null, error_code: null, resumable: false, diagnostics: null }
 
-export async function prepareLinkedChannels(page: Page, options: { readonly creator?: boolean; readonly qr?: boolean } = {}) {
+export async function prepareLinkedChannels(page: Page, options: { readonly creator?: boolean; readonly qr?: boolean; readonly status?: ZaloPersonalStatus } = {}) {
   await prepareChannels(page, { catalog: linkedCatalog, creator: options.creator ?? true })
   const requests: string[] = []
   const telegramWrites: unknown[] = []
@@ -33,7 +33,7 @@ export async function prepareLinkedChannels(page: Page, options: { readonly crea
     return canvas.toDataURL('image/png').split(',')[1] ?? ''
   }, renderToStaticMarkup(createElement(QRCodeSVG, { xmlns: 'http://www.w3.org/2000/svg', value: 'synthetic-zalo-pairing-only', size: 240, marginSize: 4 })))
   let configured = false
-  let status: ZaloPersonalStatus = disconnected
+  let status: ZaloPersonalStatus = options.status ?? disconnected
   const pairing = async (value: string): Promise<ZaloPersonalStatus> => {
     const now = await page.evaluate(() => Date.now())
     return {
@@ -84,7 +84,9 @@ export async function prepareLinkedChannels(page: Page, options: { readonly crea
     }
     if (path === '/zalo-channel/personal/start') {
       expect(method).toBe('POST'); expect(request.postDataJSON()).toEqual({ expected_generation: status.generation })
-      status = await pairing(generation)
+      status = status.resumable && status.generation !== null && (status.state === 'paused' || status.state === 'failed')
+        ? { ...status, revision: status.revision + 1, state: 'connected', qr: null, error_code: null, diagnostics: status.diagnostics ? { ...status.diagnostics, retry_at: null, heartbeat_failures: 0, last_error: null, last_error_at: null } : null }
+        : await pairing(generation)
     } else if (path === '/zalo-channel/personal/relink') {
       expect(method).toBe('POST'); expect(request.postDataJSON()).toEqual({ expected_generation: status.generation })
       status = await pairing(status.generation === generation ? nextGeneration : generation)
