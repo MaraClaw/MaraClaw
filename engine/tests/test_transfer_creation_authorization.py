@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, Response
 
 from app.api import agents
-from app.services import company_admission_decisions as decisions
+from app.services import agent_provisioning, company_admission_decisions as decisions
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 from company_transfer_blocker_fixtures import isolated_transfer_runtime, submit_free, transfer_scenario
 from test_agent_create_departments import creation
@@ -85,10 +85,10 @@ async def test_creation_rejects_stale_membership_after_final_approval_without_de
     app = FastAPI()
     app.include_router(agents.router, prefix="/api")
     app.dependency_overrides[agents.get_current_user] = lambda: scenario.applicant
-    monkeypatch.setattr(agents, "check_agent_creation_quota", AsyncMock())
+    monkeypatch.setattr(agent_provisioning, "check_agent_creation_quota", AsyncMock())
     monkeypatch.setattr(agents, "persist_agent_setup", AsyncMock())
     arrived, resume = anyio.Event(), anyio.Event()
-    lock_tenants = agents.lock_tenants
+    lock_tenants = agent_provisioning.lock_tenants
 
     async def pause_before_locks(db, tenant_ids) -> None:
         arrived.set()
@@ -96,7 +96,7 @@ async def test_creation_rejects_stale_membership_after_final_approval_without_de
         await lock_tenants(db, tenant_ids)
 
     if racing:
-        monkeypatch.setattr(agents, "lock_tenants", pause_before_locks)
+        monkeypatch.setattr(agent_provisioning, "lock_tenants", pause_before_locks)
     responses: list[Response] = []
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://creation.test") as client:
 

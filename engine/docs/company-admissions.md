@@ -175,6 +175,10 @@ request cannot approve if the applicant has since created agents. Workspace
 flocks fence setup and OpenClaw cutover through the owning transaction's commit
 or rollback; an active OpenClaw update prevents final disposition.
 
+Agent creation rechecks current membership under tenant/user locks in
+`agent_provisioning`. A stale source-organization principal receives **409** if
+final approval commits before creation acquires its locks, without inserting an agent.
+
 Paid approval preserves agent IDs, user-owned integration configurations and
 content. It moves operational agent/public-page tenant attribution, removes
 foreign-tenant model and source-only tool bindings and old organization grants,
