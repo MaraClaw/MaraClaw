@@ -1,5 +1,6 @@
 import threading
 from datetime import UTC, datetime
+from uuid import UUID
 
 import anyio
 import pytest
@@ -21,7 +22,8 @@ async def test_cancel_queued_sibling_while_claimed_smtp_continues(
     release = threading.Event()
     attempts: list[str] = []
 
-    async def resolve() -> email.SystemEmailConfig:
+    async def resolve(tenant_id: UUID | None = None) -> email.SystemEmailConfig:
+        assert tenant_id == scope.tenant_id
         return email.SystemEmailConfig("from@example.test", "MaraClaw", "smtp.example.test", 465, "u", "s", True, 15)
 
     def smtp(*, msg_string: str, **_kwargs: str | int | bool | list[str]) -> None:
