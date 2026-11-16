@@ -100,7 +100,7 @@ async def live_identity(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Revoca
                 "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, max_triggers, "
                 "min_poll_interval_min, webhook_rate_limit, access_mode, company_access_level, "
                 "heartbeat_interval_minutes) VALUES (%(id)s, 'QA', 'QA', %(owner)s, %(tenant)s, "
-                "10, 5, 10, 'private', 'none', 30)",
+                "10, 5, 10, 'private', '', 30)",
                 {"id": live.agent_id, "owner": live.users[0], "tenant": live.tenant_id},
             )
             await init_pool(conninfo=live.conninfo, min_size=1, max_size=4)
