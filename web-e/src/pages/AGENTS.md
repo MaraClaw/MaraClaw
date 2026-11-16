@@ -12,7 +12,7 @@ Landing + member auth + join/transfer **outside** `/app`. Ten files here; `app/`
 
 | File | Route | Role |
 |------|-------|------|
-| `landing.tsx` | `/` | Composer only: Hero→Features→Agents→HowItWorks→Integrations→Enterprise→Faq→Cta. Hashes stay on `/`. Copy in `@/components/sections/*`. |
+| `landing.tsx` | `/` | Composer only: Hero -> Features -> Agents -> HowItWorks -> Integrations -> Enterprise -> Pricing -> Individuals -> Faq -> Cta. Hashes stay on `/`. Copy in `@/components/sections/*`; shared Vietnamese catalog in `src/lib/i18n/`. |
 | `organization-payment.tsx` | `/organization-payment` | Public, no session. Reads the stored price quote (`organization-quote-storage.ts`; none or expired → explanation with a link to `/#pricing`). Cards: Transfer this amount (`CopyField`s for amount, bank, account, branch and transfer note), Request summary, Send your payment receipt (advisory type/10 MiB checks, `submitOrganizationAdmission`). 202 clears the quote and shows a focused outcome panel; 400/410 clear it and ask to start again; 409/413/415/429 show fixed messages, anything else `userFacingRequestError`. Owner-fenced like the landing form. |
 | `login.tsx` | `/login` | RHF+Zod. `useAuth().login`. Multi-tenant picker; unverified → `/verify-email`. `needs_org_confirm` → `/join`, except a `/transfer#code=` continuation is kept. |
 | `register.tsx` | `/register` | `fetchRegistrationConfig` (invite gate), `checkDuplicate`, `registerRequest`. Optional or required `invitation_code`; a returned admission request routes to `/app/admissions/:id`. Cannot mint `platform_admin`. |

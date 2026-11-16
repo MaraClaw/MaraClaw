@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-Marketing sections composed by `src/pages/landing.tsx`. Copy/demo data **hardcoded** per file; no shared content module.
+Marketing sections composed by `src/pages/landing.tsx`. English source keys and demo data live in the sections; `useTranslation` resolves Vietnamese through the shared `src/lib/i18n/catalog.ts`, whose landing entries come from `src/lib/i18n/landing.ts`.
 
 ## STRUCTURE
 
@@ -19,7 +19,7 @@ Marketing sections composed by `src/pages/landing.tsx`. Copy/demo data **hardcod
 | `pricing.tsx` | `Pricing` | `#pricing` | Organization plans + paid creation form (`organization-admission-form.tsx`): Create organization requests a price quote, stores it and opens `/organization-payment` |
 | `individuals.tsx` | `Individuals` | `#individuals` | Individual signup: KABERs (Pro tier system org) → `/register`; Pro numbers come from the generated contract enums |
 | `faq.tsx` | `Faq` | `#faq` | Accordion objections |
-| `cta.tsx` | `Cta` | `#cta` | Final conversion (`mailto:hello@maraclaw.com`) |
+| `cta.tsx` | `Cta` | `#cta` | Final conversion: View plans links to `#pricing`; Review the platform links to `#features` |
 
 Order: Hero → Features → Agents → HowItWorks → Integrations → Enterprise → Pricing → Individuals → Faq → Cta.
 
@@ -33,12 +33,12 @@ Header `navItems` omit `#enterprise`; footer has it. Do not “fix” one side o
 | Agent role cards | `agents.tsx` (`agents[]`) — 12 of 22; align with `engine/agent_templates/` |
 | Channel badges | `integrations.tsx` — engine truth below; do not invent |
 | FAQ answers | `faq.tsx` |
+| Vietnamese landing translations | `src/lib/i18n/landing.ts`, aggregated by `src/lib/i18n/catalog.ts` |
 | Viewport motion | Most: `@/components/motion` (`Reveal`/`Stagger`) |
 | On-mount motion | `hero.tsx` intro only |
 
 ## CONVENTIONS
 
-- Named export matching file purpose (`export function Agents()`).
 - Section root: `<section id="…" className="… scroll-mt-20">`.
 - Width: `container-page`.
 - Motion: `Reveal` / `Stagger` / `StaggerItem`; honor `useReducedMotion` if using framer-motion raw.
