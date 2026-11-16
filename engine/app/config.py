@@ -5,7 +5,7 @@ import socket
 import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import ClassVar, Final, Literal
+from typing import Annotated, ClassVar, Final, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -246,6 +246,20 @@ class Settings(BaseSettings):
     WHATSAPP_PERSONAL_BURST_PENDING_BYTES: int = Field(default=65536, gt=0, le=268435456)
     WHATSAPP_PERSONAL_BURST_BODY_BYTES: int = Field(default=16384, gt=0, le=268435456)
     WHATSAPP_PERSONAL_BUSY_NOTICE_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0, le=86400, allow_inf_nan=False)
+
+    # Optional typing pulses for current authorized busy private Zalo peers.
+    ZALO_PERSONAL_TYPING_ENABLED: bool = False
+    # Operator-selected seconds between keepalives; the SDK server interval's units are undocumented.
+    ZALO_PERSONAL_KEEPALIVE_INTERVAL_SECONDS: int = Field(default=300, ge=60, le=1800)
+    ZALO_PERSONAL_MEDIA_ALLOWED_HOSTS: list[
+        Annotated[
+            str,
+            Field(
+                max_length=253,
+                pattern=r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$",
+            ),
+        ]
+    ] = Field(default_factory=list, max_length=32)
 
     @model_validator(mode="after")
     def validate_personal_burst_limits(self) -> Settings:
