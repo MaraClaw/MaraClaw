@@ -141,26 +141,49 @@ Aliases (`teams` → `microsoft_teams`, `gchat` → `google_chat`, …) live in
 ## Telegram bot and Zalo personal
 
 These channels accept private text messages and return the agent's reply through the
-durable outbound pipeline. Groups, incoming attachments and proactive tool sends are
-not enabled. A connected provider account does not grant its contacts access to an
+durable outbound pipeline. Zalo also supports the bounded file and media flow described
+below. Groups and proactive tool sends are not enabled. A connected provider account does not grant its contacts access to an
 agent: each sender must link an active MaraClaw membership with access to that agent.
 Use the member Channels tab to issue a temporary linking code, send the displayed
 command to the bot or linked personal account, and check the resulting link status.
 
-For Telegram, the agent creator saves a BotFather bot token and a webhook secret in
-the Channels tab. Saving does not register a webhook with Telegram. Configure Bot
-API `setWebhook` with the HTTPS URL returned by the setup panel, the same secret as
-`secret_token`, and `allowed_updates` restricted to `message`. Telegram supplies that
-secret in `X-Telegram-Bot-Api-Secret-Token`; the engine checks it before parsing the
-request. Keep bot tokens out of command history and HTTP debug logs. The provider
-adapter sends replies with `sendMessage` and requires a message acknowledgment.
+For Telegram, the agent creator saves only a BotFather `bot_token` in the Channels
+tab (`POST /api/agents/{agent_id}/telegram-channel`). The engine generates a
+cryptographic, Telegram-compatible webhook secret and automatically calls Bot API
+`setWebhook` with the engine's public HTTPS webhook URL, `secret_token`, and
+`allowed_updates=["message"]`. Configure deployment-owned `PUBLIC_BASE_URL` to a
+public HTTPS address on a Telegram-supported port (443, 80, 88, or 8443); request
+Host headers never supply that address. An unusable address returns 503 before any
+registration or write. A Telegram rejection, malformed acknowledgment, or transport
+failure returns a safe 502 without saving the new credentials.
+
+The bot token and webhook secret are encrypted at rest and masked in configuration
+responses. `secret_token` is not accepted as public input. Later saves (including
+an empty request for an existing configuration or a bot-token replacement) register
+again with the existing valid secret and configuration URL. Existing manually
+configured secrets remain valid. Unreadable credentials require a replacement bot
+token; repair preserves an independently readable, valid secret, or generates a new
+one when the secret is damaged. Telegram supplies the secret in
+`X-Telegram-Bot-Api-Secret-Token`; the engine checks it before parsing the request.
+Setup and deletion share a per-agent file lock in the engine's existing lock
+directory, with a separate Telegram name, so overlapping repairs reuse the first
+completed secret. Registration runs outside DB transactions and precedes the
+encrypted configuration write. Telegram and PostgreSQL cannot commit atomically: if registration succeeds
+but the write fails, save again to complete setup. Keep bot tokens out of command
+history and HTTP debug logs. The provider adapter sends replies with `sendMessage`
+and requires a message acknowledgment.
 
 For Zalo, the agent creator starts login and scans the displayed QR image in the
 Zalo mobile app. The image expires and stays out of browser storage and query caches.
 The connector stores the completed login credentials encrypted on the server and
-restores them after restart. A failed restore requires explicit relinking. Disconnect
-revokes the session and its reply routes; old pending replies cannot target a new
-account. The connector role must be running, and the bridge must be built:
+restores them after restart. Transient transport failures preserve the encrypted session
+and retry after 5, 15, 30, 60 and 120 seconds, releasing the claim only after the old
+child is reaped. A successful heartbeat resets the retry budget. Exhausted retries or
+a replaced Zalo Web session pause recovery; the creator can reconnect with the stored
+session or explicitly relink with a new QR code. Invalid stored credentials require
+relinking. Disconnect revokes the session and its reply routes; old pending replies
+cannot target a new account. The creator's status panel shows sanitized connection,
+heartbeat, activity and retry timestamps. The connector role must be running, and the bridge must be built:
 
 ```sh
 npm ci --prefix connectors/zalo
@@ -172,6 +195,48 @@ from the Zalo Official Account API. Its listener has no offline replay guarantee
 another Zalo Web session may interrupt it. Provider acknowledgment is not proof of
 recipient delivery; ambiguous sends are not automatically retried. See
 [`connectors/zalo/README.md`](../connectors/zalo/README.md) for the subprocess protocol.
+
+### Zalo session maintenance and files
+
+`ZALO_PERSONAL_KEEPALIVE_INTERVAL_SECONDS` selects a 60–1800 second cadence (default
+300). Only one keepalive runs at a time. Changed cookies are encrypted and committed
+before the bridge receives the persistence acknowledgment and resumes new provider
+operations. A stuck keepalive or three settled failures ends the child and lets the
+parent apply its bounded recovery policy. Existing uncertain sends are never retried.
+
+`ZALO_PERSONAL_TYPING_ENABLED=false` is the default. Enabling it sends rate-limited
+typing pulses only to currently bound, authorized private peers with recent active
+reply work. Completion, cancellation, unlinking or loss of the connector lease ends
+future pulses. The SDK has no explicit stop-typing operation.
+
+Incoming media requires `ZALO_PERSONAL_MEDIA_ALLOWED_HOSTS`, a JSON list of at most
+32 exact lowercase DNS hostnames verified for the deployment's provider media traffic.
+The default empty list disables inbound attachment downloads. URLs, wildcards and IP
+literals are not configuration values. Every HTTPS hop and resolved address is checked;
+private destinations are refused, and cookies are selected for the full destination
+URL. An offered link never grants permission to download from an arbitrary host.
+
+The bridge recognizes current-message attachments with a supported top-level original
+`href`; quoted files, thumbnails alone and unknown provider payload variants are not
+treated as originals. No live-provider fixture is implied by the SDK's generic content
+type. A linked sender is authorized before fetching bytes and again before accepting
+the message. Limits are 10 MiB for images and 50 MiB for other files, with a 50 MiB
+per-event budget. Transfers use bounded private bridge frames, not public download
+links. Accepted bytes and their SHA-256 descriptor are stored, added to the transcript,
+and materialized in the agent's mounted `workspace/uploads/zalo` directory, including
+when managed storage uses S3. The native agent receives a real guest-readable path;
+image interpretation still depends on the agent's available tools.
+
+An agent returns a workspace or media file with a standalone `MEDIA:` path. Normal
+native completion also recovers file markers from the exact completed run. The relay
+snapshots the contained source before committing a version 2 reply plan, then sends
+each file through the private attachment journal. JPEG, PNG and WebP use image metadata;
+documents, audio and video can be sent as ordinary files. GIF output is not supported
+by this buffer-based path. Missing, changed or uncontained sources fail explicitly.
+Attachment-only SDK replies may have `message: null`; a valid attachment acknowledgment
+is required. Accepted means provider acceptance, not recipient delivery. Version 1
+text plans remain readable, and Zalo text chunks prefer newline or word boundaries
+while preserving content and the 2000-code-point limit.
 
 Run the schema bootstrap before starting the updated API. It adds the missing
 `telegram` and `zalo` values to an existing `channel_type_enum` without replacing
