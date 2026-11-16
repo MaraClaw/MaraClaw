@@ -4,6 +4,7 @@ import anyio
 import pytest
 from fastapi import HTTPException
 
+from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
 from app.services import company_admission_auto as auto
 from company_admission_fixtures import AdmissionScenario, admission_scenario
@@ -25,8 +26,9 @@ async def tenant_of(scenario: AdmissionScenario, user):
 
 
 async def test_valid_invitation_admits_a_newcomer_without_waiting_for_a_reviewer(admission_scenario: AdmissionScenario):
-    # Given an unassigned newcomer with a valid code bound to their email.
+    # Given a cached principal, then a tenantless newcomer with a recipient-bound code.
     scenario = admission_scenario
+    _ = await user_dao.get_with_identity(scenario.applicant.id)
     await unassign(scenario)
 
     # When the code is redeemed through /join.
@@ -40,9 +42,12 @@ async def test_valid_invitation_admits_a_newcomer_without_waiting_for_a_reviewer
     assert body["request"]["source_tenant_id"] is None
     user = await scenario.current_applicant()
     assert (user.tenant_id, user.role, user.quota_max_agents) == (scenario.target_id, "member", 9)
-    assert await scenario.db.fetchone("SELECT status,decided_by_user_id FROM company_admission_requests") == {
+    assert await scenario.db.fetchone(
+        "SELECT status,decided_by_user_id,source_tenant_id FROM company_admission_requests"
+    ) == {
         "status": "approved",
         "decided_by_user_id": None,
+        "source_tenant_id": None,
     }
     code = await scenario.db.fetchone("SELECT used_count,redeemed_by FROM invitation_codes WHERE code='JOIN'")
     assert code == {"used_count": 1, "redeemed_by": scenario.applicant.id}
