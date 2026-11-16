@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { setImmediate } from 'node:timers/promises';
-import type { BaileysEventEmitter, Contact } from 'baileys';
+import type { BaileysEventEmitter, Contact, WAMessage } from 'baileys';
 import { z } from 'zod';
 import { Peer } from '../src/peer.js';
 import type { Ack, Transport } from '../src/transport.js';
@@ -39,6 +39,7 @@ export class ControlledTransport implements Transport {
     return () => { this.ackListener = undefined; };
   }
   async end(): Promise<void> { this.ended++; }
+  async *download(_message: WAMessage, _signal: AbortSignal): AsyncGenerator<Uint8Array> { yield Buffer.from('controlled media'); }
 }
 
 export class ParentStore {

@@ -171,6 +171,12 @@ test('refresh cannot replay the same revision QR or its changed expiry', async (
   assert.equal(h.session.getSnapshot().status?.qr, null)
 })
 
+test('refresh cannot replace a QR value at the same revision and deadline', async (t) => {
+  const h = harness(t); h.session.start(); h.reads[0]?.result.resolve(qr); await h.settle()
+  h.session.refresh(); h.reads[1]?.result.resolve({ ...qr, qr: { value: 'synthetic-replacement', expires_at: '2030-01-01T00:00:10Z' } }); await h.settle()
+  assert.equal(h.session.getSnapshot().status?.qr, null)
+})
+
 test('refresh cannot revive an expired attempt even with a newer revision and extended deadline', async (t) => {
   const h = harness(t); h.session.start(); h.reads[0]?.result.resolve(qr); await h.settle()
   h.fire(10000)

@@ -304,16 +304,12 @@ class WeChatPollManager:
                     retry_delay = 2
 
                     new_cursor = json_as_str_or(data.get("get_updates_buf"))
-                    if new_cursor and new_cursor != cursor:
-                        await self._update_extra(agent_id, {"get_updates_buf": new_cursor})
-
                     msgs = data.get("msgs")
                     if isinstance(msgs, list):
                         for msg in msgs:
-                            try:
-                                await process_wechat_message(agent_id, msg, config)
-                            except Exception as exc:
-                                logger.error(f"[WeChat] Failed to process message for {agent_id}: {exc}")
+                            await process_wechat_message(agent_id, msg, config)
+                    if new_cursor and new_cursor != cursor:
+                        await self._update_extra(agent_id, {"get_updates_buf": new_cursor})
                 except WeChatSessionExpiredError:
                     logger.warning(f"[WeChat] Session expired for agent {agent_id}")
                     await self._set_connected(agent_id, False)

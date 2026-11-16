@@ -503,6 +503,8 @@ export const workspace = {
   "Loading configuration…": "Đang tải cấu hình…",
   "Retry configuration": "Thử lại cấu hình",
   "Configuration saved; connection not verified.": "Đã lưu cấu hình; kết nối chưa được xác minh.",
+  "Configuration saved.": "Đã lưu cấu hình.",
+  "Create a bot with BotFather and save its bot token. MaraClaw generates the webhook secret and registers the webhook automatically. Private messages only.": "Tạo bot bằng BotFather và lưu token của bot. MaraClaw tự tạo mã bí mật webhook và đăng ký webhook. Chỉ hỗ trợ tin nhắn riêng tư.",
   "Service account credentials configured.": "Thông tin đăng nhập tài khoản dịch vụ được định cấu hình.",
   "No service account credentials configured. Inbound-only setup is available.": "Không có thông tin xác thực tài khoản dịch vụ nào được định cấu hình. Thiết lập chỉ gửi đến có sẵn.",
   "Leave credentials untouched to keep the stored account. Supply fresh JSON only to add or replace it.": "Giữ nguyên thông tin đăng nhập để giữ tài khoản được lưu trữ. Chỉ cung cấp JSON mới để thêm hoặc thay thế nó.",

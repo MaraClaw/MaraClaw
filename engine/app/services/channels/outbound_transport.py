@@ -6,7 +6,7 @@ from typing import assert_never
 import httpx
 
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from, json_object_from_response
-from app.records.outbound_plan import OutboundChunk, OutboundProvider
+from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundProvider
 from app.services import im_token_cache
 from app.services.channels.outbound_errors import ProviderDeliveryError, provider_deadline, response_body
 from app.services.channels.outbound_http import outbound_client
@@ -58,19 +58,57 @@ async def _feishu_send(
 
 
 async def send_chunk(
-    outbound: ConfiguredOutbound, chunk: OutboundChunk, *, clock: Callable[[], datetime] = utcnow
+    outbound: ConfiguredOutbound, chunk: OutboundChunk | OutboundFileChunk, *, clock: Callable[[], datetime] = utcnow
 ) -> str | None:
-    """Send one chunk; return the provider message id only where the acknowledgement carries one (WhatsApp)."""
+    """Send one chunk; return the native message id for WhatsApp and Telegram acknowledgments."""
     target, config = outbound.target, outbound.config
-    if target.mode == "personal_qr":
-        from app.services.channels.whatsapp_personal_journal import enqueue
+    if isinstance(chunk, OutboundFileChunk):
+        from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
+        from app.services.channels.zalo_personal_media_journal import enqueue_media
 
-        await enqueue(target, chunk)
+        if target.provider != OutboundProvider.ZALO or target.mode != "personal_qr":
+            raise PersonalSendTerminalError("media_provider_forbidden")
+        await enqueue_media(target.destination, chunk)
+        return None
+    if target.mode == "personal_qr":
+        match target.provider:
+            case OutboundProvider.WHATSAPP:
+                from app.services.channels.whatsapp_personal_journal import enqueue
+
+                await enqueue(target, chunk)
+            case OutboundProvider.ZALO:
+                from app.services.channels.zalo_personal_journal import enqueue as enqueue_zalo
+
+                await enqueue_zalo(target.destination, chunk)
+            case (
+                OutboundProvider.FEISHU
+                | OutboundProvider.SLACK
+                | OutboundProvider.MICROSOFT_TEAMS
+                | OutboundProvider.GOOGLE_CHAT
+                | OutboundProvider.WECOM
+                | OutboundProvider.DINGTALK
+                | OutboundProvider.WECHAT
+                | OutboundProvider.DISCORD
+                | OutboundProvider.TELEGRAM
+            ):
+                from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
+
+                raise PersonalSendTerminalError("personal_provider_forbidden")
+            case unreachable:
+                assert_never(unreachable)
         return None
     app_id, app_secret = config.app_id or "", config.app_secret or ""
     provider_message_id: str | None = None
     client = outbound_client()
     match target.provider:
+        case OutboundProvider.ZALO:
+            from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
+
+            raise PersonalSendTerminalError("personal_cloud_route_forbidden")
+        case OutboundProvider.TELEGRAM:
+            from app.services.channels.telegram_outbound import send_telegram_text
+
+            return await send_telegram_text(config, target.destination, chunk.text)
         case OutboundProvider.SLACK:
             response = await client.post(
                 "https://slack.com/api/chat.postMessage",

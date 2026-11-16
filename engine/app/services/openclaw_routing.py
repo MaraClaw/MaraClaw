@@ -190,7 +190,13 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
             case TerminalOutcome(status=status, text=text):
                 match status:
                     case "ok":
-                        result = text or "The agent completed the request without a text response."
+                        from app.services.openclaw_channel_media import native_completion_result
+                        from app.services.openclaw_transcript import ReplyMediaError
+
+                        try:
+                            result = await native_completion_result(agent, claimed, text)
+                        except ReplyMediaError as error:
+                            result = f"The agent could not return the generated file ({error.code})."
                     case "error":
                         result = "The agent could not complete this request."
                     case "timeout":

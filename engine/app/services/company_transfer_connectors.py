@@ -17,9 +17,13 @@ async def stop_free_transfer_connectors(agent_id: UUID) -> str | None:
     await wechat_poll_manager.stop_client(agent_id)
     await discord_gateway_manager.stop_client(agent_id)
     from app.dao.whatsapp_personal_dao import get_personal
+    from app.dao.zalo_personal_dao import get_personal as get_zalo_personal
 
     personal = await get_personal(agent_id)
     if personal is not None and personal.claim_token is not None:
+        return "connector_cleanup_pending"
+    zalo = await get_zalo_personal(agent_id)
+    if zalo is not None and zalo.claim_token is not None:
         return "connector_cleanup_pending"
     if dingtalk_stream_manager.status().get(str(agent_id), False):
         return "connector_still_running"

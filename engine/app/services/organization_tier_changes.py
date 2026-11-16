@@ -72,7 +72,8 @@ async def preview_tier_change(
     async with connection_ctx() as db:
         await lock_tenants(db, (tenant_id,), shared=True)
         tenant = await _company(tenant_id)
-        caps = await company_caps(db, tenant_id, tier=target_tier)
+        today = vn_today()
+        caps = await company_caps(db, tenant_id, tier=target_tier, on_date=today)
         if caps is None:
             raise conflict("system_company_tier_fixed", "System organization tiers are managed by bootstrap")
         accounts_used, agents_used = await company_usage(db, tenant_id)
@@ -91,7 +92,7 @@ async def preview_tier_change(
             "AND container_id <> '' ORDER BY id",
             {"tenant": tenant_id},
         )
-        month = month_start(vn_today())
+        month = month_start(today)
         covered = await coverage(db, tenant_id, month)
         account_unit = int(plan.additional_account_monthly_usd)
         agent_unit = int(plan.additional_agent_monthly_usd)

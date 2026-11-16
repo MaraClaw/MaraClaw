@@ -6,6 +6,7 @@ import { useWorkspaceSession } from '@/hooks/session-workspace'
 import { attachmentPreviewClient, type AttachmentPreview } from '@/lib/attachment-preview-api'
 import { ApiError, BinaryLimitError, userFacingRequestError } from '@/lib/http'
 import { AttachmentImage } from './attachment-image'
+import { AttachmentVideo } from './attachment-video'
 import { showRequestError } from '@/lib/request-error-toast'
 
 const AttachmentPdf = lazy(() => import('./attachment-pdf').then((module) => ({ default: module.AttachmentPdf })))
@@ -29,6 +30,7 @@ function PreviewRenderer({ preview }: { readonly preview: AttachmentPreview }) {
   const { t: translate } = useTranslation()
   switch (preview.renderer) {
     case 'image': return <AttachmentImage bytes={preview.bytes} metadata={preview.metadata} />
+    case 'video': return <AttachmentVideo bytes={preview.bytes} metadata={preview.metadata} />
     case 'pdf': return <Suspense fallback={<p role="status" className="text-sm text-muted-foreground">{translate("Loading PDF viewer…")}</p>}>
       <AttachmentPdf bytes={preview.bytes} />
     </Suspense>

@@ -33,6 +33,7 @@ from app.core.json_types import (
     mapping_from_row,
 )
 from app.core.logging import logger
+from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
 from app.services.service_contracts import GoogleChatMessage
 
@@ -321,7 +322,7 @@ def _service_account_info(config: ChannelConfigRecord) -> dict[str, Any] | None:
     return None
 
 
-async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[str]) -> str:
+async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[str], *, pinned: bool = False) -> str:
     """Mint a service-account access token via JWT bearer grant (no google-auth dep)."""
     now = int(time.time())
     client_email_raw: object = sa_info.get("client_email")
@@ -349,7 +350,12 @@ async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[st
         private_key.replace("\\n", "\n"),
         algorithm="RS256",
     )
-    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+    client_context = (
+        public_http_client(timeout=15, origin="https://oauth2.googleapis.com")
+        if pinned
+        else httpx.AsyncClient(timeout=15, follow_redirects=False)
+    )
+    async with client_context as client:
         resp = await client.post(
             token_uri,
             data={
@@ -357,6 +363,10 @@ async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[st
                 "assertion": assertion,
             },
         )
+        if pinned and resp.status_code != 200:
+            raise ValueError(
+                f"Google Chat media token exchange failed ({resp.status_code}); verify service account access"
+            )
         if resp.status_code >= 400:
             raise ValueError(f"Token exchange failed: {resp.status_code} {resp.text[:200]}")
         data = json_object_from_response(resp)

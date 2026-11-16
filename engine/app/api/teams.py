@@ -5,6 +5,7 @@ import os
 import time
 import uuid
 from datetime import UTC, datetime
+from functools import partial
 from typing import TypedDict
 
 import httpx
@@ -37,6 +38,8 @@ from app.services.channels.teams_auth import (
     authenticate_teams_activity,
     is_bot_framework_service_url,
 )
+from app.services.channels.teams_media import accept_teams_media, parse_teams_media
+from app.services.storage_runtime.quota_errors import StorageQuotaError
 
 settings = get_settings()
 
@@ -445,7 +448,8 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request) -> Response
             return {"ok": True}
 
         user_text = str(activity.get("text", "") or "").strip()
-        if not user_text:
+        media = parse_teams_media(activity)
+        if not user_text and not media.attachments:
             return {"ok": True}
 
         conversation = _json_mapping(activity.get("conversation"))
@@ -462,19 +466,24 @@ async def teams_event_webhook(agent_id: uuid.UUID, request: Request) -> Response
             return Response(status_code=400, content="Teams activity ID is required")
         from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
-        await accept_channel_event(
-            ChannelEvent(
-                config_id=config.id,
-                agent_id=agent_id,
-                provider="microsoft_teams",
-                event_key=json.dumps([config.app_id, conversation_id, str(activity_id)], separators=(",", ":")),
-                sender_id=sender_id,
-                conversation_id=conversation_id,
-                text=user_text,
-                is_group=json_as_str_or(conversation.get("conversationType")) in ("groupChat", "channel"),
-            )
+        event = ChannelEvent(
+            config_id=config.id,
+            agent_id=agent_id,
+            provider="microsoft_teams",
+            event_key=json.dumps([config.app_id, conversation_id, str(activity_id)], separators=(",", ":")),
+            sender_id=sender_id,
+            conversation_id=conversation_id,
+            text=user_text,
+            media_ids=media.media_ids(),
+            is_group=json_as_str_or(conversation.get("conversationType")) in ("groupChat", "channel"),
         )
+        if media.attachments:
+            await accept_teams_media(event, media, partial(_get_teams_access_token, config))
+        else:
+            await accept_channel_event(event)
         return {"ok": True}
+    except HTTPException, StorageQuotaError:
+        raise
     except Exception as e:
         logger.error("Teams: webhook handler failed agent={} error_type={}", agent_id, type(e).__name__)
         return Response(status_code=500, content="Internal server error")

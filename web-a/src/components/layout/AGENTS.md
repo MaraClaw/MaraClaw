@@ -25,8 +25,10 @@ Scope: console navigation, notification entry point and shared screen chrome.
    active `org_admin`, not a platform admin, with a `tenant_id`.
 6. `paymentReviewOnly` (`/payments`, label "Payments") uses `useTransferReviewAccess().canReview`, called by both `NavItems`.
    Only active platform admins pass, using the canonical platform flag or role, without a tenant lookup.
-   It is the only payment nav entry: the page holds the transfers queue and the capacity queue (`?tab=capacity`),
-   whose `canReviewCapacityPayments` gate is the same predicate. The org-admin payment page `/capacity-orders/:orderId` has no nav entry.
+   It is the only payment nav entry: `/payments` has `transfers` (default), `capacity`, `admissions` and `settings` tabs.
+   Transfers/capacity allow active PAs; admissions/settings are visible only to the active genesis PA through their respective predicates.
+   Settings mounts separately from the capacity queue. The guarded `/organization-admissions` alias redirects to `/payments?tab=admissions`; it does not use the genesis OA Admissions nav gate.
+   Detail pages such as `/capacity-orders/:orderId` and `/companies/:companyId/runtimes` have no separate nav entry.
 7. Under `mustChangePassword`, surviving nav entries other than `/settings`
    render non-link spans with `aria-disabled="true"`.
    Notifications uses this same locked span presentation.

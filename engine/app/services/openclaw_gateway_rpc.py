@@ -34,9 +34,11 @@ from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.services.agent_runtime_loss import clear_stopped_guest_loss, report_missing_guest, report_stopped_guest
 from app.services.agent_setup_lock import drain_on_cancel
+from app.services.channels.channel_media import ChannelMediaError
 from app.services.guest_bootstrap import BOOTSTRAP_PENDING_EXIT, BOOTSTRAP_PENDING_STDERR, guarded_argv
 from app.services.guest_identity import GuestOwnershipError, guest_resolutions, resolve_guest
 from app.services.onboarding_greeting import build_identity_context
+from app.services.openclaw_channel_media import channel_input
 from app.services.openclaw_gateway_stream import EXEC_POLICY, DeltaRelay, streams_to_web
 from app.services.openclaw_native_capacity import native_capacity
 from app.services.openclaw_turns import runtime_session_key
@@ -260,15 +262,17 @@ async def execute_gateway_turn(
         try:
             agent_dir = agent_manager._agent_dir(agent.id)
             await drain_on_cancel(anyio.to_thread.run_sync(prepare_native_gateway_files, agent_dir))
+            input_text, media_instruction = await channel_input(fresh, message)
             payload_name = f".maraclaw-rpc-{uuid4()}.json"
             payload_path = Path(agent_dir) / payload_name
             payload = {
                 "version": 2 if stream_reply else 1,
                 "messageId": message_id,
                 "sessionKey": runtime_session_key(message),
-                "message": message.content,
+                "message": input_text,
                 "modelRef": message.guest_model_ref,
-                "extraSystemPrompt": f"{identity_prompt()}\n\n{identity_context}",
+                "extraSystemPrompt": f"{identity_prompt()}\n\n{identity_context}"
+                + (f"\n\n{media_instruction}" if media_instruction else ""),
                 "timeoutSeconds": 900,
             }
             if stream_reply:
@@ -276,6 +280,8 @@ async def execute_gateway_turn(
             fd = os.open(payload_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except OSError:
             return NotAdmittedOutcome(message_id, "not_submitted", "filesystem_error")
+        except ChannelMediaError:
+            return NotAdmittedOutcome(message_id, "not_submitted", "media_unavailable")
         try:
             try:
                 try:

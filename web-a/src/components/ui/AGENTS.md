@@ -1,23 +1,26 @@
 # UI primitives
 
-Scope: this directory's styled controls and composition primitives.
+Scope: 12 source files, including styled controls, composition primitives and the select-options helper.
 
 ## Files
 
+- `back-button.tsx`: `BackButton` action and `BackLink` route control, with accessible labels and tooltips.
 - `badge.tsx`: status and variant badge rendering.
 - `button.tsx`: variant-sized buttons and child-element composition.
 - `card.tsx`: card container, header, title, description, content and footer.
 - `input.tsx`: styled native input.
 - `label.tsx`: styled Radix label.
 - `password-field.tsx`: labeled password input, visibility toggle and error display.
-- `select.tsx`: native form select with styled Radix options and disclosure icon; `select-options.ts` reads native options and adapts trigger input.
+- `refresh-button.tsx`: `RefreshButton`, a labeled icon button with tooltip.
+- `select.tsx`: native form select with styled Radix options and disclosure icon.
+- `select-options.ts`: `useSelectOptions` snapshots native options; `SelectNativeTrigger` adapts trigger input.
 - `separator.tsx`: orientation-aware Radix separator.
 - `switch.tsx`: styled Radix switch (`role="switch"`); label it with `<Label htmlFor>`.
 
 ## Invariants
 
-1. All nine files import `cn` from `@/lib/utils`.
-   Definition: `web-a/src/lib/utils.ts`; returns `twMerge(clsx(inputs))`.
+1. Styled controls merge classes with `cn` from `@/lib/utils` (`twMerge(clsx(inputs))`).
+   `select-options.ts` is a behavior helper and has no `cn` import.
 2. `Button` uses `buttonVariants`; variant and size both default to `default`.
    `asChild` selects Radix `Slot`; otherwise renders a native `button`.
 3. `Badge` renders a native `span`; `badgeVariants` defaults to `default`.

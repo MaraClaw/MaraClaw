@@ -1,8 +1,20 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { ZodError } from 'zod'
-import { ApiError } from '../src/lib/http.ts'
+import { ApiError, BinaryLimitError, MAX_PREVIEW_BYTES } from '../src/lib/http.ts'
+import { attachmentRenderer } from '../src/lib/attachment-preview-api.ts'
 import { attachmentFixture, metadata, resource } from './attachment-fixture.ts'
+
+for (const [content_type, renderer] of [
+  ['video/mp4', 'video'], ['video/webm', 'video'], ['video/ogg', 'video'],
+  [' VIDEO/MP4 ; codecs="avc1.42E01E"', 'video'],
+  ['video/quicktime', 'unsupported'], ['video/x-msvideo', 'unsupported'],
+  ['application/octet-stream', 'unsupported'],
+] as const) {
+  test(`${content_type} selects ${renderer} without trusting a video filename`, () => {
+    assert.equal(attachmentRenderer({ ...metadata, name: 'clip.mp4', content_type }), renderer)
+  })
+}
 
 for (const extension of ['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt']) {
   test(`${extension} preview uses authenticated bytes only when its local renderer is supported`, async (context) => {
@@ -23,30 +35,52 @@ for (const extension of ['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt']) {
   })
 }
 
-test('each opening reauthorizes metadata before reusing versioned bytes', async (context) => {
-  // Given
-  let metadataCalls = 0
-  let byteCalls = 0
-  const fixture = attachmentFixture((url, options) => {
-    assert.equal(options?.cache, 'no-store')
-    if (String(url).includes('preview-metadata')) {
-      metadataCalls++
-      return Promise.resolve(Response.json(metadata))
-    }
-    byteCalls++
-    return Promise.resolve(new Response(new Uint8Array([1, 2, 3])))
+for (const content_type of ['image/png', 'video/webm']) {
+  test(`${content_type}: each opening reauthorizes metadata before reusing versioned bytes`, async (context) => {
+    // Given
+    let metadataCalls = 0
+    let byteCalls = 0
+    const fixture = attachmentFixture((url, options) => {
+      assert.equal(options?.cache, 'no-store')
+      if (String(url).includes('preview-metadata')) {
+        metadataCalls++
+        return Promise.resolve(Response.json({ ...metadata, content_type }))
+      }
+      byteCalls++
+      return Promise.resolve(new Response(new Uint8Array([1, 2, 3])))
+    })
+    context.after(fixture.dispose)
+    const first = await fixture.previews.open(fixture.scope, resource, new AbortController().signal)
+    // When
+    const second = await fixture.previews.open(fixture.scope, resource, new AbortController().signal)
+    // Then
+    assert.equal(metadataCalls, 2)
+    assert.equal(byteCalls, 1)
+    assert.ok(first.renderer !== 'unsupported' && second.renderer !== 'unsupported')
+    assert.equal(first.bytes, second.bytes)
+    assert.ok(fixture.queryClient.getQueryCache().getAll().every((query) => !(query.state.data instanceof Uint8Array)))
   })
-  context.after(fixture.dispose)
-  const first = await fixture.previews.open(fixture.scope, resource, new AbortController().signal)
-  // When
-  const second = await fixture.previews.open(fixture.scope, resource, new AbortController().signal)
-  // Then
-  assert.equal(metadataCalls, 2)
-  assert.equal(byteCalls, 1)
-  assert.ok(first.renderer === 'image' && second.renderer === 'image')
-  assert.equal(first.bytes, second.bytes)
-  assert.ok(fixture.queryClient.getQueryCache().getAll().every((query) => !(query.state.data instanceof Uint8Array)))
-})
+}
+
+for (const limit of ['metadata', 'stream'] as const) {
+  test(`video ${limit} above 20 MiB is rejected without caching bytes`, async (context) => {
+    let byteCalls = 0
+    const fixture = attachmentFixture((url, options) => {
+      assert.equal(new Headers(options?.headers).get('Authorization'), 'Bearer token-a')
+      if (String(url).includes('preview-metadata')) return Promise.resolve(Response.json({
+        ...metadata, name: 'clip.webm', content_type: 'video/webm', size: limit === 'metadata' ? MAX_PREVIEW_BYTES + 1 : 3,
+      }))
+      byteCalls++
+      return Promise.resolve(new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(MAX_PREVIEW_BYTES + 1)); controller.close() },
+      })))
+    })
+    context.after(fixture.dispose)
+    await assert.rejects(fixture.previews.open(fixture.scope, resource, new AbortController().signal), BinaryLimitError)
+    assert.equal(byteCalls, limit === 'metadata' ? 0 : 1)
+    assert.equal(fixture.cache.size, 0)
+  })
+}
 
 test('concurrent opens deduplicate metadata and bytes without sharing view cancellation', async (context) => {
   // Given

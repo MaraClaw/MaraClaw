@@ -7,6 +7,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 ### Query-option factories
 - `admin-audit-options.ts`: validated audit queries (recent list and cursor page).
 - `admission-options.ts`: admission query keys, reads and decision cache updates.
+- `organization-admission-options.ts`: new-organization status/offset reads, guarded decisions and credentials-email retry.
 - `notification-options.ts`: notification keys, reads, read/archive/restore cache updates.
 - `agent-deletion-options.ts`: deletion queue/detail reads and the approval mutation.
 - `agent-transfer-options.ts`: transfer source/recipient reads and the ownership-transfer mutation.
@@ -16,17 +17,19 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `broadcast-options.ts`: broadcast email-status polling.
 - `resource-pressure-options.ts`: parsed-filter summary and cursor-page episode reads (`['admin-resource-pressure', ...]`, `retry: false`).
 - `organization-plan-options.ts`: the public plan catalog read (`['organization-plans']`, `retry: false`) behind the create-company form's plan summaries.
+- `company-options.ts`: company reads and mutations; `companyRuntimeOptions` keys runtime pages by company and cursor, forwards the signal and disables retries.
 
 ### Providers
 - `use-auth.tsx`: auth context, session-scoped query provider and auth consumers.
 - `use-theme.tsx`: theme preference, resolution, context and DOM application.
+- `use-translation.tsx`: `TranslationProvider` and `useTranslation`, persisted locale and localized number/date/distance formatting.
 
 ### Session ownership helpers
-- `session-mutation.ts`: mutation ownership and lifecycle callback fencing.
-- `session-query-client.ts`: session query-client creation and retirement.
+- `session-mutation.ts`, `session-query-client.ts`: mutation ownership/lifecycle fencing and session query-client creation/retirement.
 
 ### Consumer hooks
 - `use-admissions.ts`, `use-agent-deletions.ts`: role-gated reads and session-owned decisions.
+- `use-organization-admissions.ts`: active genesis PA reads, decisions and credentials-email retry; password-change locks disable access.
 - `use-notifications.ts`: gated notification reads and session-owned read/archive mutations.
 - `use-transfer-reviews.ts`: `useTransferReviewAccess` capability plus gated payment reads and decisions.
 - `use-capacity.ts`: `useCapacityAccess` (`canBuy`, `canView`, `canReview`, `canManageSettings`, all false under a password-change lock) plus the gated reads and session-owned mutations.
@@ -34,25 +37,17 @@ Scope: query-option factories, context providers, session ownership and consumer
 
 ## Invariants
 
-1. `AuthProvider` memoizes the query scope by `snapshot.owner` and keys
-   `QueryClientProvider` by `snapshot.owner.generation`; retain both boundaries.
-   `useSessionCurrent` captures that owner for later current-session checks.
-2. Session query defaults: `staleTime: 30_000`, `retry: 1`, no window-focus refetch.
-   Retirement cancels queries and clears the client; effect cleanup only cancels.
-3. `ownMutationOptions` wraps execution with `runOwned` and guards `onMutate`
-   through `assertCurrent`; success, error and settled callbacks check `isCurrent`.
+1. `AuthProvider` memoizes query scope by `snapshot.owner` and keys `QueryClientProvider` by `snapshot.owner.generation`.
+   `useSessionCurrent` captures that owner for later current-session checks; retain both boundaries.
+2. Session query defaults: `staleTime: 30_000`, `retry: 1`, no window-focus refetch. Retirement cancels and clears; effect cleanup only cancels.
+3. `ownMutationOptions` wraps execution with `runOwned`, guards `onMutate` through `assertCurrent`, and fences success/error/settled with `isCurrent`.
 4. `adminAuditOptions` parses scope before keying `['admin-audit', parsed]`; `adminAuditPageOptions`
-   strips `cursor` from the parsed scope and keys `['admin-audit-page', scope, cursor, refresh]`.
-   Both forward the query signal and set `retry: false`.
-5. Admission reads require `canReviewAdmissions(user)` and no password-change lock.
-   In `web-a/src/lib/types/auth.ts`, that helper requires `org_admin` plus `is_genesis === true`.
-   Null detail IDs use `skipToken`; admission read factories poll every 30 seconds.
+   strips `cursor` and keys `['admin-audit-page', scope, cursor, refresh]`. Both forward the signal and set `retry: false`.
+5. Member admission reads require `canReviewAdmissions(user)` (genesis OA) and no lock; null detail IDs use `skipToken`, reads poll every 30 seconds.
 6. Notification reads require `isAdmin` and no password-change lock; list and unread count poll every 30 seconds.
    List keys include the `active|archived` view. Read, read-all, archive, restore and selected variants share
-   scope `admin-notifications-read`. Single-read decrements the cached unread count only when an active cached
-   page held that item unread and unarchived; other mutations cancel and invalidate the family.
-7. Admission decisions disable retry and use a per-admission mutation scope.
-   Success updates detail, removes the pending row and invalidates admissions plus notifications.
+   scope `admin-notifications-read`. Single-read decrements unread count only if an active cached page held the item unread and unarchived; other mutations cancel/invalidate the family.
+7. Member admission decisions disable retry and use a per-admission scope; success updates detail, removes the pending row and invalidates admissions plus notifications.
    An `ApiError` with status `409` cancels and invalidates admission queries.
 8. Deletion reads require `canReviewAgentDeletions(user)` and no lock; detail uses `staleTime: 0`, `gcTime: 0`, no retry.
    The approval `mutationFn` throws a local 403 `detail_view_required` unless the cached detail is `success` and idle
@@ -64,18 +59,21 @@ Scope: query-option factories, context providers, session ownership and consumer
    Queue and detail are enabled only by `canReview` and poll every 30 seconds. `transferDecisionOptions` throws a local 403
    when not allowed. Queue pages key on `['admin-transfer-payments','list',view,cursor]`. Success cancels polls, sets detail, removes the decided request from every cached `pending` page, replaces it in `recent` pages and invalidates transfers plus notifications;
    only a 409 invalidates on error.
-10. Agent transfer reads (`gcTime: 0`, `staleTime: 0`, no retry) fetch the source detail and every recipient page.
-    Success cancels and invalidates transfers, users, user, companies, deletion queries and notifications;
-    a 403 or 409 invalidates only the transfer family. No automatic retry.
+10. Agent transfer reads (`gcTime: 0`, `staleTime: 0`, no retry) fetch the source detail and every recipient page. Success cancels and invalidates transfers, users, user, companies, deletion queries and notifications; a 403 or 409 invalidates only transfers. No automatic retry.
 11. Invitation reads need a non-null tenant and key on `[tenant, page]`; send and revoke invalidate `invitationKeys.tenant`.
-    Capacity reads need `useCapacityAccess` and a company: org admins send no `tenant_id` (the engine uses their own), platform admins send the selected one. Every capacity mutation throws a local 403 `CapacityGuardError` (a translation key, shown through `capacityGuardKey`) when not allowed, retries never, shares one scope per order (`capacity-order-{id}`), and on success stores the returned order, then cancels and invalidates `['admin-capacity']` plus notifications; a 404/409/403 only invalidates `['admin-capacity']`.
-12. `ThemeProvider` reads/writes `maraclaw-admin-theme`; missing/invalid values resolve via `system`.
-    Accepted preferences: `light`, `dark`, `system`; resolved values: `light`, `dark`.
-    DOM application updates the root dark class, color scheme, theme dataset and theme-color meta.
+12. Capacity reads use `useCapacityAccess`; company-scoped reads omit `tenant_id` for OAs and send the selected company for PAs.
+    Every capacity mutation guards before requesting with local 403 `CapacityGuardError` (translation key via `capacityGuardKey`) and disables retries.
+    Evidence/cancel/decision share `capacity-order-{id}`; create uses `capacity-order-create`, settings uses `capacity-payment-settings`.
+    Order mutations store the returned order (decision uses the review-detail key); success cancels/invalidates capacity and invalidates notifications. Their 404/409/403 handler cancels/invalidates only capacity.
+    Settings success stores settings at `capacityKeys.settings` and refreshes the same families; settings has no conflict/error handler.
+13. `ThemeProvider` persists `maraclaw-admin-theme`: `light|dark|system`, invalid/missing becomes `system`; resolution is `light|dark`.
+    DOM application updates root dark class, color scheme, theme dataset and theme-color meta.
+14. `TranslationProvider` persists `en|vi` in `maraclaw-admin-language` (invalid/missing becomes `en`) and updates document `lang`.
+    Typed messages and the client-owned translation boundary live in `../lib/i18n.ts`; API detail and user content stay outside that boundary.
 
 ## Gotchas
 
-- Read-query `enabled` gates do not guard mutation hooks; only deletion approval and payment decisions carry their own pre-request guards.
+- Query `enabled` does not guard mutations. Deletion approval, transfer-payment decisions, every capacity mutation and organization-admission decisions/email retries have their own pre-request guards.
 - Retiring client work does not undo server writes already accepted.
 - `toggleTheme` chooses explicit light/dark from the resolved theme; it exits system mode.
-- `useAuth` and `useTheme` throw outside their corresponding providers.
+- `useAuth`, `useTheme` and `useTranslation` throw outside their corresponding providers.

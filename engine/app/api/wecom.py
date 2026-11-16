@@ -44,6 +44,7 @@ from app.schemas.schemas import ChannelConfigOut
 from app.services import im_token_cache
 from app.services.channels.config import get_channel_config_metadata
 from app.services.channels.redact import channel_config_out
+from app.services.channels.wecom_media import WeComMedia, accept_wecom_media
 from app.services.platform_service import platform_service
 from app.services.sso_scan_authority import capture_scan_authority
 from app.services.sso_scan_sessions import finalize_scan_login, load_authorizable_session, parse_scan_state
@@ -442,9 +443,28 @@ async def wecom_event_webhook(
         else:
             logger.info(f"[WeCom] Received event: {event} (not handled)")
 
-    elif msg_type in ("image", "file"):
-        # TODO: Handle image/file messages in future
-        logger.info(f"[WeCom] Received {msg_type} message (not yet handled)")
+    elif msg_type in ("image", "file", "video"):
+        media_id = msg_root.findtext("MediaId", "")
+        if not media_id:
+            return Response(content="success", media_type="text/plain")
+        filename = (
+            msg_root.findtext("FileName", "")
+            or {"image": "image.jpg", "video": "video.mp4", "file": "file.bin"}[msg_type]
+        )
+        try:
+            await _process_wecom_text(
+                agent_id,
+                config,
+                from_user,
+                msg_root.findtext("Content", "").strip(),
+                chat_id=chat_id,
+                message_id=msg_id,
+                kind=msg_type,
+                media=(WeComMedia(msg_type, filename, media_id=media_id),),
+            )
+        except Exception:
+            logger.exception("[WeCom] Media acceptance failed for agent {}", agent_id)
+            return Response(status_code=503)
 
     return Response(content="success", media_type="text/plain")
 
@@ -503,10 +523,22 @@ async def _process_wecom_kf_event(
                 msg_list = sync_data.get("msg_list")
                 for raw_msg in msg_list if isinstance(msg_list, list) else []:
                     msg = json_object_from(raw_msg)
-                    if json_as_int(msg.get("origin")) == 3 and json_as_str(msg.get("msgtype")) == "text":
+                    kind = json_as_str_or(msg.get("msgtype"))
+                    if json_as_int(msg.get("origin")) == 3 and kind in ("text", "image", "file", "video"):
                         mid = msg.get("msgid")
                         text = json_as_str_or(json_object_from(msg.get("text")).get("content")).strip()
-                        if text:
+                        media: tuple[WeComMedia, ...] = ()
+                        if kind != "text":
+                            item = json_object_from(msg.get(kind))
+                            media_id = json_as_str_or(item.get("media_id"))
+                            if not media_id:
+                                raise HTTPException(400, "WeCom KF media ID is required")
+                            filename = (
+                                json_as_str_or(item.get("file_name"))
+                                or {"image": "image.jpg", "video": "video.mp4", "file": "file.bin"}[kind]
+                            )
+                            media = (WeComMedia(kind, filename, media_id=media_id),)
+                        if text or media:
                             external_userid = json_as_str_or(msg.get("external_userid"))
                             logger.info(f"[WeCom KF] Found msg from {external_userid}: {text[:20]}...")
                             await _process_wecom_text(
@@ -517,6 +549,8 @@ async def _process_wecom_kf_event(
                                 is_kf=True,
                                 open_kfid=json_as_str(msg.get("open_kfid")),
                                 kf_msg_id=json_as_str(mid),
+                                kind=kind,
+                                media=media,
                             )
                 if not has_more:
                     break
@@ -535,25 +569,30 @@ async def _process_wecom_text(
     kf_msg_id: str | None = None,
     chat_id: str = "",
     message_id: str = "",
+    kind: str = "text",
+    media: tuple[WeComMedia, ...] = (),
 ):
     native_id = kf_msg_id or message_id
     if not native_id:
         raise HTTPException(status_code=400, detail="WeCom message ID is required")
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
-    await accept_channel_event(
-        ChannelEvent(
-            config_id=config.id,
-            agent_id=agent_id,
-            provider="wecom",
-            event_key=json.dumps([config.app_id, open_kfid or chat_id, native_id], separators=(",", ":")),
-            sender_id=from_user,
-            conversation_id=f"wecom_group_{chat_id}" if chat_id else f"wecom_p2p_{from_user}",
-            text=user_text,
-            kind="kf_text" if is_kf else "text",
-            is_group=bool(chat_id),
-        )
+    native = ChannelEvent(
+        config_id=config.id,
+        agent_id=agent_id,
+        provider="wecom",
+        event_key=json.dumps([config.app_id, open_kfid or chat_id, native_id], separators=(",", ":")),
+        sender_id=from_user,
+        conversation_id=f"wecom_group_{chat_id}" if chat_id else f"wecom_p2p_{from_user}",
+        text=user_text,
+        kind=f"kf_{kind}" if is_kf else kind,
+        media_ids=tuple(item.fingerprint_id() for item in media),
+        is_group=bool(chat_id),
     )
+    if media:
+        await accept_wecom_media(native, config, media)
+    else:
+        await accept_channel_event(native)
 
 
 # ─── OAuth Callback (SSO) ──────────────────────────────

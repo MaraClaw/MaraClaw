@@ -91,7 +91,7 @@ def test_sqlstate_only_accepts_trusted_five_character_driver_values(state, expec
         ("count", True),
         ("status_code", 1000),
         ("drop_reasons", ["canary-jid@s.whatsapp.net"]),
-        ("drop_reasons", ["text"] * 10),
+        ("drop_reasons", ["text"] * 11),
         ("event_kind", "history"),
         ("has_request_id", "canary-diag"),
     ],

@@ -6,10 +6,12 @@ import { useOutletContext } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
+import { ChannelAccountLink } from '@/components/channel-account-link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { WhatsAppChannelCard } from '@/components/whatsapp-channel-card'
+import { ZaloPersonalCard } from '@/components/zalo-personal-card'
 import {
   CHANNEL_FIELDS, CHANNELS, channelDraftBody, deleteChannel, getChannel, getChannelCatalog,
   getChannelWebhook, getWechatQr, googleChatCredentialsConfigured, saveChannel, type ChannelCapability,
@@ -37,7 +39,7 @@ export function AgentChannelsPage() {
           <Button variant="outline" disabled={catalog.isFetching} onClick={scope.effect(() => void catalog.refetch())}>{translate("Retry catalog")}</Button>
         </div>
       ) : catalog.data.map((channel) => (
-        <article key={channel.channel_type} aria-label={channel.display_name} className="space-y-3 rounded-2xl border border-border p-4">
+        <article key={channel.channel_type} aria-label={channel.display_name} className="min-w-0 space-y-3 rounded-2xl border border-border p-4">
           <h2 className="text-base font-semibold">{channel.display_name}</h2>
           <p className="text-sm text-muted-foreground">
             {translate("Incoming messages: {inbound}. Proactive messages: {proactive}.", {
@@ -46,6 +48,7 @@ export function AgentChannelsPage() {
             })}
           </p>
           <ChannelSetup key={`${agent.id}:${creator}`} agentId={agent.id} channel={channel} creator={creator} />
+          {channel.channel_type === 'telegram' || channel.channel_type === 'zalo' ? <ChannelAccountLink key={`${agent.id}:${channel.channel_type}`} agentId={agent.id} channel={channel.channel_type} /> : null}
         </article>
       ))}
       {catalog.isSuccess && catalog.data.length === 0 ? <p>{translate("No channel integrations are available.")}</p> : null}
@@ -58,6 +61,7 @@ function ChannelSetup({ agentId, channel, creator }: { readonly agentId: string;
   if (channel.transport === 'skill_only') return <p className="text-sm text-muted-foreground">{translate("This integration works through skills, not channel configuration.")}</p>
   if (!channel.supports_inbound && !channel.supports_proactive) return <p className="text-sm text-muted-foreground">{translate("Channel setup is not supported for this integration.")}</p>
   if (!creator) return null
+  if (channel.channel_type === 'zalo') return <ZaloPersonalCard agentId={agentId} />
   if (channel.channel_type === 'wechat') return <WechatCard agentId={agentId} />
   const provider = CHANNELS.find((item) => item.key === channel.channel_type)
   if (!provider) return <p className="text-sm text-muted-foreground">{translate("This integration has no setup form in this client.")}</p>
@@ -103,7 +107,8 @@ function ChannelCard({ agentId, channel, path, onSaved }: { readonly agentId: st
   if (query.isError) return <div className="space-y-2"><RequestErrorToast error={query.error} message="Unable to load configuration." /><Button variant="outline" onClick={scope.effect(() => void query.refetch())}>{translate("Retry configuration")}</Button></div>
   return (
     <div className="space-y-3">
-      {query.data ? <p className="text-sm text-muted-foreground">{translate("Configuration saved; connection not verified.")}</p> : null}
+      {query.data ? <p className="text-sm text-muted-foreground">{translate(channel.channel_type === 'telegram' ? "Configuration saved." : "Configuration saved; connection not verified.")}</p> : null}
+      {channel.channel_type === 'telegram' ? <p className="max-w-prose text-lg text-muted-foreground sm:text-sm">{translate('Create a bot with BotFather and save its bot token. MaraClaw generates the webhook secret and registers the webhook automatically. Private messages only.')}</p> : null}
       {channel.channel_type === 'google_chat' ? <p className="text-sm text-muted-foreground">
         {googleChatCredentialsConfigured(query.data) ? translate("Service account credentials configured.") : translate("No service account credentials configured. Inbound-only setup is available.")}
         {' '}{translate("Leave credentials untouched to keep the stored account. Supply fresh JSON only to add or replace it.")}</p> : null}

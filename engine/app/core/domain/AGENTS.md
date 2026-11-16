@@ -2,7 +2,7 @@
 
 Canonical closed engine values, grouped by owning domain. Parent: `../AGENTS.md`.
 
-Ten leaf modules plus a docstring-only `__init__.py` (11 `.py` files). They import only the standard library: no records, DAOs, schemas, settings or I/O. Keep them that way so `app.records`, `app.core`, `app.schemas`, `app.dao` and `scripts/` can all import them without cycles.
+Domain modules import only the standard library; `__init__.py` contains only a docstring. No records, DAOs, schemas, settings or I/O. Keep them that way so `app.records`, `app.core`, `app.schemas`, `app.dao` and `scripts/` can all import them without cycles.
 
 ## Modules
 
@@ -13,6 +13,7 @@ Ten leaf modules plus a docstring-only `__init__.py` (11 `.py` files). They impo
 | `channels.py` | `ChannelType` | `channel_type_enum` |
 | `activity.py` | `ActivityAction` | `activity_action_enum` |
 | `approvals.py` | `ApprovalAction`, `ApprovalStatus` | `approval_status_enum` |
+| `notifications.py` | `BroadcastJobStatus` | `broadcast_jobs.status` check in `scripts/schema_baseline.sql`; registered in `scripts/api_contract_registry.py` |
 | `tasks.py` | `TaskType`, `TaskStatus`, `TaskPriority` | `task_type_enum`, `task_status_enum`, `task_priority_enum` |
 | `triggers.py` | `TriggerExecutionStatus` | `trigger_executions.status` |
 | `focus.py` | `FocusStatus`, `FocusKind` | `agent_focus_items.status` / `kind` |

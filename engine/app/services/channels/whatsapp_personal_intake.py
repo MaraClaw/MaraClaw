@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -40,7 +41,12 @@ async def resolve_personal_sender(source: PersonalSource, agent_id: UUID) -> tup
     return agent, owner
 
 
-async def accept_message(connection: PersonalConnection, message: Message) -> bool:
+async def accept_message(
+    connection: PersonalConnection,
+    message: Message,
+    *,
+    download: Callable[[Message, int], Awaitable[bytes]] | None = None,
+) -> bool:
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
     if (
@@ -69,16 +75,22 @@ async def accept_message(connection: PersonalConnection, message: Message) -> bo
         account_id=connection.account_id,
         self_jid=connection.pn_jid or connection.lid_jid or "",
     )
-    await accept_channel_event(
-        ChannelEvent(
-            config_id=connection.config_id,
-            agent_id=connection.agent_id,
-            provider="whatsapp",
-            event_key=f"personal:{connection.auth_epoch}:{message.message_id}",
-            sender_id=connection.account_id,
-            conversation_id=route.external_id(),
-            text=message.text,
-            personal_source=source,
-        )
+    event = ChannelEvent(
+        config_id=connection.config_id,
+        agent_id=connection.agent_id,
+        provider="whatsapp",
+        event_key=f"personal:{connection.auth_epoch}:{message.message_id}",
+        sender_id=connection.account_id,
+        conversation_id=route.external_id(),
+        text=message.text,
+        personal_source=source,
+        kind=message.media.kind if message.media is not None else "text",
+        media_ids=(message.media.source_id,) if message.media is not None else (),
     )
+    if message.media is None:
+        await accept_channel_event(event)
+    else:
+        from app.services.channels.whatsapp_personal_media import accept_media
+
+        await accept_media(event, message, download)
     return True

@@ -1,5 +1,6 @@
 import base64
 import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import assert_never, override
 from uuid import UUID
@@ -24,6 +25,9 @@ from app.services.channels.whatsapp_personal_protocol import (
     Closed,
     CredsSet,
     Identity,
+    MediaChunk,
+    MediaEnd,
+    MediaError,
     Message,
     Ready,
     SendResult,
@@ -73,10 +77,9 @@ async def handle_frame(connection: PersonalConnection, frame: ChildFrame) -> Jso
                     },
                 )
         case Message():
-            async with connection_ctx():
-                current = await get_personal(connection.agent_id)
-            if current is not None and current.claim_token == connection.claim_token:
-                await accept_message(current, frame)
+            await handle_message(connection, frame)
+        case MediaChunk() | MediaEnd() | MediaError():
+            raise HTTPException(409, "personal_media_transport_required")
         case SendResult():
             async with connection_ctx() as db:
                 await db.execute(
@@ -99,6 +102,20 @@ async def handle_frame(connection: PersonalConnection, frame: ChildFrame) -> Jso
         case unreachable:
             assert_never(unreachable)
     return None
+
+
+async def handle_message(
+    connection: PersonalConnection, message: Message, download: Callable[[Message, int], Awaitable[bytes]] | None = None
+) -> None:
+    async with connection_ctx():
+        current = await get_personal(connection.agent_id)
+    if (
+        current is not None
+        and (current.config_id, current.auth_epoch, current.generation, current.claim_token)
+        == (connection.config_id, connection.auth_epoch, connection.generation, connection.claim_token)
+        and (connection.account_id is None or connection.account_id == current.account_id)
+    ):
+        await accept_message(current, message, download=download)
 
 
 async def revoke_current_claim(connection: PersonalConnection, reason: str) -> None:

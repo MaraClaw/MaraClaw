@@ -1,6 +1,6 @@
 # hooks/ - providers, query options and workspace scopes
 
-Scope: auth/theme context lifetimes, session-fenced query adapters, query-option factories, and the invitation, transfer, chat-history and agent-lifecycle hooks built on them.
+Scope: auth/theme/translation context lifetimes, session-fenced query adapters, query-option factories, and the invitation, transfer, chat-history and agent-lifecycle hooks built on them.
 
 ## Files
 
@@ -8,6 +8,7 @@ Scope: auth/theme context lifetimes, session-fenced query adapters, query-option
 
 - `auth-provider.tsx`: `AuthProvider`, external auth-store subscription and context action wiring.
 - `theme-provider.tsx`: `ThemeProvider`, stored/system theme resolution and document updates.
+- `translation-provider.tsx`: `TranslationProvider`, persisted language, HTML `lang`, translation callbacks and locale-aware date/number formatting.
 
 ### Query-option factories
 
@@ -27,17 +28,18 @@ Scope: auth/theme context lifetimes, session-fenced query adapters, query-option
 - `use-auth.ts`: `AuthContextValue`, `AuthContext`, `useAuth`; typed auth context and required-provider access.
 - `use-admission-access.ts`: `useAdmissionAccess`; pending-admission query exposing `workspaceAllowed`.
 - `use-invitation-link.ts`, `use-invitation-preview.ts`, `use-joined-workspace.ts`, `use-transfer-funnel.ts`: invitation code intake, preview, joined-workspace entry and transfer quote/choice/payment state.
-- `use-chat-history.ts`, `use-chat-scroll.ts`: cursor-paged chat history with earlier-page loading, and scroll anchoring for it.
+- `use-chat-history.ts`, `use-chat-scroll.ts`: cursor-paged chat history, measured transcript windowing, pinned rows and scroll anchoring.
 - `use-agent-expiry.ts`, `use-agent-lifecycle.ts`, `use-agent-setup.ts`: expiry timer, lifecycle status/MCP retry and setup status/retry.
 - `use-notification-selection.ts`: selected loaded notification rows per owner/view/category.
 - `use-openclaw-update.ts`: `useOpenClawUpdate`; update query, scoped upgrade-mutation count and work gate.
 - `use-theme.ts`: `Theme`, `ResolvedTheme`, `ThemeContext`, `useTheme`; theme contract and required-provider access.
+- `use-translation.ts`: `TranslationContextValue`, `TranslationContext`, `useTranslation`; language, typed `t`, dynamic `owned`, `formatDate` and `formatNumber`.
 
 ## Invariants
 
 - `AuthProvider.login` validates its owner before and after the request; returns token/multi-tenant results without installing them.
   `applySession` remains a separate context action; unexpected login responses throw `ApiError(500)`.
-- `useAuth`, `useTheme` and `useWorkspaceSession` throw when their respective context is absent.
+- `useAuth`, `useTheme`, `useTranslation` and `useWorkspaceSession` throw when their respective context is absent.
   Option factories return options, not hook results; workspace adapters bind them to `scope.client`.
 - `scope.run` asserts currency before and after awaited work; `scope.effect` skips retired-owner callbacks.
   `fenceMutationOptions` wraps mutation/onMutate execution and success/error/settled callbacks separately.
@@ -54,12 +56,14 @@ Scope: auth/theme context lifetimes, session-fenced query adapters, query-option
 - `useTransferFunnel` loads the quote under an abort controller and owner check. `submit` stages a selection when `explicit_choice_required`, otherwise executes. Execution is single-flight and blocked unless `source_eligible` with no held admission or payment; a payment-review result stores `payment`, an admission result stores `admission` then enters.
 - `useChatHistory` reads the latest window and keeps merged pages under `chatHistoryKey`. `loadEarlier` is single-flight, aborts on target change, and a cursor that fails to advance surfaces as an error.
 - `useChatScroll` anchors on the first visible `[data-chat-entry]` across prepends and sticks to the bottom within 80 px. Earlier-page loading arms at `scrollTop` 160 or less and re-arms after scrolling past it; scope changes reset it.
+- Transcript row heights come from `ResizeObserver`; `lib/chat/transcript-window.ts` builds the viewport window. Pending, rejected and focused rows stay pinned; row/list registration and focus callbacks belong to `ChatTranscript`. Scope changes clear heights and focus along with the scroll snapshot.
 - Agent lifecycle polls every 1,500 ms while setup, start, upgrade (`pending`/`cutover`) or an optional MCP is active, otherwise 30,000 ms, in the background too. Setup polls 1,500 ms only while active. Both need `canManage` and an agent ID, use stale time 0 and never retry. `useAgentExpiry` chunks timers to 2,147,483,647 ms and invalidates agent and lifecycle queries at expiry.
 - Update polling: 1,500 ms for `isActiveUpdate(run)`, otherwise 30,000 ms, including background polling.
   Query enabled only for a nonempty agent ID; stale time 0, always refetch on mount and refetch on focus.
   Newly observed terminal runs refresh agent/list/detail queries; upgrade success installs its run before invalidation.
 - Theme toggling chooses explicit light/dark opposite the resolved theme; it does not cycle back to system.
   Invalid stored values resolve to the system preference; media-listener cleanup removes the change handler.
+- Translation locale is `en` or `vi`, persisted in localStorage `maraclaw-language`; absent, invalid or unreadable storage defaults to `en`. Restricted storage still permits an in-memory switch. The provider updates `<html lang>` and formats with `en-US` / `vi-VN`; `lib/i18n/translation.ts` owns parsing, interpolation and storage, and `lib/i18n/catalog.ts` aggregates Vietnamese strings.
 
 ## Gotchas
 

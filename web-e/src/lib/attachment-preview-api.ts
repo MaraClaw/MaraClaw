@@ -10,15 +10,16 @@ const metadataSchema = z.object({
   version_token: z.string().min(1), content_type: z.string().min(1),
 }).readonly()
 export type AttachmentMetadata = z.infer<typeof metadataSchema>
-export type AttachmentRenderer = 'image' | 'pdf' | 'office' | 'unsupported'
+export type AttachmentRenderer = 'image' | 'video' | 'pdf' | 'office' | 'unsupported'
 export type AttachmentPreview = { readonly metadata: AttachmentMetadata } & (
-  | { readonly renderer: 'image' | 'pdf' | 'office'; readonly bytes: Uint8Array }
+  | { readonly renderer: 'image' | 'video' | 'pdf' | 'office'; readonly bytes: Uint8Array }
   | { readonly renderer: 'unsupported' }
 )
 
 export function attachmentRenderer(metadata: AttachmentMetadata): AttachmentRenderer {
   const mime = metadata.content_type.split(';')[0]?.trim().toLowerCase()
   if (mime && ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp'].includes(mime)) return 'image'
+  if (mime && ['video/mp4', 'video/webm', 'video/ogg'].includes(mime)) return 'video'
   if (mime === 'application/pdf') return 'pdf'
   if (officeFormat(metadata.name)) return 'office'
   return 'unsupported'

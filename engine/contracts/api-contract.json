@@ -5145,6 +5145,102 @@
         "title": "ChannelConfigOut",
         "type": "object"
       },
+      "ChannelLinkCodeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Hint"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/LinkChannel"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "deep_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deep Link"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "code",
+          "expires_at",
+          "deep_link",
+          "account_hint"
+        ],
+        "title": "ChannelLinkCodeResponse",
+        "type": "object"
+      },
+      "ChannelLinkStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/LinkChannel"
+          },
+          "external_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Hint"
+          },
+          "linked": {
+            "title": "Linked",
+            "type": "boolean"
+          },
+          "linked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linked At"
+          }
+        },
+        "required": [
+          "channel",
+          "available",
+          "linked",
+          "linked_at",
+          "external_hint"
+        ],
+        "title": "ChannelLinkStatus",
+        "type": "object"
+      },
       "ChannelType": {
         "enum": [
           "feishu",
@@ -5157,7 +5253,9 @@
           "atlassian",
           "microsoft_teams",
           "agentbay",
-          "google_chat"
+          "google_chat",
+          "telegram",
+          "zalo"
         ],
         "title": "ChannelType",
         "type": "string",
@@ -5172,7 +5270,9 @@
           "ATLASSIAN",
           "MICROSOFT_TEAMS",
           "AGENTBAY",
-          "GOOGLE_CHAT"
+          "GOOGLE_CHAT",
+          "TELEGRAM",
+          "ZALO"
         ]
       },
       "ChatAttachmentReference": {
@@ -10836,6 +10936,13 @@
           "upgrade_in_progress",
           "upgrade_required",
           "workspace_disk_exceeded"
+        ],
+        "type": "string"
+      },
+      "LinkChannel": {
+        "enum": [
+          "telegram",
+          "zalo"
         ],
         "type": "string"
       },
@@ -17924,6 +18031,28 @@
         "title": "TeamsChannelPayload",
         "type": "object"
       },
+      "TelegramBotToken": {
+        "maxLength": 512,
+        "pattern": "^[1-9][0-9]*:[A-Za-z0-9_-]+$",
+        "type": "string"
+      },
+      "TelegramChannelConfigUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "bot_token": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TelegramBotToken"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "TelegramChannelConfigUpdate",
+        "type": "object"
+      },
       "TemplateCreate": {
         "properties": {
           "category": {
@@ -20969,6 +21098,299 @@
           "type"
         ],
         "title": "WorkspaceDraftEvent",
+        "type": "object"
+      },
+      "ZaloPersonalDiagnostics": {
+        "additionalProperties": false,
+        "properties": {
+          "connected_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connected At"
+          },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          },
+          "heartbeat_failures": {
+            "default": 0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Heartbeat Failures",
+            "type": "integer"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "account_in_use",
+                  "identity_ambiguous",
+                  "protocol_error",
+                  "login_failed",
+                  "auth_store_failed",
+                  "transport_failed",
+                  "qr_expired",
+                  "qr_declined",
+                  "lease_expired"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "session_replaced",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error At"
+          },
+          "reconnect_attempts": {
+            "default": 0,
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Reconnect Attempts",
+            "type": "integer"
+          },
+          "retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry At"
+          }
+        },
+        "title": "ZaloPersonalDiagnostics",
+        "type": "object"
+      },
+      "ZaloPersonalQR": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 768000,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "expires_at"
+        ],
+        "title": "ZaloPersonalQR",
+        "type": "object"
+      },
+      "ZaloPersonalRelink": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "format": "uuid",
+            "title": "Expected Generation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_generation"
+        ],
+        "title": "ZaloPersonalRelink",
+        "type": "object"
+      },
+      "ZaloPersonalStart": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_generation": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Generation"
+          }
+        },
+        "required": [
+          "expected_generation"
+        ],
+        "title": "ZaloPersonalStart",
+        "type": "object"
+      },
+      "ZaloPersonalStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "account_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Hint"
+          },
+          "attempt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Id"
+          },
+          "diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZaloPersonalDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "account_in_use",
+                  "identity_ambiguous",
+                  "protocol_error",
+                  "login_failed",
+                  "auth_store_failed",
+                  "transport_failed",
+                  "qr_expired",
+                  "qr_declined",
+                  "lease_expired"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
+          "mode": {
+            "const": "personal_qr",
+            "default": "personal_qr",
+            "title": "Mode",
+            "type": "string"
+          },
+          "qr": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ZaloPersonalQR"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resumable": {
+            "default": false,
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "revision": {
+            "default": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "state": {
+            "default": "disconnected",
+            "enum": [
+              "pending",
+              "qr",
+              "connected",
+              "reconnecting",
+              "paused",
+              "expired",
+              "disconnecting",
+              "disconnected",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "title": "ZaloPersonalStatus",
         "type": "object"
       },
       "app__core__json_types__JsonValue-Output": {
@@ -25358,6 +25780,180 @@
         "summary": "Configure Channel",
         "tags": [
           "feishu"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/channel-links/{channel}": {
+      "delete": {
+        "operationId": "delete_2f6170692f6167656e74732f7b6167656e745f69647d2f6368616e6e656c2d6c696e6b732f7b6368616e6e656c7d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel",
+            "required": true,
+            "schema": {
+              "enum": [
+                "telegram",
+                "zalo"
+              ],
+              "title": "Channel",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Channel Link",
+        "tags": [
+          "channel-links"
+        ]
+      },
+      "get": {
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f6368616e6e656c2d6c696e6b732f7b6368616e6e656c7d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel",
+            "required": true,
+            "schema": {
+              "enum": [
+                "telegram",
+                "zalo"
+              ],
+              "title": "Channel",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelLinkStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Channel Link",
+        "tags": [
+          "channel-links"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/channel-links/{channel}/code": {
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f6368616e6e656c2d6c696e6b732f7b6368616e6e656c7d2f636f6465",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel",
+            "required": true,
+            "schema": {
+              "enum": [
+                "telegram",
+                "zalo"
+              ],
+              "title": "Channel",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelLinkCodeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Channel Link Code",
+        "tags": [
+          "channel-links"
         ]
       }
     },
@@ -32346,6 +32942,195 @@
         ]
       }
     },
+    "/api/agents/{agent_id}/telegram-channel": {
+      "delete": {
+        "operationId": "delete_2f6170692f6167656e74732f7b6167656e745f69647d2f74656c656772616d2d6368616e6e656c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Telegram Channel",
+        "tags": [
+          "telegram"
+        ]
+      },
+      "get": {
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f74656c656772616d2d6368616e6e656c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Telegram Channel",
+        "tags": [
+          "telegram"
+        ]
+      },
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f74656c656772616d2d6368616e6e656c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramChannelConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Configure Telegram Channel",
+        "tags": [
+          "telegram"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/telegram-channel/webhook-url": {
+      "get": {
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f74656c656772616d2d6368616e6e656c2f776562686f6f6b2d75726c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Telegram Webhook Url",
+        "tags": [
+          "telegram"
+        ]
+      }
+    },
     "/api/agents/{agent_id}/triggers": {
       "get": {
         "description": "List all triggers for an agent.",
@@ -33473,6 +34258,226 @@
         "summary": "Get Whatsapp Webhook Url",
         "tags": [
           "whatsapp"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/zalo-channel/personal": {
+      "delete": {
+        "operationId": "delete_2f6170692f6167656e74732f7b6167656e745f69647d2f7a616c6f2d6368616e6e656c2f706572736f6e616c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_generation",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Expected Generation",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZaloPersonalStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Disconnect Personal",
+        "tags": [
+          "zalo"
+        ]
+      },
+      "get": {
+        "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f7a616c6f2d6368616e6e656c2f706572736f6e616c",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZaloPersonalStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Personal",
+        "tags": [
+          "zalo"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/zalo-channel/personal/relink": {
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f7a616c6f2d6368616e6e656c2f706572736f6e616c2f72656c696e6b",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZaloPersonalRelink"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZaloPersonalStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Relink Personal",
+        "tags": [
+          "zalo"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/zalo-channel/personal/start": {
+      "post": {
+        "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f7a616c6f2d6368616e6e656c2f706572736f6e616c2f7374617274",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZaloPersonalStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZaloPersonalStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Personal",
+        "tags": [
+          "zalo"
         ]
       }
     },
@@ -35197,6 +36202,47 @@
         "summary": "Teams Event Webhook",
         "tags": [
           "microsoft_teams"
+        ]
+      }
+    },
+    "/api/channel/telegram/{config_id}/webhook": {
+      "post": {
+        "operationId": "post_2f6170692f6368616e6e656c2f74656c656772616d2f7b636f6e6669675f69647d2f776562686f6f6b",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Telegram Event Webhook",
+        "tags": [
+          "telegram"
         ]
       }
     },
@@ -48538,6 +49584,8 @@
       "ChannelCatalogEntry",
       "ChannelConfigCreate",
       "ChannelConfigOut",
+      "ChannelLinkCodeResponse",
+      "ChannelLinkStatus",
       "ChannelType",
       "ChatEventType",
       "ChatHistoryDelta",
@@ -48738,6 +49786,7 @@
       "TaskType",
       "TaskUpdate",
       "TeamsChannelPayload",
+      "TelegramChannelConfigUpdate",
       "TemplateCreate",
       "TemplateOut",
       "TenantChoice",
@@ -48772,7 +49821,10 @@
       "WeComChannelPayload",
       "WhatsAppChannelOut",
       "WhatsAppChannelPayload",
-      "WorkReportOut"
+      "WorkReportOut",
+      "ZaloPersonalRelink",
+      "ZaloPersonalStart",
+      "ZaloPersonalStatus"
     ],
     "schemas": [
       "ActivityAction",
@@ -48864,6 +49916,8 @@
       "ChannelCatalogEntry",
       "ChannelConfigCreate",
       "ChannelConfigOut",
+      "ChannelLinkCodeResponse",
+      "ChannelLinkStatus",
       "ChannelType",
       "ChatAttachmentReference",
       "ChatEventType",
@@ -48973,6 +50027,7 @@
       "KeyResultUpdate",
       "LifecycleBlockCode",
       "LifecycleOperationalBlockCode",
+      "LinkChannel",
       "LivePreview",
       "LockRequest",
       "MCPCatalogDiscovery",
@@ -49132,6 +50187,8 @@
       "TaskType",
       "TaskUpdate",
       "TeamsChannelPayload",
+      "TelegramBotToken",
+      "TelegramChannelConfigUpdate",
       "TemplateCreate",
       "TemplateOut",
       "TenantChoice",
@@ -49178,6 +50235,11 @@
       "WhatsAppChannelPayload",
       "WorkReportOut",
       "WorkspaceDraftEvent",
+      "ZaloPersonalDiagnostics",
+      "ZaloPersonalQR",
+      "ZaloPersonalRelink",
+      "ZaloPersonalStart",
+      "ZaloPersonalStatus",
       "app__core__json_types__JsonValue-Output",
       "pydantic__types__JsonValue"
     ],

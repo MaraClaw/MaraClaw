@@ -169,8 +169,14 @@ async def _register_slash_commands(application_id: str, bot_token: str) -> Disco
                 "name": "message",
                 "description": "Your question or message to the agent",
                 "type": 3,  # STRING
-                "required": True,
-            }
+                "required": False,
+            },
+            {
+                "name": "attachment",
+                "description": "A file, image or video for the agent",
+                "type": 11,
+                "required": False,
+            },
         ],
     }
     url = f"https://discord.com/api/v10/applications/{application_id}/commands"
@@ -261,13 +267,15 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
         data_obj = json_object_from(body.get("data"))
         options_raw = data_obj.get("options")
         user_text = ""
+        attachment_ids: list[str] = []
         for raw_opt in options_raw if isinstance(options_raw, list) else []:
             opt = json_object_from(raw_opt)
             if json_as_str(opt.get("name")) == "message":
                 user_text = json_as_str_or(opt.get("value")).strip()
-                break
+            if json_as_int(opt.get("type")) == 11:
+                attachment_ids.append(json_as_str_or(opt.get("value")))
 
-        if not user_text:
+        if not user_text and not attachment_ids:
             return {"type": 4, "data": {"content": "⚠️ Please provide a message. Usage: `/ask message:<your question>`"}}
 
         member_user = json_object_from(json_object_from(body.get("member")).get("user"))
@@ -280,21 +288,28 @@ async def discord_interaction_webhook(agent_id: uuid.UUID, request: Request) -> 
         native_id = json_as_str_or(body.get("id"))
         if not native_id:
             raise HTTPException(status_code=400, detail="Discord interaction ID is required")
+        from app.services.channels.discord_media import DiscordAttachment, accept_discord_media, defer_discord_media
         from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
-        await accept_channel_event(
-            ChannelEvent(
-                config_id=config.id,
-                agent_id=agent_id,
-                provider="discord",
-                event_key=json.dumps([config.app_id, channel_id, native_id], separators=(",", ":")),
-                sender_id=sender_id,
-                conversation_id=conv_id,
-                text=user_text,
-                kind="application_command",
-                is_group=_is_group_discord,
-            )
+        resolved = json_object_from(json_object_from(data_obj.get("resolved")).get("attachments"))
+        attachments = tuple(DiscordAttachment.model_validate(resolved.get(item)) for item in attachment_ids)
+        event = ChannelEvent(
+            config_id=config.id,
+            agent_id=agent_id,
+            provider="discord",
+            event_key=json.dumps([config.app_id, channel_id, native_id], separators=(",", ":")),
+            sender_id=sender_id,
+            conversation_id=conv_id,
+            text=user_text,
+            kind="application_command",
+            media_ids=tuple(attachment_ids),
+            is_group=_is_group_discord,
         )
+        if attachments:
+            await defer_discord_media(event, native_id, json_as_str_or(body.get("token")))
+            await accept_discord_media(event, attachments)
+            return Response(status_code=202)
+        await accept_channel_event(event)
         return {"type": 5}
 
     return {"type": 1}

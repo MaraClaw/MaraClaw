@@ -1,5 +1,5 @@
-import makeWASocket from 'baileys';
-import type { BaileysEventEmitter, Contact } from 'baileys';
+import makeWASocket, { downloadMediaMessage } from 'baileys';
+import type { BaileysEventEmitter, Contact, WAMessage } from 'baileys';
 import { pino } from 'pino';
 import { z } from 'zod';
 import type { ParentAuth } from './auth.js';
@@ -11,6 +11,7 @@ export interface Transport {
   readonly user: Contact | undefined;
   send(jid: string, text: string, id: string): Promise<void>;
   onAck(listener: (ack: Ack) => void): () => void;
+  download(message: WAMessage, signal: AbortSignal): AsyncGenerator<Uint8Array>;
   end(): Promise<void>;
 }
 export type TransportFactory = (auth: ParentAuth) => Transport;
@@ -52,6 +53,17 @@ export const createTransport: TransportFactory = auth => {
       };
       socket.ws.on('CB:ack,class:message', handler);
       return () => { socket.ws.off('CB:ack,class:message', handler); };
+    },
+    download: async function* (message, signal) {
+      await auth.barrier();
+      signal.throwIfAborted();
+      const stream = await downloadMediaMessage(message, 'stream', { options: { signal } });
+      try {
+        for await (const chunk of stream) {
+          if (!(chunk instanceof Uint8Array)) throw new BridgeFault();
+          yield chunk;
+        }
+      } finally { stream.destroy(); }
     },
     end: async () => { await socket.end(undefined); },
   };

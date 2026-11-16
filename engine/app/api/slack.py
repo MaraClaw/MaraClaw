@@ -199,7 +199,7 @@ async def slack_event_webhook(
     from app.services.channels import dedup as channel_dedup
 
     if ((bot_id := event.get("bot_id")) is not None and bot_id) or (
-        (subtype := event.get("subtype")) is not None and subtype
+        (subtype := event.get("subtype")) is not None and subtype and subtype != "file_share"
     ):
         return {"ok": True}
 

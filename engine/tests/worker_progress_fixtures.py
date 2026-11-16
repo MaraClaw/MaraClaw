@@ -36,7 +36,7 @@ WORKER_BUDGETED_LOOPS: Final = frozenset(
         "capacity_renewal",
     }
 )
-CONNECTOR_BUDGETED_LOOPS: Final = frozenset({"whatsapp_personal", "transfer_cleanup"})
+CONNECTOR_BUDGETED_LOOPS: Final = frozenset({"whatsapp_personal", "zalo_personal", "transfer_cleanup"})
 
 
 @dataclass(slots=True)

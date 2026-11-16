@@ -160,6 +160,17 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
             )
         return row is not None
 
+    async def stored_plan(self, claim: GatewayReportDeliveryRecord) -> OutboundPlan | None:
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"SELECT im_plan FROM {self.table} WHERE id=%(id)s AND claim_token=%(claim)s "
+                "AND next_chunk=%(ordinal)s",
+                {"id": claim.id, "claim": claim.claim_token, "ordinal": claim.next_chunk},
+            )
+        if row is None or row["im_plan"] is None:
+            return None
+        return OutboundPlan.model_validate(row["im_plan"])
+
     async def checkpoint_chunk(self, claim: GatewayReportDeliveryRecord, *, now: datetime) -> bool:
         """Advance exactly one ordinal; final progress and delivery acknowledgement are one write."""
         async with self.session() as db:

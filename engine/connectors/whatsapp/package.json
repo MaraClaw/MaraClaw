@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/protocol.test.js dist/test/auth.test.js dist/test/sends.test.js dist/test/runtime.test.js dist/test/cli.test.js dist/test/diagnostics.test.js dist/test/intake-diagnostics.test.js dist/test/sdk-recovery.test.js",
+    "test": "npm run build && node --test dist/test/protocol.test.js dist/test/auth.test.js dist/test/sends.test.js dist/test/runtime.test.js dist/test/cli.test.js dist/test/diagnostics.test.js dist/test/intake-diagnostics.test.js dist/test/sdk-recovery.test.js dist/test/media.test.js",
     "start": "node dist/src/bridge.js"
   },
   "dependencies": {
@@ -18,7 +18,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@tsconfig/node26": "^26.0.1",
+    "@tsconfig/node26": "^26.0.2",
     "@types/node": "26.6.6",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
   },

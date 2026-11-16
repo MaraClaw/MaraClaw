@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.records.outbound_plan import OutboundProvider
+from app.records.outbound_plan import OutboundChunk, OutboundProvider
 from app.services import gateway_report_relay as relay
 from app.services.channels import outbound_plan
 from app.services.channels.outbound_errors import ProviderPayloadRejectedError
@@ -166,4 +166,8 @@ async def test_one_claim_sends_only_one_chunk(monkeypatch):
     assert stored.available_at == store.now
     assert store.sends == ["a" * 4000]
     assert stored.im_plan is not None
-    assert [chunk.text for chunk in stored.im_plan.chunks] == ["a" * 4000, "a"]
+    texts: list[str] = []
+    for chunk in stored.im_plan.chunks:
+        assert isinstance(chunk, OutboundChunk)
+        texts.append(chunk.text)
+    assert texts == ["a" * 4000, "a"]

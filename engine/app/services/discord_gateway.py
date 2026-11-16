@@ -17,6 +17,8 @@ from contextlib import AbstractAsyncContextManager
 from types import ModuleType
 from typing import Protocol, TypeIs
 
+import httpx
+
 from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str_or, json_object_from
 from app.core.logging import logger
@@ -24,6 +26,7 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import cancel_tasks
 from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
+from app.services.storage_runtime.quota_errors import StorageQuotaError
 
 
 class _DiscordUserLike(Protocol):
@@ -193,7 +196,7 @@ class DiscordGatewayManager:
                 user_text = user_text.replace(f"<@{client.user.id}>", "").strip()
                 user_text = user_text.replace(f"<@!{client.user.id}>", "").strip()
 
-            if not user_text:
+            if not user_text and not getattr(message, "attachments", ()):
                 return
 
             try:
@@ -259,6 +262,7 @@ class DiscordGatewayManager:
     ) -> str | None:
         """Process an incoming Discord message through the agent LLM."""
         try:
+            from app.services.channels.discord_media import DiscordAttachment, accept_discord_media
             from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
             sender_id = str(message.author.id)
@@ -267,22 +271,35 @@ class DiscordGatewayManager:
 
             if source is None:
                 raise RuntimeError("Discord connection source is required")
-            await accept_channel_event(
-                ChannelEvent(
-                    config_id=source.config_id,
-                    agent_id=agent_id,
-                    provider="discord",
-                    event_key=f"{channel_id}:{message.id}",
-                    sender_id=sender_id,
-                    conversation_id=conv_id,
-                    text=user_text,
-                    is_group=message.guild is not None,
-                    group_session_owner="sender",
-                    stream_source=source,
-                )
+            raw_attachments = _mod_attr(message, "attachments")
+            items = list[object](raw_attachments) if isinstance(raw_attachments, (list, tuple)) else []
+            attachments = tuple(DiscordAttachment.model_validate(item) for item in items)
+            event = ChannelEvent(
+                config_id=source.config_id,
+                agent_id=agent_id,
+                provider="discord",
+                event_key=f"{channel_id}:{message.id}",
+                sender_id=sender_id,
+                conversation_id=conv_id,
+                text=user_text,
+                media_ids=tuple(str(item.id) for item in attachments),
+                is_group=message.guild is not None,
+                group_session_owner="sender",
+                stream_source=source,
             )
+            if attachments:
+                await accept_discord_media(event, attachments)
+            else:
+                await accept_channel_event(event)
             return None
 
+        except StorageQuotaError:
+            raise
+        except httpx.HTTPError as error:
+            logger.warning(
+                "[Discord GW] Attachment request failed agent={} error_type={}", agent_id, type(error).__name__
+            )
+            return "Discord attachment download failed. Please attach the file again."
         except Exception as e:
             logger.exception(f"[Discord GW] Error handling message for {agent_id}: {e}")
             return f"An error occurred while processing your message: {str(e)[:100]}"

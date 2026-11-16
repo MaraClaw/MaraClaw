@@ -7,7 +7,8 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | Topic | Location | Notes |
 |---|---|---|
 | Admin APIs (platform + tenant) | `admin-apis.md` | Full inventory of `platform_admin` / `org_admin` HTTP APIs, genesis bootstrap, `must_change_password`, role matrix for `web-a` |
-| Channels | `channels.md` | Transport/maturity per IM product. **Cloud API WhatsApp**: signed webhook, per-message admission, 24-hour reply window from the signed inbound timestamp. **Personal QR WhatsApp**: self-chat only, durable burst collection, `WHATSAPP_PERSONAL_BURST_*` limits. Bridge process contract is not here: `../connectors/whatsapp/AGENTS.md` |
+| Channels | `channels.md` | Transport/maturity per IM product. **Cloud API WhatsApp**: signed webhook, per-message admission, 24-hour reply window from the signed inbound timestamp. **Personal QR WhatsApp**: self-chat text/original media, durable burst collection, `WHATSAPP_PERSONAL_BURST_*` limits. Bridge contract: `../connectors/whatsapp/AGENTS.md` |
+| Personal Zalo | `channels.md` (Telegram bot and Zalo personal; session maintenance and files) | QR setup, encrypted session restore, bounded recovery, sender linking and private files. Bridge ownership: `../connectors/zalo/AGENTS.md`; wire contract: `../connectors/zalo/README.md`. Personal-account SDK, separate from the Official Account API |
 | Shared human runtime | `shared-openclaw-runtime.md` | One shared human transcript lane per agent, FIFO head dispatch, destination contracts, guest session identity, focused verification |
 | Gateway reports | `gateway-report-delivery.md` | Native terminal settlement and independent `/gateway/report`, durable agent and IM destinations, chunk checkpoints, provider backoff, delivery-ambiguity limits |
 | Guest containers | `guest-containers.md` | Engine-side ownership/replacement, readiness deadlines, bootstrap handshake, tier guest limits (applied on create and resume), aggregate admission, workspace disk quota, resource-pressure episodes; policy, not live-host validation |
@@ -29,6 +30,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 
 - Admin API docs should track `app/api/admin.py`, `tenants.py`, `enterprise.py`, `users.py`, `organization.py`, `tools.py`, `skills.py`, `auth.py` (login/password force-change), `app/services/platform_admin_seeder.py`, `app/services/tenant_provisioning.py`, and admin gates in `app/core/security.py` when roles, genesis bootstrap, or routes change.
 - Channel docs should track `app/api/whatsapp.py`, `app/api/whatsapp_personal.py`, `app/services/channels/` (`whatsapp_window.py`, `whatsapp_personal_*.py`, `personal_burst_*.py`) and the `WHATSAPP_PERSONAL_BURST_*` settings.
+- Zalo operational docs should track `../app/api/zalo_personal.py`, `../app/services/channels/zalo_personal_supervisor.py`, the `zalo_personal_*.py` control/protocol/media modules in that package, `ZALO_PERSONAL_*` settings and `../connectors/zalo/README.md`. Keep API setup/relink/disconnect, connector recovery and bridge credential-ACK/file limits consistent.
 - Shared-runtime and gateway docs should track `app/services/openclaw_shared_dispatch.py`, `openclaw_native_claims.py`, `openclaw_routing.py`, `openclaw_gateway_rpc.py`, `openclaw_gateway_delivery.py`, `openclaw_gateway_config.py`, `openclaw_gateway_stream.py`, `response_identity.py`, `openclaw_dispatch_reconciler.py`, `shared_chat.py`, `gateway_report_relay.py`, `connectors/openclaw-dispatcher/gateway-rpc.mjs` and `app/api/gateway.py`.
 - Guest-container docs should track `app/services/guest_*.py`, `agent_start_*.py`, `agent_workspace_quota*.py`, `agent_resource_pressure*.py`, `app/api/admin_resource_pressure.py` and the tier limits in `app/records/organization_plan.py`.
 - AgentBay docs should track `check_agentbay_config.py`, `app/api/agentbay_control.py`, and AgentBay env vars in `.env.example`.
@@ -46,7 +48,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 - Update docs when runner behavior changes in `start-from-docker.sh`, `entrypoint.sh`, or OpenClaw Docker scripts.
 - Prefer concise operational notes over broad design essays; `../AGENTS.md` carries engine commands and hierarchy.
 - Credential docs may describe paths and rotation, but must not include live tokens, OAuth refresh secrets, keyring passwords, or customer data.
-- Schema-affecting docs must say whether a change is fresh-baseline only (no existing-database upgrade is supplied) or one of the six guarded baseline upgrades (`../AGENTS.md`); for an upgrade, also give any operator pre-build steps (`chat-history.md`).
+- Schema-affecting docs must say whether a change is fresh-baseline only (no existing-database upgrade is supplied) or one of the eight explicit baseline exceptions (`../AGENTS.md`); for an upgrade, also give any operator pre-build steps (`chat-history.md`).
 
 ## Avoid
 

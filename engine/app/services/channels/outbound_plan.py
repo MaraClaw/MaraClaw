@@ -1,4 +1,6 @@
+import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from os import environ
 from typing import assert_never
 from urllib.parse import urlsplit
@@ -11,10 +13,11 @@ from app.core.json_types import json_as_str_or, json_object_from
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
+from app.records.channel_media import StoredFile
 from app.records.chat import ChatSessionRecord
-from app.records.outbound_plan import OutboundChunk, OutboundPlan, OutboundProvider, OutboundTarget
+from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundPlan, OutboundProvider, OutboundTarget
 from app.services.channels.google_chat import _service_account_info, parse_external_conv_id
-from app.services.channels.types import normalize_channel_type
+from app.services.channels.types import outbound_provider_key
 from app.services.wechat_channel import WECHAT_ILINK_BASE_URL
 
 _provider = TypeAdapter(OutboundProvider)
@@ -28,6 +31,8 @@ _LIMITS: dict[OutboundProvider, int] = {
     OutboundProvider.WHATSAPP: 4096,
     OutboundProvider.WECHAT: 2000,
     OutboundProvider.DISCORD: 2000,
+    OutboundProvider.TELEGRAM: 4096,
+    OutboundProvider.ZALO: 2000,
 }
 
 
@@ -39,14 +44,16 @@ class ConfiguredOutbound:
 
 
 async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) -> ConfiguredOutbound:
-    provider = _provider.validate_python(normalize_channel_type(session.source_channel))
-    channel_type = ChannelType(provider)
+    provider = _provider.validate_python(outbound_provider_key(session.source_channel))
+    channel_type = ChannelType.ZALO if provider == OutboundProvider.ZALO else ChannelType(provider)
     config = await channel_config_dao.get_configured_for_agent(agent.id, channel_type=channel_type)
     if config is None and provider == OutboundProvider.FEISHU and agent.tenant_id is not None:
         config = await channel_config_dao.get_for_tenant_channel(tenant_id=agent.tenant_id, channel_type=channel_type)
     external = (session.external_conv_id or "").strip()
     if config is None:
-        if provider == OutboundProvider.WHATSAPP and external.startswith("whatsapp_personal:"):
+        if provider == OutboundProvider.ZALO or (
+            provider == OutboundProvider.WHATSAPP and external.startswith("whatsapp_personal:")
+        ):
             from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
 
             raise PersonalSendTerminalError("personal_route_revoked")
@@ -81,6 +88,52 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
     destination, thread, recipient_type, endpoint, enterprise_agent_id = external, None, "", "", ""
     account: tuple[str, ...] = (config.app_id or "",)
     match provider:
+        case OutboundProvider.ZALO:
+            from app.dao.zalo_personal_dao import get_personal as get_zalo_personal
+            from app.records.zalo_personal import ZaloRoute
+            from app.services.channels.whatsapp_personal_journal import (
+                PersonalSendPendingError,
+                PersonalSendTerminalError,
+            )
+            from app.services.channels.zalo_personal_journal import route_state as zalo_route_state
+
+            if extra.get("mode") != "personal_qr":
+                raise PersonalSendTerminalError("personal_cloud_route_forbidden")
+            try:
+                zalo_route = ZaloRoute.from_external_id(external)
+            except ValueError:
+                raise PersonalSendTerminalError("personal_route_invalid") from None
+            if zalo_route.config_id != config.id:
+                raise PersonalSendTerminalError("personal_route_revoked")
+            zalo_connection = await get_zalo_personal(agent.id)
+            match zalo_route_state(zalo_connection, zalo_route, datetime.now(UTC)):
+                case "recovering":
+                    raise PersonalSendPendingError
+                case "revoked":
+                    raise PersonalSendTerminalError("personal_route_revoked")
+                case "live":
+                    pass
+            return ConfiguredOutbound(
+                OutboundTarget(
+                    provider=provider,
+                    mode="personal_qr",
+                    config_id=config.id,
+                    account=(zalo_route.account_id, str(zalo_route.auth_epoch), str(zalo_route.generation)),
+                    destination=zalo_route.external_id(),
+                ),
+                config,
+                agent.tenant_id,
+            )
+        case OutboundProvider.TELEGRAM:
+            if (
+                re.fullmatch(r"[1-9][0-9]*", config.app_id or "") is None
+                or not (config.app_secret or "").strip()
+                or (config.app_secret or "").partition(":")[0] != config.app_id
+            ):
+                raise ValueError("Telegram bot identity or token is unavailable")
+            if re.fullmatch(r"telegram_[1-9][0-9]*", external) is None:
+                raise ValueError("Telegram private destination is invalid")
+            destination = external.removeprefix("telegram_")
         case OutboundProvider.SLACK | OutboundProvider.DISCORD:
             token = (config.app_secret or "").strip()
             if not token:
@@ -146,10 +199,51 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
     return ConfiguredOutbound(target, config, agent.tenant_id)
 
 
+def _split_zalo_chunks(content: str, limit: int) -> tuple[str, ...]:
+    """Prefer readable cuts while reserving nonblank text for every remaining chunk."""
+    # A suffix is viable if a nonblank chunk can reach another viable suffix.
+    viable = [False] * (len(content) + 1)
+    viable[-1] = True
+    end = next_text = len(content)
+    for start in range(len(content) - 1, -1, -1):
+        if not content[start].isspace():
+            next_text = start
+        end = min(end, start + limit)
+        while end > start and not viable[end]:
+            end -= 1
+        viable[start] = end > next_text
+    if not viable[0]:
+        raise ValueError("Cannot split Zalo content within the text limit without blank chunks")
+    chunks: list[str] = []
+    start = 0
+    while start < len(content):
+        end = min(start + limit, len(content))
+        while not viable[end]:
+            end -= 1
+        if end < len(content):
+            for separator in ("\n", " "):
+                boundary = next(
+                    (
+                        index
+                        for index in range(end, start + limit // 2, -1)
+                        if content[index - 1] == separator and viable[index] and content[start:index].strip()
+                    ),
+                    None,
+                )
+                if boundary is not None:
+                    end = boundary
+                    break
+        chunks.append(content[start:end])
+        start = end
+    return tuple(chunks)
+
+
 def split_chunks(content: str, provider: OutboundProvider) -> tuple[str, ...]:
     if not content.strip():
         raise ValueError("Cannot plan empty IM content")
     limit = _LIMITS[provider]
+    if provider == OutboundProvider.ZALO:
+        return _split_zalo_chunks(content, limit)
     chunks: list[str] = []
     start, size = 0, 0
     for index, character in enumerate(content):
@@ -162,7 +256,22 @@ def split_chunks(content: str, provider: OutboundProvider) -> tuple[str, ...]:
     return tuple(chunks)
 
 
-def build_plan(target: OutboundTarget, content: str, delivery_id: UUID) -> OutboundPlan:
+def build_plan(
+    target: OutboundTarget, content: str, delivery_id: UUID, *, files: tuple[StoredFile, ...] = ()
+) -> OutboundPlan:
+    if files:
+        text = split_chunks(content, target.provider) if content.strip() else ()
+        return OutboundPlan(
+            version=2,
+            target=target,
+            chunks=(
+                *(OutboundChunk(text=value, key=uuid5(delivery_id, f"v2:{index}")) for index, value in enumerate(text)),
+                *(
+                    OutboundFileChunk(file=file, key=uuid5(delivery_id, f"v2:{len(text) + index}"))
+                    for index, file in enumerate(files)
+                ),
+            ),
+        )
     return OutboundPlan(
         target=target,
         chunks=tuple(

@@ -11,7 +11,7 @@ from compression import zstd
 from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import ClassVar
+from typing import ClassVar, override
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -67,6 +67,15 @@ class ReplyMedia:
     text: str
     attachments: tuple[ChatAttachment, ...]
     pending: bool
+
+
+@dataclass(slots=True)
+class ReplyMediaError(Exception):
+    code: str
+
+    @override
+    def __str__(self) -> str:
+        return self.code
 
 
 @contextmanager
@@ -146,6 +155,24 @@ class TranscriptSource:
                 pages.append(_decode(rows))
         return tuple(pages)
 
+    def terminal(self, session_key: str, run_id: str) -> TranscriptReply | None:
+        with closing(sqlite3.connect(self.uri, uri=True, timeout=1)) as db:
+            db.execute("PRAGMA query_only=ON")
+            db.set_progress_handler(_deadline_handler(2), 1000)
+            rows = _rows.validate_python(
+                db.execute(
+                    "SELECT e.session_id, e.seq, CASE WHEN length(e.event_json) <= ? THEN e.event_json END, "
+                    "CASE WHEN length(e.event_zstd) <= ? THEN e.event_zstd END FROM transcript_events e "
+                    "WHERE EXISTS (SELECT 1 FROM session_windows w "
+                    "WHERE w.session_id = e.session_id AND w.session_key = ?) ORDER BY e.seq DESC LIMIT 1000",
+                    (MAX_EVENT_BYTES, MAX_EVENT_BYTES, session_key),
+                ).fetchall()
+            )
+        matching = [row.event for row in _decode(rows) if row.event is not None and row.event.run_id == run_id]
+        if len(matching) > 1:
+            raise ReplyMediaError("ambiguous_terminal_media")
+        return matching[0] if matching else None
+
 
 @contextmanager
 def open_transcript(root: Path) -> Generator[TranscriptSource]:
@@ -194,23 +221,33 @@ def _decode(rows: list[tuple[str, int, str | None, bytes | None]]) -> tuple[Tran
     return tuple(replies)
 
 
-def recover_media(root: Path, text: str) -> ReplyMedia:
+def recover_media(root: Path, text: str, strict: bool = False) -> ReplyMedia:
     attachments: list[ChatAttachment] = []
     pending = False
     for match in _MEDIA.finditer(text):
         raw = match.group(1).strip().strip("\"'")
+        if strict and not raw.startswith("/home/node/custom-state/workspace/"):
+            raise ReplyMediaError("foreign_media_path")
         relative = raw.removeprefix("/home/node/custom-state/")
         try:
             ref = ChatAttachment(path=relative, name=PurePosixPath(relative).name)
             if PurePosixPath(ref.path).parts[0] not in ("media", "workspace"):
+                if strict:
+                    raise ReplyMediaError("foreign_media_path")
                 continue
             with _open_contained(root, PurePosixPath(ref.path)):
                 pass
         except FileNotFoundError:
+            if strict:
+                raise ReplyMediaError("missing_media_file") from None
             pending = True
             continue
         except ValidationError, OSError:
+            if strict:
+                raise ReplyMediaError("invalid_media_file") from None
             continue
+        if strict and ref not in attachments and len(attachments) == 10:
+            raise ReplyMediaError("too_many_media_files")
         if ref not in attachments and len(attachments) < 10:
             attachments.append(ref)
     return ReplyMedia(_MEDIA.sub("", text).strip(), tuple(attachments), pending)

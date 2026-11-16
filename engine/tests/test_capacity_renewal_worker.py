@@ -2,7 +2,7 @@
 (no database)."""
 
 import asyncio
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, tzinfo
 from typing import cast
 from uuid import UUID
 
@@ -39,6 +39,19 @@ class Passes:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+@pytest.fixture(autouse=True)
+def wall_clock(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
+    current = [datetime(2026, 11, 16, 12, tzinfo=UTC)]
+
+    class Clock:
+        @staticmethod
+        def now(tz: tzinfo | None = None) -> datetime:
+            return current[0].astimezone(tz)
+
+    monkeypatch.setattr(worker, "datetime", Clock)
+    return current
 
 
 @pytest.fixture
@@ -81,6 +94,72 @@ async def test_a_finished_pass_beats_and_the_loop_sleeps_the_interval(
     await worker_http.ready(expected=True)
     await worker_http.pacing.step()
     assert passes.calls == 2
+    assert not task.done()
+
+
+@pytest.mark.parametrize(
+    ("now", "interval", "expected"),
+    [
+        pytest.param(datetime(2026, 11, 16, 12, tzinfo=UTC), 1800.0, 1800.0, id="configured-interval"),
+        pytest.param(datetime(2026, 11, 30, 16, 50, tzinfo=UTC), 3600.0, 600.0, id="next-vietnam-month"),
+        pytest.param(
+            datetime(2026, 11, 30, 17, tzinfo=UTC),
+            40 * 86400.0,
+            31 * 86400.0,
+            id="vietnam-month-start-before-utc-month-start",
+        ),
+        pytest.param(
+            datetime(2026, 11, 30, 23, 59, tzinfo=UTC), 3600.0, 3600.0, id="utc-month-end-is-not-vietnam-month-end"
+        ),
+        pytest.param(datetime(2026, 12, 31, 16, 59, 59, 750000, tzinfo=UTC), 3600.0, 0.25, id="december-year-rollover"),
+        pytest.param(
+            datetime(2026, 12, 31, 17, tzinfo=UTC),
+            40 * 86400.0,
+            31 * 86400.0,
+            id="vietnam-new-year-before-utc-new-year",
+        ),
+    ],
+)
+async def test_the_loop_sleeps_until_the_earlier_of_the_interval_and_next_vietnam_month(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_http: WorkerHTTP,
+    sleeps: list[float],
+    wall_clock: list[datetime],
+    now: datetime,
+    interval: float,
+    expected: float,
+):
+    wall_clock[0] = now
+    monkeypatch.setattr(get_settings(), "CAPACITY_RENEWAL_INTERVAL_SECONDS", interval)
+    passes = Passes()
+    task = start(monkeypatch, worker_http, passes)
+
+    await worker_http.pacing.paused()
+
+    assert passes.calls == 1
+    assert sleeps == [expected]
+    await worker_http.ready(expected=True)
+    assert not task.done()
+
+
+async def test_the_loop_recalculates_its_normal_sleep_after_the_month_boundary(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, sleeps: list[float], wall_clock: list[datetime]
+):
+    wall_clock[0] = datetime(2026, 11, 30, 16, 59, 50, tzinfo=UTC)
+    monkeypatch.setattr(get_settings(), "CAPACITY_RENEWAL_INTERVAL_SECONDS", 3600.0)
+    passes = Passes()
+    task = start(monkeypatch, worker_http, passes)
+    await worker_http.pacing.paused()
+
+    assert passes.calls == 1
+    assert sleeps == [10.0]
+
+    wall_clock[0] = datetime(2026, 11, 30, 17, tzinfo=UTC)
+    await worker_http.pacing.step(seconds=10.0)
+
+    assert passes.calls == 2
+    assert sleeps == [10.0, 3600.0]
+    await worker_http.ready(expected=True)
     assert not task.done()
 
 

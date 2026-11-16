@@ -8,7 +8,7 @@ from psycopg.types.json import Jsonb
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao as dao
 from app.db.errors import CheckViolationError
 from app.db.session import transaction
-from app.records.outbound_plan import OutboundTarget
+from app.records.outbound_plan import OutboundProvider, OutboundTarget
 from app.services.channels.outbound_plan import build_plan
 from test_chat_submission_postgres import ReceiptDatabase, receipt_db
 
@@ -34,7 +34,9 @@ async def delivery_db(receipt_db: ReceiptDatabase):
 
 def plan_for(row, content="a" * 4001):
     return build_plan(
-        OutboundTarget(provider="slack", config_id=uuid4(), account=("account",), destination="C1"), content, row.id
+        OutboundTarget(provider=OutboundProvider.SLACK, config_id=uuid4(), account=("account",), destination="C1"),
+        content,
+        row.id,
     )
 
 
@@ -171,7 +173,7 @@ async def test_real_schema_rejects_invalid_plan_cursor_states(delivery_db, chang
         case "past_end":
             cursor = 3
         case "invalid_version":
-            plan["version"] = 2
+            plan["version"] = 3
 
     with pytest.raises(CheckViolationError):
         async with transaction(db.first):

@@ -15,3 +15,5 @@ class ChannelType(StrEnum):
     MICROSOFT_TEAMS = "microsoft_teams"
     AGENTBAY = "agentbay"
     GOOGLE_CHAT = "google_chat"
+    TELEGRAM = "telegram"
+    ZALO = "zalo"

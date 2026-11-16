@@ -39,9 +39,10 @@ async def _accept(original: PersonalOriginal) -> PersonalAccepted:
         agent_id=original.agent.id,
         user_id=original.sender.id,
         conversation_id=str(original.shared_session_id),
-        content=original.text,
+        content=original.text if original.saved_content is None else original.saved_content,
+        attachments=original.attachments,
     )
-    member = NewBurstMember(original.receipt, original.text, message_id)
+    member = NewBurstMember(original.receipt, original.content, message_id)
     batch = await personal_burst_dao.append_member(scope, member, limits)
     if batch is not None:
         return PersonalAccepted(batch.gateway_id, batch.member_count, started_batch=False)

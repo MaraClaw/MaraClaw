@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, override
+from typing import TYPE_CHECKING, Literal, override
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -14,6 +14,7 @@ from app.core.permissions import compute_agent_access_level
 from app.core.row_memo import clear_entity_memo
 from app.core.security import load_user_principal
 from app.dao import agent_dao, channel_config_dao
+from app.dao.channel_event_media_dao import channel_event_media_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.channel_source_lock import lock_channel_source
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -21,6 +22,8 @@ from app.dao.company_admission_dao import company_admission_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.channel_event_receipt import ChannelEventReceiptRecord
+from app.records.channel_media import StoredFile
+from app.records.chat_attachment import ChatAttachment
 from app.records.personal_burst_input import ReceiptKey
 from app.records.user import UserRecord
 from app.records.whatsapp_personal import PersonalSource
@@ -38,6 +41,9 @@ from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_model_selection import prepare_shared_openclaw_message
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message
 from app.services.quota_guard import charge_conversation_quota
+
+if TYPE_CHECKING:
+    from app.records.zalo_personal import ZaloSource
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,11 +66,16 @@ class ChannelEvent:
     provider_timestamp_source: str | None = None
     personal_source: PersonalSource | None = None
     stream_source: StreamSource | None = None
+    zalo_source: ZaloSource | None = None
+    attachments: tuple[ChatAttachment, ...] = ()
+    media: tuple[StoredFile, ...] = ()
 
     def fingerprint(self) -> str:
         payload = [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids]
         if self.personal_source is not None:
             payload[1] = str(self.personal_source.auth_epoch)
+        if self.zalo_source is not None:
+            payload[1] = str(self.zalo_source.auth_epoch)
         if (
             self.provider_account_id is not None
             or self.provider_timestamp_source is not None
@@ -109,6 +120,16 @@ class AcceptedChannelEvent:
 
 async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
     clear_entity_memo()
+    if event.zalo_source is not None and normalize_channel_type(event.provider) != normalize_channel_type("zalo"):
+        raise HTTPException(403, "Invalid Zalo source")
+    if event.provider in {"telegram", "zalo", "zalo_personal"}:
+        from app.services.channels.sender_links import authorize_link_source, resolve_explicit_sender
+
+        config, agent = await authorize_link_source(event)
+        if event.provider_account_id is None:
+            raise HTTPException(403, "Provider account is required")
+        sender = await resolve_explicit_sender(config, agent, event.provider_account_id, event.sender_id)
+        return agent, sender
     if event.personal_source is not None:
         from app.services.channels.whatsapp_personal_intake import resolve_personal_sender
 
@@ -155,7 +176,7 @@ async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
 def _receipt(event: ChannelEvent, agent: AgentRecord) -> ChannelEventReceiptRecord:
     return ChannelEventReceiptRecord(
         config_id=event.config_id,
-        provider=event.provider,
+        provider="zalo" if event.zalo_source is not None else event.provider,
         event_key=event.event_key,
         agent_id=agent.id,
         tenant_id=agent.tenant_id,
@@ -221,6 +242,9 @@ async def accept_channel_event(
                 route=route,
                 shared_session_id=session.id,
                 reply_session_id=reply.id,
+                attachments=event.attachments,
+                saved_content=saved_content,
+                model_content=content,
             )
             return AcceptedChannelEvent(replayed=False, personal=await admit_personal_original(original))
         await charge_conversation_quota(sender)
@@ -235,18 +259,21 @@ async def accept_channel_event(
             user_id=sender.id,
             conversation_id=str(session.id),
             content=event.text if saved_content is None else saved_content,
+            attachments=event.attachments,
         )
         await ensure_workspace_within_quota(agent)
         # Last before enqueue: the per-agent counter row stays locked until commit and is shared by every conversation
         # with this agent, so it must not be held across route selection.
         await charge_agent_daily_message(agent)
-        await enqueue_prepared_openclaw_message(
+        message = await enqueue_prepared_openclaw_message(
             prepared,
             sender_user_id=sender.id,
             conversation_id=str(session.id),
             reply_session_id=reply.id,
             deduplicate=False,
         )
+        if event.media:
+            await channel_event_media_dao.insert(candidate, message.id, event.media)
     return AcceptedChannelEvent(replayed=False)
 
 

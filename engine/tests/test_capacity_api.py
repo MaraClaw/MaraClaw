@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -18,6 +18,7 @@ from app.api import admin_capacity, capacity, capacity_evidence, enterprise
 from app.core.domain.approvals import ApprovalAction
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
+from app.db.connection import DbConnection
 from app.records.capacity_order import (
     CapacityEvidence,
     CapacityOrderKind,
@@ -27,10 +28,12 @@ from app.records.capacity_order import (
 )
 from app.records.identity import IdentityRecord
 from app.records.organization_plan import OrganizationPlanId
+from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.schemas.capacity import CapacityEvidenceOut, CapacityOrderOut
-from app.services import capacity_orders, capacity_payment_settings
+from app.services import capacity_orders, capacity_payment_settings, company_capacity
 from app.services.capacity_evidence import MAX_EVIDENCE_BYTES
+from app.services.capacity_ledger import CapacityExtras
 from app.services.capacity_orders import EvidenceFile
 from app.services.capacity_payment_settings import RESERVED_SETTING_KEYS, SETTINGS_KEY, PaymentSettings
 
@@ -120,6 +123,44 @@ def world(monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeOrders]:
 
 def status_of(error: pytest.ExceptionInfo[HTTPException]) -> int:
     return error.value.status_code
+
+
+async def test_overview_keeps_caps_and_billing_on_one_date_across_month_end(
+    world: Callable[..., FakeOrders], monkeypatch: pytest.MonkeyPatch
+):
+    admin = person("org_admin", TENANT_A)
+    table = world(admin)
+    db = AsyncMock(spec=DbConnection)
+    db.fetchval.return_value = False
+
+    @asynccontextmanager
+    async def connection() -> AsyncGenerator[AsyncMock]:
+        yield db
+
+    today = date(2026, 12, 31)
+    clock = Mock(side_effect=[today, date(2027, 1, 1)])
+
+    async def extras(_db, _tenant_id, on_date):
+        return CapacityExtras(1, 2) if on_date == today else CapacityExtras(0, 0)
+
+    monkeypatch.setattr(capacity_orders, "connection_ctx", connection)
+    monkeypatch.setattr(capacity_orders.capacity_ledger, "vn_today", clock)
+    monkeypatch.setattr(company_capacity, "vn_today", clock)
+    monkeypatch.setattr(company_capacity, "effective_extras", extras)
+    monkeypatch.setattr(company_capacity, "tier_for_tenant", AsyncMock(return_value=OrganizationPlanId.PRO))
+    tenant = TenantRecord(id=TENANT_A, name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
+    monkeypatch.setattr(capacity_orders.tenant_dao, "get", AsyncMock(return_value=tenant), raising=False)
+    monkeypatch.setattr(capacity_orders, "company_usage", AsyncMock(return_value=(0, 0)))
+    monkeypatch.setattr(capacity_orders, "load_payment_settings", AsyncMock(return_value=None))
+    monkeypatch.setattr(table, "open_for_tenant", AsyncMock(return_value=[]), raising=False)
+    monkeypatch.setattr(table, "primary_renewal", AsyncMock(return_value=None), raising=False)
+
+    overview = await capacity_orders.overview(admin.id, None)
+
+    assert overview.today == today
+    assert overview.remaining_days == 1
+    assert (overview.extra_accounts, overview.extra_agents) == (1, 2)
+    assert (overview.account_limit, overview.agent_limit) == (6, 4)
 
 
 # ── authorization matrix ────────────────────────────────────────────────

@@ -175,6 +175,10 @@ request cannot approve if the applicant has since created agents. Workspace
 flocks fence setup and OpenClaw cutover through the owning transaction's commit
 or rollback; an active OpenClaw update prevents final disposition.
 
+Agent creation rechecks current membership under tenant/user locks in
+`agent_provisioning`. A stale source-organization principal receives **409** if
+final approval commits before creation acquires its locks, without inserting an agent.
+
 Paid approval preserves agent IDs, user-owned integration configurations and
 content. It moves operational agent/public-page tenant attribution, removes
 foreign-tenant model and source-only tool bindings and old organization grants,
@@ -221,6 +225,10 @@ unbound or non-expiring code and no legacy fallback. Preview, validation, row lo
 consume (`UPDATE ... WHERE is_active AND unexpired AND used_count < max_uses AND
 invited_email = <account email>`) all apply the same predicate, so a missing or
 different address matches nothing.
+
+Emailed invitations link to `/transfer#code=<code>` on the configured public
+frontend origin. The code stays in the URL fragment, not the query string;
+the recipient email is not included in the URL.
 
 `POST /api/tenants/invitations/preview {invitation_code}` (authenticated eligible
 unassigned or default-org member) returns `{tenant: {id, name}}` for an active

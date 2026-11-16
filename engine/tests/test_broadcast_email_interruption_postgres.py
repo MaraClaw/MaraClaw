@@ -2,6 +2,7 @@ import smtplib
 import threading
 from datetime import datetime, timedelta, tzinfo
 from email import message_from_string
+from uuid import UUID
 
 import anyio
 import pytest
@@ -26,7 +27,7 @@ class Clock:
 
 @pytest.fixture(autouse=True)
 def configured_email(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def resolve() -> email.SystemEmailConfig:
+    async def resolve(_tenant_id: UUID | None = None) -> email.SystemEmailConfig:
         return email.SystemEmailConfig("from@example.test", "MaraClaw", "smtp.example.test", 465, "u", "s", True, 15)
 
     monkeypatch.setattr(email, "resolve_email_config_async", resolve)

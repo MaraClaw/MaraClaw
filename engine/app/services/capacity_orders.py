@@ -149,7 +149,7 @@ async def overview(user_id: UUID, tenant_id: UUID | None) -> CapacityOverview:
         if tenant is None:
             raise HTTPException(404, "Company not found")
         today = capacity_ledger.vn_today()
-        caps = await company_caps(db, target)
+        caps = await company_caps(db, target, on_date=today)
         accounts_used, agents_used = await company_usage(db, target)
         settings = await load_payment_settings()
         plan = plan_for(caps.tier) if caps is not None else None

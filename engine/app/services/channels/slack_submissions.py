@@ -1,9 +1,12 @@
 import json
 import re
+from dataclasses import replace
+from pathlib import PurePosixPath
 
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from
 from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
+from app.records.chat_attachment import ChatAttachment
 from app.services.storage import store_agent_upload
 
 from .media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
@@ -35,6 +38,7 @@ async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject) -> b
     if await is_channel_event_replay(native):
         return True
     enriched = text
+    attachments: list[ChatAttachment] = []
     budget = MediaBudget()
     for file in files:
         url = json_as_str_or(file.get("url_private_download")) or json_as_str_or(file.get("url_private"))
@@ -53,6 +57,9 @@ async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject) -> b
             continue
         budget.spend(len(data))
         _, workspace_path, _ = await store_agent_upload(config.agent_id, filename, data, content_type=content_type)
+        attachments.append(ChatAttachment(path=workspace_path, name=PurePosixPath(workspace_path).name))
         enriched = f"{enriched}\n[file:{workspace_path}]".strip()
-    await accept_channel_event(native, content=enriched, saved_content=enriched)
+    await accept_channel_event(
+        replace(native, attachments=tuple(attachments)), content=enriched, saved_content=enriched
+    )
     return True

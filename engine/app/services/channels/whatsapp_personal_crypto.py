@@ -23,8 +23,8 @@ class AuthKey:
 
 
 class AuthCipher:
-    def __init__(self, secret: str) -> None:
-        self._cipher: AESGCM = AESGCM(hashlib.sha256(b"maraclaw:whatsapp:auth:v1\0" + secret.encode()).digest())
+    def __init__(self, secret: str, *, purpose: bytes = b"maraclaw:whatsapp:auth:v1") -> None:
+        self._cipher: AESGCM = AESGCM(hashlib.sha256(purpose + b"\0" + secret.encode()).digest())
 
     def seal(self, key: AuthKey, plaintext: str) -> bytes:
         nonce = secrets.token_bytes(12)

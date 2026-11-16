@@ -1,16 +1,17 @@
 import { ApiError } from './http.ts'
 import type { PersonalCommand, PersonalStatus } from './whatsapp-api.ts'
 
-export type PersonalView = {
-  readonly status: PersonalStatus | null
+type SessionStatus = Omit<PersonalStatus, 'error_code'> & { readonly error_code: string | null }
+export type PersonalView<Status extends SessionStatus = PersonalStatus> = {
+  readonly status: Status | null
   readonly loading: boolean
   readonly busy: boolean
   readonly error: string | null
 }
-type PersonalTransport = {
+type PersonalTransport<Status extends SessionStatus> = {
   readonly current: () => boolean
-  readonly read: (signal: AbortSignal) => Promise<PersonalStatus>
-  readonly change: (command: PersonalCommand, signal: AbortSignal) => Promise<PersonalStatus>
+  readonly read: (signal: AbortSignal) => Promise<Status>
+  readonly change: (command: PersonalCommand, signal: AbortSignal) => Promise<Status>
 }
 type PersonalClock = {
   readonly now: () => number
@@ -20,8 +21,8 @@ type PersonalClock = {
 const browserClock: PersonalClock = { now: Date.now, later: (callback, delay) => setTimeout(callback, delay), cancel: (timer) => clearTimeout(timer) }
 
 /** View-local secret lifetime. Never install this object or its snapshots into a query cache. */
-export function createPersonalSession(transport: PersonalTransport, clock: PersonalClock = browserClock) {
-  let view: PersonalView = { status: null, loading: true, busy: false, error: null }
+export function createPersonalSession<Status extends SessionStatus>(transport: PersonalTransport<Status>, clock: PersonalClock = browserClock) {
+  let view: PersonalView<Status> = { status: null, loading: true, busy: false, error: null }
   let active = false
   let epoch = 0
   let request: AbortController | undefined
@@ -33,7 +34,8 @@ export function createPersonalSession(transport: PersonalTransport, clock: Perso
   const invalidatedQrAttempts = new Set<string>()
   let watermark: Pick<PersonalStatus, 'generation' | 'attempt_id' | 'revision'> | null = null
   let qrDeadline: number | null = null
-  const publish = (next: PersonalView) => { view = next; for (const listener of listeners) listener() }
+  let qrIdentity: Status['qr'] = null
+  const publish = (next: PersonalView<Status>) => { view = next; for (const listener of listeners) listener() }
   const current = (token: number) => active && transport.current() && token === epoch
   function clearWork() {
     request?.abort()
@@ -42,7 +44,7 @@ export function createPersonalSession(transport: PersonalTransport, clock: Perso
     request = undefined; poll = undefined; expiry = undefined
   }
   function begin() { epoch += 1; clearWork(); return epoch }
-  function accept(incoming: PersonalStatus, replace: boolean): boolean {
+  function accept(incoming: Status, replace: boolean): boolean {
     const previous = watermark
     if (incoming.generation && retiredGenerations.has(incoming.generation)) return false
     if (incoming.attempt_id && retiredAttempts.has(incoming.attempt_id)) return false
@@ -62,11 +64,12 @@ export function createPersonalSession(transport: PersonalTransport, clock: Perso
     const pairing = incoming.state === 'qr' || incoming.state === 'pending'
     const expired = pairing && (deadline <= clock.now() || incoming.attempt_id !== null && invalidatedQrAttempts.has(incoming.attempt_id))
     const repeat = previous?.generation === incoming.generation && previous.revision === incoming.revision
-    const status: PersonalStatus = {
+    const status: Status = {
       ...incoming, state: expired ? 'expired' : incoming.state,
-      qr: incoming.state === 'qr' && !expired && (!repeat || deadline === qrDeadline) && incoming.generation !== null && incoming.attempt_id !== null ? incoming.qr : null,
+      qr: incoming.state === 'qr' && !expired && (!repeat || deadline === qrDeadline && incoming.qr?.value === qrIdentity?.value) && incoming.generation !== null && incoming.attempt_id !== null ? incoming.qr : null,
     }
     qrDeadline = status.qr ? deadline : null
+    qrIdentity = status.qr
     if (status.state === 'expired' && status.attempt_id) invalidatedQrAttempts.add(status.attempt_id)
     watermark = { generation: incoming.generation, attempt_id: incoming.attempt_id, revision: incoming.revision }
     publish({ status, busy: false, loading: false, error: null })
@@ -78,6 +81,7 @@ export function createPersonalSession(transport: PersonalTransport, clock: Perso
         if (!latest) return
         if (latest.attempt_id) invalidatedQrAttempts.add(latest.attempt_id)
         qrDeadline = null
+        qrIdentity = null
         begin() // Invalidate a held poll as well as removing the displayed secret.
         publish({ ...view, status: { ...latest, state: 'expired', qr: null }, busy: false })
       }, Math.max(0, deadline - clock.now()))
@@ -120,6 +124,7 @@ export function createPersonalSession(transport: PersonalTransport, clock: Perso
     const token = begin()
     if (view.status?.attempt_id) invalidatedQrAttempts.add(view.status.attempt_id)
     qrDeadline = null
+    qrIdentity = null
     publish({ ...view, status: view.status ? { ...view.status, qr: null } : null, busy: true, error: null })
     request = new AbortController()
     try {
@@ -135,7 +140,7 @@ export function createPersonalSession(transport: PersonalTransport, clock: Perso
     start() { active = true; const token = begin(); publish({ status: null, loading: true, busy: false, error: null }); void read(token) },
     refresh() { if (!active || !transport.current()) return; const token = begin(); publish({ status: null, loading: true, busy: false, error: null }); void read(token) },
     change,
-    stop() { active = false; begin(); publish({ status: null, loading: true, busy: false, error: null }); watermark = null; qrDeadline = null; retiredGenerations.clear(); retiredAttempts.clear(); invalidatedQrAttempts.clear() },
+    stop() { active = false; begin(); publish({ status: null, loading: true, busy: false, error: null }); watermark = null; qrDeadline = null; qrIdentity = null; retiredGenerations.clear(); retiredAttempts.clear(); invalidatedQrAttempts.clear() },
   }
 }
 

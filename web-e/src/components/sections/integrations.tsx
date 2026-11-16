@@ -11,6 +11,8 @@ const integrations = [
   'Discord',
   'MS Teams',
   'WhatsApp',
+  'Zalo Personal',
+  'Telegram Bot',
   'Google Workspace',
   'Atlassian',
   'Email',

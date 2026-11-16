@@ -6,7 +6,7 @@ const categorySchema = z.enum(['pre-key', 'session', 'sender-key', 'sender-key-m
 const issueSchema = z.enum(['invalid_type', 'too_big', 'too_small', 'invalid_format', 'not_multiple_of',
   'unrecognized_keys', 'invalid_union', 'invalid_key', 'invalid_element', 'invalid_value', 'custom']);
 const dropReasonSchema = z.enum(['not_notify', 'identity_unavailable', 'non_self', 'missing_content', 'stub',
-  'content_shape', 'text', 'quoted_or_forwarded', 'timestamp']);
+  'content_shape', 'text', 'quoted_or_forwarded', 'timestamp', 'media']);
 export type DropReason = z.infer<typeof dropReasonSchema>;
 export const diagnosticSchema = z.strictObject({
   type: z.literal('diagnostic'),
@@ -16,7 +16,7 @@ export const diagnosticSchema = z.strictObject({
   operation: z.enum(['auth_get', 'auth_set', 'creds_set']).optional(),
   category: categorySchema.optional(), categories: z.array(categorySchema).max(12).optional(), rpc_id: z.uuid().optional(),
   count: z.int().min(0).max(1000000).optional(), dropped: z.int().min(0).max(1000000).optional(),
-  drop_reasons: z.array(dropReasonSchema).max(9).optional(), event_kind: z.enum(['notify', 'append']).optional(),
+  drop_reasons: z.array(dropReasonSchema).max(10).optional(), event_kind: z.enum(['notify', 'append']).optional(),
   has_request_id: z.boolean().optional(),
   elapsed_ms: z.int().min(0).max(86400000).optional(),
   retry_count: z.int().min(0).max(1000).optional(), delay_ms: z.int().min(0).max(86400000).optional(),

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import anyio
 from anyio.abc import Process
+from anyio.streams.memory import MemoryObjectReceiveStream
 from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
 from pydantic import JsonValue, ValidationError
@@ -23,20 +24,14 @@ from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
 from app.services.channels.whatsapp_personal_access import personal_owner
 from app.services.channels.whatsapp_personal_diagnostics import (
-    Diagnostic,
-    diagnostic_frame,
     failed,
     lifecycle,
-    log_diagnostic,
-    observed_frame,
 )
-from app.services.channels.whatsapp_personal_events import IdentityAmbiguousError
+from app.services.channels.whatsapp_personal_events import IdentityAmbiguousError, handle_message
 from app.services.channels.whatsapp_personal_journal import authorize_dispatch
-from app.services.channels.whatsapp_personal_protocol import AuthGet, AuthSet, Closed, CredsSet
-
-
-class AuthStoreFailedError(Exception):
-    pass
+from app.services.channels.whatsapp_personal_media_reader import AuthStoreFailedError, IntakeQueues, read_frames
+from app.services.channels.whatsapp_personal_media_transport import MediaTransferError, MediaTransport
+from app.services.channels.whatsapp_personal_protocol import Message
 
 
 async def spawn_child(command: Sequence[str]) -> Process:
@@ -52,69 +47,43 @@ class PersonalChild:
         self.run_id = uuid4()
         self.process: Process | None = None
         self.write_lock = anyio.Lock()
+        self.media: MediaTransport = MediaTransport(self.write, self.token)
 
     async def write(self, value: dict[str, JsonValue]) -> None:
         process = self.process
         if process is None or process.stdin is None:
             raise BrokenPipeError
         async with self.write_lock:
-            await process.stdin.send((json.dumps(value, separators=(",", ":")) + "\n").encode())
+            raw = json.dumps(value, separators=(",", ":")).encode()
+            if len(raw) > 1048576:
+                raise MediaTransferError("too_large")
+            await process.stdin.send(raw + b"\n")
 
     async def read(self) -> None:
-        process = self.process
-        if process is None or process.stdout is None:
-            raise BrokenPipeError
-        pending = b""
-        while True:
-            try:
-                pending += await process.stdout.receive(65536)
-            except anyio.EndOfStream:
-                lifecycle(self.connection, self.run_id, "parent_eof", "finished")
-                return
-            while b"\n" in pending:
-                raw, pending = pending.split(b"\n", 1)
-                if len(raw) > 1048576:
-                    raise ValueError("personal_frame_limit")
-                frame = diagnostic_frame.validate_json(raw)
-                if not secrets.compare_digest(frame.token.encode(), self.token.encode()):
-                    raise ValueError("personal_frame_token")
-                if isinstance(frame, Diagnostic):
-                    log_diagnostic(self.connection, self.run_id, frame)
-                    continue
+        text_send, text_receive = anyio.create_memory_object_stream[Message](32)
+        media_send, media_receive = anyio.create_memory_object_stream[Message](128)
+        text_drained = anyio.Event()
+        async with text_send, text_receive, media_send, media_receive, anyio.create_task_group() as tasks:
+
+            async def messages(receive: MemoryObjectReceiveStream[Message]) -> None:
                 try:
-                    result = await observed_frame(self.connection, self.run_id, frame)
-                except HTTPException as error:
-                    if isinstance(frame, (AuthGet, AuthSet, CredsSet)):
-                        await self.write(
-                            {
-                                "type": "result",
-                                "id": frame.id,
-                                "token": self.token,
-                                "ok": False,
-                                "value": None,
-                                "error": "auth_store_failed",
-                            }
-                        )
-                    if error.status_code not in {403, 404, 409, 429}:
-                        raise
-                    if isinstance(frame, (AuthGet, AuthSet, CredsSet)):
-                        raise AuthStoreFailedError from None
-                else:
-                    if isinstance(frame, (AuthGet, AuthSet, CredsSet)):
-                        await self.write(
-                            {
-                                "type": "result",
-                                "id": frame.id,
-                                "token": self.token,
-                                "ok": True,
-                                "value": result,
-                                "error": None,
-                            }
-                        )
-                if isinstance(frame, Closed):
-                    return
-            if len(pending) > 1048576:
-                raise ValueError("personal_frame_limit")
+                    async for message in receive:
+                        try:
+                            await handle_message(self.connection, message, self.media.download)
+                        except HTTPException as error:
+                            if error.status_code not in {403, 404, 409, 429}:
+                                raise
+                finally:
+                    if receive is text_receive:
+                        text_drained.set()
+
+            tasks.start_soon(messages, text_receive)
+            tasks.start_soon(messages, media_receive)
+            try:
+                await read_frames(self, IntakeQueues(text_send, media_send, text_drained))
+            finally:
+                self.media.close()
+                tasks.cancel_scope.cancel()
 
     async def tick(self) -> None:
         while True:
@@ -187,7 +156,15 @@ class PersonalChild:
                     tasks.cancel_scope.cancel()
 
                 async def owned_tick() -> None:
-                    await self.tick()
+                    try:
+                        await self.tick()
+                    except BrokenPipeError, anyio.BrokenResourceError, anyio.ClosedResourceError:
+                        process = self.process
+                        if process is not None:
+                            with anyio.move_on_after(3):
+                                if await process.wait() == 0:
+                                    return
+                        raise
                     tasks.cancel_scope.cancel()
 
                 tasks.start_soon(owned_read)

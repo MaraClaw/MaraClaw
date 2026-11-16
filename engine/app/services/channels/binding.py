@@ -13,6 +13,7 @@ from app.dao.company_admission_dao import company_admission_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
+from app.records.chat_attachment import ChatAttachment
 from app.records.user import UserRecord
 from app.schemas.chat_wire import ChatEventType
 from app.services.channel_user_service import ChannelUserResolutionError, channel_user_service
@@ -74,21 +75,36 @@ async def persist_channel_user_message(
     participant_id: UUID | None = None,
     touch_last_active: bool = False,
     agent: AgentRecord | None = None,
+    attachments: tuple[ChatAttachment, ...] = (),
 ) -> UUID:
     async with connection_ctx():
-        message = await chat_message_dao.insert_message(
-            agent_id=agent_id,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            role="user",
-            content=content,
-            thinking=thinking,
-            participant_id=participant_id,
-        )
+        if attachments:
+            message = await chat_message_dao.create(
+                obj_in={
+                    "agent_id": agent_id,
+                    "user_id": user_id,
+                    "conversation_id": conversation_id,
+                    "role": "user",
+                    "content": content,
+                    "thinking": thinking,
+                    "participant_id": participant_id,
+                    "attachments": [ref.as_dict() for ref in attachments],
+                }
+            )
+        else:
+            message = await chat_message_dao.insert_message(
+                agent_id=agent_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                role="user",
+                content=content,
+                thinking=thinking,
+                participant_id=participant_id,
+            )
         session = await chat_session_dao.get(UUID(conversation_id))
         if session is not None:
             await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
-            if is_shared_session(session):
+            if is_shared_session(session) or attachments:
                 from app.api.background_tasks import schedule_background_task
 
                 schedule_background_task(
@@ -101,9 +117,10 @@ async def persist_channel_user_message(
                             "content": content,
                             "message_id": str(message.id),
                             "session_id": conversation_id,
+                            "attachments": [ref.as_dict() for ref in attachments],
                         },
                     ),
-                    "Publish shared IM user message",
+                    "Publish IM user message",
                 )
         if touch_last_active:
             row = agent if agent is not None else await agent_dao.get(agent_id)

@@ -1,6 +1,6 @@
 # app/schemas
 
-Pydantic request/response models live here. `schemas.py` is the large shared grab bag; 38 focused modules sit beside it (40 `.py` files including the empty `__init__.py`, so there are no package-level re-exports). Import from the owning module.
+Pydantic request/response models live here. Focused modules sit beside the large shared `schemas.py` grab bag. The empty `__init__.py` has no package-level re-exports. Import from the owning module.
 
 ## Pydantic Rules
 

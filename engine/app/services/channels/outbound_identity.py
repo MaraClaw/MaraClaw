@@ -52,6 +52,8 @@ async def preflight_outbound(outbound: ConfiguredOutbound) -> OutboundPreflight:
             | OutboundProvider.DINGTALK
             | OutboundProvider.WHATSAPP
             | OutboundProvider.WECHAT
+            | OutboundProvider.TELEGRAM
+            | OutboundProvider.ZALO
         ):
             pass
         case unreachable:

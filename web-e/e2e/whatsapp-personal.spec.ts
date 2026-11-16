@@ -77,8 +77,9 @@ test('expired QR disappears locally and relink uses the current generation', asy
   await page.goto(channelsPath)
   const card = page.getByRole('article', { name: 'WhatsApp', exact: true })
   await expect(card.getByRole('img', { name: 'WhatsApp pairing QR', exact: true })).toBeVisible()
-  // When: its deadline elapses without a provider update.
-  await page.clock.runFor(60001)
+  // When: its deadline elapses without a provider update, as after an inactive tab resumes.
+  // Jump once so simulated request timeouts cannot outrun real routed responses.
+  await page.clock.fastForward(60001)
   // Then: the QR is gone and recovery carries the fenced generation.
   await expect(card.getByRole('img', { name: 'WhatsApp pairing QR', exact: true })).toHaveCount(0)
   await expect(card).toContainText('Pairing code expired.')

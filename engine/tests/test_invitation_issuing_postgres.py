@@ -2,6 +2,7 @@ import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
+from urllib.parse import urlsplit
 
 import anyio
 import pytest
@@ -212,9 +213,11 @@ async def test_emailed_invitation_reaches_the_recipient_over_smtp_and_redeems_on
     assert message["To"] == "mixed@example.com"
     payloads = [part.get_payload(decode=True) for part in message.walk() if part.get_content_type() == "text/plain"]
     body = "".join(payload.decode() for payload in payloads if isinstance(payload, bytes))
-    link_code = re.search(r"/login\?code=([^&\s]+)&email=mixed@example\.com", body)
-    assert link_code is not None
-    assert link_code.group(1) == stored["code"]
+    invite_link = re.search(r"https://[^\s]+", body)
+    assert invite_link is not None
+    link = urlsplit(invite_link.group())
+    assert (link.scheme, link.netloc, link.path, link.query) == ("https", "app.example.com", "/transfer", "")
+    assert link.fragment == f"code={stored['code']}"
     assert stored["expires_at"].astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC") in body
     # And only the recipient (with their password) can redeem the emailed code.
     wrong = await scenario.client.post(

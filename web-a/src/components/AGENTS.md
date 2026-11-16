@@ -14,13 +14,14 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 
 | Family | Files / responsibility |
 |--------|------------------------|
-| Primitives | `ui/{badge,button,card,input,label,password-field,select,separator,switch}.tsx` |
+| Primitives | `ui/AGENTS.md`: styled controls, back/refresh controls and select-options helper |
 | Shells | `layout/admin-shell.tsx`: protected nav + `Outlet`; `layout/auth-shell.tsx`: forgot/reset chrome (login has its own) |
 | Navigation | `layout/nav-icon.tsx`: active/inactive assets; `layout/section-rail.tsx`: route links or local selection |
 | Notifications | `layout/admin-shell.tsx`: shared Notifications nav tile and unread badge |
 | Company UI | `companies/create-company-form.tsx`: company + plan + genesis OA; `companies/company-plan-badge.tsx`: Pro/Max/Ultra badge (every company has a tier); `companies/company-status-icon.tsx`: active/disabled state |
 | User rows | `users/user-card.tsx`: linked row, toggle action and slots; page owns role/toggle policy |
 | Agent transfer | `users/transfer-agents.tsx`: `TransferAgents` dialog rendered in a `UserCard` slot by `pages/users-departments.tsx` |
+| Agent daily messages | `users/agent-daily-messages.tsx`: `AgentDailyMessages` usage/limit and reset-time display; guarded reset dialog on user detail |
 | Capacity | `capacity/`: shared by the payment page, the review detail and Users. `capacity-labels.ts` (status/kind/tier labels, `capacityActionClass`), `capacity-status-badge.tsx`, `capacity-order-details.tsx` (the order's quote, period, amounts and evidence summary), `copy-field.tsx` (value + Copy button + status text; `copyValue` for the raw amount), `capacity-payment-actions.tsx` (`CapacityEvidenceForm`: Finish with a client-checked file; `CapacityCancelOrder`: inline confirmation; both show translated copy for the evidence/cancel refusals through `lib/capacity-errors.ts`) |
 | Payment evidence | `payment-evidence-preview.tsx`: `PaymentEvidencePreview` takes `load(signal)` (a Bearer bytes loader such as `fetchCapacityEvidence` / `fetchOrganizationAdmissionEvidence`), a stable `loadKey` (a new key remounts and refetches; a new `load` function alone does not) and `{filename, content_type}`. The bytes become an object URL, revoked on unmount; images show inline, PDF as "Open PDF" (new tab; the blob page inherits the production CSP, whose `object-src 'none'` can stop a PDF viewer in some browsers) plus "Download PDF" (same blob URL, `download` = evidence filename) so the file is always reachable; other types render nothing; `BinaryLimitError` and 404 have their own messages; Retry remounts it. Used by the capacity order and review pages and by the organization admission review. |
 | Brand | `brand/maraclaw-logo.tsx`: `MaraClawLogo`; `brand/maraclaw-mark.tsx`: public SVG mark |
@@ -49,4 +50,5 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 - `UserCard` takes `canToggle`, pending state and callbacks; keep the overlay link `z-10` and actions `z-20`, plus the `web-a:users-scroll` handoff.
 - `TransferAgents` renders nothing unless `canTransferMemberAgents(user, source)` (active non-PA `org_admin`, same tenant, end-user source), no `mustChangePassword`, and `source.tenant_id`. Its dialog uses Radix Dialog directly, not a `ui/` primitive.
 - Transfer submit stays disabled until source detail and every-cursor recipient list are loaded and settled; source is re-checked against the viewer and selected agents against the fresh non-system list. Recipients must pass `isAgentTransferTarget`; errors map through `agentLifecycleError`. Mutations come from `hooks/agent-transfer-options.ts` via `useSessionMutation`.
-- Keep company form/status UI in `companies/`, user rows and transfer in `users/`, shared shells in `layout/`, marks in `brand/`, and reusable primitives in `ui/`.
+- `AgentDailyMessages` renders only when the agent has `daily_messages`. Its reset dialog requires `canResetAgentDailyMessages(user, owner)` and no password-change lock; the trigger is disabled below the limit. Pending reset blocks dialog close and repeat submission; retain its error/success announcements and session-owned mutation.
+- Keep company form/status UI in `companies/`, user rows, transfer and daily messages in `users/`, shared shells in `layout/`, marks in `brand/`, and reusable primitives in `ui/`.

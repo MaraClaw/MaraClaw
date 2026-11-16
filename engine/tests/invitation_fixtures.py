@@ -61,10 +61,10 @@ async def new_member(
 
 
 async def unassign(scenario: AdmissionScenario, user: UserRecord | None = None) -> None:
-    """Make a member tenantless: /join is only for newcomers, existing members use /transfer."""
-    await scenario.db.execute(
-        "UPDATE users SET tenant_id=NULL WHERE id=%(id)s", {"id": (user or scenario.applicant).id}
-    )
+    """Make a newcomer tenantless in SQL, cached sessions and the fixture's principal."""
+    member = user or scenario.applicant
+    updated = await user_dao.update(db_obj=member, obj_in={"tenant_id": None})
+    member.tenant_id = updated.tenant_id
 
 
 async def join(scenario: AdmissionScenario, code: str, user: UserRecord | None = None):

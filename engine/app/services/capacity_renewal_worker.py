@@ -1,5 +1,6 @@
 """Periodic expiry of unpaid capacity orders and monthly renewal of paid extras (``capacity_renewal``)."""
 
+from datetime import datetime, timedelta
 from typing import Final
 
 from anyio import sleep
@@ -9,6 +10,7 @@ from app.config import get_settings
 from app.core.logging import logger, new_trace_id
 from app.db.errors import DbError
 from app.runtime.tasks import capped_backoff, loop_progress
+from app.services.capacity_ledger import _VIETNAM
 from app.services.capacity_renewals import run_renewal_pass
 
 # A pass is a few set-based statements plus one short transaction per company due a renewal.
@@ -22,7 +24,7 @@ def progress_budget_seconds() -> float:
 
 
 async def start_capacity_renewal_worker() -> None:
-    """Run a renewal pass, then sleep the interval; beat only after a pass that finished.
+    """Run a renewal pass, then sleep until the interval or next Vietnam month; beat only after a finished pass.
 
     One company's failed renewal is logged inside the pass and the pass continues. A database error that stops the
     whole pass is retried in place with capped backoff and never beats.
@@ -44,5 +46,7 @@ async def start_capacity_renewal_worker() -> None:
                 "[capacity] renewal pass expired={} created={} failed={}", result.expired, result.created, result.failed
             )
         progress.beat()
-        await sleep(get_settings().CAPACITY_RENEWAL_INTERVAL_SECONDS)
+        now = datetime.now(_VIETNAM)
+        next_month = (now.replace(day=1) + timedelta(days=32)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        await sleep(min(get_settings().CAPACITY_RENEWAL_INTERVAL_SECONDS, (next_month - now).total_seconds()))
         new_trace_id()

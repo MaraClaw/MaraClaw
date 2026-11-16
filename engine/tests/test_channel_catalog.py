@@ -55,12 +55,15 @@ async def test_catalog_keeps_canonical_ids_and_unregistered_proactive_senders(cl
     app.dependency_overrides[get_current_user] = lambda: UserRecord(id=uuid4())
     entries = {entry["channel_type"]: entry for entry in (await client.get("/api/channel-catalog")).json()}
 
-    assert len(entries) == 11
+    assert len(entries) == 13
     assert "teams" not in entries
     assert entries["microsoft_teams"]["display_name"] == "MS Teams"
     assert entries["discord"]["supports_proactive"] is False
     assert entries["whatsapp"]["supports_proactive"] is True
     assert entries["whatsapp"]["supports_inbound"] is True
+    for linked_channel in ("telegram", "zalo"):
+        assert entries[linked_channel]["supports_inbound"] is True
+        assert entries[linked_channel]["supports_proactive"] is False
     for skill_only in ("atlassian", "agentbay"):
         assert entries[skill_only]["transport"] == "skill_only"
         assert entries[skill_only]["supports_inbound"] is False

@@ -10,6 +10,7 @@ import { Sends } from './sends.js';
 import type { Transport, TransportFactory } from './transport.js';
 import { diagnostic } from './diagnostics.js';
 import type { DropReason } from './diagnostics.js';
+import { MediaTransport } from './media_transport.js';
 
 const disconnectError = z.object({ output: z.object({ statusCode: z.number().int() }) });
 const reconnectMs = [1000, 2000, 4000, 8000, 16000] as const;
@@ -36,8 +37,11 @@ export class Runtime {
   private healthy: ReturnType<typeof setTimeout> | undefined;
   private pairTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly sends: Sends;
+  private readonly media: MediaTransport;
   private pairDeadline = 0;
   constructor(private readonly host: RuntimeHost) {
+    this.media = new MediaTransport({ emit: payload => this.emit(payload),
+      current: () => this.connected ? this.socket : undefined, barrier: async () => { await this.auth?.barrier(); } });
     this.sends = new Sends({ emit: payload => { if (payload.type === 'send_result') diagnostic(this.peer, { type: 'diagnostic', stage: 'send', event: 'finished', outcome: payload.outcome }); this.emit(payload); },
       barrier: async () => { await this.auth?.barrier(); },
       current: () => this.connected && this.socket && this.identity ? { socket: this.socket, identity: this.identity } : null,
@@ -61,6 +65,7 @@ export class Runtime {
       case 'send': this.sends.submit(frame); return;
       case 'shutdown': void this.stop('shutdown'); return;
       case 'result': this.peer?.result(frame); return;
+      case 'media_get': case 'media_ack': case 'media_error': this.media.receive(frame); return;
       default: assertNever(frame);
     }
   }
@@ -97,7 +102,7 @@ export class Runtime {
     socket.ev.on('messages.upsert', event => {
       if (this.stopped || this.socket !== socket || !this.connected) return;
       const reasons = new Set<DropReason>();
-      const accepted = notifyText(event, this.identity, reason => { reasons.add(reason); });
+      const accepted = notifyText(event, this.identity, reason => { reasons.add(reason); }, this.media.offers);
       diagnostic(this.peer, { type: 'diagnostic', stage: 'intake', event: 'finished', count: accepted.length, dropped: event.messages.length - accepted.length,
         event_kind: event.type, has_request_id: event.requestId !== undefined, ...(reasons.size === 0 ? {} : { drop_reasons: [...reasons] }) });
       for (const payload of accepted) this.emit(payload);
@@ -116,6 +121,7 @@ export class Runtime {
     if (this.closing.has(socket)) return;
     if (update.connection === 'close') {
       this.closing.add(socket); this.connected = false; this.identity = null; this.sends.disconnect(socket);
+      this.media.close();
       clearTimeout(this.healthy);
     }
     await this.auth?.barrier();
@@ -191,6 +197,7 @@ export class Runtime {
     clearTimeout(this.lease); clearTimeout(this.reconnect); clearTimeout(this.pairTimer); clearTimeout(this.healthy);
     this.auth?.close();
     this.sends.close();
+    this.media.close();
     const force = setTimeout(() => this.finish(reason), 2000);
     try { if (this.socket) await this.release(this.socket); }
     catch { this.finish('transport_failed'); }

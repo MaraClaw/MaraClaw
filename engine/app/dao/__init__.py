@@ -19,7 +19,9 @@ from app.dao.broadcast_job_dao import broadcast_job_dao
 from app.dao.broadcast_submission_dao import broadcast_submission_dao
 from app.dao.capacity_order_dao import capacity_order_dao
 from app.dao.channel_config_dao import channel_config_dao
+from app.dao.channel_event_media_dao import channel_event_media_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
+from app.dao.channel_sender_link_dao import channel_sender_link_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.dao.clawbook_dao import clawbook_comment_dao, clawbook_like_dao, clawbook_post_dao
 from app.dao.company_admission_dao import company_admission_dao
@@ -100,7 +102,9 @@ __all__ = [
     "broadcast_submission_dao",
     "capacity_order_dao",
     "channel_config_dao",
+    "channel_event_media_dao",
     "channel_event_receipt_dao",
+    "channel_sender_link_dao",
     "chat_message_dao",
     "chat_session_dao",
     "clawbook_comment_dao",

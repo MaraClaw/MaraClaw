@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import HTTPException
 
 from app.records.agent import AgentRecord
+from app.records.chat_attachment import ChatAttachment
 from app.records.personal_burst import PersonalBurstScope
 from app.records.personal_burst_input import ReceiptKey
 from app.records.user import UserRecord
@@ -41,10 +42,17 @@ class PersonalOriginal:
     route: PersonalRoute
     shared_session_id: UUID
     reply_session_id: UUID
+    attachments: tuple[ChatAttachment, ...] = ()
+    saved_content: str | None = None
+    model_content: str | None = None
+
+    @property
+    def content(self) -> str:
+        return self.text if self.model_content is None else self.model_content
 
     @property
     def text_bytes(self) -> int:
-        return len(self.text.encode())
+        return len(self.content.encode())
 
     @property
     def scope(self) -> PersonalBurstScope:
