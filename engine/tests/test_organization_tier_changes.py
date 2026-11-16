@@ -123,6 +123,23 @@ async def test_preview_projects_target_caps_owner_overage_guests_and_next_renewa
     store["audit"].assert_not_awaited()
 
 
+async def test_preview_keeps_capacity_and_renewal_on_one_date_across_month_end(store, monkeypatch: pytest.MonkeyPatch):
+    today = date(2026, 12, 31)
+    clock = Mock(side_effect=[today, date(2027, 1, 1)])
+    monkeypatch.setattr(service, "vn_today", clock)
+    monkeypatch.setattr(company_capacity, "vn_today", clock)
+
+    async def extras(_db, _tenant_id, on_date):
+        return CapacityExtras(1, 2) if on_date == today else CapacityExtras(0, 0)
+
+    store["extras"].side_effect = extras
+
+    preview = await service.preview_tier_change(ACTOR, TENANT, PRO)
+
+    assert (preview.accounts.extras, preview.agents.extras) == (1, 2)
+    assert preview.next_capacity_renewal.billing_month == date(2027, 1, 1)
+
+
 @pytest.mark.parametrize("missing_observation", [False, True])
 async def test_preview_uses_owned_running_observations_and_excludes_stopped_foreign_or_missing_guests(
     store, missing_observation: bool
