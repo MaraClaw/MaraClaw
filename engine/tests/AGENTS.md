@@ -26,6 +26,7 @@ node --test tests/contract_codegen.test.mjs tests/contract_public_names.test.mjs
 - New DB tests wrap a fake raw connection and assert SQL / `%(name)s` params. Reset `_conn_ctx` and `reset_pool_for_tests()` when touching the pool.
 - HTTP: `httpx.ASGITransport(app=app)` + `AsyncClient` when you need the stack; most tests call handlers directly.
 - Clear `app.dependency_overrides` after use. Storage tests use `tmp_path`.
+- Telegram configuration requests accept only `bot_token`; `secret_token` is server-managed, not a field on `TelegramChannelConfigUpdate`.
 
 ## Test Navigation And Coverage
 

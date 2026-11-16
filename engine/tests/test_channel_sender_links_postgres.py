@@ -376,7 +376,7 @@ async def test_telegram_account_swap_invalidates_links_and_open_codes(linked_cha
         async with transaction(fixture.db.first):
             await telegram.configure_telegram_channel(
                 fixture.event.agent_id,
-                TelegramChannelConfigUpdate(bot_token=f"{account}:secret", secret_token="hook"),
+                TelegramChannelConfigUpdate(bot_token=f"{account}:secret"),
                 creator,
             )
     async with transaction(fixture.db.first):
