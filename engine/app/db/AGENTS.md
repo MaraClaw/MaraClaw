@@ -32,4 +32,4 @@ Live psycopg3 data-access layer. SQLAlchemy is gone from `app/`.
 ## Tests
 
 - `tests/test_db_url.py`, `test_db_connection.py`, `test_db_session.py` - no live Postgres.
-- CI does not apply `schema_baseline.sql`.
+- The database-free CI gate does not apply `../../scripts/schema_baseline.sql`; `lifecycle-postgres` does through the opted-in `../../tests/test_bootstrap_postgres.py` bootstrap tests (`BOOTSTRAP_TEST_DATABASE_URL`).
