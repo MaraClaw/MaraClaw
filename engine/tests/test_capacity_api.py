@@ -134,7 +134,7 @@ async def test_overview_keeps_caps_and_billing_on_one_date_across_month_end(
     db.fetchval.return_value = False
 
     @asynccontextmanager
-    async def connection() -> AsyncGenerator[DbConnection]:
+    async def connection() -> AsyncGenerator[AsyncMock]:
         yield db
 
     today = date(2026, 12, 31)
