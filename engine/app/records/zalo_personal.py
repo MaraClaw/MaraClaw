@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Annotated, ClassVar, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
+
+from app.records.channel_media import StoredFile
 
 ZaloState = Literal[
     "pending", "qr", "connected", "reconnecting", "paused", "expired", "disconnecting", "disconnected", "failed"
@@ -20,8 +22,23 @@ ZaloError = Literal[
     "qr_declined",
     "lease_expired",
 ]
+ZaloDiagnosticError = ZaloError | Literal["session_replaced"]
 ProviderUID = Annotated[str, Field(pattern=r"^[0-9]{1,64}$")]
 SendState = Literal["pending", "dispatch_started", "accepted", "rejected", "uncertain", "cancelled"]
+
+
+class ZaloRuntime(BaseModel):
+    """Validated, credential-free observations persisted in channel extra_config."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="ignore")
+    reconnect_attempts: int = Field(default=0, ge=0, le=1000, strict=True)
+    retry_at: AwareDatetime | None = None
+    last_error: ZaloDiagnosticError | None = None
+    last_error_at: AwareDatetime | None = None
+    connected_at: AwareDatetime | None = None
+    last_activity_at: AwareDatetime | None = None
+    heartbeat_at: AwareDatetime | None = None
+    heartbeat_failures: int = Field(default=0, ge=0, le=1000, strict=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,3 +127,20 @@ class ZaloSend(BaseModel):
     purpose: Literal["reply", "link_notice"] = "reply"
     message_id: str | None = None
     claim_token: UUID | None = None
+
+
+class ZaloMediaSend(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    command_id: UUID
+    config_id: UUID
+    auth_epoch: UUID
+    generation: UUID
+    account_id: ProviderUID
+    peer_id: ProviderUID
+    file: StoredFile
+    state: SendState
+    claim_token: UUID | None = None
+    message_id: str | None = None
+    created_at: AwareDatetime
+    dispatched_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None

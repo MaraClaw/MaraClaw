@@ -6,13 +6,17 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.records.zalo_personal import ZaloError, ZaloState
+from app.records.zalo_personal import ZaloError, ZaloRuntime, ZaloState
 
 
 class ZaloPersonalQR(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
     value: str = Field(max_length=768000)
     expires_at: datetime
+
+
+class ZaloPersonalDiagnostics(ZaloRuntime):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
 
 class ZaloPersonalStatus(BaseModel):
@@ -26,6 +30,8 @@ class ZaloPersonalStatus(BaseModel):
     qr: ZaloPersonalQR | None = None
     account_hint: str | None = None
     error_code: ZaloError | None = None
+    resumable: bool = False
+    diagnostics: ZaloPersonalDiagnostics | None = None
 
 
 class ZaloPersonalStart(BaseModel):

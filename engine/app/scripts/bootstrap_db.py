@@ -2,7 +2,8 @@
 
 The only supported legacy upgrades are the explicit guarded ``DO`` blocks in the baseline (``tasks`` lease columns,
 organization admission provisioning, ``approval_requests.execution_args``, ``gateway_messages.reply_binding_id``,
-``chat_history_changes.recorded_at``, ``users.membership_generation``), plus the Telegram/Zalo channel enum additions.
+``chat_history_changes.recorded_at``, ``users.membership_generation``, gateway report plan versions),
+plus the Telegram/Zalo channel enum additions.
 Schema errors are fatal.
 """
 

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
 from psycopg.errors import QueryCanceled
 from psycopg.rows import DictRow, dict_row
@@ -24,6 +24,8 @@ from app.db.errors import CheckViolationError, DbError, ForeignKeyViolationError
 from app.db.pool import EnginePool, close_pool, durable_pool, get_pool, init_pool
 from app.db.session import connection_ctx
 from app.main import app
+from app.records.channel_media import StoredFile
+from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundPlan, OutboundProvider, OutboundTarget
 from app.scripts import bootstrap_db
 from organization_admission_fixtures import insert_admission_row
 
@@ -540,6 +542,170 @@ async def test_legacy_gateway_messages_without_reply_binding_are_upgraded_in_pla
     assert [claimed.reply_binding_id] == [row["id"] for row in binding]
     created = await gateway_message_dao.create(obj_in={"agent_id": agent_id, "content": "New"})
     assert (created.content, created.reply_binding_id) == ("New", None)
+
+
+async def test_legacy_gateway_report_plans_accept_files_without_changing_rows_or_other_checks(
+    schema_db: DbConnection,
+) -> None:
+    await bootstrap_db.main()
+    tenant_id, user_id, agent_id, message_id = uuid4(), uuid4(), uuid4(), uuid4()
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Legacy', 'legacy', 'ultra')",
+        {"tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Legacy')",
+        {"user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+        "VALUES (%(agent)s, 'Legacy', 'Legacy', %(user)s, %(tenant)s, 1, 1, 1, 'company', 'use', 1)",
+        {"agent": agent_id, "user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO gateway_messages (id, agent_id, content, status) VALUES (%(id)s, %(agent)s, 'Keep me', 'completed')",
+        {"id": message_id, "agent": agent_id},
+    )
+    target = OutboundTarget(
+        provider=OutboundProvider.ZALO, mode="personal_qr", config_id=uuid4(), account=("account",), destination="peer"
+    )
+    text = OutboundChunk(text="Legacy text", key=uuid4())
+    v1 = OutboundPlan(target=target, chunks=(text,)).model_dump_json()
+    v2 = OutboundPlan(
+        version=2,
+        target=target,
+        chunks=(
+            text,
+            OutboundFileChunk(
+                key=uuid4(),
+                file=StoredFile(
+                    storage_key=f"{agent_id}/workspace/uploads/zalo/report.pdf",
+                    path="workspace/uploads/zalo/report.pdf",
+                    name="report.pdf",
+                    size=12,
+                    sha256="a" * 64,
+                    kind="file",
+                ),
+            ),
+        ),
+    ).model_dump_json()
+    insert = (
+        "INSERT INTO gateway_report_deliveries "
+        "(id, message_id, destination_kind, destination_id, tenant_id, im_plan, next_chunk) "
+        "VALUES (%(id)s, %(message)s, 'im', %(destination)s, %(tenant)s, %(plan)s::jsonb, %(next)s)"
+    )
+    base = {"message": message_id, "tenant": tenant_id, "next": 0}
+    # Fresh bootstrap accepts the real version 2 text/file plan before simulating the old database.
+    fresh_id = uuid4()
+    await schema_db.execute(insert, {**base, "id": fresh_id, "destination": uuid4(), "plan": v2})
+    constraints_query = (
+        "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+        "WHERE conrelid = 'gateway_report_deliveries'::regclass ORDER BY conname"
+    )
+    fresh_constraints = await schema_db.fetchall(constraints_query)
+    [fresh_plan_check] = [row for row in fresh_constraints if "version" in str(row["definition"])]
+    await schema_db.execute("UPDATE gateway_report_deliveries SET im_plan = %(plan)s::jsonb", {"plan": v1})
+    await schema_db.execute(
+        sql.SQL("ALTER TABLE gateway_report_deliveries DROP CONSTRAINT {}")
+        .format(sql.Identifier(str(fresh_plan_check["conname"])))
+        .as_string(schema_db.raw)
+    )
+    await schema_db.execute(
+        "ALTER TABLE gateway_report_deliveries ADD CHECK (im_plan IS NULL OR ("
+        "destination_kind = 'im' AND jsonb_typeof(im_plan) = 'object' "
+        "AND im_plan->>'version' = '1' AND jsonb_typeof(im_plan->'chunks') = 'array' "
+        "AND jsonb_array_length(im_plan->'chunks') > 0 "
+        "AND next_chunk <= jsonb_array_length(im_plan->'chunks')) IS TRUE)"
+    )
+    [legacy_plan_check] = [
+        row for row in await schema_db.fetchall(constraints_query) if "version" in str(row["definition"])
+    ]
+    # A renamed legacy check still upgrades; a custom check using its old name must survive.
+    await schema_db.execute(
+        sql.SQL('ALTER TABLE gateway_report_deliveries RENAME CONSTRAINT {} TO "legacy renamed plan check"')
+        .format(sql.Identifier(str(legacy_plan_check["conname"])))
+        .as_string(schema_db.raw)
+    )
+    await schema_db.execute(
+        sql.SQL("ALTER TABLE gateway_report_deliveries ADD CONSTRAINT {} CHECK (attempts < 50)")
+        .format(sql.Identifier(str(legacy_plan_check["conname"])))
+        .as_string(schema_db.raw)
+    )
+    for plan in (None, v1):
+        await schema_db.execute(insert, {**base, "id": uuid4(), "destination": uuid4(), "plan": plan})
+    with pytest.raises(CheckViolationError):
+        await schema_db.execute(insert, {**base, "id": uuid4(), "destination": uuid4(), "plan": v2})
+    rows_query = "SELECT * FROM gateway_report_deliveries ORDER BY id"
+    legacy_rows = await schema_db.fetchall(rows_query)
+    identity_query = "SELECT oid, reltype, relfilenode FROM pg_class WHERE oid = 'gateway_report_deliveries'::regclass"
+    table_identity = await schema_db.fetchone(identity_query)
+    columns_query = (
+        "SELECT attnum, attname, atttypid, atttypmod, attnotnull FROM pg_attribute "
+        "WHERE attrelid = 'gateway_report_deliveries'::regclass AND attnum > 0 ORDER BY attnum"
+    )
+    columns = await schema_db.fetchall(columns_query)
+    other_checks_query = (
+        "SELECT oid, conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+        "WHERE conrelid = 'gateway_report_deliveries'::regclass "
+        "AND conname <> 'legacy renamed plan check' AND conname <> 'ck_gateway_report_deliveries_im_plan' "
+        "ORDER BY conname"
+    )
+    other_checks = await schema_db.fetchall(other_checks_query)
+
+    await bootstrap_db.main()
+
+    assert await schema_db.fetchall(rows_query) == legacy_rows
+    assert await schema_db.fetchone(identity_query) == table_identity
+    assert await schema_db.fetchall(columns_query) == columns
+    assert await schema_db.fetchall(other_checks_query) == other_checks
+    upgraded_constraints = await schema_db.fetchall(constraints_query)
+    for plan, next_chunk in ((v1, 1), (v2, 2)):
+        await schema_db.execute(
+            insert, {**base, "id": uuid4(), "destination": uuid4(), "plan": plan, "next": next_chunk}
+        )
+    assert [row for row in upgraded_constraints if row["conname"] != legacy_plan_check["conname"]] == fresh_constraints
+    for invalid_plan in (
+        '{"version":0,"chunks":[{}]}',
+        '{"version":3,"chunks":[{}]}',
+        '{"chunks":[{}]}',
+        '{"version":null,"chunks":[{}]}',
+        '{"version":2}',
+        '{"version":2,"chunks":null}',
+        '{"version":2,"chunks":[]}',
+        '{"version":2,"chunks":{}}',
+        "[]",
+        "null",
+    ):
+        # Invalid scalar/array JSON can also raise a native JSON shape error; both must reject the write.
+        with pytest.raises(DbError):
+            await schema_db.execute(insert, {**base, "id": uuid4(), "destination": uuid4(), "plan": invalid_plan})
+    for assignment in (
+        "next_chunk = -1",
+        "next_chunk = 2",
+        "im_plan = NULL, next_chunk = 1",
+        "destination_kind = 'agent'",
+        "destination_kind = 'unknown', im_plan = NULL",
+        "terminal_reason = 'payload_rejected'",
+        "terminal_at = now()",
+        "terminal_reason = 'unknown', terminal_at = now()",
+        "terminal_reason = 'payload_rejected', terminal_at = now(), delivered_at = now()",
+        "attempts = 50",
+    ):
+        with pytest.raises(CheckViolationError):
+            await schema_db.execute(
+                sql.SQL("UPDATE gateway_report_deliveries SET {} WHERE id = %(id)s")
+                .format(sql.SQL(assignment))
+                .as_string(schema_db.raw),
+                {"id": fresh_id},
+            )
+    settled = await schema_db.fetchall(rows_query)
+    await bootstrap_db.main()
+    assert await schema_db.fetchall(rows_query) == settled
+    assert await schema_db.fetchall(constraints_query) == upgraded_constraints
+    assert await schema_db.fetchone(identity_query) == table_identity
+    assert await schema_db.fetchall(columns_query) == columns
+    assert await schema_db.fetchall(other_checks_query) == other_checks
 
 
 _JOURNAL_RECORDED_AT = (

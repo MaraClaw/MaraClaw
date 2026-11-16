@@ -1943,9 +1943,9 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     im_plan JSONB,
     next_chunk INTEGER NOT NULL DEFAULT 0 CHECK (next_chunk >= 0),
     CHECK (im_plan IS NOT NULL OR next_chunk = 0),
-    CHECK (im_plan IS NULL OR (
+    CONSTRAINT ck_gateway_report_deliveries_im_plan CHECK (im_plan IS NULL OR (
         destination_kind = 'im' AND jsonb_typeof(im_plan) = 'object'
-        AND im_plan->>'version' = '1' AND jsonb_typeof(im_plan->'chunks') = 'array'
+        AND im_plan->>'version' IN ('1','2') AND jsonb_typeof(im_plan->'chunks') = 'array'
         AND jsonb_array_length(im_plan->'chunks') > 0
         AND next_chunk <= jsonb_array_length(im_plan->'chunks')
     ) IS TRUE),
@@ -1953,6 +1953,32 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     CHECK (terminal_at IS NULL OR delivered_at IS NULL),
     UNIQUE (message_id, destination_kind, destination_id)
 );
+
+-- Explicit legacy upgrade: replace only the catalog-proven v1 plan predicate, regardless of its name.
+-- Other checks, rows, column types and table identity stay untouched; the bootstrap transaction keeps this atomic.
+DO $$
+DECLARE
+    legacy_constraints TEXT[];
+    legacy_constraint TEXT;
+BEGIN
+    SELECT array_agg(conname::text) INTO legacy_constraints
+    FROM pg_constraint
+    WHERE conrelid = 'gateway_report_deliveries'::regclass AND contype = 'c'
+        AND pg_get_constraintdef(oid) = $legacy$CHECK (((im_plan IS NULL) OR ((((destination_kind)::text = 'im'::text) AND (jsonb_typeof(im_plan) = 'object'::text) AND ((im_plan ->> 'version'::text) = '1'::text) AND (jsonb_typeof((im_plan -> 'chunks'::text)) = 'array'::text) AND (jsonb_array_length((im_plan -> 'chunks'::text)) > 0) AND (next_chunk <= jsonb_array_length((im_plan -> 'chunks'::text)))) IS TRUE)))$legacy$;
+    IF legacy_constraints IS NOT NULL THEN
+        FOREACH legacy_constraint IN ARRAY legacy_constraints LOOP
+            EXECUTE format('ALTER TABLE gateway_report_deliveries DROP CONSTRAINT %I', legacy_constraint);
+        END LOOP;
+        ALTER TABLE gateway_report_deliveries
+            ADD CONSTRAINT ck_gateway_report_deliveries_im_plan CHECK (im_plan IS NULL OR (
+                destination_kind = 'im' AND jsonb_typeof(im_plan) = 'object'
+                AND im_plan->>'version' IN ('1','2') AND jsonb_typeof(im_plan->'chunks') = 'array'
+                AND jsonb_array_length(im_plan->'chunks') > 0
+                AND next_chunk <= jsonb_array_length(im_plan->'chunks')
+            ) IS TRUE);
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_due
     ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_tenant
@@ -2687,5 +2713,42 @@ CREATE TABLE IF NOT EXISTS auth_email_jobs (
 );
 CREATE INDEX IF NOT EXISTS ix_auth_email_jobs_due
     ON auth_email_jobs(available_at,id) WHERE status='pending';
+
+-- Winning, immutable media descriptors share the native event acceptance transaction.
+CREATE TABLE IF NOT EXISTS channel_event_media (
+    config_id UUID NOT NULL,
+    provider TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0 AND ordinal < 10),
+    gateway_message_id UUID NOT NULL,
+    stored_file JSONB NOT NULL CHECK (jsonb_typeof(stored_file) = 'object'),
+    PRIMARY KEY (config_id, provider, event_key, ordinal),
+    FOREIGN KEY (config_id, provider, event_key)
+        REFERENCES channel_event_receipts(config_id, provider, event_key) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_channel_event_media_message ON channel_event_media(gateway_message_id);
+CREATE INDEX IF NOT EXISTS ix_channel_event_media_storage_key ON channel_event_media((stored_file->>'storage_key'));
+
+-- Private outbound media commands retain uncertainty across connector restarts.
+CREATE TABLE IF NOT EXISTS zalo_personal_media_sends (
+    command_id UUID PRIMARY KEY,
+    config_id UUID NOT NULL,
+    auth_epoch UUID NOT NULL,
+    generation UUID NOT NULL,
+    account_id TEXT NOT NULL CHECK (account_id ~ '^[0-9]{1,64}$'),
+    peer_id TEXT NOT NULL CHECK (peer_id ~ '^[0-9]{1,64}$'),
+    file JSONB NOT NULL CHECK (jsonb_typeof(file) = 'object'),
+    message_id TEXT,
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending','dispatch_started','accepted','rejected','uncertain','cancelled')),
+    claim_token UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    dispatched_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_zalo_personal_media_sends_pending
+    ON zalo_personal_media_sends(config_id,created_at,command_id) WHERE state='pending';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_zalo_personal_media_sends_message
+    ON zalo_personal_media_sends(account_id,message_id) WHERE message_id IS NOT NULL;
 
 COMMIT;
