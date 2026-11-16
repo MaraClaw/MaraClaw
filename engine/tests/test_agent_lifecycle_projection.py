@@ -240,7 +240,8 @@ async def test_runtime_loss_is_projected_from_committed_rows(lifecycle_db, no_do
         lifecycle_db, record.id, "image_unavailable", recorded_container_id="other", image="sha256:gone"
     )
     assert (again.reason, again.image, again.recorded_container_id) == ("image_unavailable", "sha256:gone", "lost")
-    assert again.detected_at == first.detected_at
+    assert again.detected_at > first.detected_at
+    assert await agent_runtime_loss_dao.claim_notification(lifecycle_db, record.id)
     assert not await agent_runtime_loss_dao.claim_notification(lifecycle_db, record.id)
     user = await load_user_principal(record.creator_id)
     # When lifecycle is read.
@@ -249,7 +250,7 @@ async def test_runtime_loss_is_projected_from_committed_rows(lifecycle_db, no_do
     assert response.status_code == 200
     body = AgentLifecycleOut.model_validate_json(response.content)
     assert body.runtime.loss is not None
-    assert (body.runtime.loss.reason, body.runtime.loss.detected_at) == ("image_unavailable", first.detected_at)
+    assert (body.runtime.loss.reason, body.runtime.loss.detected_at) == ("image_unavailable", again.detected_at)
     await agent_runtime_loss_dao.clear(lifecycle_db, record.id)
     assert (await get_lifecycle(record.id, user)).json()["runtime"]["loss"] is None
 
