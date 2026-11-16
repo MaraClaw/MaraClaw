@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from typing import Any, NotRequired, TypedDict
 
 from app.core.json_types import JsonValue
 from app.core.logging import logger
 from app.records.channel_config import ChannelConfigRecord
+from app.services.channels.wechat_media import WeChatMedia, parse_wechat_media, store_wechat_media
 
 
 class WeChatTextItem(TypedDict):
@@ -17,6 +19,7 @@ class WeChatTextItem(TypedDict):
 class WeChatMessageItem(TypedDict):
     type: int
     text_item: NotRequired[WeChatTextItem]
+    media: NotRequired[WeChatMedia]
 
 
 class WeChatInboundMessage(TypedDict):
@@ -48,6 +51,9 @@ def _parse_wechat_message_item(value: JsonValue) -> WeChatMessageItem | None:
         return None
 
     item: WeChatMessageItem = {"type": item_type}
+    media = parse_wechat_media(value)
+    if media is not None:
+        item["media"] = media
     text_item = value.get("text_item")
     if not isinstance(text_item, dict):
         return item
@@ -106,7 +112,8 @@ async def process_wechat_message(agent_id: uuid.UUID, raw_message: JsonValue, co
     if from_user_id == (getattr(config, "app_id", None) or "").strip():
         return
     user_text = _extract_wechat_text(message["item_list"])
-    if not user_text:
+    media = tuple(attachment for item in message["item_list"] if (attachment := item.get("media")) is not None)
+    if not user_text and not media:
         return
     context_token = message["context_token"]
     if context_token is None:
@@ -126,6 +133,8 @@ async def process_wechat_message(agent_id: uuid.UUID, raw_message: JsonValue, co
         sender_id=from_user_id,
         conversation_id=f"wechat_{message['session_id']}",
         text=user_text,
+        kind="media" if media else "text",
+        media_ids=tuple(item.fingerprint_id() for item in media),
     )
     if await is_channel_event_replay(native):
         return
@@ -135,4 +144,9 @@ async def process_wechat_message(agent_id: uuid.UUID, raw_message: JsonValue, co
         context_token=context_token,
         conv_id=native.conversation_id,
     )
-    await accept_channel_event(native)
+    if media:
+        media_content, attachments = await store_wechat_media(agent_id, media)
+        content = "\n".join(part for part in (user_text, media_content) if part)
+        await accept_channel_event(replace(native, attachments=attachments), content=content, saved_content=content)
+    else:
+        await accept_channel_event(native)
