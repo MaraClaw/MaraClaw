@@ -30,10 +30,7 @@ Local sandbox backends run code on the same host or Docker daemon. This is the m
 
 ## Proxy env
 
-- Guest proxy comes only from explicit `SANDBOX_HTTP_PROXY` / `SANDBOX_HTTPS_PROXY` / `SANDBOX_NO_PROXY` (or per-agent config fields), never from process env or global `HTTP_PROXY`.
-- Injection is gated on `allow_network`: disabled-network sandboxes must not receive proxy secrets.
-- Subprocess path puts proxy in the process env (`_build_safe_env`), not on bwrap `--setenv` argv (avoids credential leak via `/proc/.../cmdline`).
-- Changing `allow_network` or proxy fields in agent tool config requires platform/org admin.
+- Subprocess proxy injection uses `SandboxConfig.resolve_proxy_env()` (`../AGENTS.md`) in `_build_safe_env`, not bwrap `--setenv` argv (avoids credential leak via `/proc/.../cmdline`).
 
 ## Docker Safety
 
