@@ -3,9 +3,12 @@ from __future__ import annotations
 import base64
 import json
 import re
+from dataclasses import replace
+from pathlib import PurePosixPath
 
 from app.core.json_types import JsonObject, JsonValue, json_as_str_or, json_loads_object, json_object_from
 from app.records.channel_config import ChannelConfigRecord
+from app.records.chat_attachment import ChatAttachment
 from app.services.feishu_service import feishu_service
 from app.services.storage import store_agent_upload
 
@@ -45,7 +48,7 @@ async def accept_feishu_event(
     message = json_object_from(event.get("message"))
     message_id = json_as_str_or(message.get("message_id"))
     kind = json_as_str_or(message.get("message_type"), "text")
-    if not message_id or kind not in ("text", "post", "image", "file"):
+    if not message_id or kind not in ("text", "post", "image", "file", "media"):
         return False
     sender = json_object_from(json_object_from(event.get("sender")).get("sender_id"))
     external_id = json_as_str_or(sender.get("user_id"))
@@ -58,7 +61,7 @@ async def accept_feishu_event(
     if kind == "post":
         parts, media = _post_parts(body)
         text = re.sub(r"@_user_\d+", "", "\n".join(parts)).strip()
-    elif kind in ("image", "file"):
+    elif kind in ("image", "file", "media"):
         media = [json_as_str_or(body.get("image_key" if kind == "image" else "file_key"))]
     native = ChannelEvent(
         config_id=config.id,
@@ -79,12 +82,15 @@ async def accept_feishu_event(
         return True
     enriched = text
     saved = text
+    attachments: list[ChatAttachment] = []
     budget = MediaBudget()
     for media_id in media:
         if source is not None:
             await authorize_stream_source(source)
-        resource_type = "file" if kind == "file" else "image"
-        filename = json_as_str_or(body.get("file_name")) or f"image_{media_id[-8:]}.jpg"
+        resource_type = "file" if kind in ("file", "media") else "image"
+        filename = json_as_str_or(body.get("file_name")) or (
+            f"video_{media_id[-8:]}.mp4" if kind == "media" else f"image_{media_id[-8:]}.jpg"
+        )
         try:
             data = await feishu_service.download_message_resource(
                 config.app_id or "",
@@ -106,10 +112,11 @@ async def accept_feishu_event(
         _, workspace_path, _ = await store_agent_upload(
             config.agent_id, filename, data, content_type="image/jpeg" if resource_type == "image" else None
         )
+        attachments.append(ChatAttachment(path=workspace_path, name=PurePosixPath(workspace_path).name))
         marker = f"[file:{workspace_path}]"
         saved = f"{saved}\n{marker}".strip()
         if resource_type == "image":
             marker += f"\n[image_data:data:image/jpeg;base64,{base64.b64encode(data).decode('ascii')}]"
         enriched = f"{enriched}\n{marker}".strip()
-    await accept_channel_event(native, content=enriched, saved_content=saved)
+    await accept_channel_event(replace(native, attachments=tuple(attachments)), content=enriched, saved_content=saved)
     return True

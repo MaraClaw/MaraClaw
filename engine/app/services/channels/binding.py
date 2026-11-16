@@ -104,7 +104,7 @@ async def persist_channel_user_message(
         session = await chat_session_dao.get(UUID(conversation_id))
         if session is not None:
             await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
-            if is_shared_session(session):
+            if is_shared_session(session) or attachments:
                 from app.api.background_tasks import schedule_background_task
 
                 schedule_background_task(
@@ -120,7 +120,7 @@ async def persist_channel_user_message(
                             "attachments": [ref.as_dict() for ref in attachments],
                         },
                     ),
-                    "Publish shared IM user message",
+                    "Publish IM user message",
                 )
         if touch_last_active:
             row = agent if agent is not None else await agent_dao.get(agent_id)

@@ -10,7 +10,8 @@ import json
 import threading
 import uuid
 from collections.abc import Awaitable, Callable
-from pathlib import Path
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
 from typing import TypedDict, cast, override
 from weakref import WeakValueDictionary
 
@@ -19,6 +20,7 @@ import httpx
 from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
+from app.records.chat_attachment import ChatAttachment
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.services.channels import dingtalk_downloads
 from app.services.channels.dingtalk_downloads import get_media_download_url as _get_media_download_url
@@ -840,6 +842,14 @@ class DingTalkStreamManager:
         if not user_text:
             logger.info("[DingTalk Stream] Empty content after media processing, skipping")
             return
+
+        if native is not None:
+            native = replace(
+                native,
+                attachments=tuple(
+                    ChatAttachment(path=path, name=PurePosixPath(path).name) for path in saved_file_paths or ()
+                ),
+            )
 
         await authorize_stream_source(source)
 
