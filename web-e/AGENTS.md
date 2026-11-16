@@ -1,7 +1,7 @@
 # web-e - end-user web UI
 
-**Generated:** 2026-11-05
-**Commit:** 0056d92a
+**Generated:** 2026-11-16
+**Commit:** 86583502
 **Branch:** 2026November
 
 Parent: [monorepo router](../AGENTS.md). Prefer the deepest guide below; engine routes/tests remain behavior truth.
@@ -15,25 +15,25 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 | Task | Source / guide |
 |------|----------------|
 | SPA assembly | `src/main.tsx`, `src/App.tsx` |
-| Routes and gates | `src/routes/index.tsx`, `src/routes/protected.tsx` |
+| Routes and gates | [routes/AGENTS.md](./src/routes/AGENTS.md) |
 | Landing, organization payment, auth, invitation join and transfer | [pages/AGENTS.md](./src/pages/AGENTS.md) |
 | Member screens, admissions, agent tabs | [pages/app/AGENTS.md](./src/pages/app/AGENTS.md) |
 | Component families, chrome, brand, primitives | [components/AGENTS.md](./src/components/AGENTS.md), then its chat/layout/sections/ui guides |
 | HTTP, sockets, tickets, domain clients | [lib/AGENTS.md](./src/lib/AGENTS.md), then [lib/chat/AGENTS.md](./src/lib/chat/AGENTS.md) |
+| Member DTO adapters and admission schemas | [lib/types/AGENTS.md](./src/lib/types/AGENTS.md) |
 | Query options, session scopes, funnel and chat hooks | [hooks/AGENTS.md](./src/hooks/AGENTS.md) |
 | Session ownership | `src/lib/auth-session.ts`, `auth-session-controller.ts`; `src/hooks/auth-provider.tsx`, `session-workspace.ts`, `session-query-scope.ts` |
 | Admission access gating | `src/lib/admission-access.ts`, `src/hooks/use-admission-access.ts`, `src/components/layout/admission-access-gate.tsx` |
 | Node and browser checks | [tests/AGENTS.md](./tests/AGENTS.md), [e2e/AGENTS.md](./e2e/AGENTS.md) |
 | Theme and shared styles | `index.html`, `src/hooks/theme-provider.tsx`, `src/index.css` |
+| Language, translations and locale formatting | `src/hooks/translation-provider.tsx`, `src/hooks/use-translation.ts`, `src/lib/i18n/`; contract in the hooks guide |
 | Production / verification | `Dockerfile`, `docker/Caddyfile`, `package.json`, `../.github/workflows/frontend-ci.yml` |
 
 ## RUNTIME CONTRACTS
 
-- `main.tsx`: ThemeProvider wraps App. `App.tsx`: RootErrorBoundary wraps AuthProvider, AppRouter, and Toaster. Never add QueryClient here or in main; AppShell is the only QueryClientProvider.
-- Routing uses BrowserRouter, not a data router. Public auth and session-gated `/join` / `/transfer` stay outside `/app`; landing hashes stay on `/`. No catch-all 404; no `src/routes.tsx`.
+- `main.tsx`: ThemeProvider wraps TranslationProvider, which wraps App. `App.tsx`: RootErrorBoundary wraps AuthProvider, AppRouter, and Toaster. Never add QueryClient here or in main; AppShell is the only QueryClientProvider.
+- Route composition and password, organization, admission and onboarding gate ordering live in the routes guide. Keep route changes paired with the corresponding gates and workspace navigation.
 - Organization creation is a public, paid flow with no session: the landing pricing form requests a server price quote (`POST /api/organization-admissions/quote`, stores nothing), keeps it in sessionStorage `maraclaw-organization-quote` (parsed with the generated schema; malformed or expired quotes are dropped) and navigates to the public `/organization-payment` route, which shows the transfer amount and bank details and sends the quote token with the receipt file (`POST /api/organization-admissions`). A platform admin approves later. The route stays outside `/app` and never uses AppShell.
-- ProtectedRoute sends anonymous users to `/login`, missing-org sessions to `/join` except Inbox Admissions (`/app/notifications?category=admissions`), its legacy `/app/admissions` list redirect and `/app/admissions/*` status views, and `must_change_password` to `/app/settings`. `/app/account` redirects there; settings and admissions stay outside OnboardingGate.
-- Admission access is a separate branch from onboarding. AppShell renders `AdmissionAccessGate`: a session with a pending, non-transfer admission from its current organization may use only Inbox, Settings, Account and admissions routes, and any other path redirects to `/app/notifications`. Inbox Admissions reuses the existing admission history and transfer APIs; it is a UI category, not a notification wire category. The Inbox route sits under `AdmissionInboxGate`, which adds OnboardingGate only for notification categories once workspace access is allowed. Transfer requests are their own route, `/app/admissions/transfers/:id`, beside `/app/admissions/:id`.
 - Member auth uses server-enforced member-audience routes and DTOs. `auth-storage.ts` owns localStorage `maraclaw-enduser-token`, never the admin token; logout is local, not an API call. SSO state uses sessionStorage.
 - Capture the current session owner for async work; discard stale completions after logout, replacement, or tenant switch. Use session-scoped workspace query/mutation hooks; AppShell creates a per-owner QueryClient and cancels/clears retired-owner work.
 - Join is invitation-driven: `/join` previews a code, then accepts it or continues in the default organization. Transfer requires an invitation code plus password, loads a quote and may force an explicit paid or free choice. Results are an immediate join (access token), a pending/approved admission, or a payment-review transfer request. Pending outcomes keep the source session and link to `/app/admissions/:id` or `/app/admissions/transfers/:id`; approved admissions enter the target only through the switch/replacement session flow.
