@@ -46,7 +46,8 @@ takes precedence when both fields are invalid.
 `client_submission_id`. `GET /api/agents/{agent_id}/sessions/{session_id}/messages`
 returns nonempty references unchanged as `attachments` on the persisted user
 message, including after reconnect/reload. Shared-session user `done` events
-carry the same field. Legacy messages and empty lists omit the response field.
+and native IM session user `done` events with attachments carry the same field.
+Legacy messages and empty lists omit the response field.
 References are metadata only: existing `content`, `display_content`, and legacy
 `file_name` handling are unchanged. Clients still supply whatever model-facing
 content their existing upload flow requires.
@@ -59,6 +60,35 @@ the reference, not a snapshot or a new capability to access its contents.
 Bounded local reads, including previews, refuse symlinks in any path component,
 even when their target remains inside the same agent root; they do not follow
 symlinks while opening the file. This is stricter than reference existence checks.
+
+## IM files and media
+
+Inbound IM downloads use the configured `STORAGE_BACKEND` through the storage
+facade. Local storage writes under `STORAGE_LOCAL_ROOT` (or `AGENT_DATA_DIR`);
+managed S3 writes retain its quota accounting, including when legacy local
+read-through is enabled. New uploads use conditional creation: repeated filenames
+receive a numeric suffix instead of replacing an earlier chat attachment.
+Provider failures and unconfirmed storage writes do not publish a successful
+attachment reference.
+
+The persisted message and its live event contain canonical `{path, name}`
+references. Provider download URLs, access tokens and binary payloads are not
+attachment metadata. Native event replay identity continues to use the original
+provider event, so enrichment does not change its fingerprint. Downloads follow
+fresh sender authorization and the committed-replay precheck.
+
+Office files, images and videos appear as attachment cards in `web-e`. Opening a
+preview performs fresh authenticated metadata and byte requests; history loading
+does not download the attachment bodies. PDF, DOCX, PPTX, XLSX and supported
+images use the existing preview pipeline. Legacy DOC/XLS files remain available
+through download. MP4, WebM and Ogg video use native controls when the browser
+supports the codec, with no autoplay and `preload="none"`.
+
+Preview bytes still use the existing bounded whole-file endpoint (20 MiB) and
+owner-scoped cache (64 MiB), rather than HTTP range playback. Larger stored files
+remain downloadable. Inbound channel HTTP downloads count decoded bytes as they
+arrive, with the shared 10 MiB image / 50 MiB file and per-event budget; providers
+can impose a smaller limit, including Telegram's hosted 20 MiB download limit.
 
 ## Replay identity
 
