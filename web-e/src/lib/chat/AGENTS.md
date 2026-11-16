@@ -1,6 +1,6 @@
 # chat/ - transport, submissions and transcript reconciliation
 
-Scope: socket attempts, wire validation, submission identity, history merging, skill-mention submission and rejected-turn recovery.
+Scope: socket attempts, wire validation, submission identity, history merging, transcript layout/windowing, skill-mention submission and rejected-turn recovery.
 
 ## Files
 
@@ -13,6 +13,7 @@ Scope: socket attempts, wire validation, submission identity, history merging, s
 - `skill-mentions.ts`: `resolveSkillMentionSegments`, `findSkillMention`, `filterSkillMentions`, `insertSkillMention`, `buildSkillMentionContent`; installed-skill mention parsing and submission content.
 - `submissions.ts`: `createChatSubmissions`, `ChatSubmissions`; frozen envelopes, pending/accepted tracking and canonical session identity.
 - `transcript.ts`: `ChatLine`, `acceptSubmission`, `mergeServerHistory`, `appendCompletion`; optimistic/history reconciliation.
+- `transcript-window.ts`: `transcriptEntryId`, `transcriptLayout`, `firstVisibleRow`, `transcriptWindow`, `anchoredScrollTop`; stable row identity, measured-height layout, viewport selection and anchor restoration.
 - `turn-rejection.ts`: `recoverRejectedTurn`, `restoreComposerDraft`; rejected-row state, recovery notices and draft restoration.
 - `ws-client.ts`: `connectAgentChat`, `ChatSocket`, `ChatTransport`, `ChatConnectionState`; socket lifecycle, liveness, offline/suspended handling and protocol guard/type re-exports.
 
@@ -51,6 +52,7 @@ Scope: socket attempts, wire validation, submission identity, history merging, s
 - Transcript merging matches user rows by submission/message ID, not text; deduplicate authoritative rows by `entry_id`.
   Preserve order: older local rows, authoritative history, unmatched pending users, remaining live rows.
   Completion deduplication respects entry IDs and already-authoritative parent message IDs.
+- Transcript layout uses measured heights with an 88 px estimate until measured. Entry identity prefers `entry_id`, then `client_submission_id`, then `message_id`, with a WeakMap ID for otherwise anonymous local rows. Windowing adds eight rows before and after the visible range, unions caller-supplied pinned IDs and returns index order. `useChatScroll` owns measurements and the pending/rejected/focused pin set; rendering belongs to `components/chat/transcript.tsx`.
 - A mention must start the message or follow whitespace; only names matching an installed skill resolve, and a trailing `.` run is tolerated. The picker and chips share `resolveSkillMentionSegments`, so display and submission cannot disagree.
   `buildSkillMentionContent` trims the draft. With no resolved skill, `content` is just that text; otherwise `content` lists each distinct skill's exact workspace-relative path ahead of the request and `display_content` keeps the user's text.
 - Recover only a matching pending, not-accepted user row; an ID-less rejection produces an onboarding notice without editing rows.
