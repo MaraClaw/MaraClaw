@@ -284,35 +284,23 @@ class WeComStreamManager:
                     except Exception as reply_error:
                         logger.warning(f"[WeCom Stream] Could not send error reply for {agent_id}: {reply_error}")
 
-            # ── Message handler: image ──
-            async def on_image(frame: _WeComFrame) -> None:
-                try:
-                    body = _json_object(getattr(frame, "body", None))
-                    sender_id = _extract_wecom_sender_id(body)
-                    logger.info(f"[WeCom Stream] Image message from {sender_id} (not yet handled)")
-                    stream_id = generate_req_id("stream")
-                    await reply_stream(
-                        frame,
-                        stream_id,
-                        "Received your image. Image processing is not yet supported.",
-                    )
-                except Exception as e:
-                    logger.error(f"[WeCom Stream] Error handling image: {e}")
+            async def on_media(frame: _WeComFrame) -> None:
+                body = _json_object(getattr(frame, "body", None))
+                reply_text = await _process_wecom_stream_message(
+                    agent_id=agent_id,
+                    sender_id=_extract_wecom_sender_id(body),
+                    user_text="",
+                    chat_id=_extract_wecom_chat_id(body),
+                    chat_type=_extract_wecom_chat_type(body),
+                    message_id=str(body.get("msgid") or body.get("msg_id") or ""),
+                    source=source,
+                    media_body=body,
+                )
+                await reply_stream(frame, generate_req_id("stream"), reply_text)
 
-            # ── Message handler: file ──
-            async def on_file(frame: _WeComFrame) -> None:
-                try:
-                    body = _json_object(getattr(frame, "body", None))
-                    sender_id = _extract_wecom_sender_id(body)
-                    logger.info(f"[WeCom Stream] File message from {sender_id} (not yet handled)")
-                    stream_id = generate_req_id("stream")
-                    await reply_stream(
-                        frame,
-                        stream_id,
-                        "Received your file. File processing is not yet supported.",
-                    )
-                except Exception as e:
-                    logger.error(f"[WeCom Stream] Error handling file: {e}")
+            async def on_video(frame: _WeComFrame) -> None:
+                if _json_object(getattr(frame, "body", None)).get("msgtype") == "video":
+                    await business(on_media)(frame)
 
             # ── Enter chat event: send welcome ──
             async def on_enter_chat(frame: _WeComFrame) -> None:
@@ -353,8 +341,10 @@ class WeComStreamManager:
                 return callbacks.wrap(handle)
 
             stream_client.on("message.text", business(on_text))
-            stream_client.on("message.image", business(on_image))
-            stream_client.on("message.file", business(on_file))
+            stream_client.on("message.image", business(on_media))
+            stream_client.on("message.file", business(on_media))
+            stream_client.on("message.mixed", business(on_media))
+            stream_client.on("message", on_video)
             stream_client.on("event.enter_chat", callbacks.wrap(on_enter_chat))
             stream_client.on("disconnected", on_disconnected)
 
@@ -469,6 +459,7 @@ async def _process_wecom_stream_message(
     chat_type: str = "single",
     message_id: str = "",
     source: StreamSource | None = None,
+    media_body: JsonObject | None = None,
 ) -> str:
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
@@ -476,19 +467,27 @@ async def _process_wecom_stream_message(
         raise ValueError("WeCom message ID is required")
     if source is None:
         raise RuntimeError("WeCom connection source is required")
-    await accept_channel_event(
-        ChannelEvent(
-            config_id=source.config_id,
-            agent_id=agent_id,
-            provider="wecom",
-            event_key=f"{source.account_id}:{chat_id}:{message_id}",
-            sender_id=sender_id,
-            conversation_id=_build_wecom_conv_id(sender_id, chat_id, chat_type),
-            text=user_text,
-            is_group=chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id),
-            stream_source=source,
-        )
+    from app.services.channels.wecom_media import accept_wecom_media, stream_media
+
+    text, media = stream_media(media_body) if media_body is not None else (user_text, ())
+    native = ChannelEvent(
+        config_id=source.config_id,
+        agent_id=agent_id,
+        provider="wecom",
+        event_key=f"{source.account_id}:{chat_id}:{message_id}",
+        sender_id=sender_id,
+        conversation_id=_build_wecom_conv_id(sender_id, chat_id, chat_type),
+        text=text,
+        kind=str(media_body.get("msgtype") or "text") if media_body is not None else "text",
+        media_ids=tuple(item.fingerprint_id() for item in media),
+        is_group=chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id),
+        stream_source=source,
     )
+    if media:
+        config = await authorize_stream_source(source)
+        await accept_wecom_media(native, config, media)
+    else:
+        await accept_channel_event(native)
     return ""
 
 
