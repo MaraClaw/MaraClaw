@@ -19,41 +19,43 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `/activity` | admin (PA + OA) | bounded recent administrator activity; platform filters vs own organization |
 | `/invitations` | `InvitationsRoute`: `canManageInvitations` (`org_admin`, not PA, has tenant) | invitations form + history |
 | `/agent-deletion-requests` `/agent-deletion-requests/:id` | `AgentDeletionReviewRoute`: `canReviewAgentDeletions` (active `org_admin`, not PA, has tenant) | deletion queue, detail + approval |
-| `/payments` | `TransferReviewRoute`: active PA only; the one payment nav entry "Payments" (`paymentReviewOnly`) | `payments.tsx`: `?tab=` rail with organization transfers (default) and `?tab=capacity` for extra accounts and agents; genesis PA also sees the payment settings section on the capacity tab |
+| `/payments` | `TransferReviewRoute`: active PA; one "Payments" nav entry (`paymentReviewOnly`) | `payments.tsx`: `?tab=transfers` (default), `capacity`, `admissions`, `settings`; admissions/settings require the active genesis PA. Payment settings is a separate tab. |
 | `/transfer-payments` `/capacity-payments` | same gates as their details | redirect (replace) to `/payments` and `/payments?tab=capacity` |
 | `/transfer-payments/:id` | `TransferReviewRoute`: active PA only | payment detail + decision |
 | `/capacity-payments/:orderId` | `CapacityReviewRoute`: `canReviewCapacityPayments` (active PA); no nav entry | extra-accounts payment detail with evidence and decision; engine notifications link here |
 | `/capacity-orders/:orderId` | `CapacityOrderRoute`: `canViewCapacityOrders` (active non-PA org admin with a tenant, or active PA read-only); no nav entry | payment page: amount, bank recipient with copy buttons, evidence upload, cancel, status views |
 | `/admission-approvals` `/admission-approvals/:id` | `AdmissionReviewRoute`: `canReviewAdmissions` (`org_admin` + `is_genesis`) | admission queue, detail + decision |
+| `/organization-admissions` | `OrganizationAdmissionReviewRoute`: `canReviewOrganizationAdmissions` (active genesis `platform_admin`) | redirect (replace) to `/payments?tab=admissions`; distinct from the genesis OA member-admission gate |
 | `/broadcast` | `BroadcastRoute`: `canSendBroadcast` (`org_admin`, not PA) | broadcast |
 | `/companies` `/companies/:companyId` | `PlatformAdminRoute` | companies, company detail + domains + deletion |
+| `/companies/:companyId/runtimes` | `PlatformAdminRoute`; no separate nav entry | company runtime inventory |
 | `/search-engine` | `PlatformAdminRoute` | search-engine |
 | `/openclaw-updates` | `PlatformAdminRoute` | openclaw-updates |
 | `/upgrade-signals` | `PlatformAdminRoute` | upgrade-signals |
 | `*` (inside shell) | none | `Navigate` → `/` |
 
 Every row except public ones sits under `ProtectedRoute`; while `mustChangePassword`, everything but `/settings` redirects to `/settings`.
-Analytics is `?tab=analytics` on `/search-engine`, and capacity payments are `?tab=capacity` on `/payments`; neither is a route.
+Analytics is `?tab=analytics` on `/search-engine`; payment tabs are query values on `/payments`. `/settings` is the separate account/organization settings route.
 
-**Nesting:** public routes bare → `ProtectedRoute` → `AdminShell` → optional gate route (`AgentDeletionReviewRoute`, `TransferReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`, `AdmissionReviewRoute`, `BroadcastRoute`, `InvitationsRoute`, `PlatformAdminRoute`). A failed gate `Navigate`s to `/` (replace).
+**Nesting:** public routes bare → `ProtectedRoute` → `AdminShell` → optional gate route (`AgentDeletionReviewRoute`, `TransferReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `BroadcastRoute`, `InvitationsRoute`, `PlatformAdminRoute`). A failed gate `Navigate`s to `/` (replace).
 
 ## WHERE TO LOOK
 
 | File | Role |
 |------|------|
-| `index.tsx` | `AppRouter`, all pages lazy under one `Suspense`, plus the `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `AgentDeletionReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute` guards. |
+| `index.tsx` | `AppRouter`, routed pages lazy under one `Suspense`, plus `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `AgentDeletionReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`. |
 | `protected.tsx` | Auth + `isAdmin`. Loading spinner. Unauth / non-admin → `/login`. Force-pw allowlist: `/settings` (and `/*` under it) until cleared; else `/settings`. |
 | `platform-admin.tsx` | `isPlatformAdminUser` else `/`. Wraps `/companies*`, `/search-engine`, `/openclaw-updates` and `/upgrade-signals`; their nav items use `platformAdminOnly`. |
 | `transfer-review.tsx` | `TransferReviewRoute`: `useTransferReviewAccess().canReview ? Outlet : /`. |
 
-Nav chrome: `../components/layout/admin-shell.tsx` (per-gate nav flags, force-pw locks links). Add the route here first, then the nav entry with the same predicate (see `../components/layout/AGENTS.md`).
+Nav chrome: `../components/layout/admin-shell.tsx` (per-gate nav flags, force-pw locks links). Add routes here first; a new nav destination needs an entry with the same predicate (see `../components/layout/AGENTS.md`). Detail routes can reuse an existing destination.
 
 ## CONVENTIONS
 
 - JWT `maraclaw-admin-token` via `useAuth`. Guards read context, not `localStorage`.
 - Force-change is `mustChangePassword` from `useAuth`, enforced by `ProtectedRoute`. A 403 never logs out; only an authenticated 401 expires the session (`../lib/AGENTS.md`).
 - Non-admin after login → `/login`. Members never see this app (`web-e`).
-- New live screen: page + route here + nav. Query-string tabs stay query-string.
+- New routed screen: page + route here; add nav only for a navigation destination. Capacity-order and company-runtime details need no separate nav entry. Query-string tabs stay query-string.
 - Catch-all is inside the shell, not a second public `*`.
 
 ## ANTI-PATTERNS
@@ -62,4 +64,4 @@ Nav chrome: `../components/layout/admin-shell.tsx` (per-gate nav flags, force-pw
 - Implementing APIs or `fetch` in this folder; capability lookups belong in `hooks/`.
 - A `/search-engine/analytics` path (keep `?tab=analytics`).
 - Metrics or Enterprise-settings routes until engine + page exist. Those two Overview cards are teasers (no `href`); Companies and Users cards link.
-- Treating `VITE_AUTH_BYPASS` as implemented — it is not.
+- Treating `VITE_AUTH_BYPASS` as implemented; it is not.
