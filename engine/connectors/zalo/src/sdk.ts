@@ -1,14 +1,19 @@
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { LoginQRCallbackEventType, ThreadType, Zalo } from 'zca-js';
-import type { Credentials, LoginQRCallback, Message, SendMessageResponse } from 'zca-js';
+import type { Credentials, LoginQRCallback, Message, MessageContent, SendMessageResponse } from 'zca-js';
 import { z } from 'zod';
 import { assertNever, BridgeFault, childFrame } from './protocol.js';
 import type { ChildPayload, CloseReason, SendCommand } from './protocol.js';
+import type { MediaOffers } from './media_offers.js';
+import type { MediaCookies } from './media_download.js';
+import { bufferAttachment } from './media_attachment.js';
 
 export interface SdkListener {
   on(event: 'message', handler: (message: Message) => void): unknown;
-  on(event: 'connected' | 'closed' | 'disconnected' | 'error', handler: () => void): unknown;
+  on(event: 'connected', handler: () => void): unknown;
+  on(event: 'closed' | 'disconnected', handler: (code: number, reason: string) => void): unknown;
+  on(event: 'error', handler: (error: unknown) => void): unknown;
   start(options: { retryOnClose: boolean }): void;
   stop(): void;
 }
@@ -16,8 +21,10 @@ export interface SdkApi {
   readonly listener: SdkListener;
   getOwnId(): string;
   getContext(): { readonly imei: string; readonly userAgent: string;
-    readonly cookie: { toJSON(): { readonly cookies: unknown } | undefined } };
-  sendMessage(text: string, threadId: string, type: ThreadType.User): Promise<SendMessageResponse>;
+    readonly cookie: { toJSON(): { readonly cookies: unknown } | undefined } & MediaCookies };
+  sendMessage(text: string | MessageContent, threadId: string, type: ThreadType.User): Promise<SendMessageResponse>;
+  keepAlive(): Promise<unknown>;
+  sendTypingEvent(threadId: string, type: ThreadType.User): Promise<unknown>;
 }
 export interface SdkClient {
   login(credentials: Credentials): Promise<SdkApi>;
@@ -36,12 +43,15 @@ const credentialsSchema = z.strictObject({
   cookie: z.array(z.object({ key: z.string().min(1), value: z.string(), domain: z.string().min(1) }).catchall(z.json())).min(1).max(512),
   imei: z.string().min(1).max(512), userAgent: z.string().min(1).max(4096),
 });
-const sendReceipt = z.object({ message: z.object({ msgId: z.union([
+const receiptId = z.union([
   z.string().regex(/^[0-9]{1,256}$/), z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-]) }).nullable() });
+]);
+const sendReceipt = z.object({ message: z.object({ msgId: receiptId }).nullable() });
+const attachmentReceipt = z.object({ message: z.object({ msgId: receiptId }).nullable(),
+  attachment: z.array(z.object({ msgId: receiptId })).length(1) });
 type LoginEvents = { readonly qr: (value: string, expiresAt: string) => void; readonly closed: (reason: CloseReason) => void };
 type ListenEvents = { readonly connected: () => void; readonly message: (payload: Extract<ChildPayload, { type: 'message' }>) => void;
-  readonly closed: () => void };
+  readonly closed: (reason: CloseReason) => void };
 
 export class SdkAdapter {
   private api: SdkApi | undefined;
@@ -67,11 +77,22 @@ export class SdkAdapter {
           default: assertNever(event);
         }
       })
-      : await this.client.login(credentialsSchema.parse(JSON.parse(credentials)));
+      : await this.restore(credentials);
     clearTimeout(this.qrTimer);
     this.abort = undefined;
     if (!this.active) { api.listener.stop(); throw new BridgeFault('shutdown'); }
     this.api = api;
+  }
+  private async restore(value: string): Promise<SdkApi> {
+    let credentials: Credentials;
+    try { credentials = credentialsSchema.parse(JSON.parse(value)); }
+    catch { // no-excuse-ok: catch -- invalid stored data never reaches the provider.
+      throw new BridgeFault('login_failed');
+    }
+    try { return await this.client.login(credentials); }
+    catch { // no-excuse-ok: catch -- SDK errors do not establish credential revocation.
+      throw new BridgeFault('transport_failed');
+    }
   }
   credentials(): string {
     const context = this.session().getContext();
@@ -79,24 +100,28 @@ export class SdkAdapter {
     return JSON.stringify(credentials);
   }
   accountId(): string { return this.session().getOwnId(); }
-  listen(events: ListenEvents): void {
+  cookies(): MediaCookies { return this.session().getContext().cookie; }
+  listen(events: ListenEvents, offers?: MediaOffers): void {
     const api = this.session();
     api.listener.on('connected', events.connected);
-    api.listener.on('disconnected', events.closed);
-    api.listener.on('closed', events.closed);
-    api.listener.on('error', events.closed);
+    const closed = (code: number): void => events.closed(code === 3000 || code === 3003 ? 'session_replaced' : 'transport_failed');
+    api.listener.on('disconnected', closed);
+    api.listener.on('closed', closed);
+    // Message processor errors are also emitted here. Recover transport without inferring revocation.
+    api.listener.on('error', () => events.closed('transport_failed'));
     api.listener.on('message', message => {
       if (!this.active) return;
       switch (message.type) {
         case ThreadType.Group: return;
         case ThreadType.User: {
-          if (message.isSelf || message.data.uidFrom === api.getOwnId() || message.data.msgType !== 'webchat' ||
-            typeof message.data.content !== 'string' || !/^\d+$/.test(message.data.ts)) return;
+          if (message.isSelf || message.data.uidFrom === api.getOwnId() || !/^\d+$/.test(message.data.ts)) return;
           const milliseconds = Number(message.data.ts);
           if (!Number.isSafeInteger(milliseconds)) return;
+          const media = offers?.add(message.data.msgId, message.data.msgType, message.data.content);
+          const text = message.data.msgType === 'webchat' && typeof message.data.content === 'string' ? message.data.content : '';
           const frame = childFrame.safeParse({ id: 'message', token: 'validation', type: 'message',
             message_id: message.data.msgId, sender_id: message.data.uidFrom, thread_id: message.threadId,
-            from_me: false, timestamp: Math.floor(milliseconds / 1000), text: message.data.content });
+            from_me: false, timestamp: Math.floor(milliseconds / 1000), text, ...(media ? { media } : {}) });
           if (frame.success && frame.data.type === 'message') events.message(frame.data);
           return;
         }
@@ -105,11 +130,20 @@ export class SdkAdapter {
     });
     api.listener.start({ retryOnClose: false });
   }
-  async send(command: SendCommand): Promise<string | null> {
-    const response = await this.session().sendMessage(command.text, command.thread_id, ThreadType.User);
+  async send(command: SendCommand, data?: Buffer): Promise<string | null> {
+    const payload = data ? { msg: command.text, attachments: await bufferAttachment(command, data) } : command.text;
+    const response = await this.session().sendMessage(payload, command.thread_id, ThreadType.User);
+    if (command.attachment) {
+      const receipt = attachmentReceipt.safeParse(JSON.parse(JSON.stringify(response)));
+      const id = receipt.success ? receipt.data.attachment[0]?.msgId : undefined;
+      return receipt.success && (command.text === '' ? receipt.data.message === null : receipt.data.message !== null) &&
+        id !== undefined ? String(id) : null;
+    }
     const receipt = sendReceipt.safeParse(JSON.parse(JSON.stringify(response)));
     return receipt.success && receipt.data.message !== null ? String(receipt.data.message.msgId) : null;
   }
+  async keepAlive(): Promise<void> { await this.session().keepAlive(); }
+  async typing(threadId: string): Promise<void> { await this.session().sendTypingEvent(threadId, ThreadType.User); }
   close(): void {
     this.active = false;
     clearTimeout(this.qrTimer);

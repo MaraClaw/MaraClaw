@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { LoginQRCallbackEventType, ThreadType } from 'zca-js';
-import type { Credentials, LoginQRCallback, Message, SendMessageResponse, TMessage } from 'zca-js';
+import type { Credentials, LoginQRCallback, Message, MessageContent, SendMessageResponse, TMessage } from 'zca-js';
 import { childFrame } from '../src/protocol.js';
 import type { ChildFrame } from '../src/protocol.js';
 import { Runtime } from '../src/runtime.js';
@@ -14,7 +14,8 @@ export const credentials = { cookie: [{ key: 'session', value: 'private-cookie',
 function isFrame<T extends ChildFrame['type']>(frame: ChildFrame, type: T): frame is Extract<ChildFrame, { type: T }> {
   return frame.type === type;
 }
-export class TestListener extends EventEmitter<{ message: [Message]; connected: []; closed: []; disconnected: []; error: [unknown] }> implements SdkListener {
+export class TestListener extends EventEmitter<{ message: [Message]; connected: []; closed: [number, string];
+  disconnected: [number, string]; error: [unknown] }> implements SdkListener {
   started = false;
   autoConnect = true;
   start(options: { retryOnClose: boolean }): void {
@@ -27,12 +28,23 @@ export class TestListener extends EventEmitter<{ message: [Message]; connected: 
 }
 export class TestApi implements SdkApi {
   readonly listener = new TestListener();
-  readonly dispatched: { text: string; threadId: string; type: ThreadType.User }[] = [];
+  readonly dispatched: { text: string | MessageContent; threadId: string; type: ThreadType.User }[] = [];
+  readonly typed: { threadId: string; type: ThreadType.User }[] = [];
+  cookies = structuredClone(credentials.cookie);
+  pingCalls = 0;
+  ping: () => Promise<unknown> = async () => ({});
+  typing: () => Promise<unknown> = async () => ({});
   response: () => Promise<SendMessageResponse> = async () => ({ message: { msgId: 97531 }, attachment: [] });
   getOwnId(): string { return '10001'; }
   getContext() { return { imei: credentials.imei, userAgent: credentials.userAgent,
-    cookie: { toJSON: () => ({ cookies: credentials.cookie }) } }; }
-  sendMessage(text: string, threadId: string, type: ThreadType.User): Promise<SendMessageResponse> {
+    cookie: { toJSON: () => ({ cookies: this.cookies }), getCookieString: async (_url: string) => '',
+      setCookie: async (_cookie: string, _url: string) => undefined } }; }
+  keepAlive(): Promise<unknown> { this.pingCalls++; return this.ping(); }
+  sendTypingEvent(threadId: string, type: ThreadType.User): Promise<unknown> {
+    this.typed.push({ threadId, type });
+    return this.typing();
+  }
+  sendMessage(text: string | MessageContent, threadId: string, type: ThreadType.User): Promise<SendMessageResponse> {
     this.dispatched.push({ text, threadId, type });
     return this.response();
   }
@@ -46,9 +58,11 @@ export class TestSdk implements SdkClient {
   aborted = 0;
   settleAbort = true;
   restoreFailure = false;
+  restoreResponse: (() => Promise<SdkApi>) | undefined;
   async login(value: Credentials): Promise<SdkApi> {
     this.restored = value;
     if (this.restoreFailure) throw new Error('private-provider-failure');
+    if (this.restoreResponse) return this.restoreResponse();
     return this.api;
   }
   loginQR(_options: Record<string, never>, callback: LoginQRCallback): Promise<SdkApi> {
@@ -74,8 +88,9 @@ export class Harness {
     this.frames.push(frame);
     this.events.emit('frame', frame);
   }, exit: () => { this.exits++; } });
-  init(restored: string | null = JSON.stringify(credentials)): void {
-    this.runtime.receive({ type: 'init', id: 'init', token, lease_ms: 120_000, credentials: restored });
+  init(restored: string | null = JSON.stringify(credentials), interval?: number): void {
+    this.runtime.receive({ type: 'init', id: 'init', token, lease_ms: 120_000, credentials: restored,
+      ...(interval === undefined ? {} : { keepalive_interval_ms: interval }) });
   }
   waitFor<T extends ChildFrame['type']>(type: T, after = 0): Promise<Extract<ChildFrame, { type: T }>> {
     return new Promise((resolve, reject) => {

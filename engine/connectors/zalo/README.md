@@ -46,16 +46,21 @@ same 2000-code-point boundary. Incoming text is preserved up to 131072 UTF-16 co
 invalid or oversized provider messages are discarded.
 
 All schemas below are strict: the displayed fields plus `id` and `token` are the entire
-frame. No protocol extensions were added.
+frame. The initialization cadence and media options are optional.
 
 ### Parent to child
 
 ```ts
-{ id, token, type: "init", lease_ms: number, credentials: string | null }
+{ id, token, type: "init", lease_ms: number, credentials: string | null,
+  keepalive_interval_ms?: number, media_allowed_hosts?: string[],
+  media_transfer_timeout_ms?: 120000 }
 { id, token, type: "lease", lease_ms: number }
 { id, token, type: "shutdown" }
 { id, token, type: "result", request_id: string, ok: boolean }
-{ id, token, type: "send", command_id: string, thread_id: string, text: string }
+{ id, token, type: "send", command_id: string, thread_id: string, text: string,
+  attachment?: { transfer_id: string, filename: string, kind: "image" | "file",
+    size: number, sha256: string } }
+{ id, token, type: "typing", thread_id: string }
 ```
 
 Send init first, within 15 seconds of launch, exactly once. `credentials: null` requests
@@ -73,8 +78,11 @@ the opaque JSON previously returned in `creds_set`. It is parsed as:
 The top-level credentials object is strict. Cookie entries preserve JSON cookie fields;
 `key` and `domain` must be nonempty, `value` must be a string. There must be 1..512 cookies.
 `imei` is 1..512 code units and `userAgent` 1..4096. Restore calls `Zalo.login(credentials)`
-once. Any invalid/failed restore closes with `login_failed`; the caller must explicitly
-relink in a fresh run. There is no QR fallback or reconnect loop.
+once. Invalid stored JSON or credential schema closes with `login_failed`. Every
+unclassified SDK restore exception closes with `transport_failed`; provider codes and
+localized messages do not reliably establish credential revocation. There is no QR
+fallback or reconnect loop. The parent owns recovery and preserves stored credentials
+on transport failures.
 
 Renew the lease before expiry; each lease replaces its deadline relative to receipt.
 Lease renewal does not extend QR expiry, credential acknowledgment or login deadlines.
@@ -90,13 +98,16 @@ exit bound of 1 further second. A parent should still bound its own process wait
 { id, token, type: "creds_set", creds: string }
 { id, token, type: "identity", account_id: string }
 { id, token, type: "ready" }
+{ id, token, type: "heartbeat", ok: boolean }
 { id, token, type: "message", message_id: string, sender_id: string,
-  thread_id: string, from_me: boolean, timestamp: number, text: string }
+  thread_id: string, from_me: boolean, timestamp: number, text: string,
+  media?: { source_id: string, kind: "image" | "file", filename: string } }
 { id, token, type: "send_result", command_id: string, message_id: string,
   outcome: "accepted" | "rejected" | "uncertain" }
 { id, token, type: "closed", reason:
   "shutdown" | "lease_expired" | "protocol_error" | "login_failed" |
-  "auth_store_failed" | "transport_failed" | "qr_expired" | "qr_declined" }
+  "auth_store_failed" | "transport_failed" | "qr_expired" | "qr_declined" |
+  "session_replaced" }
 ```
 
 `qr.value` is canonical base64 PNG (maximum 768000 code units), with the PNG signature
@@ -117,21 +128,60 @@ precede successful acknowledgment, including restored logins.
 
 Then `identity.account_id` comes from synchronous, authoritative `api.getOwnId()`.
 The listener starts with `retryOnClose: false`; `ready` means its `connected` event fired.
-Login through listener connection has a 120-second deadline. Intake accepts only live
-`ThreadType.User` messages with `msgType = "webchat"`, nonblank string content and a
-valid millisecond timestamp. Groups, media, self messages and history are excluded.
+Login through listener connection has a 120-second deadline: restored login closes
+with `transport_failed`, fresh QR login with `login_failed`. Listener `disconnected`
+and `closed` codes 3000 (duplicate) and 3003 (kick) close with `session_replaced`;
+other codes close with `transport_failed`. Duplicate close events terminate only once.
+Listener `error` may originate in a per-message processor: it triggers transport
+recovery, never an auth-revocation inference, without exposing the raw error/event.
+Intake accepts only live private `ThreadType.User` messages with supported current
+text or media content and a valid millisecond timestamp. Groups, self messages and
+history are excluded. Unknown attachment shapes and quoted or thumbnail-only content
+are not treated as original files.
 `sender_id` is `data.uidFrom`, `thread_id` is the SDK thread ID, `from_me` is always false,
 and `timestamp` is integer Unix **seconds**, converted from SDK milliseconds. Python
 must authorize the bound sender; neither contacts nor display names establish ownership.
 The SDK has no provider acknowledgment/replay for receive, so this is live intake only.
 
-Sends call `api.sendMessage(text, thread_id, ThreadType.User)` exactly once per new
+After `ready`, keepalive calls use `init.keepalive_interval_ms`: an integer in
+**60000..1800000 milliseconds**, default **300000 milliseconds** (5 minutes). This is
+an explicit operator cadence; the SDK's `settings.keepalive.keepalive_duration` has
+unknown units and is never used. Each `api.keepAlive()` settles before a new interval
+timer is armed; calls never overlap. A stuck call closes with `transport_failed` after
+15 seconds and emits `heartbeat.ok = false`; it cannot release capacity for another
+call. Settled failures emit `false`, successes emit `true` and reset the failure streak.
+Three consecutive settled failures close with `transport_failed`.
+
+After every settled keepalive, including failures, the bridge snapshots the current
+context credentials: the SDK can mutate its cookie jar from error responses too.
+A changed snapshot emits `creds_set` after ready using the same exact-ID, 15-second
+durable ACK contract. Commits are serialized; only an ACKed snapshot becomes the
+comparison baseline. The jar is re-read after ACK to capture mutations from requests
+already in flight. Further heartbeat emission/scheduling and new provider sends/typing
+are gated until all changed snapshots are ACKed. Intake is discarded during the commit
+barrier. New sends during the barrier are `rejected` without dispatch; existing send
+outcomes and replay history remain intact. Refresh NACK or timeout closes with
+`auth_store_failed`; the parent preserves the previous stored credentials on refresh
+failure. The original startup persistence barrier remains mandatory.
+
+Typing is a best-effort pulse requested only by a parent `typing` frame for a peer the
+parent has already authorized. The child never auto-types for inbound messages. After
+ready and outside a credential commit, it calls
+`api.sendTypingEvent(thread_id, ThreadType.User)`. Pulses are limited to one per peer
+per 4 seconds, at most 4 unsettled provider calls and 1000 tracked peers. When full,
+new peers are refused unless entries whose 4-second window expired can be evicted;
+the map is never cleared to bypass a live rate limit. Unsettled calls keep their slots
+until actual settlement, without a local deadline freeing capacity. Errors are
+contained without raw logging or affecting sends. The provider has no explicit stop
+API: closing the bridge prevents every future pulse and ignores late completions.
+
+Text sends call `api.sendMessage(text, thread_id, ThreadType.User)` exactly once per new
 command. `accepted` requires a nonnull `response.message.msgId`, converted to a decimal
 string without accepting an unsafe JS integer; SDK big-integer JSON values preserve
 their decimal representation. Attachment acknowledgments do not count. Missing message
 acknowledgment, an exception after dispatch, a 15-second send deadline or disconnect
 produces `uncertain`, with `message_id: ""`. `rejected` means no SDK send was dispatched
-(not ready or 32 SDK calls still in flight), also with an empty message ID. Timed-out
+(not ready, credential commit pending or 32 SDK calls still in flight), also with an empty message ID. Timed-out
 SDK calls retain their in-flight slots until their promises actually settle. Accepted means
 SDK acceptance, not proof the recipient read the message.
 
@@ -144,6 +194,45 @@ validation and close with `protocol_error`; they never reach the SDK. The bridge
 retries an uncertain send. If a worker dies or must be forcibly terminated, the parent
 must classify all commands without a terminal result as uncertain, even if only `closed`
 is received.
+
+## Private file transfer
+
+An inbound offer contains a digest identifying the current provider descriptor; its
+original URL remains in a bounded, expiring map inside the worker. Python authorizes
+the sender before requesting it. Downloads require exact trusted HTTPS hosts from
+`init.media_allowed_hosts` (default empty), public DNS addresses pinned to the socket,
+per-hop redirect checks and cookies selected for the full destination URL. The SDK's
+generic content type does not establish which undocumented payload variants contain
+original files. Unsupported variants are skipped rather than replaced with thumbnails.
+
+Transfer frames carry the usual `id` and `token` plus these fields:
+
+```ts
+// Parent requests an offered attachment; the child sends chunks and an end frame.
+{ type: "media_get", transfer_id, message_id, source_id, limit }
+// Parent stages reply bytes; child acknowledges phase "receiving", then "complete".
+{ type: "media_put", transfer_id, size, sha256 }
+{ type: "media_ready", transfer_id, phase: "receiving" | "complete" }
+// Either direction: sequence-numbered bytes, acknowledgment and final digest.
+{ type: "media_chunk", transfer_id, seq, data }
+{ type: "media_ack", transfer_id, seq }
+{ type: "media_end", transfer_id, size, sha256 }
+{ type: "media_error", transfer_id, code }
+```
+
+`data` is canonical base64 of at most 65536 decoded bytes. At most two transfers
+share a 100 MiB staging budget, with a fixed 120-second transfer deadline. Images
+are limited to 10 MiB and other files to 50 MiB. Every transfer verifies size and
+SHA-256 before use. Demultiplexed readers keep lease, heartbeat and credential
+acknowledgments responsive during transfers. Closing the bridge discards staged data.
+
+A file `send` references a completed staged transfer and has empty text. It calls
+`api.sendMessage` once with a private Buffer attachment. JPEG, PNG and WebP metadata
+comes from Sharp; other supported extensions use the ordinary file path. GIF output
+is refused because its SDK route requires a separate thumbnail operation. A valid
+single attachment acknowledgment counts even when `message` is null. Missing or
+partial acknowledgment after dispatch is uncertain and is never automatically retried.
+The file-send deadline is 120 seconds; text sends retain their 15-second deadline.
 
 ## Pinned source evidence
 

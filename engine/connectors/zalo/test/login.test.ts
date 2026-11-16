@@ -68,24 +68,25 @@ test('local QR expiry closes even when SDK expiration callback never arrives', a
   assert.equal(h.sdk.aborted, 1);
   assert.equal(h.exits, 1);
 });
-for (const mode of ['restore-failed', 'malformed-credentials', 'commit-rejected', 'commit-timeout', 'wrong-request'] as const) {
+for (const mode of ['restore-failed', 'malformed-credentials', 'invalid-json', 'commit-rejected', 'commit-timeout', 'wrong-request'] as const) {
   test(`${mode} fails closed without QR fallback or intake`, async context => {
     context.mock.timers.enable({ apis: ['setTimeout'] });
     const h = new Harness();
     context.after(() => h.runtime.stop('shutdown'));
     h.sdk.restoreFailure = mode === 'restore-failed';
-    h.init(mode === 'malformed-credentials' ? '{}' : JSON.stringify(credentials));
+    h.init(mode === 'malformed-credentials' ? '{}' : mode === 'invalid-json' ? '{' : JSON.stringify(credentials));
     switch (mode) {
-      case 'restore-failed': case 'malformed-credentials': break;
+      case 'restore-failed': case 'malformed-credentials': case 'invalid-json': break;
       case 'commit-rejected': h.ack((await h.waitFor('creds_set')).id, false); break;
       case 'wrong-request': await h.waitFor('creds_set'); h.ack('unrelated'); break;
       case 'commit-timeout': await h.waitFor('creds_set'); context.mock.timers.tick(15_000); break;
     }
     const closed = await h.waitFor('closed');
-    const reason = mode === 'wrong-request' ? 'protocol_error' : mode.startsWith('commit') ? 'auth_store_failed' : 'login_failed';
+    const reason = mode === 'wrong-request' ? 'protocol_error' : mode.startsWith('commit') ? 'auth_store_failed'
+      : mode === 'restore-failed' ? 'transport_failed' : 'login_failed';
     assert.equal(closed.reason, reason);
     assert.equal(h.sdk.qrCalls, 0);
     assert.equal(h.sdk.api.listener.started, false);
     assert.equal(h.frames.some(frame => frame.type === 'identity' || frame.type === 'ready' || frame.type === 'message'), false);
-  });
+});
 }

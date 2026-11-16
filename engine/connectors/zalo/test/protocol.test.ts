@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Frames, MAX_FRAME_BYTES, parentFrame, textSchema } from '../src/protocol.js';
+import { childFrame, Frames, MAX_FRAME_BYTES, parentFrame, textSchema } from '../src/protocol.js';
 
 const init = { type: 'init', id: 'i', token: 'capability', lease_ms: 30_000, credentials: null } as const;
 test('byte framing reassembles split UTF-8 and several strict frames', () => {
@@ -30,4 +30,23 @@ test('invalid UTF-8, JSON and strict schema inputs are refused', () => {
 test('text limit counts Unicode code points and refuses empty content', () => {
   assert.equal(textSchema.safeParse('😀'.repeat(2000)).success, true);
   for (const text of ['', ' \n', '😀'.repeat(2001)]) assert.equal(textSchema.safeParse(text).success, false);
+});
+test('heartbeat cadence and authorized-peer typing use strict bounded wire frames', () => {
+  for (const keepalive_interval_ms of [60_000, 300_000, 1_800_000]) {
+    assert.equal(parentFrame.safeParse({ ...init, keepalive_interval_ms }).success, true);
+  }
+  for (const keepalive_interval_ms of [59_999, 1_800_001, 60_000.5, '300000', null]) {
+    assert.equal(parentFrame.safeParse({ ...init, keepalive_interval_ms }).success, false);
+  }
+  const typing = { id: 't', token: 'capability', type: 'typing', thread_id: '1'.repeat(64) };
+  assert.equal(parentFrame.safeParse(typing).success, true);
+  for (const thread_id of ['', 'group', '1'.repeat(65)]) {
+    assert.equal(parentFrame.safeParse({ ...typing, thread_id }).success, false);
+  }
+  assert.equal(parentFrame.safeParse({ ...typing, text: 'extra' }).success, false);
+  for (const ok of [true, false]) {
+    assert.equal(childFrame.safeParse({ id: 'h', token: 'capability', type: 'heartbeat', ok }).success, true);
+  }
+  assert.equal(childFrame.safeParse({ id: 'h', token: 'capability', type: 'heartbeat', ok: 'true' }).success, false);
+  assert.equal(childFrame.safeParse({ id: 'c', token: 'capability', type: 'closed', reason: 'session_replaced' }).success, true);
 });

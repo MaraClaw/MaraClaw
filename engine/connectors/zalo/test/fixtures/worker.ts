@@ -1,4 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads';
+import { mock } from 'node:test';
 import { z } from 'zod';
 import { closeReason, parentFrame } from '../../src/protocol.js';
 import { Runtime } from '../../src/runtime.js';
@@ -9,6 +10,14 @@ if (!port) process.exit(1);
 console.log('SDK stdout secret must be isolated');
 console.error('SDK stderr secret must be discarded');
 const sdk = new TestSdk();
+if (workerData === 'heartbeat') {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  sdk.api.ping = async () => {
+    sdk.api.cookies[0] = { key: 'session', value: 'refreshed-cookie', domain: 'zalo.me', path: '/' };
+  };
+  sdk.api.response = async () => ({ message: sdk.api.typed.length === 1 && sdk.api.pingCalls === 1 ? { msgId: 97531 } : null, attachment: [] });
+}
+let acknowledgments = 0;
 const runtime = new Runtime({ client: () => sdk, write: line => port.postMessage(line), exit: () => {
   port.postMessage(null); port.close();
 } });
@@ -24,5 +33,8 @@ port.on('message', (raw: unknown) => {
     return;
   }
   runtime.receive(frame);
+  if (workerData === 'heartbeat' && frame.type === 'result' && acknowledgments++ === 0) {
+    setImmediate(() => mock.timers.tick(60_000));
+  }
   port.postMessage('handled');
 });

@@ -54,7 +54,7 @@ test('disconnect revokes intake and resolves in-flight sends as uncertain withou
   const pending = Promise.withResolvers<{ message: { msgId: number }; attachment: [] }>();
   h.sdk.api.response = () => pending.promise;
   h.runtime.receive({ id: 's', token, type: 'send', command_id: 'inflight', thread_id: '20002', text: 'pending' });
-  h.sdk.api.listener.emit('disconnected');
+  h.sdk.api.listener.emit('disconnected', 1006, 'private-socket-reason');
   assert.equal((await h.waitFor('send_result')).outcome, 'uncertain');
   assert.equal((await h.waitFor('closed')).reason, 'transport_failed');
   h.sdk.api.listener.emit('message', new UserMessage('10001', messageData()));

@@ -85,3 +85,41 @@ test('independent main-thread deadline reaps an unresponsive SDK worker', { time
   if (closed.type === 'closed') assert.equal(closed.reason, 'shutdown');
   assert.deepEqual(await p.exit, [0, null]);
 });
+for (const ok of [true, false]) {
+  test(`real pipes carry post-ready refresh ACK ${ok} and gate authorized typing and sends`, { timeout: 5000 }, async context => {
+    const p = launch(context, 'heartbeat');
+    p.write({ ...init, lease_ms: 120_000, keepalive_interval_ms: 60_000 });
+    const initial = await p.next();
+    assert.equal(initial.type, 'creds_set');
+    p.write({ id: 'ack-initial', token, type: 'result', request_id: initial.id, ok: true });
+    assert.equal((await p.next()).type, 'identity');
+    assert.equal((await p.next()).type, 'ready');
+    const refresh = await p.next();
+    assert.equal(refresh.type, 'creds_set');
+    assert.notEqual(refresh.id, initial.id);
+    if (refresh.type === 'creds_set') assert.equal(JSON.parse(refresh.creds).cookie[0].value, 'refreshed-cookie');
+    const typing = { id: 'typing', token, type: 'typing', thread_id: '20002' };
+    const send = { id: 'send', token, type: 'send', command_id: 'blocked', thread_id: '20002', text: 'hello' };
+    p.write(typing);
+    p.write(send);
+    const blocked = await p.next();
+    assert.equal(blocked.type, 'send_result');
+    if (blocked.type === 'send_result') assert.equal(blocked.outcome, 'rejected');
+    p.write({ id: 'ack-refresh', token, type: 'result', request_id: refresh.id, ok });
+    if (ok) {
+      const heartbeat = await p.next();
+      assert.equal(heartbeat.type, 'heartbeat');
+      if (heartbeat.type === 'heartbeat') assert.equal(heartbeat.ok, true);
+      p.write(typing);
+      p.write({ ...send, command_id: 'after-refresh' });
+      const result = await p.next();
+      assert.equal(result.type, 'send_result');
+      if (result.type === 'send_result') assert.equal(result.outcome, 'accepted');
+      p.write({ id: 'bye', token, type: 'shutdown' });
+    }
+    const closed = await p.next();
+    assert.equal(closed.type, 'closed');
+    if (closed.type === 'closed') assert.equal(closed.reason, ok ? 'shutdown' : 'auth_store_failed');
+    assert.deepEqual(await p.exit, [0, null]);
+  });
+}
