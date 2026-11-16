@@ -1,7 +1,7 @@
 # MaraClawOne - monorepo guide for agents
 
-**Generated:** 2026-11-05
-**Commit:** 0056d92a
+**Generated:** 2026-11-16
+**Commit:** 86583502
 **Branch:** 2026November
 
 **Audience:** AI coding agents and humans coordinating changes across packages.  
@@ -51,6 +51,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 |--------|---------|-----------|
 | REST/WS endpoint | `engine` | `engine/AGENTS.md`, `engine/app/api/` |
 | Personal QR WhatsApp bridge | `engine` | `engine/connectors/whatsapp/AGENTS.md`; separate Node package and CI job |
+| Personal QR Zalo bridge | `engine` | `engine/connectors/zalo/AGENTS.md`; separate Node package, worker-isolated SDK and CI job |
 | Generated API contracts | `engine` + clients | `engine/contracts/README.md`; export in engine, generate/check validators in each frontend |
 | Agent role catalog | `engine` | `engine/agent_templates/` ≠ `engine/agent_template/` |
 | Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Tavily proxy is `tavily/`; bundled skills live in the sibling guest image project (not a function-calling tool) |
@@ -141,6 +142,6 @@ Keep this file a router. New domains get a nested `AGENTS.md`, not more root pro
 
 ## NOTES
 
-Classify, read the owning guide, implement engine behavior first, then wire the matching UI. Engine CI runs Ruff lint/format, API contract freshness, basedpyright, ty, and `bash scripts/test.sh` (scoped coverage), plus separate PostgreSQL and WhatsApp bridge jobs. Frontend CI runs contract freshness, lint, TypeScript, `npm test` (Node runner), build, and Docker build. Run package commands from their package directory; CI workflows are the exact command source. No drive-by reformats.
+Classify, read the owning guide, implement engine behavior first, then wire the matching UI. Engine CI runs Ruff lint/format, API contract freshness, basedpyright, ty, and `bash scripts/test.sh` (scoped coverage), plus native gateway RPC, WhatsApp and Zalo bridge jobs. Full PostgreSQL/Redis discovery is partitioned across eight shards. Frontend CI runs contract freshness, lint, TypeScript, `npm test` (Node runner), build, and Docker build, with separate member and selected admin browser jobs. Run package commands from their package directory; CI workflows are the exact command source. No drive-by reformats.
 
 Who is looking, and does it need a secret or privileged role? Public or member → `web-e`. Operator → `web-a`. Data/policy → `engine`.
