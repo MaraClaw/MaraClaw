@@ -111,8 +111,11 @@ class CapacityOrderOut(BaseModel):
 
 
 class CapacityOrderPage(BaseModel):
+    """``next_cursor`` resumes after the last returned order; it is null on the last page."""
+
     items: list[CapacityOrderOut]
     has_more: bool
+    next_cursor: str | None
 
 
 class CapacityOverviewOut(BaseModel):

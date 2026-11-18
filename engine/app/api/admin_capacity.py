@@ -47,11 +47,14 @@ async def review_capacity_orders(
     status: CapacityOrderStatus = CapacityOrderStatus.SUBMITTED,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    cursor: str | None = None,
     user: UserRecord = Depends(get_current_user),
 ) -> CapacityOrderPage:
-    views, has_more = await list_review_orders(user.id, status, limit=limit, offset=offset)
+    page = await list_review_orders(user.id, status, limit=limit, offset=offset, cursor=cursor)
     return CapacityOrderPage(
-        items=[CapacityOrderOut.from_record(v.order, v.tenant_name) for v in views], has_more=has_more
+        items=[CapacityOrderOut.from_record(v.order, v.tenant_name) for v in page.items],
+        has_more=page.has_more,
+        next_cursor=page.next_cursor,
     )
 
 
