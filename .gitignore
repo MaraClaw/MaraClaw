@@ -220,6 +220,7 @@ __marimo__/
 *.DS_Store
 *.omo/
 *.omgb/
+*.omsg/
 *.docker/
 *docker-data/
 engine/coverage.json
