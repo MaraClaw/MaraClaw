@@ -36,7 +36,9 @@ class Table:
 
 @pytest.fixture(autouse=True)
 async def isolated_daemon(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
-    async def claim_ready(_now: datetime) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
+    async def claim_ready(
+        _now: datetime, *, max_agents: int
+    ) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
         return {}, set()
 
     monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim_ready)

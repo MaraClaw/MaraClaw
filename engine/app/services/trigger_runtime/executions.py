@@ -265,9 +265,11 @@ def hold_trigger_execution_leases(leases: Sequence[ExecutionLease]) -> Execution
 
 async def claim_pending_trigger_executions(
     *,
+    max_agents: int,
     sources: list[str] | None = None,
     limit: int = 100,
 ) -> list[tuple[TriggerExecutionRecord, AgentTriggerRecord]]:
+    """Lease ready executions of at most ``max_agents`` agents and ``limit`` rows in one transaction."""
     now = datetime.now(UTC)
     lease_until = now + LEASE_DURATION
     lease_token = new_lease_token()
@@ -276,7 +278,7 @@ async def claim_pending_trigger_executions(
 
     # Hold one transaction for SELECT ... FOR UPDATE + lease updates.
     async with connection_ctx() as db:
-        rows = await trigger_execution_dao.claim_pending(sources=sources, now=now, limit=limit)
+        rows = await trigger_execution_dao.claim_pending(sources=sources, now=now, max_agents=max_agents, limit=limit)
         if not rows:
             return []
         first_start_ids = [execution.id for execution, _trigger in rows if execution.started_at is None]

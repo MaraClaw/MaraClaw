@@ -472,37 +472,65 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         *,
         sources: list[str],
         now: datetime,
+        max_agents: int,
         limit: int,
     ) -> list[tuple[TriggerExecutionRecord, AgentTriggerRecord]]:
-        """Never wait on row locks; hold claimed trigger rows for the rest of the claim transaction."""
+        """Lock ready work of at most ``max_agents`` agents and ``limit`` rows, never waiting on a row lock.
+
+        Each round locks the oldest ready row of an agent not chosen yet, then that agent's ready rows up to the row
+        ceiling, so one agent's rows batch together and other agents' rows stay unlocked for peers. Locked rows are
+        held for the rest of the claim transaction.
+        """
         exec_cols = ", ".join(f"e.{c} AS e_{c}" for c in self.columns)
         trig_cols = ", ".join(f"t.{c} AS t_{c}" for c in agent_trigger_dao.columns)
-        async with self.session() as db:
-            rows = await db.fetchall(
-                f"""
-                SELECT {exec_cols}, {trig_cols}
-                FROM trigger_executions e
-                JOIN agent_triggers t ON t.id = e.trigger_id
-                WHERE (
-                        (e.status = 'pending' AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE)
-                        OR (
-                            e.status = 'processing'
-                            AND (e.lease_expires_at IS NULL OR e.lease_expires_at < %(now)s)
-                            AND (t.is_enabled IS TRUE OR t.self_disabled IS TRUE)
-                        )
-                  )
-                ORDER BY e.scheduled_at ASC
-                FOR UPDATE OF e SKIP LOCKED FOR NO KEY UPDATE OF t SKIP LOCKED
-                LIMIT %(limit)s
-                """,
-                {"sources": sources, "now": now, "limit": limit},
+        # Every predicate stays on the locked rows so a concurrent change is rechecked after the lock is taken.
+        ready = """
+            (
+                (e.status = 'pending' AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE)
+                OR (
+                    e.status = 'processing'
+                    AND (e.lease_expires_at IS NULL OR e.lease_expires_at < %(now)s)
+                    AND (t.is_enabled IS TRUE OR t.self_disabled IS TRUE)
+                )
             )
-            pairs: list[tuple[TriggerExecutionRecord, AgentTriggerRecord]] = []
-            for row in rows:
-                exec_row = {col: row[f"e_{col}"] for col in self.columns}
-                trig_row = {col: row[f"t_{col}"] for col in agent_trigger_dao.columns}
-                pairs.append((TriggerExecutionRecord.from_row(exec_row), AgentTriggerRecord.from_row(trig_row)))
-            return pairs
+        """
+        pairs: list[tuple[TriggerExecutionRecord, AgentTriggerRecord]] = []
+        chosen: list[UUID] = []
+        async with self.session() as db:
+            while len(chosen) < max_agents and len(pairs) < limit:
+                head = await db.fetchone(
+                    f"""
+                    SELECT t.agent_id
+                    FROM trigger_executions e
+                    JOIN agent_triggers t ON t.id = e.trigger_id
+                    WHERE {ready} AND t.agent_id <> ALL(%(chosen)s::uuid[])
+                    ORDER BY e.scheduled_at ASC, e.id ASC
+                    FOR UPDATE OF e SKIP LOCKED FOR NO KEY UPDATE OF t SKIP LOCKED
+                    LIMIT 1
+                    """,
+                    {"sources": sources, "now": now, "chosen": chosen},
+                )
+                if head is None:
+                    break
+                agent_id = uuid_from_row(head["agent_id"])
+                chosen.append(agent_id)
+                rows = await db.fetchall(
+                    f"""
+                    SELECT {exec_cols}, {trig_cols}
+                    FROM trigger_executions e
+                    JOIN agent_triggers t ON t.id = e.trigger_id
+                    WHERE {ready} AND t.agent_id = %(agent_id)s
+                    ORDER BY e.scheduled_at ASC, e.id ASC
+                    FOR UPDATE OF e SKIP LOCKED FOR NO KEY UPDATE OF t SKIP LOCKED
+                    LIMIT %(limit)s
+                    """,
+                    {"sources": sources, "now": now, "agent_id": agent_id, "limit": limit - len(pairs)},
+                )
+                for row in rows:
+                    exec_row = {col: row[f"e_{col}"] for col in self.columns}
+                    trig_row = {col: row[f"t_{col}"] for col in agent_trigger_dao.columns}
+                    pairs.append((TriggerExecutionRecord.from_row(exec_row), AgentTriggerRecord.from_row(trig_row)))
+        return pairs
 
 
 # Instantiated after class bodies so claim_pending can reference agent_trigger_dao columns.

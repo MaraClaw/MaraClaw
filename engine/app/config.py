@@ -205,6 +205,8 @@ class Settings(BaseSettings):
     SCHEDULE_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1, le=256)
     # Trial limits for guests of system agents and of agents with no organization (every organization's agents get
     # their tier's). They apply on creation and when a stopped guest is resumed, never to running guests.
+    # Per-worker cap on concurrently running trigger invocations (claimed triggers and agent-to-agent wakes share it).
+    TRIGGER_MAX_CONCURRENT_INVOCATIONS: int = Field(default=8, ge=1, le=256)
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)
     OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)
     OPENCLAW_GUEST_PIDS_LIMIT: int = Field(default=512, gt=0)
