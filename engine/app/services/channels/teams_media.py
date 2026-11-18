@@ -18,7 +18,14 @@ from app.core.json_types import JsonObject, json_as_str_or, json_object_from
 from app.core.outbound_transport import public_http_client
 from app.records.chat_attachment import ChatAttachment
 from app.services.channels import submissions
-from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from app.services.channels.media_limits import (
+    MediaBudget,
+    MediaTooLargeError,
+    limit_attachments,
+    read_capped,
+    skipped_attachments_note,
+    too_large_note,
+)
 from app.services.channels.teams_auth import is_bot_framework_service_url
 from app.services.storage import store_agent_upload
 
@@ -73,7 +80,8 @@ async def accept_teams_media(
         return
     budget, refs, parts = MediaBudget(), [], [event.text] if event.text else []
     token: str | None = None
-    for item in media.attachments[:10]:
+    retrieved, skipped = limit_attachments(media.attachments)
+    for item in retrieved:
         filename = item.name or ("image.png" if item.content_type.startswith("image/") else "file.bin")
         headers = {"Accept-Encoding": "identity"}
         if item.content_type == FILE_DOWNLOAD:
@@ -132,8 +140,8 @@ async def accept_teams_media(
         )
         refs.append(ChatAttachment(path=path, name=PurePosixPath(path).name))
         parts.append(f"[file: {path}]")
-    if len(media.attachments) > 10:
-        parts.append("[files skipped: maximum 10 attachments per message]")
+    if skipped:
+        parts.append(skipped_attachments_note(skipped))
     content = "\n".join(parts)
     await submissions.accept_channel_event(
         replace(event, attachments=tuple(refs)), content=content, saved_content=content

@@ -8,7 +8,9 @@ from typing import override
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
+from app.config import Settings
 from app.services.channels import media_limits
 from app.services.channels.media_limits import (
     EVENT_MAX_BYTES,
@@ -16,10 +18,11 @@ from app.services.channels.media_limits import (
     MediaBudget,
     MediaTooLargeError,
     file_limit,
+    limit_attachments,
     read_capped,
 )
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES, MAX_INPUT_BYTES
-from channel_media_fixtures import CountingStream
+from channel_media_fixtures import CountingStream, set_attachment_limit
 
 LIMIT = 1024 * 1024
 
@@ -311,3 +314,28 @@ async def test_read_capped_lets_transient_failures_propagate(failure):
     # When / Then: the provider keeps its retry signal
     with pytest.raises(httpx.ReadTimeout if failure == "read_timeout" else httpx.HTTPStatusError):
         await read(handler)
+
+
+@pytest.mark.parametrize(("count", "kept"), [(0, 0), (1, 1), (2, 2), (3, 2), (7, 2)])
+def test_limit_attachments_keeps_the_first_descriptors_in_provider_order(monkeypatch, count, kept):
+    # Given: a deliberately low limit and descriptors in provider order
+    set_attachment_limit(monkeypatch, 2)
+    descriptors = [f"descriptor-{index}" for index in range(count)]
+    # When / Then: the first ones are kept and every other one is counted as skipped
+    assert limit_attachments(descriptors) == (tuple(descriptors[:kept]), count - kept)
+
+
+def test_attachment_limit_defaults_to_ten():
+    assert Settings().CHANNEL_MEDIA_MAX_ATTACHMENTS == 10
+
+
+@pytest.mark.parametrize("limit", [1, 10])
+def test_attachment_limit_accepts_one_through_ten(limit):
+    settings = Settings(CHANNEL_MEDIA_MAX_ATTACHMENTS=limit)
+    assert limit == settings.CHANNEL_MEDIA_MAX_ATTACHMENTS
+
+
+@pytest.mark.parametrize("limit", [-1, 0, 11])
+def test_attachment_limit_rejects_values_outside_one_through_ten(limit):
+    with pytest.raises(ValidationError):
+        Settings(CHANNEL_MEDIA_MAX_ATTACHMENTS=limit)

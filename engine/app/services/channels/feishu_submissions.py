@@ -12,7 +12,7 @@ from app.records.chat_attachment import ChatAttachment
 from app.services.feishu_service import feishu_service
 from app.services.storage import store_agent_upload
 
-from .media_limits import MediaBudget, MediaTooLargeError, too_large_note
+from .media_limits import MediaBudget, MediaTooLargeError, limit_attachments, skipped_attachments_note, too_large_note
 from .stream_source import StreamSource, authorize_stream_source
 from .submissions import ChannelEvent, accept_channel_event, is_channel_event_replay
 
@@ -84,7 +84,8 @@ async def accept_feishu_event(
     saved = text
     attachments: list[ChatAttachment] = []
     budget = MediaBudget()
-    for media_id in media:
+    retrieved, skipped = limit_attachments(media)
+    for media_id in retrieved:
         if source is not None:
             await authorize_stream_source(source)
         resource_type = "file" if kind in ("file", "media") else "image"
@@ -118,5 +119,9 @@ async def accept_feishu_event(
         if resource_type == "image":
             marker += f"\n[image_data:data:image/jpeg;base64,{base64.b64encode(data).decode('ascii')}]"
         enriched = f"{enriched}\n{marker}".strip()
+    if skipped:
+        note = skipped_attachments_note(skipped)
+        enriched = f"{enriched}\n{note}".strip()
+        saved = f"{saved}\n{note}".strip()
     await accept_channel_event(replace(native, attachments=tuple(attachments)), content=enriched, saved_content=saved)
     return True

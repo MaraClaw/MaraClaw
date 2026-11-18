@@ -27,6 +27,18 @@ retryable. Distinct native event IDs remain distinct even when text is identical
 Direct messages retain the shared agent transcript and provider-specific reply
 session; group conversations retain their separate session routing.
 
+`CHANNEL_MEDIA_MAX_ATTACHMENTS` (1 to 10, default 10) bounds the attachments the engine
+fetches from one native message on Slack, Feishu, DingTalk, Google Chat, Teams, Discord,
+WeCom and WeChat. The first attachments in provider order are kept; an oversized one keeps
+its slot, so a later file is never fetched to fill it. Skipped attachments cost no
+credential lookup, download, decryption or workspace write. The transcript and the model
+content each carry one skipped-files notice, and text after the cutoff, including text
+interleaved with images in a rich post, is kept. The receipt fingerprint still covers
+every original attachment ID, so a retry that changes only a skipped attachment conflicts
+with the durable receipt. Personal Zalo, Telegram and WhatsApp media keep their own limits.
+The Slack fallback for events with neither `ts` nor `event_id` applies the same count and notice; a Feishu
+post without a message id has no retrievable images, so its text is processed with no media work.
+
 WhatsApp validates the raw-body signature before processing, visits every message
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed
 events replay safely when the provider redelivers the batch.

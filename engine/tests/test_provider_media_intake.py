@@ -6,10 +6,12 @@ import anyio
 import httpx
 import pytest
 from fastapi import HTTPException
+from tests.channel_media_fixtures import set_attachment_limit
 from tests.im_webhook_fixtures import AGENT_ID
 from tests.provider_media_fixtures import PROVIDERS, REAL_CLIENT, media_case
 
 from app.services.channels import discord_media, google_chat_media, teams_media
+from app.services.channels.media_limits import skipped_attachments_note
 from app.services.storage_runtime.quota_errors import StorageQuotaError
 
 
@@ -68,6 +70,33 @@ async def test_provider_replay_prevents_all_download_and_storage(monkeypatch, tm
     case.token.assert_not_awaited()
     case.accept.assert_not_awaited()
     assert not await case.storage.list_dir(str(AGENT_ID))
+
+
+@pytest.mark.parametrize("name", PROVIDERS)
+async def test_provider_surfaces_limit_media_before_io_and_keep_the_original_fingerprint(monkeypatch, tmp_path, name):
+    # Given: a limit of two and three attachments arriving through the provider's real intake surface
+    case = media_case(name, monkeypatch, tmp_path)
+    set_attachment_limit(monkeypatch, 2)
+    # When
+    result = await case.invoke(monkeypatch, "caption", case.distinct(3))
+    # Then: the intake succeeded and only the first two attachments were downloaded and stored, in order
+    assert result is None or (
+        isinstance(result, httpx.Response) and result.status_code == (202 if name == "discord_interaction" else 200)
+    )
+    native = case.replay.call_args.args[0]
+    enriched = case.accept.call_args.args[0]
+    downloads = [request for request in case.requests if request.url.host != "discord.com"]
+    paths = [f"workspace/uploads/report{index}.docx" for index in range(2)]
+    assert len(downloads) == 2
+    assert [ref.path for ref in enriched.attachments] == paths
+    assert case.accept.call_args.kwargs["saved_content"] == "\n".join(
+        ["caption", *(f"[file: {path}]" for path in paths), skipped_attachments_note(1)]
+    )
+    assert case.accept.call_args.kwargs["content"] == case.accept.call_args.kwargs["saved_content"]
+    # And: the receipt still sees all three originals
+    assert len(native.media_ids) == 3
+    assert enriched.fingerprint() == native.fingerprint()
+    assert case.token.await_count == (1 if name == "google_chat" else 0)
 
 
 @pytest.mark.parametrize("module", [discord_media, teams_media, google_chat_media])

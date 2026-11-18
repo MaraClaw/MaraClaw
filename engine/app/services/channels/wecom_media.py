@@ -22,7 +22,14 @@ from app.records.chat_attachment import ChatAttachment
 from app.services.storage import store_agent_upload
 from app.services.wecom_service import get_wecom_access_token
 
-from .media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from .media_limits import (
+    MediaBudget,
+    MediaTooLargeError,
+    limit_attachments,
+    read_capped,
+    skipped_attachments_note,
+    too_large_note,
+)
 from .stream_source import authorize_stream_source
 from .submissions import ChannelEvent, accept_channel_event, is_channel_event_replay
 
@@ -153,7 +160,8 @@ async def accept_wecom_media(native: ChannelEvent, config: ChannelConfigRecord, 
     content = native.text
     attachments: list[ChatAttachment] = []
     budget = MediaBudget()
-    for item in media[:10]:
+    retrieved, skipped = limit_attachments(media)
+    for item in retrieved:
         if native.stream_source is not None:
             await authorize_stream_source(native.stream_source)
         try:
@@ -168,6 +176,6 @@ async def accept_wecom_media(native: ChannelEvent, config: ChannelConfigRecord, 
         _, path, _ = await store_agent_upload(config.agent_id, name, data)
         attachments.append(ChatAttachment(path=path, name=PurePosixPath(path).name))
         content = f"{content}\n[file:{path}]".strip()
-    if len(media) > 10:
-        content = f"{content}\n[files skipped: maximum 10 attachments per message]".strip()
+    if skipped:
+        content = f"{content}\n{skipped_attachments_note(skipped)}".strip()
     await accept_channel_event(replace(native, attachments=tuple(attachments)), content=content, saved_content=content)

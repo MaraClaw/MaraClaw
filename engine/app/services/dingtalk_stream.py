@@ -25,7 +25,13 @@ from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.services.channels import dingtalk_downloads
 from app.services.channels.dingtalk_downloads import get_media_download_url as _get_media_download_url
 from app.services.channels.dingtalk_stream_transport import DingTalkTransport
-from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_note
+from app.services.channels.media_limits import (
+    MediaBudget,
+    MediaTooLargeError,
+    limit_attachments,
+    skipped_attachments_note,
+    too_large_note,
+)
 from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
 from app.services.channels.submissions import ChannelEvent, is_channel_event_replay
 from app.services.dingtalk_token import dingtalk_token_manager
@@ -255,33 +261,39 @@ async def _process_media_message(
     if msgtype == "richText":
         rich_text = msg_data.get("content", {}).get("richText", [])
         text_parts: list[str] = []
+        items = [item for section in rich_text for item in (section if isinstance(section, list) else [section])]
+        downloads = [item for item in items if "text" not in item and item.get("downloadCode", "")]
+        retrieved, skipped = limit_attachments(downloads)
+        remaining = len(retrieved)
 
-        for section in rich_text:
-            for item in section if isinstance(section, list) else [section]:
-                if "text" in item:
-                    text_parts.append(item["text"])
-                elif "downloadCode" in item:
-                    filename = f"dingtalk_richimg_{uuid.uuid4().hex[:8]}.jpg"
-                    try:
-                        file_bytes = await fetch(item["downloadCode"], filename)
-                    except MediaTooLargeError as error:
-                        text_parts.append(too_large_note(filename, error.limit))
-                        continue
-                    if file_bytes not in (None, b""):
-                        _, workspace_path, _ = await store_agent_upload(
-                            agent_id,
-                            filename,
-                            file_bytes,
-                            content_type="image/jpeg",
-                        )
-                        logger.info(f"[DingTalk] Saved rich text image to {workspace_path}")
+        for item in items:
+            if "text" in item:
+                text_parts.append(item["text"])
+            elif (download_code := item.get("downloadCode", "")) and remaining:
+                remaining -= 1
+                filename = f"dingtalk_richimg_{uuid.uuid4().hex[:8]}.jpg"
+                try:
+                    file_bytes = await fetch(download_code, filename)
+                except MediaTooLargeError as error:
+                    text_parts.append(too_large_note(filename, error.limit))
+                    continue
+                if file_bytes not in (None, b""):
+                    _, workspace_path, _ = await store_agent_upload(
+                        agent_id,
+                        filename,
+                        file_bytes,
+                        content_type="image/jpeg",
+                    )
+                    logger.info(f"[DingTalk] Saved rich text image to {workspace_path}")
 
-                        b64_data = base64.b64encode(file_bytes).decode("ascii")
-                        image_marker = f"[image_data:data:image/jpeg;base64,{b64_data}]"
-                        text_parts.append(image_marker)
-                        image_base64_list.append(f"data:image/jpeg;base64,{b64_data}")
-                        saved_file_paths.append(workspace_path)
+                    b64_data = base64.b64encode(file_bytes).decode("ascii")
+                    image_marker = f"[image_data:data:image/jpeg;base64,{b64_data}]"
+                    text_parts.append(image_marker)
+                    image_base64_list.append(f"data:image/jpeg;base64,{b64_data}")
+                    saved_file_paths.append(workspace_path)
 
+        if skipped:
+            text_parts.append(skipped_attachments_note(skipped))
         combined_text = "\n".join(text_parts).strip()
         if not combined_text:
             combined_text = "[User sent a rich text message]"

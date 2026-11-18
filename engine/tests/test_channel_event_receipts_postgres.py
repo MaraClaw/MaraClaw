@@ -3,8 +3,10 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import anyio
+import httpx
 import pytest
 from fastapi import HTTPException
+from tests.channel_media_fixtures import REAL_CLIENT, set_attachment_limit
 from tests.channel_submission_fixtures import ChannelDatabase, channel_db, receipt_db
 
 __all__ = ["channel_db", "receipt_db"]
@@ -14,7 +16,8 @@ from app.db.connection import DbConnection
 from app.db.session import get_connection, transaction
 from app.records.channel_event_receipt import ChannelReplyScope
 from app.services.channel_user_service import ChannelUserResolutionError
-from app.services.channels import submissions
+from app.services.channels import discord_media, submissions
+from app.services.channels.media_limits import skipped_attachments_note
 from app.services.channels.submissions import AcceptedChannelEvent, ChannelEventConflictError, accept_channel_event
 from app.services.quota_guard import AgentExpired, QuotaExceeded
 from app.services.shared_chat import shared_session_id
@@ -34,6 +37,12 @@ async def counts(fixture: ChannelDatabase):
         )
         assert result is not None
         return result
+
+
+async def saved_transcript(fixture: ChannelDatabase) -> list[str]:
+    async with transaction(fixture.db.first):
+        rows = await fixture.db.first.fetchall("SELECT content FROM chat_messages ORDER BY created_at, id")
+    return [str(row["content"]) for row in rows]
 
 
 async def test_stream_replay_conflict_and_restored_authority_keep_original_charge(channel_db):
@@ -308,3 +317,69 @@ async def test_new_acceptance_obeys_expiry_quota_and_admin_exemption(channel_db,
     state = await counts(fixture)
     assert state["charged"] == 0
     assert state["receipts"] == (1 if policy == "admin" else 0)
+
+
+async def test_retry_changing_only_a_discarded_attachment_conflicts_with_the_durable_receipt(channel_db, monkeypatch):
+    # Given: a limit of two, an accepted event with three attachments, and a recorded provider and storage
+    fixture = channel_db
+    set_attachment_limit(monkeypatch, 2)
+    requests: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        return httpx.Response(200, content=b"office")
+
+    monkeypatch.setattr(
+        discord_media,
+        "public_http_client",
+        lambda **kwargs: REAL_CLIENT(transport=httpx.MockTransport(respond), follow_redirects=False),
+    )
+    store = AsyncMock(
+        side_effect=lambda agent_id, name, data, content_type=None: ("key", f"workspace/uploads/{name}", None)
+    )
+    monkeypatch.setattr(discord_media, "store_agent_upload", store)
+
+    def attachment(index: int) -> discord_media.DiscordAttachment:
+        name = f"report{index}.docx"
+        url = f"https://cdn.discordapp.com/attachments/1/{index}/{name}?ex=1"
+        return discord_media.DiscordAttachment(id=str(index), filename=name, url=url, size=6)
+
+    attachments = tuple(attachment(index) for index in (1, 2, 3))
+    event = replace(fixture.event, media_ids=("1", "2", "3"))
+    async with transaction(fixture.db.first):
+        await discord_media.accept_discord_media(event, attachments)
+    accepted = {"receipts": 1, "messages": 1, "enqueued": 1, "intents": 1, "charged": 1, "creator_charged": 0}
+    paths = ["/attachments/1/1/report1.docx", "/attachments/1/2/report2.docx"]
+    transcript = await saved_transcript(fixture)
+    # Then: two files were fetched and stored, and the transcript holds their references and one notice
+    assert requests == paths
+    assert transcript == [
+        "\n".join(
+            [
+                "identical text",
+                "[file: workspace/uploads/report1.docx]",
+                "[file: workspace/uploads/report2.docx]",
+                skipped_attachments_note(1),
+            ]
+        )
+    ]
+    assert await counts(fixture) == accepted
+
+    # When: the same delivery is retried on another connection
+    async with transaction(fixture.db.second):
+        await discord_media.accept_discord_media(event, attachments)
+    # Then: the committed receipt answers it without any provider read or storage write
+    assert requests == paths
+    assert store.await_count == 2
+    assert await counts(fixture) == accepted
+
+    # When: the retry differs only in the attachment beyond the limit
+    changed = (*attachments[:2], attachment(4))
+    with pytest.raises(ChannelEventConflictError):
+        async with transaction(fixture.db.second):
+            await discord_media.accept_discord_media(replace(event, media_ids=("1", "2", "4")), changed)
+    # Then: it conflicts with the durable receipt before any provider read, and the saved state is untouched
+    assert requests == paths
+    assert store.await_count == 2
+    assert await counts(fixture) == accepted
+    assert await saved_transcript(fixture) == transcript
