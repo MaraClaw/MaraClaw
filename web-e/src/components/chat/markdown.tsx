@@ -1,6 +1,6 @@
-import { memo } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { useTranslation } from '@/hooks/use-translation'
-import { parseMarkdownTable, splitMarkdownBlocks } from './markdown-blocks'
+import { createMarkdownSplitter, parseMarkdownTable } from './markdown-blocks'
 
 function escapeHtml(value: string): string {
   return value
@@ -47,12 +47,9 @@ const MarkdownBlock = memo(function MarkdownBlock({ block }: { readonly block: s
 })
 
 export const ChatMarkdown = memo(function ChatMarkdown({ text }: { readonly text: string }) {
-  let start = 0
+  const [splitter] = useState(createMarkdownSplitter)
+  const { blocks } = useMemo(() => splitter.update(text), [splitter, text])
   return <div className="space-y-2 [&_a]:text-inherit">
-    {splitMarkdownBlocks(text).map((block) => {
-      const key = start
-      start += block.length + 1
-      return <MarkdownBlock key={key} block={block} />
-    })}
+    {blocks.map((block, index) => <MarkdownBlock key={index} block={block} />)}
   </div>
 })

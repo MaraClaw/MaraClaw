@@ -85,6 +85,7 @@ export function AgentChatPage() {
   const [draft, setDraft] = useState('')
   const [lines, setLines] = useState<Line[]>([])
   const [liveStore] = useState(createLiveStreamStore)
+  useLayoutEffect(() => () => liveStore.reset(), [liveStore])
   const live = useSyncExternalStore(liveStore.subscribe, liveStore.hasLive)
   const liveTurnId = useSyncExternalStore(liveStore.subscribe, () => liveStore.getSnapshot().turnId)
   const [thinking, setThinking] = useState('')
@@ -236,7 +237,7 @@ export function AgentChatPage() {
       setSlow(false)
       return
     }
-    if (liveStore.getSnapshot().turnId === null && !next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
+    if (liveStore.latest().turnId === null && !next.some((row) => row.pending) && next.at(-1)?.role === 'assistant') {
       setBusy(false)
       setInfo(null)
       setThinking('')
@@ -257,7 +258,7 @@ export function AgentChatPage() {
   useEffect(() => {
     if (!isCurrent(owner) || liveTurnId === null) return
     const timer = window.setInterval(() => {
-      if (!isCurrent() || !submissions.active || liveStore.getSnapshot().turnId !== liveTurnId) return
+      if (!isCurrent() || !submissions.active || liveStore.latest().turnId !== liveTurnId) return
       const rows = linesRef.current
       if (historyTailRoleRef.current !== 'assistant' || rows.some((row) => row.pending)) return
       if (rows.findLast((row) => row.role === 'user' || row.role === 'assistant')?.role !== 'assistant') return
@@ -415,7 +416,7 @@ export function AgentChatPage() {
           return
         }
         case ChatEventType.DONE: {
-          const currentLive = liveStore.getSnapshot()
+          const currentLive = liveStore.latest()
           const unrelated = event.turn_id != null && currentLive.turnId !== null && event.turn_id !== currentLive.turnId
           const content = textContent || (unrelated ? '' : currentLive.text)
           const role = event.role ?? 'assistant'

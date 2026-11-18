@@ -1,33 +1,274 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyLiveChunk, clearLiveStream, createLiveStream, createLiveStreamStore } from '../src/lib/chat/live-stream.ts'
+import { applyLiveChunk, clearLiveStream, createLiveStream, createLiveStreamStore, type FrameScheduler } from '../src/lib/chat/live-stream.ts'
 import { ChunkEventSchema, DoneEventSchema } from '../src/lib/engine-contracts.generated.ts'
 
 const turnA = '11111111-1111-4111-8111-111111111111'
 const turnB = '22222222-2222-4222-8222-222222222222'
 
-test('live store publishes reducer snapshots, ignores stale chunks and releases subscriptions', () => {
-  const store = createLiveStreamStore()
-  const snapshots = [store.getSnapshot()]
-  const unsubscribe = store.subscribe(() => snapshots.push(store.getSnapshot()))
+function frameClock(options: { readonly honorsCancel?: boolean } = {}) {
+  const queue = new Map<number, () => void>()
+  let issued = 0
+  const scheduler: FrameScheduler = {
+    request: (callback) => {
+      queue.set(++issued, callback)
+      return issued
+    },
+    cancel: (handle) => {
+      if (options.honorsCancel !== false) queue.delete(handle)
+    },
+  }
+  return {
+    scheduler,
+    requested: () => issued,
+    pending: () => queue.size,
+    tick: () => {
+      const due = [...queue.values()]
+      queue.clear()
+      for (const callback of due) callback()
+    },
+    run: (handle: number) => {
+      const callback = queue.get(handle)
+      queue.delete(handle)
+      callback?.()
+    },
+  }
+}
+
+function watched(options?: { readonly honorsCancel?: boolean }) {
+  const clock = frameClock(options)
+  const store = createLiveStreamStore(clock.scheduler)
+  const published: string[] = []
+  const stop = store.subscribe(() => published.push(store.getSnapshot().text))
+  return { clock, store, published, stop }
+}
+
+test('a burst of chunks is accepted in order and published once on the next frame', (t) => {
+  const { clock, store, published, stop } = watched()
+  t.after(stop)
+  const initial = store.getSnapshot()
+  for (const [seq, content] of ['One ', 'two ', 'three'].entries()) {
+    assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq, content }), true)
+  }
+  assert.equal(clock.requested(), 1)
+  assert.equal(store.getSnapshot(), initial)
   assert.equal(store.hasLive(), false)
-  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'First' }), true)
+  assert.equal(store.latest().text, 'One two three')
+  assert.deepEqual(published, [])
+
+  clock.tick()
+
+  assert.deepEqual(published, ['One two three'])
   assert.equal(store.hasLive(), true)
-  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Stale' }), false)
+  assert.equal(store.getSnapshot(), store.latest())
+  clock.tick()
+  assert.equal(published.length, 1)
+})
+
+test('snapshots stay referentially stable between frames and each frame publishes one new snapshot', (t) => {
+  const { clock, store, published, stop } = watched()
+  t.after(stop)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'First' })
+  clock.tick()
+  const first = store.getSnapshot()
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: ' second' })
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 2, content: ' third' })
+  assert.equal(store.getSnapshot(), first)
+  assert.equal(first.text, 'First')
+  clock.tick()
+  assert.notEqual(store.getSnapshot(), first)
+  assert.deepEqual(published, ['First', 'First second third'])
+  assert.equal(clock.requested(), 2)
+})
+
+test('acceptance stays synchronous for stale, duplicate and foreign chunks and schedules no frame for them', (t) => {
+  const { clock, store, published, stop } = watched()
+  t.after(stop)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'First' }), true)
+  clock.tick()
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Duplicate' }), false)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: -3, content: 'Stale' }), false)
   assert.equal(store.chunk({ type: 'chunk', turn_id: turnB, seq: 1, content: 'Foreign' }), false)
-  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, replace: true, content: 'Replaced' })
-  store.clear(turnB)
-  assert.equal(store.getSnapshot().text, 'Replaced')
+  assert.equal(clock.pending(), 0)
+  assert.equal(store.latest().text, 'First')
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: ' next' }), true)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: ' replay' }), false)
+  assert.equal(store.latest().text, 'First next')
+  clock.tick()
+  assert.deepEqual(published, ['First', 'First next'])
+})
+
+test('a replacement swaps the pending text and legacy chunks without a turn keep appending', (t) => {
+  const { clock, store, published, stop } = watched()
+  t.after(stop)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Draft ' })
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: 'more' })
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 2, replace: true, content: 'Revised' })
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 3, content: ' text' })
+  clock.tick()
+  assert.deepEqual(published, ['Revised text'])
+  const legacy = watched()
+  assert.equal(legacy.store.chunk(ChunkEventSchema.parse({ type: 'chunk', replace: true, content: 'Hello' })), true)
+  assert.equal(legacy.store.chunk(ChunkEventSchema.parse({ type: 'chunk', replace: true, content: ' legacy' })), true)
+  legacy.clock.tick()
+  assert.deepEqual(legacy.published, ['Hello legacy'])
+  legacy.stop()
+})
+
+test('a terminal clear publishes at once, cancels the pending frame and blocks that turn afterwards', (t) => {
+  const { clock, store, published, stop } = watched()
+  t.after(stop)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Visible' })
+  clock.tick()
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: ' unpainted' })
+  assert.equal(store.latest().text, 'Visible unpainted')
+
   store.clear(turnA)
+
+  assert.deepEqual(published, ['Visible', ''])
   assert.equal(store.hasLive(), false)
-  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 3, content: 'Late' }), false)
-  store.reset()
-  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'New session' })
-  assert.deepEqual(snapshots.map((state) => state.text), ['', 'First', 'Replaced', 'Replaced', '', '', 'New session'])
-  unsubscribe()
-  store.clear()
-  assert.equal(snapshots.length, 7)
+  assert.equal(store.latest().text, '')
+  assert.equal(clock.pending(), 0)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 2, content: ' late' }), false)
+  clock.tick()
+  assert.deepEqual(published, ['Visible', ''])
+})
+
+test('a terminal clear before the first paint leaves nothing to publish', (t) => {
+  const { clock, store, published, stop } = watched()
+  t.after(stop)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Never painted' })
+  assert.equal(store.latest().text, 'Never painted')
+
+  store.clear(turnA)
+  clock.tick()
+
   assert.equal(store.getSnapshot().text, '')
+  assert.equal(published.every((text) => text === ''), true)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: 'Late' }), false)
+})
+
+test('a frame the scheduler failed to cancel cannot repopulate after a clear or a reset', (t) => {
+  for (const [name, invalidate] of [['clear', (store: ReturnType<typeof createLiveStreamStore>) => store.clear(turnA)], ['reset', (store: ReturnType<typeof createLiveStreamStore>) => store.reset()]] as const) {
+    const { clock, store, published, stop } = watched({ honorsCancel: false })
+    t.after(stop)
+    store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Old turn' })
+    invalidate(store)
+    const afterInvalidation = published.length
+    assert.equal(clock.pending(), 1, `${name} leaves the cancelled frame queued`)
+
+    clock.tick()
+
+    assert.equal(published.length, afterInvalidation, name)
+    assert.equal(store.getSnapshot().text, '', name)
+  }
+})
+
+test('a stale frame firing ahead of the live one neither publishes early nor lets a second frame be scheduled', (t) => {
+  const { clock, store, published, stop } = watched({ honorsCancel: false })
+  t.after(stop)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Old' })
+  store.reset()
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'New' })
+  assert.equal(clock.requested(), 2)
+  const beforeStale = published.length
+
+  clock.run(1)
+
+  assert.equal(published.length, beforeStale)
+  assert.equal(store.getSnapshot().text, '')
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: ' more' })
+  assert.equal(clock.requested(), 2)
+  clock.run(2)
+  assert.equal(store.getSnapshot().text, 'New more')
+  assert.equal(published.length, beforeStale + 1)
+})
+
+test('reset cancels pending work immediately and the next conversation starts on its own frame', (t) => {
+  const { clock, store, published, stop } = watched()
+  t.after(stop)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Old conversation' })
+
+  store.reset()
+
+  assert.equal(clock.pending(), 0)
+  assert.equal(store.latest().text, '')
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'New conversation' }), true)
+  assert.equal(clock.pending(), 1)
+  clock.tick()
+  assert.equal(store.getSnapshot().text, 'New conversation')
+  assert.equal(published.at(-1), 'New conversation')
+})
+
+test('finishing another turn keeps the active text and still publishes its unpainted chunks on their frame', (t) => {
+  const { clock, store, published, stop } = watched()
+  t.after(stop)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Active' })
+  clock.tick()
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: ' still going' })
+
+  store.clear(turnB)
+
+  assert.equal(store.getSnapshot().text, 'Active')
+  assert.equal(store.latest().text, 'Active still going')
+  assert.equal(store.latest().turnId, turnA)
+  assert.equal(clock.pending(), 1)
+  assert.equal(store.chunk({ type: 'chunk', turn_id: turnB, seq: 9, content: 'Late foreign' }), false)
+  clock.tick()
+  assert.deepEqual(published, ['Active', 'Active still going'])
+})
+
+test('finishing another turn with nothing pending keeps the published active text', (t) => {
+  const { clock, store, stop } = watched()
+  t.after(stop)
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Active' })
+  clock.tick()
+
+  store.clear(turnB)
+
+  assert.equal(store.getSnapshot().text, 'Active')
+  assert.equal(store.getSnapshot().turnId, turnA)
+  assert.equal(store.getSnapshot(), store.latest())
+  assert.equal(clock.pending(), 0)
+})
+
+test('listeners are released on unsubscribe and an unsubscribed listener sees no frame', () => {
+  const { clock, store, published, stop } = watched()
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'Heard' })
+  clock.tick()
+  stop()
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: ' unheard' })
+  clock.tick()
+  store.clear()
+  assert.deepEqual(published, ['Heard'])
+  assert.equal(store.getSnapshot().text, '')
+})
+
+test('the default scheduler uses requestAnimationFrame and cancels with cancelAnimationFrame', (t) => {
+  const frames = new Map<number, FrameRequestCallback>()
+  const cancelled: number[] = []
+  let issued = 0
+  Object.defineProperty(globalThis, 'requestAnimationFrame', { configurable: true, value: (callback: FrameRequestCallback) => { frames.set(++issued, callback); return issued } })
+  Object.defineProperty(globalThis, 'cancelAnimationFrame', { configurable: true, value: (handle: number) => { cancelled.push(handle); frames.delete(handle) } })
+  t.after(() => {
+    Reflect.deleteProperty(globalThis, 'requestAnimationFrame')
+    Reflect.deleteProperty(globalThis, 'cancelAnimationFrame')
+  })
+  const store = createLiveStreamStore()
+
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 0, content: 'One' })
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 1, content: ' two' })
+  assert.equal(frames.size, 1)
+  assert.equal(store.getSnapshot().text, '')
+  const callback = frames.get(1)
+  frames.delete(1)
+  callback?.(16)
+  assert.equal(store.getSnapshot().text, 'One two')
+
+  store.chunk({ type: 'chunk', turn_id: turnA, seq: 2, content: ' three' })
+  store.reset()
+  assert.deepEqual(cancelled, [2])
+  assert.equal(frames.size, 0)
 })
 
 test('increasing correlated chunks append to the live text', () => {

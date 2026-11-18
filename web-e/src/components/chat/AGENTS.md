@@ -13,9 +13,9 @@ Scope: windowed transcript and live reply rendering, response copy, attachment d
 - `attachment-preview.tsx`: `AttachmentPreviewBody`, request attempts, renderer dispatch and render-error boundary.
 - `attachment-video.tsx`: `AttachmentVideo`, copied-Blob playback and element/object URL cleanup.
 - `history-control.tsx`: `HistoryControl`, conversation loading/error status and the earlier-messages control.
-- `live-reply.tsx`: `LiveReply`, external live-stream subscription, incremental markdown/copy and scroll-update callback.
-- `markdown-blocks.ts`: `splitMarkdownBlocks`, `parseMarkdownTable`; fenced blocks and pipe tables, including escaped/code-span pipes.
-- `markdown.tsx`: `ChatMarkdown`, limited escaped markup rendering.
+- `live-reply.tsx`: `LiveReply`, external live-stream subscription to the published snapshot (one per animation frame); copy uses the displayed text and the scroll-update callback runs when the snapshot changes.
+- `markdown-blocks.ts`: `splitMarkdownBlocks`, `createMarkdownSplitter`, `parseMarkdownTable`; fenced blocks and pipe tables, including escaped/code-span pipes. The splitter gives the same blocks as `splitMarkdownBlocks` for any chunking; leading blocks no later text can change are `completed` and not rescanned while the text only grows, and a replacement reuses only the prefix whose deciding lines are unchanged.
+- `markdown.tsx`: `ChatMarkdown`, limited escaped markup rendering; one splitter per instance and memoized blocks, so completed blocks are not rendered again as the tail grows.
 - `message-content.tsx`: `ChatMessageContent`, message text and attachment-card composition.
 - `office-viewer.ts`: `createOfficeViewer` and `NavigableOfficeViewer`, uniform Office adapter.
 - `response-copy.tsx`: `ResponseCopy`, exact source clipboard text and source-bound success/failure feedback.
