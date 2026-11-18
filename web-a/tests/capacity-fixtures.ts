@@ -19,6 +19,13 @@ export const submittedOrder = capacityOrderSchema.parse({
   evidence: { content_type: 'image/png', filename: 'receipt.png', size_bytes: 20480, sha256: 'a'.repeat(64) },
 })
 
+export function queuedOrder(index: number) {
+  return capacityOrderSchema.parse({
+    ...submittedOrder, id: `b0000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    reference: `MCQUEUEAA${String.fromCharCode(64 + index)}`, tenant_name: `Queue Company ${index}`,
+  })
+}
+
 export const renewalOrder = capacityOrderSchema.parse({
   ...purchaseOrder, id: 'e4444444-4444-4444-8444-444444444444', kind: 'renewal', billing_month: '2026-12-01',
   days_charged: 31, days_in_month: 31, amount_usd_cents: 11500, amount_vnd: 2_875_000, grace_until: '2026-12-07',

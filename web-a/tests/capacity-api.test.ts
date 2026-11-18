@@ -68,17 +68,39 @@ for (const malformed of [
 }
 
 test('the order list sends bounded paging and the optional company', async (t) => {
-  const fetch = t.mock.method(globalThis, 'fetch', respond({ items: [purchaseOrder], has_more: true }))
+  const fetch = t.mock.method(globalThis, 'fetch', respond({ items: [purchaseOrder], has_more: true, next_cursor: 'opaque-cursor' }))
   const page = await fetchCapacityOrders({ tenantId: capacityTenantId, limit: 10, offset: 20 })
   assert.equal(fetch.mock.calls[0]?.arguments[0], `/api/capacity/orders?limit=10&offset=20&tenant_id=${capacityTenantId}`)
   assert.deepEqual(page.items, [purchaseOrder])
   assert.equal(page.has_more, true)
+  assert.equal(page.next_cursor, 'opaque-cursor')
   await fetchCapacityOrders({ tenantId: null })
   assert.equal(fetch.mock.calls[1]?.arguments[0], '/api/capacity/orders?limit=50&offset=0')
   for (const bad of [{ limit: 0 }, { limit: 101 }, { offset: -1 }, { limit: 1.5 }]) {
     await assert.rejects(fetchCapacityOrders({ tenantId: null, ...bad }), z.ZodError)
   }
   assert.equal(fetch.mock.callCount(), 2)
+})
+
+test('the order list continues from the server cursor, only URL-encoded, and then sends no offset', async (t) => {
+  const cursor = 'a+b/c=d_e-f'
+  const fetch = t.mock.method(globalThis, 'fetch', respond({ items: [purchaseOrder], has_more: false, next_cursor: null }))
+  const page = await fetchCapacityOrders({ tenantId: capacityTenantId, limit: 10, cursor })
+  const sent = String(fetch.mock.calls[0]?.arguments[0])
+  assert.equal(sent, `/api/capacity/orders?limit=10&cursor=a%2Bb%2Fc%3Dd_e-f&tenant_id=${capacityTenantId}`)
+  const query = new URL(sent, 'https://admin.example.test').searchParams
+  assert.equal(query.get('cursor'), cursor)
+  assert.equal(query.has('offset'), false)
+  assert.equal(page.next_cursor, null)
+
+  await fetchCapacityOrders({ tenantId: null, cursor: null })
+  assert.equal(fetch.mock.calls[1]?.arguments[0], '/api/capacity/orders?limit=50&offset=0')
+  await fetchCapacityOrders({ tenantId: null, offset: 0, cursor })
+  assert.equal(fetch.mock.calls[2]?.arguments[0], '/api/capacity/orders?limit=50&cursor=a%2Bb%2Fc%3Dd_e-f')
+  for (const bad of [{ cursor, offset: 50 }, { cursor: '' }]) {
+    await assert.rejects(fetchCapacityOrders({ tenantId: null, ...bad }), z.ZodError)
+  }
+  assert.equal(fetch.mock.callCount(), 3)
 })
 
 test('an order carries the locked quote, recipient and nullable review fields', async (t) => {
@@ -227,16 +249,21 @@ test('a missing evidence file is a typed 404', async (t) => {
   await assert.rejects(fetchCapacityEvidence(capacityOrderId), (error) => error instanceof ApiError && error.status === 404 && error.message === 'Payment evidence not found')
 })
 
-test('the review queue sends the status and offset', async (t) => {
-  const fetch = t.mock.method(globalThis, 'fetch', respond({ items: [submittedOrder], has_more: false }))
-  const page = await fetchCapacityReviewOrders('submitted', 50)
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/admin/capacity-orders?status=submitted&limit=50&offset=50')
-  assert.equal(page.items[0]?.tenant_name, 'Acme Co')
-  await fetchCapacityReviewOrders('awaiting_payment')
-  assert.equal(fetch.mock.calls[1]?.arguments[0], '/api/admin/capacity-orders?status=awaiting_payment&limit=50&offset=0')
+test('the review queue sends the status, and the server cursor unchanged after the first page', async (t) => {
+  const fetch = t.mock.method(globalThis, 'fetch', respond({ items: [submittedOrder], has_more: true, next_cursor: 'opaque-cursor' }))
+  const first = await fetchCapacityReviewOrders('submitted')
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/admin/capacity-orders?status=submitted&limit=50')
+  assert.equal(first.items[0]?.tenant_name, 'Acme Co')
+  assert.equal(first.next_cursor, 'opaque-cursor')
+  await fetchCapacityReviewOrders('awaiting_payment', null)
+  assert.equal(fetch.mock.calls[1]?.arguments[0], '/api/admin/capacity-orders?status=awaiting_payment&limit=50')
+  await fetchCapacityReviewOrders('approved', 'a+b/c=d_e-f')
+  const sent = String(fetch.mock.calls[2]?.arguments[0])
+  assert.equal(sent, '/api/admin/capacity-orders?status=approved&limit=50&cursor=a%2Bb%2Fc%3Dd_e-f')
+  assert.equal(new URL(sent, 'https://admin.example.test').searchParams.get('cursor'), 'a+b/c=d_e-f')
   await assert.rejects(fetchCapacityReviewOrders('paid' as 'submitted'), z.ZodError)
-  await assert.rejects(fetchCapacityReviewOrders('submitted', -1), z.ZodError)
-  assert.equal(fetch.mock.callCount(), 2)
+  await assert.rejects(fetchCapacityReviewOrders('submitted', ''), z.ZodError)
+  assert.equal(fetch.mock.callCount(), 3)
 })
 
 test('an approval omits an absent note and a rejection carries its note', async (t) => {

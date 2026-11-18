@@ -9,7 +9,7 @@ import {
 } from '../src/hooks/capacity-options.ts'
 import { notificationKeys } from '../src/hooks/notification-options.ts'
 import { ApiError } from '../src/lib/http.ts'
-import { capacityOrderId, cappedOverview, purchaseOrder, submittedOrder } from './capacity-fixtures.ts'
+import { capacityOrderId, capacityTenantId, cappedOverview, purchaseOrder, submittedOrder } from './capacity-fixtures.ts'
 
 function clientFor(t: TestContext) {
   const client = new QueryClient()
@@ -25,10 +25,10 @@ test('disabled gates and unusable ids send no capacity reads', (t) => {
   const fetch = t.mock.method(globalThis, 'fetch', answer({}))
   const observers = [
     new QueryObserver(client, capacityOverviewOptions(null, false)),
-    new QueryObserver(client, capacityOrdersOptions(null, 10, 0, false)),
+    new QueryObserver(client, capacityOrdersOptions(null, 10, null, false)),
     new QueryObserver(client, capacityOrderOptions(capacityOrderId, false)),
     new QueryObserver(client, capacityOrderOptions(null, true)),
-    new QueryObserver(client, capacityReviewListOptions('submitted', 0, false)),
+    new QueryObserver(client, capacityReviewListOptions('submitted', null, false)),
     new QueryObserver(client, capacityReviewDetailOptions(capacityOrderId, false)),
     new QueryObserver(client, capacityReviewDetailOptions(null, true)),
     new QueryObserver(client, capacitySettingsOptions(false)),
@@ -39,14 +39,40 @@ test('disabled gates and unusable ids send no capacity reads', (t) => {
 
 test('company, order, queue and settings reads are keyed apart', () => {
   const keys = [
-    capacityKeys.overview(null), capacityKeys.overview('tenant-a'), capacityKeys.orders(null, 10, 0), capacityKeys.orders(null, 10, 10),
-    capacityKeys.order(capacityOrderId), capacityKeys.reviewList('submitted', 0), capacityKeys.reviewList('approved', 0),
+    capacityKeys.overview(null), capacityKeys.overview('tenant-a'), capacityKeys.orders(null, 10, null), capacityKeys.orders(null, 10, 'cursor-a'),
+    capacityKeys.orders('tenant-a', 10, null), capacityKeys.orders('tenant-a', 10, 'cursor-a'), capacityKeys.orders(null, 50, null),
+    capacityKeys.order(capacityOrderId), capacityKeys.reviewList('submitted', null), capacityKeys.reviewList('approved', null),
+    capacityKeys.reviewList('submitted', 'cursor-a'), capacityKeys.reviewList('submitted', 'cursor-b'),
     capacityKeys.reviewDetail(capacityOrderId), capacityKeys.settings,
   ].map((key) => JSON.stringify(key))
   assert.equal(new Set(keys).size, keys.length)
-  for (const key of [capacityKeys.overview(null), capacityKeys.reviewList('submitted', 0), capacityKeys.settings]) {
+  for (const key of [capacityKeys.overview(null), capacityKeys.reviewList('submitted', null), capacityKeys.settings]) {
     assert.deepEqual(key.slice(0, 1), capacityKeys.all)
   }
+})
+
+test('order lists fetch the view and boundary they are keyed by', async (t) => {
+  const client = clientFor(t)
+  const page = { items: [], has_more: false, next_cursor: null }
+  const fetch = t.mock.method(globalThis, 'fetch', answer(page))
+  const requested = () => fetch.mock.calls.map((call) => String(call.arguments[0]))
+
+  await client.fetchQuery(capacityReviewListOptions('submitted', null, true))
+  await client.fetchQuery(capacityReviewListOptions('submitted', 'cursor-a', true))
+  await client.fetchQuery(capacityReviewListOptions('approved', null, true))
+  await client.fetchQuery(capacityOrdersOptions(capacityTenantId, 10, null, true))
+  await client.fetchQuery(capacityOrdersOptions(capacityTenantId, 10, 'cursor-a', true))
+  await client.fetchQuery(capacityOrdersOptions(null, 10, null, true))
+
+  assert.deepEqual(requested(), [
+    '/api/admin/capacity-orders?status=submitted&limit=50',
+    '/api/admin/capacity-orders?status=submitted&limit=50&cursor=cursor-a',
+    '/api/admin/capacity-orders?status=approved&limit=50',
+    `/api/capacity/orders?limit=10&offset=0&tenant_id=${capacityTenantId}`,
+    `/api/capacity/orders?limit=10&cursor=cursor-a&tenant_id=${capacityTenantId}`,
+    '/api/capacity/orders?limit=10&offset=0',
+  ])
+  assert.equal(client.getQueryCache().findAll({ queryKey: capacityKeys.all }).length, 6)
 })
 
 test('a denied mutation never sends a request even when called directly', async (t) => {
@@ -67,25 +93,25 @@ test('a denied mutation never sends a request even when called directly', async 
 test('placing an order stores it and refreshes the overview, lists and notifications', async (t) => {
   const client = clientFor(t)
   client.setQueryData(capacityKeys.overview(null), cappedOverview)
-  client.setQueryData(capacityKeys.orders(null, 10, 0), { items: [], has_more: false })
+  client.setQueryData(capacityKeys.orders(null, 10, null), { items: [], has_more: false })
   client.setQueryData(notificationKeys.unread, { unread_count: 0 })
   t.mock.method(globalThis, 'fetch', answer(purchaseOrder, 201))
   const order = await new MutationObserver(client, capacityOrderCreateOptions(client, true)).mutate({ extra_accounts: 2, extra_agents: 3 })
   assert.equal(order.id, capacityOrderId)
   assert.deepEqual(client.getQueryData(capacityKeys.order(capacityOrderId)), purchaseOrder)
   assert.equal(invalidated(client, capacityKeys.overview(null)), true)
-  assert.equal(invalidated(client, capacityKeys.orders(null, 10, 0)), true)
+  assert.equal(invalidated(client, capacityKeys.orders(null, 10, null)), true)
   assert.equal(invalidated(client, notificationKeys.unread), true)
 })
 
 test('finishing stores the submitted order and refreshes what the reviewers see', async (t) => {
   const client = clientFor(t)
-  client.setQueryData(capacityKeys.reviewList('submitted', 0), { items: [], has_more: false })
+  client.setQueryData(capacityKeys.reviewList('submitted', null), { items: [], has_more: false })
   t.mock.method(globalThis, 'fetch', answer(submittedOrder))
   const file = new File([new Uint8Array([1])], 'receipt.png', { type: 'image/png' })
   await new MutationObserver(client, capacityEvidenceOptions(client, capacityOrderId, true)).mutate(file)
   assert.deepEqual(client.getQueryData(capacityKeys.order(capacityOrderId)), submittedOrder)
-  assert.equal(invalidated(client, capacityKeys.reviewList('submitted', 0)), true)
+  assert.equal(invalidated(client, capacityKeys.reviewList('submitted', null)), true)
 })
 
 test('cancelling stores the cancelled order', async (t) => {
@@ -98,11 +124,11 @@ test('cancelling stores the cancelled order', async (t) => {
 test('a decision stores the decided order and refreshes notifications', async (t) => {
   const client = clientFor(t)
   client.setQueryData(notificationKeys.unread, { unread_count: 1 })
-  client.setQueryData(capacityKeys.reviewList('submitted', 0), { items: [submittedOrder], has_more: false })
+  client.setQueryData(capacityKeys.reviewList('submitted', null), { items: [submittedOrder], has_more: false })
   t.mock.method(globalThis, 'fetch', answer({ ...submittedOrder, status: 'approved' }))
   await new MutationObserver(client, capacityDecisionOptions(client, capacityOrderId, true)).mutate({ action: 'approve' })
   assert.equal(client.getQueryData<{ status: string }>(capacityKeys.reviewDetail(capacityOrderId))?.status, 'approved')
-  assert.equal(invalidated(client, capacityKeys.reviewList('submitted', 0)), true)
+  assert.equal(invalidated(client, capacityKeys.reviewList('submitted', null)), true)
   assert.equal(invalidated(client, notificationKeys.unread), true)
 })
 

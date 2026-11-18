@@ -1,5 +1,8 @@
+import type { Page } from '@playwright/test'
+import { queuedOrder } from '../tests/capacity-fixtures.ts'
+import type { CapacityOrder } from '../src/lib/capacity-api.ts'
 import { test, expect } from './fixtures.ts'
-import { paymentAliases } from './synthetic-api.ts'
+import { capacityQueueKey, paymentAliases, type CapacityQueuePage, type syntheticState } from './synthetic-api.ts'
 
 for (const alias of paymentAliases) {
   test(`Payments is current and visible in the rail on ${alias.heading} detail`, async ({ page, isMobile }) => {
@@ -149,5 +152,123 @@ for (const actor of ['platform_admin', 'genesis_platform_admin'] as const) test.
     await page.keyboard.press('ArrowDown')
     await expect(page.getByRole('tab', { name: 'Extra accounts and agents', exact: true })).toBeFocused()
     await expect(page.getByRole('tab', { selected: true })).toHaveText('Extra accounts and agents')
+  })
+})
+
+test.describe('capacity payment queue paging', () => {
+  const a1 = queuedOrder(1)
+  const a2 = queuedOrder(2)
+  const b1 = queuedOrder(3)
+  const b2 = queuedOrder(4)
+  const c1 = queuedOrder(5)
+  const queue = '/payments?tab=capacity'
+
+  function script(api: ReturnType<typeof syntheticState>, status: string, pages: readonly (readonly [string | null, readonly CapacityOrder[], string | null])[]) {
+    for (const [cursor, items, next] of pages) api.capacityQueue.set(capacityQueueKey(status, cursor), { items, next_cursor: next } satisfies CapacityQueuePage)
+  }
+  function controls(page: Page) {
+    const pages = page.getByRole('navigation', { name: 'Capacity payment pages', exact: true })
+    return {
+      previous: pages.getByRole('button', { name: 'Previous', exact: true }), next: pages.getByRole('button', { name: 'Next', exact: true }),
+      label: pages.getByRole('status'),
+    }
+  }
+  const expectQueue = (page: Page, ...orders: readonly CapacityOrder[]) => expect(
+    page.getByRole('list', { name: 'Capacity payments', exact: true }).getByRole('listitem'),
+  ).toContainText(orders.map((order) => order.reference))
+
+  test('Next follows the server cursor and Previous revisits each visited boundary', async ({ page, api }) => {
+    script(api, 'submitted', [[null, [a1, a2], 'cursor-page-2'], ['cursor-page-2', [b1, b2], 'cursor-page-3'], ['cursor-page-3', [c1], null]])
+    await page.goto(queue)
+    const { previous, next, label } = controls(page)
+    await expectQueue(page, a1, a2)
+    await expect(label).toHaveText('Page 1')
+    await expect(previous).toBeDisabled()
+    await expect(next).toBeEnabled()
+
+    await next.click()
+    await expectQueue(page, b1, b2)
+    await expect(label).toHaveText('Page 2')
+    await expect(previous).toBeEnabled()
+    await next.click()
+    await expectQueue(page, c1)
+    await expect(label).toHaveText('Page 3')
+    await expect(next).toBeDisabled()
+
+    await previous.click()
+    await expectQueue(page, b1, b2)
+    await expect(label).toHaveText('Page 2')
+    await previous.click()
+    await expectQueue(page, a1, a2)
+    await expect(label).toHaveText('Page 1')
+    await expect(previous).toBeDisabled()
+    expect(new Set(api.capacityQueueRequests.map((request) => request.cursor))).toEqual(new Set([null, 'cursor-page-2', 'cursor-page-3']))
+    expect(api.capacityQueueRequests.every((request) => request.offset === null && request.limit === '50')).toBe(true)
+  })
+
+  test('Previous is offered on a later page that emptied between clicks and returns to the known boundary', async ({ page, api }) => {
+    script(api, 'submitted', [[null, [a1, a2], 'cursor-page-2'], ['cursor-page-2', [b1], null]])
+    await page.goto(queue)
+    const { previous, next, label } = controls(page)
+    await expectQueue(page, a1, a2)
+
+    script(api, 'submitted', [['cursor-page-2', [], null]])
+    await next.click()
+    await expect(page.getByRole('heading', { name: 'No payments with this status', exact: true })).toBeVisible()
+    await expect(page.getByText('Return to the previous page to see earlier payments.', { exact: true })).toBeVisible()
+    await expect(label).toHaveText('Page 2')
+    await expect(next).toBeDisabled()
+    await expect(previous).toBeEnabled()
+
+    await previous.click()
+    await expectQueue(page, a1, a2)
+    await expect(label).toHaveText('Page 1')
+    await expect(previous).toBeDisabled()
+  })
+
+  test('Refresh starts a new traversal from a fresh first page', async ({ page, api }) => {
+    script(api, 'submitted', [[null, [a1, a2], 'cursor-page-2'], ['cursor-page-2', [b1], null]])
+    await page.goto(queue)
+    const { previous, next, label } = controls(page)
+    await expectQueue(page, a1, a2)
+    await next.click()
+    await expectQueue(page, b1)
+    await expect(label).toHaveText('Page 2')
+
+    script(api, 'submitted', [[null, [c1, a1], 'cursor-fresh'], ['cursor-fresh', [a2, b1], null]])
+    await page.getByRole('button', { name: 'Refresh payments', exact: true }).click()
+    await expectQueue(page, c1, a1)
+    await expect(label).toHaveText('Page 1')
+    await expect(previous).toBeDisabled()
+
+    await next.click()
+    await expectQueue(page, a2, b1)
+    await expect(label).toHaveText('Page 2')
+    expect(api.capacityQueueRequests.at(-1)).toMatchObject({ status: 'submitted', cursor: 'cursor-fresh', offset: null })
+  })
+
+  test('changing the status starts a new traversal and never sends the old status its cursor', async ({ page, api }) => {
+    script(api, 'submitted', [[null, [a1], 'cursor-page-2'], ['cursor-page-2', [b1], null]])
+    script(api, 'approved', [[null, [c1], null]])
+    await page.goto(queue)
+    const { previous, next, label } = controls(page)
+    await expectQueue(page, a1)
+    await next.click()
+    await expectQueue(page, b1)
+    await expect(label).toHaveText('Page 2')
+
+    const status = page.getByLabel('Payment status', { exact: true })
+    await status.selectOption('approved')
+    await expectQueue(page, c1)
+    await expect(label).toHaveText('Page 1')
+    await expect(previous).toBeDisabled()
+    await expect(next).toBeDisabled()
+
+    await status.selectOption('submitted')
+    await expectQueue(page, a1)
+    await expect(label).toHaveText('Page 1')
+    await expect(previous).toBeDisabled()
+    await expect(next).toBeEnabled()
+    expect(api.capacityQueueRequests.filter((request) => request.status === 'approved').map((request) => request.cursor)).toEqual([null])
   })
 })
