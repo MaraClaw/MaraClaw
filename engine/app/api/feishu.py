@@ -20,7 +20,6 @@ from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
     JsonValue,
-    json_as_str,
     json_as_str_or,
     json_loads_object,
     json_object_from_response,
@@ -41,7 +40,7 @@ from app.schemas.schemas import ChannelConfigCreate, ChannelConfigOut
 from app.services.channels import dedup as channel_dedup, inbound as channel_inbound
 from app.services.channels.config import get_channel_config_metadata
 from app.services.channels.llm_bridge import _load_agent_and_model
-from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_note, too_large_reply
+from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, too_large_reply
 from app.services.channels.redact import channel_config_out
 from app.services.channels.stream_source import StreamSource
 from app.services.feishu_service import feishu_service, get_feishu_app_token_or_blank
@@ -566,7 +565,9 @@ async def process_feishu_event(
             f"[Feishu] Received {msg_type} message, chat_type={chat_type}, open_id={sender_open_id!r}, user_id_from_event={sender_user_id_from_event!r}"
         )
 
-        # ── Normalize post (rich text) → extract text + schedule image downloads ──
+        # ── Normalize post (rich text) → plain text ──
+        # Posts with a message id are accepted natively above, which owns image retrieval. Only a post without one
+        # reaches here, and Feishu serves post images by message id, so keep the text and do no media work.
         if msg_type == "post":
             import json as _json_post
 
@@ -581,7 +582,6 @@ async def process_feishu_event(
                         _paragraphs_raw = _locale_val["content"]
                         break
             _text_parts: list[str] = []
-            _post_image_keys: list[str] = []
             _paragraphs = _paragraphs_raw if isinstance(_paragraphs_raw, list) else []
             for _para in _paragraphs:
                 if not isinstance(_para, list):
@@ -596,58 +596,13 @@ async def process_feishu_event(
                         _href = json_as_str_or(_elem.get("href"), "")
                         _link_text = json_as_str_or(_elem.get("text"), "")
                         _line_parts.append(f"{_link_text} ({_href})" if _href else _link_text)
-                    elif _tag == "img":
-                        _ik = json_as_str(_elem.get("image_key"))
-                        if _ik not in (None, ""):
-                            _post_image_keys.append(_ik)
                 if _line_parts:
                     _text_parts.append("".join(_line_parts))
             _extracted_text = "\n".join(_text_parts).strip()
-            # Download images and embed as base64 for vision-capable models
-            _image_markers: list[str] = []
-            _oversize_notes: list[str] = []
-            if _post_image_keys:
-                import base64 as _b64
-
-                _msg_id = json_as_str_or(message.get("message_id"), "")
-                _post_budget = MediaBudget()
-                for _ik in _post_image_keys:
-                    _image_name = f"image_{_ik[-8:]}.jpg"
-                    try:
-                        _img_bytes = await feishu_service.download_message_resource(
-                            app_id, app_secret, _msg_id, _ik, "image", max_bytes=_post_budget.limit_for(_image_name)
-                        )
-                    except MediaTooLargeError as _large_err:
-                        _post_budget.spend(_large_err.read)
-                        _oversize_notes.append(too_large_note(_image_name, _large_err.limit))
-                        logger.warning(f"[Feishu] Skipped oversize post image {_ik}: {_large_err}")
-                        continue
-                    except httpx.HTTPStatusError as _dl_err:
-                        if _dl_err.response.is_server_error:
-                            raise
-                        logger.error(f"[Feishu] Failed to download post image {_ik}: {_dl_err}")
-                        continue
-                    _post_budget.spend(len(_img_bytes))
-                    _, _workspace_path, _save_path = await store_agent_upload(
-                        agent_id,
-                        _image_name,
-                        _img_bytes,
-                        content_type="image/jpeg",
-                    )
-                    logger.info(f"[Feishu] Saved post image to {_workspace_path} ({len(_img_bytes)} bytes)")
-                    # Embed as base64 marker for vision models
-                    _b64_data = _b64.b64encode(_img_bytes).decode("ascii")
-                    _image_markers.append(f"[image_data:data:image/jpeg;base64,{_b64_data}]")
-            # Build final text with embedded images
-            if not _extracted_text and _image_markers:
-                _extracted_text = "[用户发送了图片，请看图片内容]"
-            _final_content = _extracted_text
-            if _image_markers or _oversize_notes:
-                _final_content += "\n" + "\n".join([*_image_markers, *_oversize_notes])
             # Rewrite as text message so existing handler processes it
-            message["content"] = _json_post.dumps({"text": _final_content})
+            message["content"] = _json_post.dumps({"text": _extracted_text})
             msg_type = "text"
-            logger.info(f"[Feishu] Normalized post → text='{_extracted_text[:100]}', images={len(_image_markers)}")
+            logger.info(f"[Feishu] Normalized post → text='{_extracted_text[:100]}'")
 
         if msg_type in ("file", "image"):
             schedule_background_task(
@@ -1663,33 +1618,3 @@ async def _handle_feishu_file(
         agent=agent_obj,
         touch_last_active=True,
     )
-
-
-async def _download_post_images(
-    agent_id: uuid.UUID,
-    config: ChannelConfigRecord,
-    message_id: str,
-    image_keys: list[str],
-) -> None:
-    """Download images embedded in a Feishu post message to the agent's workspace."""
-    app_id = config.app_id or ""
-    app_secret = config.app_secret or ""
-    budget = MediaBudget()
-    for ik in image_keys:
-        filename = f"image_{ik[-8:]}.jpg"
-        try:
-            file_bytes = await feishu_service.download_message_resource(
-                app_id, app_secret, message_id, ik, "image", max_bytes=budget.limit_for(filename)
-            )
-        except MediaTooLargeError as e:
-            budget.spend(e.read)
-            logger.warning(f"[Feishu] Skipped oversize post image {ik}: {e}")
-            continue
-        except httpx.HTTPStatusError as e:
-            if e.response.is_server_error:
-                raise
-            logger.error(f"[Feishu] Failed to download post image {ik}: {e}")
-            continue
-        budget.spend(len(file_bytes))
-        _, workspace_path, _ = await store_agent_upload(agent_id, filename, file_bytes, content_type="image/jpeg")
-        logger.info(f"[Feishu] Saved post image to {workspace_path} ({len(file_bytes)} bytes)")

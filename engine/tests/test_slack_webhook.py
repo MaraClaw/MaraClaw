@@ -13,10 +13,16 @@ from tests.im_webhook_fixtures import AGENT_ID, channel_config, webhook_client
 
 from app.api import slack
 from app.services.channels import binding, slack_submissions, submissions
-from app.services.channels.media_limits import READ_CHUNK_BYTES, MediaBudget, too_large_note, too_large_reply
+from app.services.channels.media_limits import (
+    READ_CHUNK_BYTES,
+    MediaBudget,
+    skipped_attachments_note,
+    too_large_note,
+    too_large_reply,
+)
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES
 from app.services.storage_runtime.quota_errors import StorageQuotaError
-from channel_media_fixtures import CountingStream, serve
+from channel_media_fixtures import CountingStream, serve, set_attachment_limit
 from channel_shared_webhook_fixtures import context, pipeline, request_for, webhook_pipeline
 
 __all__ = ["context", "pipeline", "webhook_pipeline"]
@@ -96,6 +102,11 @@ OVERSIZE_IMAGE = {"id": "F1", "name": "photo.png", "url_private_download": "http
 BIG_THEN_SMALL = [
     {"id": "F1", "name": "big.bin", "url_private_download": "https://files.slack.com/big.bin"},
     {"id": "F2", "name": "small.txt", "url_private_download": "https://files.slack.com/small.txt"},
+]
+OVERSIZE_THEN_TWO_SMALL = [
+    OVERSIZE_IMAGE,
+    {"id": "F2", "name": "small.txt", "url_private_download": "https://files.slack.com/small.txt"},
+    {"id": "F3", "name": "extra.txt", "url_private_download": "https://files.slack.com/extra.txt"},
 ]
 
 
@@ -218,6 +229,8 @@ def legacy_slack(webhook_pipeline, monkeypatch):
         AsyncMock(return_value=SimpleNamespace(transcript_session=session, reply_session=session)),
     )
     monkeypatch.setattr(slack.chat_message_dao, "list_recent", AsyncMock(return_value=[]))
+    persist = AsyncMock()
+    monkeypatch.setattr(slack.channel_inbound, "persist_user_message", persist)
     assert isinstance(slack.store_agent_upload, AsyncMock)
     posted, requested = [], []
 
@@ -242,7 +255,9 @@ def legacy_slack(webhook_pipeline, monkeypatch):
             agent.id, request_for(payload, {"x-slack-request-timestamp": stamp, "x-slack-signature": f"v0={signature}"})
         )
 
-    return SimpleNamespace(deliver=deliver, posted=posted, requested=requested, upload=slack.store_agent_upload)
+    return SimpleNamespace(
+        deliver=deliver, posted=posted, requested=requested, upload=slack.store_agent_upload, persist=persist
+    )
 
 
 async def test_legacy_slack_fallback_tells_the_sender_the_file_was_too_large(legacy_slack):
@@ -270,6 +285,41 @@ async def test_legacy_slack_fallback_spends_an_aborted_read_so_the_next_file_is_
     assert legacy_slack.posted == [
         f"{too_large_reply('big.bin', 3 * READ_CHUNK_BYTES)} {too_large_reply('small.txt', 0)}"
     ]
+
+
+async def test_legacy_slack_fallback_applies_the_attachment_limit_before_any_request(legacy_slack, monkeypatch):
+    # Given: a limit of two and a ts-less event whose oversize first file is followed by two small ones
+    set_attachment_limit(monkeypatch, 2)
+
+    def serve_file(request):
+        if request.url.path == "/photo.png":
+            return httpx.Response(200, stream=CountingStream(total=3 * IMAGE_UPLOAD_MAX_BYTES))
+        return httpx.Response(200, content=b"small")
+
+    # When
+    await legacy_slack.deliver(OVERSIZE_THEN_TWO_SMALL, serve_file)
+    # Then: the oversize file kept its slot, the third file was never requested, and the transcript has one notice
+    assert legacy_slack.requested == ["/photo.png", "/small.txt"]
+    legacy_slack.upload.assert_awaited_once()
+    expected = ["[file:upload.bin]", too_large_note("photo.png", IMAGE_UPLOAD_MAX_BYTES), skipped_attachments_note(1)]
+    assert legacy_slack.persist.await_args.kwargs["content"] == " ".join(expected)
+    assert len(legacy_slack.posted) == 1
+
+
+async def test_legacy_slack_fallback_ack_names_only_the_retrieved_files_and_notes_the_skipped_one(
+    legacy_slack, monkeypatch
+):
+    # Given: a limit of two and a ts-less event of three files that Slack refuses to serve
+    set_attachment_limit(monkeypatch, 2)
+    # When
+    await legacy_slack.deliver(OVERSIZE_THEN_TWO_SMALL, lambda _: httpx.Response(403))
+    # Then: only the first two were requested, and the sender's one reply covers them plus a single skipped notice
+    assert legacy_slack.requested == ["/photo.png", "/small.txt"]
+    (ack,) = legacy_slack.posted
+    assert "photo.png, small.txt" in ack
+    assert "extra.txt" not in ack
+    assert ack.count(skipped_attachments_note(1)) == 1
+    legacy_slack.upload.assert_not_awaited()
 
 
 @pytest.mark.parametrize("failure", ["status_503", "read_timeout", "storage_quota"])
