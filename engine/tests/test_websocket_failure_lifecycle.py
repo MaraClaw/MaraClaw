@@ -26,6 +26,8 @@ from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.chat_submissions import AcceptedSubmission
 from app.services.realtime_runtime import router as realtime
+from app.services.realtime_runtime.router import PRESENCE_TTL_SECONDS
+from test_realtime_presence_refresh import Clock, FakeRedis, closable_socket
 
 type Lifecycle = tuple[chat_tickets.ChatTicketBinding, websocket.ConnectionManager, AsyncMock]
 
@@ -233,10 +235,17 @@ DISCONNECT: Message = {"type": "websocket.disconnect", "code": 1000}
 
 
 class Browser:
-    """An open tab: the test feeds it frames and reads what the server sent, in order."""
+    """An open tab: the test feeds it frames and reads what the server sent, in order.
 
-    def __init__(self, heartbeat_send: Literal["ok", "error", "stall"] = "ok") -> None:
+    With ``close_gate`` a close is held until the test opens the gate, like a peer slow to acknowledge it.
+    """
+
+    def __init__(
+        self, heartbeat_send: Literal["ok", "error", "stall"] = "ok", close_gate: asyncio.Event | None = None
+    ) -> None:
         self.heartbeat_send: Literal["ok", "error", "stall"] = heartbeat_send
+        self.close_gate = close_gate
+        self.closing = asyncio.Event()
         self.inbound: asyncio.Queue[Message] = asyncio.Queue()
         self.events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self.delivered: list[str] = []
@@ -252,6 +261,9 @@ class Browser:
     async def send(self, message: Message) -> None:
         if message["type"] == "websocket.close":
             self.closes.append(message["code"])
+            self.closing.set()
+            if self.close_gate is not None:
+                await self.close_gate.wait()
             self.inbound.put_nowait({"type": "websocket.disconnect", "code": message["code"]})
         elif message["type"] == "websocket.send":
             event = json.loads(message["text"])
@@ -593,3 +605,140 @@ async def test_real_submission_during_heartbeats_is_authorized_exactly_as_before
     assert session.authorize.await_count == 2
     assert session.browser.closes == ([4003] if access == "revoked" else [])
     assert accept.await_count == (0 if access == "revoked" else 1)
+
+
+def evict(manager: websocket.ConnectionManager, agent_id: str, socket: WebSocket) -> list[bool]:
+    """Report as many consecutive send timeouts as eviction takes, the way both delivery paths do."""
+    return [manager.timed_out(agent_id, socket) for _ in range(websocket.STALLED_SEND_EVICTION_THRESHOLD)]
+
+
+async def test_evicted_socket_stays_out_of_presence_across_the_handlers_refresh(
+    lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a connected socket with Redis presence, its presence refresh clock and its close in the test's hands.
+    binding, manager, _execute = lifecycle
+    clock = Clock()
+    redis = FakeRedis(clock)
+    monkeypatch.setattr(realtime, "get_redis", AsyncMock(return_value=redis))
+    monkeypatch.setattr(websocket, "EVICTION_CLOSE_TIMEOUT_SECONDS", 60.0)  # the gate, not the bound, ends the close
+    close_gate = asyncio.Event()
+    browser = Browser(close_gate=close_gate)
+    refresh = Cadence(browser)
+    monkeypatch.setattr(websocket, "_presence_sleep", refresh.sleep)
+    session = await open_session(lifecycle, monkeypatch, heartbeat=False, browser=browser)
+    agent_id, session_id, user_id = str(binding.agent_id), str(binding.session_id), str(binding.user_id)
+    ((socket, _, _),) = manager.active_connections[agent_id]
+    connection_id = socket.state.realtime_connection_id
+    await refresh.parked()
+    assert await manager.is_user_viewing_session(agent_id, session_id, user_id)
+
+    # When its sends keep timing out.
+    evictions = evict(manager, agent_id, socket)
+
+    # Then, before any await, it left local delivery and lost the presence id the refresh would rewrite.
+    assert evictions[-1]
+    assert manager.active_connections[agent_id] == []
+    assert socket.state.realtime_connection_id is None
+    assert not await manager.is_user_viewing_session(agent_id, session_id, user_id)
+
+    # And once the eviction reaches the close, a refresh after the presence TTL has nothing to write back.
+    async with asyncio.timeout(5):
+        await browser.closing.wait()
+    clock.advance(PRESENCE_TTL_SECONDS + 1)
+    await refresh.tick()
+    await refresh.parked()
+    assert connection_id not in redis.sets.get(f"realtime:ws:agent:{agent_id}", set())
+    assert f"realtime:ws:conn:{connection_id}" not in redis.hashes
+    assert not await manager.is_user_viewing_session(agent_id, session_id, user_id)
+
+    # When the peer acknowledges the close, the handler ends without raising and its disconnect releases nothing new.
+    close_gate.set()
+    await session.finish()
+    await manager.drain_evictions()
+    assert browser.closes == [websocket.EVICTION_CLOSE_CODE]
+    assert manager.active_connections[agent_id] == []
+    assert not redis.hashes
+    assert socket_tasks() == {}
+
+
+@pytest.mark.parametrize("next_step", ["reply", "revoked"])
+async def test_handler_error_paths_after_eviction_raise_nothing(
+    lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch, next_step: Literal["reply", "revoked"]
+) -> None:
+    # Given a socket whose next submission is mid-authorization.
+    binding, manager, _execute = lifecycle
+    accept = accept_submissions(binding, monkeypatch)
+    session = await open_session(lifecycle, monkeypatch, heartbeat=False)
+    report = Mock()
+    monkeypatch.setattr(websocket, "report_exception", report)
+    agent_id = str(binding.agent_id)
+    ((socket, _, _),) = manager.active_connections[agent_id]
+    grant = (
+        UserRecord(id=binding.user_id, tenant_id=binding.tenant_id, display_name="Member"),
+        AgentRecord(id=binding.agent_id, creator_id=binding.user_id, name="Agent"),
+        "use",
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def reauthorize(_binding: chat_tickets.ChatTicketBinding) -> tuple[UserRecord, AgentRecord, str]:
+        entered.set()
+        await release.wait()
+        if next_step == "revoked":
+            raise HTTPException(403, "access revoked")
+        return grant
+
+    session.authorize.side_effect = reauthorize
+    session.browser.inbound.put_nowait(submission_frame())
+    async with asyncio.timeout(5):
+        await entered.wait()
+
+    # When eviction closes the socket before the handler answers that submission.
+    assert evict(manager, agent_id, socket)[-1]
+    await manager.drain_evictions()
+    release.set()
+    await session.finish()
+
+    # Then the handler ended without raising, sending, closing again or reporting an incident.
+    assert session.browser.closes == [websocket.EVICTION_CLOSE_CODE]
+    assert session.browser.delivered == ["connected"]
+    assert accept.await_count == (1 if next_step == "reply" else 0)
+    report.assert_not_called()
+    assert manager.active_connections[agent_id] == []
+
+
+@pytest.mark.parametrize("order", ["evict-then-disconnect", "disconnect-then-evict"])
+async def test_disconnect_and_eviction_are_idempotent_in_either_order(
+    lifecycle: Lifecycle,
+    monkeypatch: pytest.MonkeyPatch,
+    order: Literal["evict-then-disconnect", "disconnect-then-evict"],
+) -> None:
+    # Given a registered socket with Redis presence.
+    binding, manager, _execute = lifecycle
+    redis = FakeRedis(Clock())
+    monkeypatch.setattr(realtime, "get_redis", AsyncMock(return_value=redis))
+    closes: list[int] = []
+    socket = closable_socket(closes)
+    await socket.accept()
+    agent_id, session_id, user_id = str(binding.agent_id), str(binding.session_id), str(binding.user_id)
+    await manager.connect(agent_id, socket, session_id, user_id)
+
+    # When eviction and the handler's disconnect both happen, in either order, and disconnect runs once more.
+    match order:
+        case "evict-then-disconnect":
+            evictions = evict(manager, agent_id, socket)
+            await manager.disconnect(agent_id, socket)
+        case "disconnect-then-evict":
+            await manager.disconnect(agent_id, socket)
+            evictions = evict(manager, agent_id, socket)
+        case unreachable:
+            assert_never(unreachable)
+    await manager.drain_evictions()
+    await manager.disconnect(agent_id, socket)
+
+    # Then the socket was released once: no second close, no presence left, nobody reported viewing.
+    assert evictions[-1] is (order == "evict-then-disconnect")
+    assert closes == ([websocket.EVICTION_CLOSE_CODE] if order == "evict-then-disconnect" else [])
+    assert manager.active_connections[agent_id] == []
+    assert redis.sets.get(f"realtime:ws:agent:{agent_id}", set()) == set()
+    assert not redis.hashes
+    assert not await manager.is_user_viewing_session(agent_id, session_id, user_id)

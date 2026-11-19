@@ -18,6 +18,7 @@ from app.services import (
     openclaw_gateway_rpc as rpc,
     openclaw_gateway_stream as streaming,
 )
+from app.services.realtime_runtime.contracts import RoutingOutcome
 from app.services.shared_chat import shared_session_id
 from app.services.turn_timing import TurnTimeline
 from test_openclaw_gateway_coalescing import IngestProbe, delta_line
@@ -55,6 +56,7 @@ async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch,
         events.append(event)
         if event["type"] == "chunk" and event["content"] == "replacement":
             release.set()
+        return RoutingOutcome()
 
     @contextmanager
     def execute(_container, argv, *, stream, timeout):
@@ -287,6 +289,7 @@ async def test_configured_model_id_split_across_deltas_never_reaches_the_socket(
         events.append(event)
         if event["content"].endswith("ok."):
             delivered.set()
+        return RoutingOutcome()
 
     @contextmanager
     def execute(_container, _argv, *, stream, timeout):
@@ -328,6 +331,7 @@ async def test_dropped_delta_withholds_appends_until_a_snapshot_resynchronizes(m
     async def send(_agent_id, _conversation_id, event, *, user_id, send_timeout=None):
         assert send_timeout == delivery.CHUNK_SEND_TIMEOUT_SECONDS
         events.append((event["seq"], event["content"], event["replace"]))
+        return RoutingOutcome()
 
     monkeypatch.setattr(manager, "send_to_session", send)
     relay = streaming.DeltaRelay(message, None)
@@ -361,7 +365,7 @@ async def test_chunk_timing_counts_failed_publications_and_keeps_the_slowest(mon
             now += 0.25
             in_flight.set()
             await release.wait()
-            return
+            return RoutingOutcome()
         now += 0.75
         raise RuntimeError("socket closed")
 
@@ -383,7 +387,7 @@ async def test_chunk_timing_counts_failed_publications_and_keeps_the_slowest(mon
             await consumer
 
     assert sends == 2
-    assert (timeline.chunks_published, timeline.slowest_chunk_ms) == (2, 750)
+    assert (timeline.chunks_published, timeline.chunks_dropped, timeline.slowest_chunk_ms) == (2, 1, 750)
 
 
 async def test_chunk_timing_counts_a_publication_that_raised(monkeypatch):
@@ -402,4 +406,39 @@ async def test_chunk_timing_counts_a_publication_that_raised(monkeypatch):
     with pytest.raises(ExceptionGroup):
         await asyncio.wait_for(relay.publish(), 5)
 
-    assert timeline.chunks_published == 1
+    assert (timeline.chunks_published, timeline.chunks_dropped) == (1, 1)
+
+
+DROPPED_BY_ROUTING = {
+    "failed": RoutingOutcome(local_targets=2, delivered=1, failed=1),
+    "evicted": RoutingOutcome(local_targets=2, delivered=1, evicted=1),
+    "remote": RoutingOutcome(local_targets=1, delivered=1, remote_instances=2, remote_publish_errors=1),
+    "delivered": RoutingOutcome(local_targets=1, delivered=1, remote_instances=1),
+    "refused": RoutingOutcome(local_targets=1),
+    "unheard": RoutingOutcome(),
+}
+
+
+@pytest.mark.parametrize(
+    ("routing", "dropped"),
+    [("raised", 1), ("failed", 1), ("evicted", 1), ("remote", 1), ("delivered", 0), ("refused", 0), ("unheard", 0)],
+)
+async def test_chunk_timing_counts_lost_chunks_as_dropped_but_not_unheard_ones(monkeypatch, routing, dropped):
+    message = GatewayMessageRecord(uuid4(), uuid4(), "hello", conversation_id=str(uuid4()))
+    timeline = TurnTimeline(message.id, message.agent_id, None)
+    relay = streaming.DeltaRelay(message, timeline)
+
+    async def send(_agent_id, _conversation_id, _event, *, user_id, send_timeout=None):
+        if routing == "raised":
+            raise RuntimeError("routing failed")
+        return DROPPED_BY_ROUTING[routing]
+
+    monkeypatch.setattr(manager, "send_to_session", send)
+    relay.offer(delta_line(message, 0, "x"))
+    scheduled = asyncio.Event()
+    relay.loop.call_soon(scheduled.set)  # queues behind the put that `offer` scheduled
+    await asyncio.wait_for(scheduled.wait(), 5)
+    relay.finish()
+    await asyncio.wait_for(relay.publish(), 5)
+
+    assert (timeline.chunks_published, timeline.chunks_dropped) == (1, dropped)

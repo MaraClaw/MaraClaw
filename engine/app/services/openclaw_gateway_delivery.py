@@ -29,6 +29,7 @@ from app.services.channels.types import normalize_channel_type
 from app.services.gateway_report_wake import wake_gateway_report_relay
 from app.services.openclaw_gateway_stream import GatewayDelta
 from app.services.openclaw_transcript import ReplyMediaError, recover_media
+from app.services.realtime_runtime.contracts import RoutingOutcome
 from app.services.response_identity import response_guard
 from app.services.shared_chat import shared_session_id
 
@@ -230,8 +231,8 @@ async def publish_report(agent: AgentRecord, report: RecordedReport) -> None:
             logger.warning("[Gateway] Skipped done notification for disconnected user: {}", error)
 
 
-async def publish_chunk(message: GatewayMessageRecord, delta: GatewayDelta) -> None:
-    """Best-effort live delivery; socket failure never changes durable execution.
+async def publish_chunk(message: GatewayMessageRecord, delta: GatewayDelta) -> RoutingOutcome:
+    """Best-effort live delivery; socket failure never changes durable execution. Returns what routing did.
 
     Only each socket send is deadlined. Authorization and routing run to completion: cancelling them discards the
     positive authorization decision they are about to cache, so a deadline over the whole publication starves every
@@ -240,7 +241,7 @@ async def publish_chunk(message: GatewayMessageRecord, delta: GatewayDelta) -> N
     from app.api.websocket import manager
 
     try:
-        await manager.send_to_session(
+        return await manager.send_to_session(
             str(message.agent_id),
             message.conversation_id or "",
             {
@@ -259,3 +260,4 @@ async def publish_chunk(message: GatewayMessageRecord, delta: GatewayDelta) -> N
         )
     except Exception as error:
         logger.warning("[Gateway] Skipped chunk notification message={} error={}", message.id, type(error).__name__)
+        return RoutingOutcome(publication_failed=True)

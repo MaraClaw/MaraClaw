@@ -4,11 +4,13 @@ import asyncio
 import contextlib
 import time
 import uuid
+import weakref
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 import anyio
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.websockets import WebSocketState
 from pydantic import ValidationError
 from redis.exceptions import RedisError
 
@@ -52,6 +54,7 @@ from app.services.realtime_runtime.chat_authorization import (
     is_shared_target,
     read_shared_acl_version,
 )
+from app.services.realtime_runtime.contracts import RoutingOutcome
 from app.services.realtime_runtime.fanout import encode_event_text, fan_out
 from app.services.realtime_runtime.router import (
     DEFAULT_SEND_TIMEOUT_SECONDS,
@@ -72,6 +75,14 @@ _heartbeat_sleep = asyncio.sleep
 HEARTBEAT_INTERVAL_SECONDS = 10.0
 # Not 4001/4003: the client treats every other close as transient, reconnects with a fresh ticket and refetches history.
 RESUBSCRIBE_CLOSE_CODE = 1012
+# Consecutive send timeouts, with no successful send in between, that evict a socket: one slow chunk on a healthy
+# phone survives, a client that stopped reading stops costing every later event its send bound.
+STALLED_SEND_EVICTION_THRESHOLD = 3
+# Reconnectable like RESUBSCRIBE_CLOSE_CODE but distinct from it ("try again later"); never 4001/4003.
+EVICTION_CLOSE_CODE = 1013
+# Bounds each step of an eviction (presence removal, then the close): closing a peer that is not reading can block
+# just like the send did.
+EVICTION_CLOSE_TIMEOUT_SECONDS = DEFAULT_SEND_TIMEOUT_SECONDS
 
 
 def _json_object_payload(value: object) -> dict[str, object]:
@@ -89,11 +100,21 @@ async def _send_chat_event(websocket: WebSocket, message: RealtimeMessage) -> No
 
 
 class ConnectionManager:
-    """Manage WebSocket connections per agent."""
+    """Manage WebSocket connections per agent and evict the ones whose sends keep timing out.
+
+    The manager is the ``SendObserver`` of both delivery paths: the router reports each bounded send back to it and
+    holds no socket state itself.
+    """
 
     def __init__(self):
         # agent_id_str -> list of (WebSocket, session_id_str | None, user_id_str | None)
         self.active_connections: dict[str, list[WebSocketConnection]] = {}
+        # Consecutive send timeouts of listed sockets; a successful send, eviction or disconnect drops the entry.
+        self._send_timeouts: dict[WebSocket, int] = {}
+        self._evicted: weakref.WeakSet[WebSocket] = weakref.WeakSet()
+        # Presence ids of evicted sockets until their Redis removal finished; this instance's presence reads skip them.
+        self._withdrawn_presence: set[str] = set()
+        self._eviction_tasks: set[asyncio.Task[None]] = set()
 
     async def connect(
         self, agent_id: str, websocket: WebSocket, session_id: str | None = None, user_id: str | None = None
@@ -109,15 +130,90 @@ class ConnectionManager:
         self.active_connections[agent_id].append((websocket, session_id, user_id))
 
     async def disconnect(self, agent_id: str, websocket: WebSocket):
-        if agent_id in self.active_connections:
-            self.active_connections[agent_id] = [
-                (ws, sid, uid) for ws, sid, uid in self.active_connections[agent_id] if ws != websocket
-            ]
+        """Release a socket. Idempotent with eviction in either order: an evicted socket carries no presence id, and a
+        socket that is no longer listed cannot be evicted."""
+        self._remove_local(agent_id, websocket)
+        _ = self._send_timeouts.pop(websocket, None)
         try:
             await realtime_router.unregister_connection(agent_id=agent_id, websocket=websocket)
         except RedisError as error:
             report_exception(error, source="websocket", operation="disconnect")
             logger.warning("[WS] Failed to unregister connection for agent {}: {}", agent_id, error)
+
+    def _remove_local(self, agent_id: str, websocket: WebSocket) -> None:
+        if agent_id in self.active_connections:
+            self.active_connections[agent_id] = [
+                (ws, sid, uid) for ws, sid, uid in self.active_connections[agent_id] if ws != websocket
+            ]
+
+    def is_live(self, websocket: WebSocket) -> bool:
+        return websocket not in self._evicted
+
+    def sent(self, websocket: WebSocket) -> None:
+        if self._send_timeouts:  # empty while every socket keeps up, so a healthy send costs no lookup
+            _ = self._send_timeouts.pop(websocket, None)
+
+    def timed_out(self, agent_id: str, websocket: WebSocket) -> bool:
+        """Count a send that hit its bound and evict on the ``STALLED_SEND_EVICTION_THRESHOLD``-th in a row.
+
+        A socket already evicted, or no longer listed because its handler disconnected, is not counted.
+        """
+        if websocket in self._evicted or all(ws is not websocket for ws, _, _ in self._local_connections(agent_id)):
+            return False
+        timeouts = self._send_timeouts.get(websocket, 0) + 1
+        if timeouts < STALLED_SEND_EVICTION_THRESHOLD:
+            self._send_timeouts[websocket] = timeouts
+            return False
+        self._evict(agent_id, websocket)
+        return True
+
+    def _evict(self, agent_id: str, websocket: WebSocket) -> None:
+        """Withdraw the socket from delivery and presence without awaiting, then close it in an owned, bounded task."""
+        self._evicted.add(websocket)
+        _ = self._send_timeouts.pop(websocket, None)
+        self._remove_local(agent_id, websocket)
+        connection_id_raw = getattr(websocket.state, "realtime_connection_id", None)
+        connection_id = connection_id_raw if isinstance(connection_id_raw, str) and connection_id_raw else None
+        # The handler's presence refresh rewrites expired presence under this id; cleared, it has nothing to rewrite.
+        websocket.state.realtime_connection_id = None
+        websocket.state.realtime_presence = None
+        if connection_id is not None:
+            self._withdrawn_presence.add(connection_id)
+        task = asyncio.create_task(self._close_evicted(agent_id, websocket, connection_id), name="ws-eviction")
+        self._eviction_tasks.add(task)
+        task.add_done_callback(self._eviction_tasks.discard)
+        logger.warning(
+            "[WS] Evicted chat socket for agent {} after {} consecutive send timeouts",
+            agent_id,
+            STALLED_SEND_EVICTION_THRESHOLD,
+        )
+
+    async def _close_evicted(self, agent_id: str, websocket: WebSocket, connection_id: str | None) -> None:
+        """Remove the evicted socket's Redis presence, then close it with ``EVICTION_CLOSE_CODE``; each step is bounded."""
+        if connection_id is not None:
+            try:
+                async with asyncio.timeout(EVICTION_CLOSE_TIMEOUT_SECONDS):
+                    await realtime_router.unregister_connection_id(agent_id=agent_id, connection_id=connection_id)
+            except Exception as error:
+                report_exception(error, source="websocket", operation="eviction-presence")
+                logger.warning(
+                    "[WS] Failed to remove presence of evicted socket for agent {}: {}", agent_id, type(error).__name__
+                )
+            finally:
+                # A record left behind expires with its TTL: the refresh can no longer find its id.
+                self._withdrawn_presence.discard(connection_id)
+        if WebSocketState.DISCONNECTED in (websocket.application_state, websocket.client_state):
+            return
+        try:
+            async with asyncio.timeout(EVICTION_CLOSE_TIMEOUT_SECONDS):
+                await websocket.close(code=EVICTION_CLOSE_CODE)
+        except Exception as error:
+            logger.warning("[WS] Failed to close evicted socket for agent {}: {}", agent_id, type(error).__name__)
+
+    async def drain_evictions(self) -> None:
+        """Wait for the eviction closes in flight; every step of one is bounded, so this returns within those bounds."""
+        while self._eviction_tasks:
+            _ = await asyncio.gather(*self._eviction_tasks, return_exceptions=True)
 
     async def refresh_presence(self, agent_id: str, websocket: WebSocket) -> None:
         try:
@@ -141,7 +237,8 @@ class ConnectionManager:
 
         Sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``. Every send is bounded: chunks get the
         same bound the publisher uses and other events the default or terminal bound, so a stalled receiver delays
-        the subscriber loop by at most that bound. Authorization stays outside the bound.
+        the subscriber loop by at most that bound, and only until ``STALLED_SEND_EVICTION_THRESHOLD`` timeouts in a
+        row evict it. Authorization stays outside the bound.
         """
         targets = [
             (ws, sid)
@@ -166,12 +263,31 @@ class ConnectionManager:
             try:
                 if not await authorize_chat_delivery(ws, agent_id, sid, acl_version=acl_version):
                     return False
-                async with asyncio.timeout(send_timeout):
-                    await ws.send_text(text)
             except Exception as error:
                 report_exception(error, source="websocket", operation="pubsub-delivery")
                 logger.warning(f"[WS] Failed to send message to connected client: {error}")
                 return False
+            # Authorization may have awaited while the publisher path evicted this socket.
+            if not self.is_live(ws):
+                return False
+            try:
+                async with asyncio.timeout(send_timeout):
+                    await ws.send_text(text)
+            except TimeoutError as error:
+                report_exception(error, source="websocket", operation="pubsub-delivery")
+                evicted = self.timed_out(agent_id, ws)
+                logger.warning(
+                    "[WS] Send to connected client timed out after {}s agent={} evicted={}",
+                    send_timeout,
+                    agent_id,
+                    evicted,
+                )
+                return False
+            except Exception as error:
+                report_exception(error, source="websocket", operation="pubsub-delivery")
+                logger.warning(f"[WS] Failed to send message to connected client: {error}")
+                return False
+            self.sent(ws)
             return True
 
         _ = await fan_out(targets, deliver)
@@ -192,11 +308,12 @@ class ConnectionManager:
 
         _ = await fan_out(sockets, close)
 
-    async def send_message(self, agent_id: str, message: RealtimeMessage):
-        await realtime_router.route_message(
+    async def send_message(self, agent_id: str, message: RealtimeMessage) -> RoutingOutcome:
+        return await realtime_router.route_message(
             agent_id=agent_id,
             message={**serialize_chat_server_event(message)},
             local_connections=self._local_connections(agent_id),
+            observer=self,
         )
 
     async def send_to_session(
@@ -206,33 +323,35 @@ class ConnectionManager:
         message: RealtimeMessage,
         user_id: str | None = None,
         send_timeout: float | None = None,
-    ) -> None:
+    ) -> RoutingOutcome:
         """Send only to this session, optionally restricting private-session recipients by user.
 
         ``send_timeout`` bounds each local socket send, nothing else (see ``RealtimeRouter.route_message``).
         """
         wanted = session_id.strip().lower()
-        await realtime_router.route_message(
+        return await realtime_router.route_message(
             agent_id=agent_id,
             message={**serialize_chat_server_event(message)},
             local_connections=self._local_connections(agent_id),
             session_id=wanted,
             user_id=None if is_shared_target(agent_id, wanted) else user_id,
             send_timeout=send_timeout,
+            observer=self,
         )
 
-    async def send_to_user(self, agent_id: str, user_id: str, message: RealtimeMessage):
+    async def send_to_user(self, agent_id: str, user_id: str, message: RealtimeMessage) -> RoutingOutcome:
         """Send message to all live WebSocket sessions of a given platform user for an agent."""
-        await realtime_router.route_message(
+        return await realtime_router.route_message(
             agent_id=agent_id,
             message={**serialize_chat_server_event(message)},
             local_connections=self._local_connections(agent_id),
             user_id=user_id,
+            observer=self,
         )
 
     async def get_active_session_ids(self, agent_id: str) -> list[str]:
         """Return distinct session IDs for all active WS connections of an agent."""
-        return await realtime_router.get_active_session_ids(agent_id)
+        return await realtime_router.get_active_session_ids(agent_id, hidden=self._withdrawn_presence)
 
     async def is_user_viewing_session(self, agent_id: str, session_id: str, user_id: str) -> bool:
         """Return True if the given platform user currently has this exact session open."""
@@ -240,6 +359,7 @@ class ConnectionManager:
             agent_id=agent_id,
             session_id=session_id,
             user_id=user_id,
+            hidden=self._withdrawn_presence,
         )
 
 
@@ -345,17 +465,20 @@ class WebSocketChatHandler:
                         return
                     await self.message_loop()
             except TimeoutError:
-                await self.websocket.close(code=4001)
+                await self._close(4001)
             except HTTPException as exc:
                 code = {401: 4001, 403: 4003, 404: 4003, 503: 1011}.get(exc.status_code, 4002)
-                await _send_chat_event(self.websocket, {"type": ChatEventType.ERROR, "content": exc.detail})
-                await self.websocket.close(code=code)
+                await self._send_error({"type": ChatEventType.ERROR, "content": exc.detail})
+                await self._close(code)
             except WebSocketDisconnect:
                 pass
             except Exception as error:
-                report_exception(error, source="websocket", operation="chat-lifecycle")
-                logger.exception("[WS] Unexpected chat error")
-                await self.websocket.close(code=1011)
+                if manager.is_live(self.websocket):
+                    report_exception(error, source="websocket", operation="chat-lifecycle")
+                    logger.exception("[WS] Unexpected chat error")
+                else:
+                    logger.info("[WS] Evicted chat socket ended: {}", type(error).__name__)
+                await self._close(1011)
         except WebSocketDisconnect:
             pass
         finally:
@@ -363,6 +486,25 @@ class WebSocketChatHandler:
                 await self._stop_heartbeat()
                 await self._stop_presence_refresh()
                 await manager.disconnect(str(self.agent_id), self.websocket)
+
+    def _ended(self) -> bool:
+        """Eviction or either side already closed the socket, so another send or close could only raise."""
+        return not manager.is_live(self.websocket) or WebSocketState.DISCONNECTED in (
+            self.websocket.application_state,
+            self.websocket.client_state,
+        )
+
+    async def _close(self, code: int) -> None:
+        if self._ended():
+            return
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+            await self.websocket.close(code=code)
+
+    async def _send_error(self, message: RealtimeMessage) -> None:
+        if self._ended():
+            return
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+            await _send_chat_event(self.websocket, message)
 
     async def _refresh_presence(self) -> None:
         """Keep Redis presence alive; the TTL would otherwise end cross-instance delivery."""
@@ -475,8 +617,8 @@ class WebSocketChatHandler:
                 self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
                 await chat_tickets.authorized_session(self.binding, self.user, self.agent)
             except HTTPException as exc:
-                await _send_chat_event(self.websocket, {"type": ChatEventType.ERROR, "content": exc.detail})
-                await self.websocket.close(code=4001 if exc.status_code == 401 else 4003)
+                await self._send_error({"type": ChatEventType.ERROR, "content": exc.detail})
+                await self._close(4001 if exc.status_code == 401 else 4003)
                 return
 
             if not is_onboarding_trigger:
@@ -626,8 +768,8 @@ class WebSocketChatHandler:
         except QuotaExceeded as exc:
             rejection.update(reason="quota_exceeded", content=exc.message)
         except HTTPException as exc:
-            await _send_chat_event(self.websocket, {"type": ChatEventType.ERROR, "content": exc.detail})
-            await self.websocket.close(code=4001 if exc.status_code == 401 else 4003)
+            await self._send_error({"type": ChatEventType.ERROR, "content": exc.detail})
+            await self._close(4001 if exc.status_code == 401 else 4003)
             return False
         except Exception as error:
             report_exception(error, source="websocket", operation="submission-turn")
