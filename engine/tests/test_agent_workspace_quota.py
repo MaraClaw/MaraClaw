@@ -102,6 +102,53 @@ def test_walk_skips_a_directory_that_vanishes_or_cannot_be_read(
     assert quota.measure_directory_bytes(tmp_path) == 11
 
 
+class Ticks:
+    """A monotonic clock that moves one second on every reading."""
+
+    def __init__(self) -> None:
+        self.now: float = 0.0
+
+    def __call__(self) -> float:
+        reading = self.now
+        self.now += 1.0
+        return reading
+
+
+def test_a_walk_inside_its_deadline_is_unchanged(tmp_path: Path):
+    _ = _write(tmp_path / "a.txt", 10)
+    _ = _write(tmp_path / "deep" / "b.bin", 20)
+
+    assert quota.measure_directory_bytes(tmp_path, 1000.0, clock=Ticks()) == 30
+
+
+def test_a_walk_past_its_deadline_raises_instead_of_returning_a_partial_total(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for number in range(5):
+        _ = _write(tmp_path / f"dir{number}" / "file.bin", 10)
+    scanned: list[str] = []
+    real_scandir = os.scandir
+
+    def counting(path: str | os.PathLike[str]) -> object:
+        scanned.append(os.fspath(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(quota.os, "scandir", counting)
+
+    with pytest.raises(quota.WorkspaceMeasurementTimeoutError):
+        _ = quota.measure_directory_bytes(tmp_path, 3.0, clock=Ticks())
+
+    assert len(scanned) < 6
+
+
+def test_one_huge_directory_is_checked_against_the_deadline_while_it_is_listed(tmp_path: Path):
+    for number in range(5 * quota.ENTRIES_PER_DEADLINE_CHECK):
+        _ = _write(tmp_path / f"file{number}.bin", 1)
+
+    with pytest.raises(quota.WorkspaceMeasurementTimeoutError):
+        _ = quota.measure_directory_bytes(tmp_path, 3.0, clock=Ticks())
+
+
 def _client() -> DockerClient:
     return cast("DockerClient", SimpleNamespace(docker_cmd=["docker", "--host", "unix:///x.sock"]))
 
@@ -195,6 +242,7 @@ class World:
     dir_bytes: int = 0
     layer_bytes: int | None = 0
     layer_error: Exception | None = None
+    walk_error: Exception | None = None
     notify: AsyncMock = field(default_factory=AsyncMock)
     tier: AsyncMock = field(default_factory=lambda: AsyncMock(return_value=OrganizationPlanId.PRO))
     pressure: list[tuple[AgentRecord, OrganizationPlanId, int, int, int]] = field(default_factory=list)
@@ -244,6 +292,8 @@ def world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> World:
     def walk(path: Path) -> int:
         state.walks.append(path)
         state.connections_during_walk.append(state.open_connections)
+        if state.walk_error is not None:
+            raise state.walk_error
         return state.dir_bytes
 
     def inspect(_client: object, container_id: str, _timeout: float) -> int | None:
@@ -767,6 +817,47 @@ async def test_a_failed_re_measure_after_recreation_never_raises(world: World, m
     monkeypatch.setattr(quota, "measure_agent", AsyncMock(side_effect=OSError("disk")))
 
     await quota.remeasure_after_recreation(_agent())
+
+
+@pytest.mark.parametrize("stored", [True, False], ids=["stored-row", "no-row"])
+async def test_a_walk_that_passes_its_deadline_records_nothing(
+    world: World, monkeypatch: pytest.MonkeyPatch, stored: bool
+):
+    # Given a walk that ran out of time after counting more than the allowance.
+    warnings: list[tuple[object, ...]] = []
+    monkeypatch.setattr(quota, "logger", SimpleNamespace(warning=lambda *args: warnings.append(args)))
+    record = AsyncMock()
+    monkeypatch.setattr(quota.agent_workspace_usage_dao, "record_measurement", record)
+    agent = _agent()
+    previous = AgentWorkspaceUsageRecord(agent.id, GIB, GIB // 2, PRO_LIMIT)
+    if stored:
+        world.rows[agent.id] = previous
+    world.dir_bytes = 4 * GIB
+    world.walk_error = quota.WorkspaceMeasurementTimeoutError("deadline")
+    # When the agent is measured.
+    await quota.measure_agent(agent)
+    # Then no size, usage row, pressure sample, alert or layer read came of it, and the stored row is as it was.
+    record.assert_not_awaited()
+    assert world.rows == ({agent.id: previous} if stored else {})
+    assert world.pressure == []
+    assert world.inspects == []
+    world.notify.assert_not_awaited()
+    assert len(warnings) == 1
+    assert agent.id in warnings[0]
+
+
+async def test_a_re_measure_whose_walk_passes_its_deadline_never_raises_and_keeps_the_block(world: World):
+    agent = _agent(container="new-guest")
+    blocked = _over(agent)
+    world.rows[agent.id] = blocked
+    world.walk_error = quota.WorkspaceMeasurementTimeoutError("deadline")
+
+    await quota.remeasure_after_recreation(agent)
+    await quota.refresh_workspace_usage_after_delete(agent)
+
+    assert world.rows == {agent.id: blocked}
+    assert world.pressure == []
+    world.notify.assert_not_awaited()
 
 
 async def test_the_quota_handler_is_registered_and_answers_507_with_the_allowance():

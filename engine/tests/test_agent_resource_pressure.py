@@ -421,6 +421,85 @@ async def test_a_failed_inspect_or_stats_leaves_the_episodes_alone_but_still_rec
     assert world.warnings.messages[-1] == "[ResourcePressure] Docker stats failed; guest sampling skipped"
 
 
+@pytest.mark.parametrize("failing", ["inspect", "stats"])
+async def test_once_docker_gives_no_answer_the_rest_of_the_pass_skips_both_docker_calls_but_not_the_database_work(
+    world: World, failing: str
+):
+    # Given a pass whose first page loses its Docker reading, however fast the refusal came back.
+    reads = pressure.GuestReads()
+    first, later, gone, stored = _agent(), _agent(), _agent(container=False), _agent(container=False)
+    _ = _guest(world, first, memory_usage=100)
+    _ = _guest(world, later, memory_usage=950)
+    world.episodes.rows.append(
+        Episode(gone.tenant_id or uuid4(), gone.id, PressureResource.MEMORY, OrganizationPlanId.PRO, 1000, 950, 0.95)
+    )
+    limit = int(plan_for(OrganizationPlanId.PRO).storage_limit_bytes)
+    world.charged[stored.id] = int(limit * 0.95)
+    world.guests.inspect_down, world.guests.stats_down = failing == "inspect", failing == "stats"
+    await pressure.sample_page([first], reads)
+    asked = (len(world.guests.inspect_calls), len(world.guests.stats_calls))
+    # When the daemon answers again but a later page of the same pass is sampled.
+    world.guests.inspect_down = world.guests.stats_down = False
+    await pressure.sample_page([later, gone, stored], reads)
+    # Then neither Docker call was repeated, while the gone close and the storage sampling still ran.
+    assert reads.unavailable
+    assert (len(world.guests.inspect_calls), len(world.guests.stats_calls)) == asked
+    assert [row.resource for row in world.episodes.rows if row.agent_id == later.id] == []
+    (closed,) = [row for row in world.episodes.rows if row.agent_id == gone.id]
+    assert (closed.ended, closed.closed_reason) == (True, "guest_not_running")
+    assert _only_for(world, stored.id, PressureResource.MANAGED_STORAGE).peak_value == int(limit * 0.95)
+
+
+async def test_a_skipped_reading_never_closes_an_open_episode(world: World):
+    # Given a latched pass and an agent whose guest has stopped, which a real inspection would close as not running.
+    agent = _agent()
+    _ = _guest(world, agent, running=False)
+    world.episodes.rows.append(
+        Episode(agent.tenant_id or uuid4(), agent.id, PressureResource.MEMORY, OrganizationPlanId.PRO, 1000, 950, 0.95)
+    )
+
+    await pressure.sample_page([agent], pressure.GuestReads(unavailable=True))
+
+    # Then the episode is untouched: no empty inspection stood in for the missing reading.
+    assert [(row.ended, row.closed_reason) for row in world.episodes.rows] == [(False, None)]
+    assert world.episodes.close_calls == []
+    assert world.guests.inspect_calls == []
+
+
+async def test_a_latched_pass_logs_the_failed_reading_once(world: World):
+    reads = pressure.GuestReads()
+    agents = [_agent() for _ in range(3)]
+    for agent in agents:
+        _ = _guest(world, agent)
+    world.guests.inspect_down = True
+
+    for agent in agents:
+        await pressure.sample_page([agent], reads)
+
+    assert world.warnings.messages == ["[ResourcePressure] Docker inspect failed; guest sampling skipped"]
+    assert len(world.guests.inspect_calls) == 1
+
+
+async def test_the_latch_belongs_to_one_pass(world: World):
+    agent = _agent()
+    _ = _guest(world, agent, memory_usage=950)
+    world.guests.inspect_down = True
+    latched = pressure.GuestReads()
+    await pressure.sample_page([agent], latched)
+    world.guests.inspect_down = False
+
+    await pressure.sample_page([agent], latched)
+    assert world.episodes.rows == []
+
+    await pressure.sample_page([agent], pressure.GuestReads())
+    assert _only(world, PressureResource.MEMORY).peak_value == 950
+
+    world.episodes.rows.clear()
+    await pressure.sample_page([agent])
+    assert len(world.episodes.rows) == 1
+    assert len(world.guests.inspect_calls) == 3
+
+
 async def test_a_page_costs_one_inspect_and_one_stats_batch_and_stats_covers_only_running_guests(world: World):
     running = [_agent() for _ in range(3)]
     stopped = _agent()

@@ -41,6 +41,17 @@ GUEST_RESOURCES: Final = (PressureResource.MEMORY, PressureResource.CPU)
 _MILLICPUS_PER_CPU_PERCENT: Final = 10
 
 
+@dataclass(slots=True)
+class GuestReads:
+    """The Docker reads of one worker pass: once one gets no answer, the rest of the pass stops asking Docker.
+
+    A hung daemon would otherwise cost every later page a full ``DOCKER_TIMEOUT_SECONDS`` wait per call. Skipping a
+    reading is not an empty reading: it never closes an episode. The latch lasts one pass; the next pass asks again.
+    """
+
+    unavailable: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class PressureSample:
     """One reading: ``value`` against ``limit_value`` in the resource's unit (bytes; millicpus for CPU)."""
@@ -183,9 +194,15 @@ def _guest_samples(tier: OrganizationPlanId, inspection: GuestInspection, readin
 
 
 async def _sample_guests(
-    governed: Sequence[tuple[AgentRecord, OrganizationPlanId]], open_by_agent: dict[UUID, list[OpenEpisode]]
+    governed: Sequence[tuple[AgentRecord, OrganizationPlanId]],
+    open_by_agent: dict[UUID, list[OpenEpisode]],
+    reads: GuestReads,
 ) -> None:
-    """Memory, CPU and OOM readings for the page: one ``inspect`` and one ``stats`` batch."""
+    """Memory, CPU and OOM readings for the page: one ``inspect`` and one ``stats`` batch.
+
+    The close of agents with no guest comes from the database and always runs. When an earlier reading of the pass
+    got no answer, the page makes no Docker call and closes nothing for its guests.
+    """
     with_guest = [(agent, tier, _container_id(agent)) for agent, tier in governed if _container_id(agent) != ""]
     gone = [
         agent.id
@@ -194,7 +211,7 @@ async def _sample_guests(
     ]
     if gone:
         _ = await agent_resource_pressure_episode_dao.close_open(gone, GUEST_RESOURCES, reason="guest_not_running")
-    if not with_guest:
+    if not with_guest or reads.unavailable:
         return
     client = agent_manager.reacquire_docker_client()
     if client is None:
@@ -208,6 +225,7 @@ async def _sample_guests(
         abandon_on_cancel=True,
     )
     if inspected is None:
+        reads.unavailable = True
         logger.warning("[ResourcePressure] Docker inspect failed; guest sampling skipped")
         return
     running: list[tuple[AgentRecord, OrganizationPlanId, GuestInspection]] = []
@@ -236,6 +254,7 @@ async def _sample_guests(
         abandon_on_cancel=True,
     )
     if readings is None:
+        reads.unavailable = True
         logger.warning("[ResourcePressure] Docker stats failed; guest sampling skipped")
         return
     for agent, tier, inspection in running:
@@ -267,8 +286,11 @@ async def _sample_storage(
         await _attempt("record storage sample", observe_sample(agent, tier, sample, open_episodes=opened), agent.id)
 
 
-async def sample_page(agents: Sequence[AgentRecord]) -> None:
+async def sample_page(agents: Sequence[AgentRecord], reads: GuestReads | None = None) -> None:
     """Sample one page of candidate agents: guests (memory, CPU, OOM) and managed storage.
+
+    ``reads`` is the worker pass's shared Docker state: every page of a pass takes the same one, and a call without
+    it is a pass of its own.
 
     System agents are not sampled (their guests use the global limits, not a tier's). The others are governed by their
     organization's tier, read for the whole page in one batch; an organization deleted since the page was read has
@@ -285,5 +307,5 @@ async def sample_page(agents: Sequence[AgentRecord]) -> None:
     open_by_agent: dict[UUID, list[OpenEpisode]] = defaultdict(list)
     for episode in await agent_resource_pressure_episode_dao.open_for_agents([agent.id for agent, _ in governed]):
         open_by_agent[episode.agent_id].append(episode)
-    await _attempt("sample guests", _sample_guests(governed, open_by_agent))
+    await _attempt("sample guests", _sample_guests(governed, open_by_agent, GuestReads() if reads is None else reads))
     await _attempt("sample storage", _sample_storage(governed, open_by_agent))
