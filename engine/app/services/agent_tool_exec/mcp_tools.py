@@ -13,7 +13,7 @@ async def _execute_mcp_tool(tool_name: str, arguments: ToolArguments, agent_id: 
     from app.services import agent_tools
 
     try:
-        from app.services.mcp_client import MCPClient
+        from app.services.mcp_client import MCPClient, mcp_session_pool
 
         # Primary lookup: maraclaw-prefixed name (e.g.
         # mcp_shibui_finance_unlock_financial_analysis).
@@ -67,8 +67,11 @@ async def _execute_mcp_tool(tool_name: str, arguments: ToolArguments, agent_id: 
                 direct_api_key = await get_atlassian_api_key_for_agent(agent_id)
             except Exception:
                 _ = None
-        client = MCPClient(mcp_url, api_key=direct_api_key)
-        return await client.call_tool(mcp_name, arguments)
+        if agent_id is None:
+            return await MCPClient(mcp_url, api_key=direct_api_key).call_tool(mcp_name, arguments)
+        return await mcp_session_pool.call_tool(
+            agent_id=agent_id, server_url=mcp_url, api_key=direct_api_key, tool_name=mcp_name, arguments=arguments
+        )
 
     except OutboundPolicyError:
         logger.warning("[MCP] Tool execution blocked by outbound destination policy")

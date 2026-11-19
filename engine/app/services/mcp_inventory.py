@@ -7,6 +7,9 @@ from pydantic import ValidationError
 from app.core.json_types import JsonObject, is_json_object
 from app.schemas.tool_management import MCPDiscoveredTool
 
+MCP_INVENTORY_MAX_PAGES = 50
+MCP_INVENTORY_MAX_TOOLS = 1_000
+
 
 class MCPInventoryError(ValueError):
     """A server returned an invalid or non-progressing inventory."""
@@ -35,12 +38,15 @@ def inventory_page(data: JsonObject) -> tuple[list[MCPDiscoveredTool], str | Non
 
 
 async def complete_inventory(request: Callable[[str, JsonObject], Awaitable[JsonObject]]) -> list[JsonObject]:
+    """Follow every cursor, failing closed past ``MCP_INVENTORY_MAX_PAGES`` pages or ``MCP_INVENTORY_MAX_TOOLS`` tools."""
     inventory: list[JsonObject] = []
     names: set[str] = set()
     cursors: set[str] = set()
     params: JsonObject = {}
-    while True:
+    for _ in range(MCP_INVENTORY_MAX_PAGES):
         page, cursor = inventory_page(await request("tools/list", params))
+        if len(inventory) + len(page) > MCP_INVENTORY_MAX_TOOLS:
+            raise MCPInventoryError("MCP inventory exceeds the tool limit")
         for tool in page:
             if tool.name in names:
                 raise MCPInventoryError("Duplicate MCP tool identity")
@@ -52,3 +58,4 @@ async def complete_inventory(request: Callable[[str, JsonObject], Awaitable[Json
             raise MCPInventoryError("Non-progressing MCP inventory cursor")
         cursors.add(cursor)
         params = {"cursor": cursor}
+    raise MCPInventoryError("MCP inventory exceeds the page limit")

@@ -7,8 +7,19 @@ import anyio
 import httpx
 import pytest
 
-from app.core.json_types import JsonObject
-from app.services.mcp_client import MCPClient, MCPClientError
+from app.core.json_types import JsonObject, JsonValue
+from app.services.mcp_client import (
+    MCP_MAX_TOOL_TEXT_CHARS,
+    MCP_TOOL_TEXT_TRUNCATION_MARKER,
+    MCPClient,
+    MCPClientError,
+)
+from app.services.mcp_inventory import (
+    MCP_INVENTORY_MAX_PAGES,
+    MCP_INVENTORY_MAX_TOOLS,
+    MCPInventoryError,
+    complete_inventory,
+)
 from test_mcp_outbound_policy import install_wire
 
 
@@ -143,3 +154,83 @@ async def test_sse_pagination_failure_and_cancellation_close_the_stream(
     with pytest.raises(anyio.get_cancelled_exc_class() if cancel else MCPClientError):
         await client.list_tools()
     assert closed == [True]
+
+
+def tools_page(first: int, count: int, cursor: str | None) -> JsonObject:
+    tools: list[JsonValue] = [{"name": f"tool-{index}"} for index in range(first, first + count)]
+    result: JsonObject = {"tools": tools}
+    if cursor is not None:
+        result["nextCursor"] = cursor
+    return {"result": result}
+
+
+def paged(sizes: list[int], *, last_cursor: str | None = None) -> list[JsonObject]:
+    pages: list[JsonObject] = []
+    first = 0
+    for number, size in enumerate(sizes):
+        cursor = f"after-{number}" if number + 1 < len(sizes) else last_cursor
+        pages.append(tools_page(first, size, cursor))
+        first += size
+    return pages
+
+
+async def test_inventory_accepts_exactly_the_page_and_item_limits() -> None:
+    sizes = [MCP_INVENTORY_MAX_TOOLS - MCP_INVENTORY_MAX_PAGES + 1] + [1] * (MCP_INVENTORY_MAX_PAGES - 1)
+    request = AsyncMock(side_effect=paged(sizes))
+
+    inventory = await complete_inventory(request)
+
+    assert len(inventory) == MCP_INVENTORY_MAX_TOOLS
+    assert request.await_count == MCP_INVENTORY_MAX_PAGES
+
+
+async def test_inventory_still_paging_after_the_page_limit_fails_closed() -> None:
+    # Given: every page, the last allowed one included, points at another page.
+    request = AsyncMock(side_effect=paged([1] * MCP_INVENTORY_MAX_PAGES, last_cursor="more"))
+
+    # When / Then: the walk stops at the limit and raises instead of returning the pages it read.
+    with pytest.raises(MCPInventoryError):
+        await complete_inventory(request)
+    assert request.await_count == MCP_INVENTORY_MAX_PAGES
+
+
+@pytest.mark.parametrize(
+    "sizes",
+    [[MCP_INVENTORY_MAX_TOOLS + 1], [MCP_INVENTORY_MAX_TOOLS, 1], [MCP_INVENTORY_MAX_TOOLS - 1, 2]],
+    ids=["one-page", "exact-then-one", "crossing-page"],
+)
+async def test_inventory_over_the_item_limit_fails_closed(sizes: list[int]) -> None:
+    request = AsyncMock(side_effect=paged(sizes))
+
+    with pytest.raises(MCPInventoryError):
+        await complete_inventory(request)
+    assert request.await_count == len(sizes)
+
+
+async def test_discovery_over_the_page_limit_returns_no_partial_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = AsyncMock(side_effect=paged([1] * (MCP_INVENTORY_MAX_PAGES + 1)))
+    monkeypatch.setattr(MCPClient, "_detect_and_request", request)
+
+    with pytest.raises(MCPClientError, match="MCP discovery failed"):
+        await MCPClient("https://mcp.example.com").list_tools()
+    assert request.await_count == MCP_INVENTORY_MAX_PAGES
+
+
+@pytest.mark.parametrize("extra", [0, 1, 5_000])
+async def test_joined_tool_text_is_capped_with_a_truncation_marker(monkeypatch: pytest.MonkeyPatch, extra: int) -> None:
+    # Given: two text blocks whose joined text is the cap plus ``extra`` characters.
+    first = "a" * 60_000
+    second = "b" * (MCP_MAX_TOOL_TEXT_CHARS - len(first) - 1 + extra)
+    blocks: list[JsonValue] = [{"type": "text", "text": first}, {"type": "text", "text": second}]
+    request = AsyncMock(return_value={"result": {"content": blocks}})
+    monkeypatch.setattr(MCPClient, "_detect_and_request", request)
+
+    # When
+    result = await MCPClient("https://mcp.example.com").call_tool("lookup", {})
+
+    # Then: text within the cap is untouched; longer text keeps its first cap characters plus the marker line.
+    joined = f"{first}\n{second}"
+    if extra == 0:
+        assert result == joined
+    else:
+        assert result == f"{joined[:MCP_MAX_TOOL_TEXT_CHARS]}\n{MCP_TOOL_TEXT_TRUNCATION_MARKER}"
