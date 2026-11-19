@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from app.core.domain.agents import AgentType
 from app.core.row_memo import memo_drop
+from app.dao.agent_start_dao import agent_start_dao
 from app.dao.base import BaseDAO
 from app.records.agent_setup import AgentSetupRecord, AgentSetupStatus
 
@@ -104,7 +105,9 @@ class AgentSetupDAO(BaseDAO[AgentSetupRecord]):
 
     async def finish(self, claim: AgentSetupRecord, failure_code: str | None = None) -> bool:
         async with self.session() as db:
-            _ = await db.fetchone("SELECT id FROM agents WHERE id = %(id)s FOR UPDATE", {"id": claim.agent_id})
+            agent = await db.fetchone(
+                "SELECT status, container_id FROM agents WHERE id = %(id)s FOR UPDATE", {"id": claim.agent_id}
+            )
             row = await db.fetchone(
                 """UPDATE agent_setups SET state = %(state)s, failure_code = %(failure)s,
                     claim_token = NULL, lease_until = NULL,
@@ -131,6 +134,9 @@ class AgentSetupDAO(BaseDAO[AgentSetupRecord]):
                     WHERE id = %(id)s""",
                     {"id": claim.agent_id},
                 )
+                # The first start is queued in this transaction, after setup_pending clears (eligibility requires it).
+                if agent is not None and agent["status"] == "creating" and agent["container_id"] is None:
+                    _ = await agent_start_dao.enqueue_if_eligible(db, claim.agent_id)
             memo_drop("agent", claim.agent_id)
             return True
 

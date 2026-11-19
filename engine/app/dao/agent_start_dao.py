@@ -1,6 +1,6 @@
 from uuid import UUID, uuid4
 
-from app.dao.agent_start_retry_dao import START_RETRY_METADATA_DDL
+from app.dao.agent_start_retry_dao import START_RETRY_METADATA_DDL, agent_start_retry_dao
 from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
@@ -64,6 +64,15 @@ class AgentStartDAO:
         if row is None:
             raise RuntimeError("Start operation insert returned no record")
         return AgentStartOperation.from_row(row)
+
+    async def enqueue_if_eligible(self, db: DbConnection, agent_id: UUID) -> AgentStartOperation | None:
+        """Record a due start intent on the caller's connection; None when the agent is not eligible."""
+        agent = await self.eligible(db, agent_id)
+        if agent is None:
+            return None
+        operation = await self.begin(db, agent)
+        await agent_start_retry_dao.initialize(db, operation)
+        return operation
 
     async def get(self, db: DbConnection, agent_id: UUID) -> AgentStartOperation | None:
         row = await db.fetchone("SELECT * FROM agent_start_operations WHERE agent_id=%(id)s", {"id": agent_id})
