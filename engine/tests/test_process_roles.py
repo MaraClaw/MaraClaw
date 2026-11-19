@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.config import Settings
 from app.process_roles import InvalidProcessRoleError, parse_process_roles
 
 
@@ -73,3 +74,45 @@ def test_entrypoint_normalized_bootstrap_decision(tmp_path: Path, raw: str, boot
     # Then
     assert result.returncode == 0, result.stderr
     assert marker.exists() == bootstrap
+
+
+@pytest.mark.parametrize(
+    ("preset", "window"),
+    [
+        ({}, str(Settings.model_fields["SHUTDOWN_HTTP_GRACE_SECONDS"].default)),
+        ({"SHUTDOWN_HTTP_GRACE_SECONDS": "45"}, "45"),
+        ({"SHUTDOWN_HTTP_GRACE_SECONDS": "45", "UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN": "7"}, "7"),
+    ],
+    ids=["default window", "window setting", "preset uvicorn variable"],
+)
+def test_entrypoint_execs_the_start_command_in_its_own_process(
+    tmp_path: Path, preset: dict[str, str], window: str
+) -> None:
+    # Given a start command that prints its own pid and the uvicorn shutdown window it inherited.
+    python = tmp_path / "python"
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n')
+    python.chmod(0o755)
+    fake_id = tmp_path / "id"
+    fake_id.write_text("#!/bin/sh\nprintf 1000\n")
+    fake_id.chmod(0o755)
+    inherited = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"SHUTDOWN_HTTP_GRACE_SECONDS", "UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN"}
+    }
+    env = {
+        **inherited,
+        **preset,
+        "PROCESS_ROLE": "api",
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "INSTANCE_ID": "test-instance",
+        "START_COMMAND": """python -c 'import os; print(os.getpid(), os.environ["UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN"])'""",
+    }
+    # When the image's entrypoint launches it.
+    process = subprocess.Popen(
+        ["/bin/bash", "entrypoint.sh"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    stdout, stderr = process.communicate(timeout=60)
+    # Then the server is the launched process itself, so docker stop's SIGTERM reaches it, and it got the window.
+    assert process.returncode == 0, stderr
+    assert stdout.splitlines()[-1].split() == [str(process.pid), window]

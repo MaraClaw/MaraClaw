@@ -93,4 +93,7 @@ else
 fi
 
 echo "[entrypoint] Step 2: Starting uvicorn..."
-exec sh -c "$START_COMMAND"
+# uvicorn finishes in-flight HTTP within this window after SIGTERM, then runs the lifespan cleanup.
+export UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN="${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-${SHUTDOWN_HTTP_GRACE_SECONDS:-30}}"
+# bash execs the last command of -c (Debian's dash forks it), so the server replaces this process and gets SIGTERM.
+exec bash -c "$START_COMMAND"
