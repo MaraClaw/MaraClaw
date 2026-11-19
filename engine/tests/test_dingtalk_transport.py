@@ -9,6 +9,7 @@ import pytest
 from websockets.asyncio.server import serve
 
 from app.api import dingtalk
+from app.services import dingtalk_stream as dingtalk_manager
 from app.services.channels import dingtalk_stream_transport
 from app.services.dingtalk_stream import DingTalkStreamManager
 from stream_source_fixtures import connection_config
@@ -109,9 +110,36 @@ async def test_real_sdk_transport_stops_joins_and_restarts_during_connection_or_
         assert all(socket.close_code is not None for socket in sockets)
 
 
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def pin_reconnect_timing(monkeypatch, value: float) -> FakeClock:
+    clock = FakeClock()
+    monkeypatch.setattr(dingtalk_manager, "_random_source", lambda: value)
+    monkeypatch.setattr(dingtalk_manager, "_clock", clock)
+    return clock
+
+
+def record_waits(monkeypatch, stop: threading.Event) -> list[float]:
+    delays: list[float] = []
+
+    def backoff(timeout):
+        delays.append(timeout)
+        return stop.is_set()
+
+    monkeypatch.setattr(stop, "wait", backoff)
+    return delays
+
+
 async def test_connection_recovers_after_more_than_six_transient_failures(monkeypatch):
+    pin_reconnect_timing(monkeypatch, 0.5)
     manager, stop = DingTalkStreamManager(), threading.Event()
-    attempts, delays = [], []
+    attempts = []
 
     def run(transport, client):
         attempts.append(client)
@@ -119,15 +147,105 @@ async def test_connection_recovers_after_more_than_six_transient_failures(monkey
             raise ConnectionError("provider unavailable")
         stop.set()
 
-    def backoff(timeout):
-        delays.append(timeout)
-        return stop.is_set()
-
+    delays = record_waits(monkeypatch, stop)
     monkeypatch.setattr(dingtalk_stream_transport.DingTalkTransport, "run", run)
-    monkeypatch.setattr(stop, "wait", backoff)
     await asyncio.to_thread(manager._run_client_thread, uuid4(), "app", "secret", stop)
     assert len(attempts) == 9
-    assert delays == [2, 5, 15, 30, 60, 60, 60, 60]
+    assert delays == [3, 6, 12, 24, 45, 45, 45, 45]
+
+
+async def test_client_that_ends_immediately_escalates_instead_of_restarting_at_two_seconds(monkeypatch):
+    # Given a client that connects and drops at once, every time.
+    pin_reconnect_timing(monkeypatch, 0.0)
+    manager, stop = DingTalkStreamManager(), threading.Event()
+    attempts = []
+
+    def run(transport, client):
+        attempts.append(client)
+        if len(attempts) == 7:
+            stop.set()
+
+    delays = record_waits(monkeypatch, stop)
+    monkeypatch.setattr(dingtalk_stream_transport.DingTalkTransport, "run", run)
+    # When the thread keeps reconnecting.
+    await asyncio.to_thread(manager._run_client_thread, uuid4(), "app", "secret", stop)
+    # Then the delays keep growing to the cap instead of resetting to the first one.
+    assert delays == [2, 4, 8, 16, 30, 30]
+
+
+@pytest.mark.parametrize("starts_over", [False, True])
+async def test_client_that_stayed_up_past_the_healthy_threshold_starts_over(monkeypatch, starts_over):
+    # Given two fast failures followed by a run that lasts just under, or exactly, the healthy threshold.
+    clock = pin_reconnect_timing(monkeypatch, 0.0)
+    healthy = dingtalk_manager.DINGTALK_HEALTHY_RUN_SECONDS
+    manager, stop = DingTalkStreamManager(), threading.Event()
+    attempts = []
+
+    def run(transport, client):
+        attempts.append(client)
+        if len(attempts) == 3:
+            clock.now += healthy if starts_over else healthy - 0.1
+        if len(attempts) == 4:
+            stop.set()
+
+    delays = record_waits(monkeypatch, stop)
+    monkeypatch.setattr(dingtalk_stream_transport.DingTalkTransport, "run", run)
+    await asyncio.to_thread(manager._run_client_thread, uuid4(), "app", "secret", stop)
+    # Then only the healthy run makes the next delay the first one again.
+    assert delays == [2, 4, 2 if starts_over else 8]
+
+
+async def test_client_build_errors_after_a_long_run_still_count_as_fast_failures(monkeypatch):
+    # Given one long run, after which the client can no longer be built.
+    clock = pin_reconnect_timing(monkeypatch, 0.0)
+    manager, stop = DingTalkStreamManager(), threading.Event()
+    builds = []
+    build = dingtalk_stream.DingTalkStreamClient
+
+    def broken_build(*args, **kwargs):
+        builds.append(kwargs)
+        if len(builds) == 1:
+            return build(*args, **kwargs)
+        if len(builds) == 4:
+            stop.set()
+        raise RuntimeError("cannot build client")
+
+    def run(transport, client):
+        clock.now += 120
+
+    delays = record_waits(monkeypatch, stop)
+    monkeypatch.setattr(dingtalk_stream, "DingTalkStreamClient", broken_build)
+    monkeypatch.setattr(dingtalk_stream_transport.DingTalkTransport, "run", run)
+    await asyncio.to_thread(manager._run_client_thread, uuid4(), "app", "secret", stop)
+    # Then the build errors escalate from their own start instead of inheriting the old run's health.
+    assert delays == [2, 4, 8, 16]
+
+
+def test_stop_while_waiting_to_reconnect_ends_the_thread_without_waiting_out_the_delay(monkeypatch):
+    # Given a client that fails at once and a retry delay of an hour.
+    monkeypatch.setattr(dingtalk_manager, "DINGTALK_RECONNECT_BASE_SECONDS", 3600.0)
+    monkeypatch.setattr(dingtalk_manager, "DINGTALK_RECONNECT_CAP_SECONDS", 3600.0)
+    monkeypatch.setattr(dingtalk_stream_transport.DingTalkTransport, "run", lambda transport, client: None)
+    manager, stop, waiting = DingTalkStreamManager(), threading.Event(), threading.Event()
+    wait = stop.wait
+
+    def observed_wait(timeout=None):
+        waiting.set()
+        return wait(timeout)
+
+    monkeypatch.setattr(stop, "wait", observed_wait)
+    thread = threading.Thread(target=manager._run_client_thread, args=(uuid4(), "app", "secret", stop), daemon=True)
+    thread.start()
+    try:
+        # When stop is requested once the thread is parked in its retry wait.
+        assert waiting.wait(5)
+        stop.set()
+        thread.join(5)
+        # Then the wait ends as soon as the client is stopped.
+        assert not thread.is_alive()
+    finally:
+        stop.set()
+        thread.join(5)
 
 
 async def test_overlapping_stop_and_restart_wait_for_old_callback_cleanup_before_transport_teardown(monkeypatch):

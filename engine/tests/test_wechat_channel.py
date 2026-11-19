@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from collections.abc import Sequence
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -353,3 +354,104 @@ async def test_start_all_cancels_promptly_while_stop_client_awaits_a_poller(
     finally:
         release.set()
         _ = await asyncio.wait({stuck}, timeout=2)
+
+
+def failed_polls(count: int) -> list[Exception]:
+    return [OSError("provider unavailable") for _ in range(count)]
+
+
+def poll_manager(
+    monkeypatch: pytest.MonkeyPatch, outcomes: Sequence[Exception | dict[str, object]], *, value: float = 0.5
+) -> tuple[wechat_channel.WeChatPollManager, AsyncMock]:
+    # Each outcome is one poll (an exception is a failed poll); after the last one the session expires.
+    manager = wechat_channel.WeChatPollManager()
+    config = channel_config("wechat")
+    config.extra_config = {"bot_token": "token"}
+    script = iter(outcomes)
+    set_connected = AsyncMock()
+
+    async def fetch_updates(**_kwargs: object) -> dict[str, object]:
+        outcome = next(script, wechat_channel.WeChatSessionExpiredError("session expired"))
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(wechat_channel, "_random_source", lambda: value)
+    monkeypatch.setattr(manager, "_load_config", AsyncMock(return_value=config))
+    monkeypatch.setattr(manager, "_fetch_updates", fetch_updates)
+    monkeypatch.setattr(manager, "_set_connected", set_connected)
+    monkeypatch.setattr(manager, "_update_extra", AsyncMock())
+    return manager, set_connected
+
+
+def record_retry_waits(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    original_sleep = asyncio.sleep
+    delays: list[float] = []
+
+    async def advance_without_waiting(seconds: float) -> None:
+        delays.append(seconds)
+        await original_sleep(0)
+
+    monkeypatch.setattr(wechat_channel.asyncio, "sleep", advance_without_waiting)
+    return delays
+
+
+@pytest.mark.parametrize(("value", "expected"), [(0.0, [2, 4, 8, 15, 15, 15]), (1.0, [4, 8, 16, 30, 30, 30])])
+async def test_poll_errors_back_off_within_the_jitter_window_and_the_cap(
+    monkeypatch: pytest.MonkeyPatch, value: float, expected: list[float]
+) -> None:
+    # Given a poller whose polls keep failing.
+    manager, _ = poll_manager(monkeypatch, failed_polls(6), value=value)
+    delays = record_retry_waits(monkeypatch)
+    # When it retries until the session ends.
+    await manager._run_client(uuid.uuid4())
+    # Then every wait came from the doubling window and stayed within the 2 to 30 second bounds.
+    assert delays == expected
+
+
+async def test_a_successful_poll_resets_the_poll_error_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given three failed polls, one good poll and two more failures.
+    manager, _ = poll_manager(monkeypatch, [*failed_polls(3), {}, *failed_polls(2)])
+    delays = record_retry_waits(monkeypatch)
+    # When the poller runs through them.
+    await manager._run_client(uuid.uuid4())
+    # Then the good poll made the next failure wait the first delay again.
+    assert delays == [3, 6, 12, 3, 6]
+
+
+async def test_a_poll_whose_messages_fail_to_process_does_not_reset_the_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given polls that return a message the processor cannot handle.
+    poison: dict[str, object] = {"msgs": [{"message_id": "poison"}]}
+    manager, _ = poll_manager(monkeypatch, [poison] * 3)
+    monkeypatch.setattr(
+        wechat_message_processor, "process_wechat_message", AsyncMock(side_effect=RuntimeError("cannot process"))
+    )
+    delays = record_retry_waits(monkeypatch)
+    # When the poller retries them.
+    await manager._run_client(uuid.uuid4())
+    # Then the delays escalate instead of restarting after every completed fetch.
+    assert delays == [3, 6, 12]
+
+
+async def test_cancellation_during_a_poll_error_wait_ends_the_poller_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a failing poller parked in its retry wait.
+    manager, set_connected = poll_manager(monkeypatch, failed_polls(3))
+    parked = asyncio.Event()
+
+    async def park(_seconds: float) -> None:
+        parked.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(wechat_channel.asyncio, "sleep", park)
+    task = asyncio.create_task(manager._run_client(uuid.uuid4()))
+    await asyncio.wait_for(parked.wait(), 2)
+    # When it is cancelled.
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=2)
+    # Then it ends at once, cancelled, and reports the channel disconnected.
+    assert task in done
+    assert task.cancelled()
+    assert set_connected.await_args is not None
+    assert set_connected.await_args.args[1] is False

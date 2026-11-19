@@ -7,8 +7,9 @@ import base64
 import os
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from random import random as system_random
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -23,7 +24,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
-from app.runtime.tasks import capped_backoff, loop_progress
+from app.runtime.tasks import capped_backoff, jittered_backoff, loop_progress
 from app.services.service_contracts import WeChatContextEntry
 
 if TYPE_CHECKING:
@@ -37,6 +38,9 @@ WECHAT_CONTEXT_CACHE_LIMIT = 100
 PROGRESS_BUDGET_SECONDS: Final = 300.0
 RECONCILE_RETRY_BASE_SECONDS: Final = 1.0
 RECONCILE_RETRY_CAP_SECONDS: Final = 30.0
+POLL_RETRY_BASE_SECONDS: Final = 2.0
+POLL_RETRY_CAP_SECONDS: Final = 30.0
+_random_source: Callable[[], float] = system_random
 
 
 class WeChatSessionExpiredError(RuntimeError):
@@ -275,8 +279,7 @@ class WeChatPollManager:
     async def _run_client(self, agent_id: uuid.UUID) -> None:
         from app.services.wechat_message_processor import process_wechat_message
 
-        retry_delay = 2
-        max_retry_delay = 30
+        failures = 0
         try:
             while True:
                 config = await self._load_config(agent_id)
@@ -301,7 +304,6 @@ class WeChatPollManager:
                     await self._set_connected(agent_id, True)
                     if (session_expired := extra.get("session_expired")) is not None and session_expired:
                         await self._update_extra(agent_id, {"session_expired": False})
-                    retry_delay = 2
 
                     new_cursor = json_as_str_or(data.get("get_updates_buf"))
                     msgs = data.get("msgs")
@@ -310,6 +312,7 @@ class WeChatPollManager:
                             await process_wechat_message(agent_id, msg, config)
                     if new_cursor and new_cursor != cursor:
                         await self._update_extra(agent_id, {"get_updates_buf": new_cursor})
+                    failures = 0
                 except WeChatSessionExpiredError:
                     logger.warning(f"[WeChat] Session expired for agent {agent_id}")
                     await self._set_connected(agent_id, False)
@@ -321,8 +324,15 @@ class WeChatPollManager:
                     self._connected[agent_id] = False
                     await self._set_connected(agent_id, False)
                     logger.error(f"[WeChat] Poll error for agent {agent_id}: {exc}")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_retry_delay)
+                    await asyncio.sleep(
+                        jittered_backoff(
+                            failures,
+                            base_seconds=POLL_RETRY_BASE_SECONDS,
+                            cap_seconds=POLL_RETRY_CAP_SECONDS,
+                            random=_random_source,
+                        )
+                    )
+                    failures += 1
         except asyncio.CancelledError:
             await self._set_connected(agent_id, False)
             raise

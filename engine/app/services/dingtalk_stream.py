@@ -12,7 +12,9 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import TypedDict, cast, override
+from random import random as system_random
+from time import monotonic
+from typing import Final, TypedDict, cast, override
 from weakref import WeakValueDictionary
 
 import httpx
@@ -22,6 +24,7 @@ from app.core.json_types import json_as_str, json_loads_value, json_object_from,
 from app.core.logging import logger
 from app.records.chat_attachment import ChatAttachment
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
+from app.runtime.tasks import ReconnectBackoff
 from app.services.channels import dingtalk_downloads
 from app.services.channels.dingtalk_downloads import get_media_download_url as _get_media_download_url
 from app.services.channels.dingtalk_stream_transport import DingTalkTransport
@@ -37,6 +40,12 @@ from app.services.channels.submissions import ChannelEvent, is_channel_event_rep
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.document_parser import MAX_INPUT_BYTES
 from app.services.storage import store_agent_upload
+
+DINGTALK_RECONNECT_BASE_SECONDS: Final = 2.0
+DINGTALK_RECONNECT_CAP_SECONDS: Final = 60.0
+DINGTALK_HEALTHY_RUN_SECONDS: Final = 60.0
+_random_source: Callable[[], float] = system_random
+_clock: Callable[[], float] = monotonic
 
 
 class _DingTalkText(TypedDict, total=False):
@@ -620,11 +629,15 @@ class DingTalkStreamManager:
             )
             return
 
-        retry_delays = [2, 5, 15, 30, 60]  # exponential backoff, seconds
-
         # Reference to manager's main loop for async dispatch
         main_loop = self._main_loop
-        retries = 0
+        backoff = ReconnectBackoff(
+            base_seconds=DINGTALK_RECONNECT_BASE_SECONDS,
+            cap_seconds=DINGTALK_RECONNECT_CAP_SECONDS,
+            healthy_seconds=DINGTALK_HEALTHY_RUN_SECONDS,
+            random=_random_source,
+            clock=_clock,
+        )
         manager_self = self
         admission = callbacks if callbacks is not None else CallbackAdmission()
         transport = self._transports.get(agent_id) or DingTalkTransport(stop_event)
@@ -756,6 +769,8 @@ class DingTalkStreamManager:
                 return ack
 
         while not stop_event.is_set():
+            # Read before building the client, so a build error is measured from this attempt, not an earlier run.
+            started = backoff.started()
             try:
                 credential = dingtalk_stream.Credential(client_id=app_key, client_secret=app_secret)
                 client = dingtalk_stream.DingTalkStreamClient(credential=credential)
@@ -765,23 +780,19 @@ class DingTalkStreamManager:
                     handler,
                 )
 
-                logger.info(f"[DingTalk Stream] Connecting for agent {agent_id}... (attempt {retries + 1})")
+                logger.info(f"[DingTalk Stream] Connecting for agent {agent_id}... (attempt {backoff.failures + 1})")
                 transport.run(client)
 
                 if stop_event.is_set():
                     break  # intentional stop, no retry
 
-                # Reset retries on successful connection (ran for a while then disconnected)
-                retries = 0
-                retries += 1
                 logger.warning(f"[DingTalk Stream] Connection lost for agent {agent_id}, will retry...")
 
             except Exception as e:
-                retries += 1
-                logger.error(f"[DingTalk Stream] Connection error for {agent_id} (attempt {retries}): {e}")
+                logger.error(f"[DingTalk Stream] Connection error for {agent_id} (attempt {backoff.failures + 1}): {e}")
 
-            delay = retry_delays[min(retries - 1, len(retry_delays) - 1)]
-            logger.info(f"[DingTalk Stream] Retrying in {delay}s for agent {agent_id}...")
+            delay = backoff.next_delay(started)
+            logger.info(f"[DingTalk Stream] Retrying in {delay:.1f}s for agent {agent_id}...")
             # Use stop_event.wait so we exit immediately if stopped
             if stop_event.wait(timeout=delay):
                 break  # stop was requested during wait

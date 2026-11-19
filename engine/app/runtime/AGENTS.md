@@ -7,7 +7,7 @@ Owns per-lifespan process resources, background work and readiness. `app/main.py
 | File / symbol | Responsibility |
 |---|---|
 | `lifecycle.py`: `Runtime`, `lifespan` | Role-gated startup, attempted-resource bookkeeping, ordered/shielded shutdown; fresh state each lifespan. |
-| `tasks.py`: `OwnedTasks`, `LoopProgress`, `EventTasks`, `TaskAdmission`, `cancel_tasks` | Explicit task ownership, required-task evidence and opt-in progress budgets, SDK callback and producer admission/drain. |
+| `tasks.py`: `OwnedTasks`, `LoopProgress`, `EventTasks`, `TaskAdmission`, `cancel_tasks`, `capped_backoff`, `jittered_backoff`, `ReconnectBackoff` | Explicit task ownership, required-task evidence and opt-in progress budgets, SDK callback and producer admission/drain. Deterministic worker backoff, plus jittered connector reconnect delays that reset only after a healthy run. |
 | `readiness.py`: `Readiness`, `router` | `/api/ready`, bounded existing-dependency probes, drain-aware eligibility. |
 | `bootstrap.py`: `bootstrap` | Ordered seed boundaries; no schema DDL. |
 | `connectors.py`: `WeChatRuntime` | Finite initial reconciliation followed by a required ongoing loop. |
