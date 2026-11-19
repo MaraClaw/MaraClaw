@@ -11,7 +11,7 @@ export const lifecycleBlockMessage = {
   tenant_inactive: 'The company is inactive. Contact your company admin.',
   owner_tenant_changed: 'The creator changed companies. Contact your company admin.',
   transfer_pending: 'A company transfer is pending. Wait for it to finish.',
-  setup_pending: 'Required setup must finish before starting.',
+  setup_pending: 'The agent starts automatically after required setup finishes.',
   runtime_stopped: 'The recorded runtime is stopped.',
   runtime_not_running: 'The recorded runtime is not running.',
   upgrade_in_progress: 'An upgrade is in progress. Wait for it to finish.',

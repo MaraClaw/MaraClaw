@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 
+import type { AgentOut } from '../src/lib/workspace-api'
 import { lifecycleReady, warningLifecycle } from './agent-lifecycle-data'
 import { deferMCPRetry, prepareLifecycle, settingsPath } from './agent-lifecycle-fixture'
 import { originalAgent, originalUser, replacementToken, writeFromOtherTab } from './session-fencing-fixture'
@@ -164,6 +165,30 @@ test('manual Start and Stop refresh the recorded lifecycle after successful upda
   await page.getByRole('button', { name: 'Stop', exact: true }).click()
   await expect(region).toContainText('Recorded runtime: Stopped')
   expect(api.reads()).toBeGreaterThan(runningReads)
+})
+
+test('a worker-driven start refreshes the recorded status badge without a reload', async ({ page }) => {
+  // Given
+  const start = { operation_id: '33333333-3333-4333-8333-333333333333', attempts: 1,
+    last_attempt_at: '2030-01-01T00:00:00Z', next_retry_at: null, last_failure_code: null } as const
+  const api = await prepareLifecycle(page, { ...lifecycleReady, runtime: { recorded_status: 'idle', recorded_container_id: null },
+    start: { ...start, state: 'pending' }, availability: { ...lifecycleReady.availability, blocking_codes: ['runtime_not_running'], can_start: false } })
+  let agent: AgentOut = { ...originalAgent, status: 'idle' }
+  let agentReads = 0
+  await page.route(`**/api/agents/${originalAgent.id}`, (route) => { agentReads++; return route.fulfill({ json: agent }) })
+  await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') })
+  await page.goto(settingsPath)
+  const badge = page.getByLabel('Recorded runtime status', { exact: true })
+  await expect(badge).toHaveText('idle')
+  // Initial layout + runtime-loss recheck; nothing else reads the agent record on Settings.
+  await expect.poll(() => agentReads).toBe(2)
+  // When
+  agent = { ...agent, status: 'running' }
+  api.set({ ...lifecycleReady, runtime: { recorded_status: 'running', recorded_container_id: null },
+    start: { ...start, state: 'succeeded' }, availability: { ...lifecycleReady.availability, blocking_codes: [], can_start: false } })
+  await page.clock.runFor(1600)
+  // Then
+  await expect(badge).toHaveText('running')
 })
 
 test('a replaced workspace clears its mounted expiry timer before the old deadline', async ({ page }) => {

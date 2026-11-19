@@ -1,13 +1,21 @@
 import { queryOptions, type QueryFunctionContext } from '@tanstack/react-query'
 
-import { getAgentLifecycle, retryAgentMCP, type OptionalMCP } from '../lib/agent-lifecycle-api.ts'
+import { getAgentLifecycle, retryAgentMCP, type AgentLifecycle, type OptionalMCP } from '../lib/agent-lifecycle-api.ts'
+import { refreshAgent } from './agent-setup-options.ts'
 import type { SessionQueryScope } from './session-query-scope.ts'
 
 export function agentLifecycleKey(agentId: string) { return ['agent-lifecycle', agentId] as const }
 
 export function agentLifecycleOptions(scope: SessionQueryScope, agentId: string, canManage: boolean) {
-  const queryFn = ({ signal }: QueryFunctionContext<ReturnType<typeof agentLifecycleKey>>) =>
-    scope.run(() => getAgentLifecycle(agentId, { owner: scope.owner, signal }))
+  const queryFn = async ({ signal }: QueryFunctionContext<ReturnType<typeof agentLifecycleKey>>) => {
+    const lifecycle = await scope.run(() => getAgentLifecycle(agentId, { owner: scope.owner, signal }))
+    const previous = scope.client.getQueryData<AgentLifecycle>(agentLifecycleKey(agentId))
+    if (previous && ((previous.start?.state === 'pending' && lifecycle.start?.state !== 'pending') ||
+      previous.runtime.recorded_status !== lifecycle.runtime.recorded_status)) {
+      refreshAgent(scope, agentId)
+    }
+    return lifecycle
+  }
   return { ...queryOptions({
     queryKey: agentLifecycleKey(agentId), queryFn,
     enabled: canManage && Boolean(agentId), staleTime: 0, retry: false,
