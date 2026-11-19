@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import anyio
@@ -18,8 +19,9 @@ from app.records.agent_start import AgentStartOperation
 from app.records.user import UserRecord
 from app.services import agent_lifecycle as lifecycle, openclaw_update_exclusion as exclusion
 from app.services.agent_setup_lock import setup_workspace_lock
-from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
+from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, assert_start_active
 from app.services.guest_identity import GuestOwnershipError
+from app.services.guest_start import start_operation_id
 
 
 class TransactionalRuntime:
@@ -84,11 +86,19 @@ def surface(monkeypatch, tmp_path):
         await runtime.commit()
         return True
 
+    async def halted(_operation_id):
+        return None
+
+    async def recover(_operation):
+        return None
+
     monkeypatch.setattr(lifecycle.start_store, "begin", begin)
     monkeypatch.setattr(lifecycle.start_store, "cancel", cancel)
     monkeypatch.setattr(lifecycle.start_store, "publish", publish)
     monkeypatch.setattr(lifecycle.start_store, "reserve", reserve)
     monkeypatch.setattr(lifecycle.start_store, "fail", fail)
+    monkeypatch.setattr(lifecycle.start_store, "halted", halted)
+    monkeypatch.setattr(lifecycle.start_store, "recover", recover)
 
     async def authorize(_user, _id):
         return replace(runtime.committed), "manage"
@@ -131,6 +141,8 @@ def surface(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "_agent_to_out", serialize)
     monkeypatch.setattr(exclusion, "assert_no_active_run", gate)
     monkeypatch.setattr(exclusion, "assert_transfer_ready", gate)
+    monkeypatch.setattr(lifecycle, "assert_no_active_run", gate)
+    monkeypatch.setattr(lifecycle, "assert_transfer_ready", gate)
     monkeypatch.setattr(exclusion, "setup_workspace_lock", lock)
     monkeypatch.setattr(lifecycle.agent_manager, "_agent_dir", lambda _id: tmp_path / str(_id))
     app = FastAPI()
@@ -211,6 +223,104 @@ async def test_preflight_outcomes_do_not_persist_runtime(surface, monkeypatch, f
     # Then expected refusals leave references intact; unexpected errors propagate.
     assert runtime.committed == agent
     assert "persist" not in runtime.events
+
+
+async def test_stop_cancels_a_slow_start_before_waiting_for_its_lock(surface, monkeypatch):
+    # Given a start holding the lifecycle lock through a slow phase that reaches a checkpoint between steps.
+    app, runtime, agent = surface
+    cancelled, entered, step = anyio.Event(), anyio.Event(), anyio.Event()
+    checkpoints = []
+
+    async def cancel(_id):
+        runtime.events.append("cancel")
+        cancelled.set()
+
+    async def halted(_operation_id):
+        return "cancelled" if cancelled.is_set() else None
+
+    async def slow_start(_record):
+        while True:
+            await assert_start_active(start_operation_id.get())
+            checkpoints.append(runtime.locked)
+            entered.set()
+            await step.wait()
+
+    async def stop(record):
+        record.status = "stopped"
+        return True
+
+    monkeypatch.setattr(lifecycle.start_store, "cancel", cancel)
+    monkeypatch.setattr(lifecycle.start_store, "halted", halted)
+    monkeypatch.setattr(lifecycle.agent_manager, "start_container", slow_start)
+    monkeypatch.setattr(lifecycle.agent_manager, "stop_container", stop)
+    responses = {}
+
+    async def post(client, operation):
+        responses[operation] = await client.post(f"/api/agents/{agent.id}/{operation}")
+
+    async with (
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client,
+        anyio.create_task_group() as group,
+    ):
+        group.start_soon(post, client, "start")
+        with anyio.fail_after(5):
+            await entered.wait()
+        # When Stop is pressed while the start is in its slow phase, and that step then finishes.
+        group.start_soon(post, client, "stop")
+        with anyio.fail_after(5):
+            await cancelled.wait()
+        step.set()
+    # Then the cancel committed while the start still held the lock, the start ended at its next checkpoint
+    # with the cancelled code, and the stop then ran under the lock and cancelled again.
+    assert checkpoints == [True]
+    assert responses["start"].status_code == 409
+    assert responses["start"].json()["detail"]["code"] == "guest_start_cancelled"
+    assert responses["stop"].status_code == 200
+    first_release = runtime.events.index("release")
+    assert runtime.events[:first_release].count("cancel") == 1
+    assert runtime.events[first_release:].count("cancel") == 1
+    assert runtime.committed.status == "stopped"
+
+
+@pytest.mark.parametrize(
+    ("seen_at", "reason", "code"),
+    [
+        ("checkpoint", "cancelled", "guest_start_cancelled"),
+        ("checkpoint", "ineligible", "guest_start_ineligible"),
+        ("publication", "cancelled", "guest_start_cancelled"),
+        ("publication", "ineligible", "guest_start_ineligible"),
+        ("reservation", "cancelled", "guest_start_cancelled"),
+    ],
+)
+async def test_stopped_start_answers_409_without_failure_or_runtime(surface, monkeypatch, seen_at, reason, code):
+    # Given a start whose operation is cancelled, or whose agent stops qualifying (say it expires), mid-start.
+    app, runtime, agent = surface
+    recover, fail = AsyncMock(return_value=None), AsyncMock()
+    monkeypatch.setattr(lifecycle.start_store, "halted", AsyncMock(return_value=reason))
+    monkeypatch.setattr(lifecycle.start_store, "recover", recover)
+    monkeypatch.setattr(lifecycle.start_store, "fail", fail)
+
+    async def start(record):
+        if seen_at == "checkpoint":
+            await assert_start_active(start_operation_id.get())
+        record.status, record.container_id, record.container_port = "running", "new", 18889
+        return "new"
+
+    monkeypatch.setattr(lifecycle.agent_manager, "start_container", start)
+    if seen_at == "publication":
+        monkeypatch.setattr(lifecycle.start_store, "publish", AsyncMock(return_value=False))
+    if seen_at == "reservation":
+        monkeypatch.setattr(lifecycle.start_store, "reserve", AsyncMock(return_value=False))
+    # When the start route sees it at a checkpoint, at publication or at reservation.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/agents/{agent.id}/start")
+    # Then the start answers 409 with the stop's own code, never 502, and records no failure or runtime.
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == code
+    fail.assert_not_awaited()
+    assert recover.await_count == (0 if seen_at == "reservation" else 1)
+    assert "persist" not in runtime.events
+    assert runtime.committed == agent
 
 
 @pytest.mark.parametrize("operation", ["start", "stop"])

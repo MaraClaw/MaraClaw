@@ -19,7 +19,8 @@ from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.records.agent import AgentRecord
 from app.services import agent_manager as module, guest_admission as admission
 from app.services.agent_manager import AgentManager
-from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
+from app.services.agent_start_store import start_store
+from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_container_name
 from builtin_keyword_fakes import IncludeAllKeyword
 
@@ -129,6 +130,8 @@ def env(tmp_path, monkeypatch):
     manager = AgentManager.__new__(AgentManager)
     monkeypatch.setattr(manager, "docker_client", docker, raising=False)
     monkeypatch.setattr(manager, "_prepare_tavily_proxy_token", AsyncMock())
+    # Start checkpoints read the durable operation; offline starts are never stopped unless a test says so.
+    monkeypatch.setattr(start_store, "halted", AsyncMock(return_value=None))
     agent = AgentRecord(
         id=uuid4(),
         name="guest",
@@ -173,6 +176,40 @@ async def test_preflight_failure_preserves_old_guest(env, monkeypatch):
     assert docker.removed == []
     assert config.read_text(encoding="utf-8") == old_config
     assert sorted(path.name for path in directory.iterdir()) == old_listing
+
+
+@pytest.mark.parametrize("stop_at", ["pull", "create"])
+async def test_stopped_start_creates_no_container(env, monkeypatch, stop_at):
+    # Given a creating start whose image must be pulled, stopped before the pull or while its state is prepared.
+    manager, docker, agent = env
+    docker.guests.clear()
+    agent.container_id = None
+    docker.image_present = False
+    operation = uuid4()
+    stopped = stop_at == "pull"
+    prepare = manager._apply_guest_state
+
+    async def preparing(*args, **kwargs):
+        nonlocal stopped
+        result = await prepare(*args, **kwargs)
+        stopped = True
+        return result
+
+    async def halted(operation_id):
+        assert operation_id == operation
+        return "cancelled" if stopped else None
+
+    monkeypatch.setattr(manager, "_apply_guest_state", preparing)
+    monkeypatch.setattr(start_store, "halted", halted)
+    # When the start reaches its next checkpoint.
+    with pytest.raises(GuestStartStoppedError) as stop:
+        await manager.replace_container(
+            agent, image="registry.example/team/openclaw:1", create_only=True, operation_id=operation
+        )
+    # Then it ends there: a stop seen before the pull skips it, and no container is created after a stop is seen.
+    assert stop.value.reason == "cancelled"
+    assert len(docker.pulls) == (0 if stop_at == "pull" else 1)
+    assert docker.runs == []
 
 
 async def test_token_persistence_failure_precedes_guest_mutation(env, monkeypatch):

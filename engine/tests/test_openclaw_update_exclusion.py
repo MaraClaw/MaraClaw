@@ -18,7 +18,7 @@ from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.records.user import UserRecord
-from app.services import agent_stops, openclaw_update_exclusion as exclusion
+from app.services import agent_lifecycle, agent_stops, openclaw_update_exclusion as exclusion
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from app.services.agent_start_store import start_store
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
@@ -244,11 +244,15 @@ def lifecycle(gate: Gate, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(start_store, "begin", AsyncMock(return_value=(operation, fresh)))
     monkeypatch.setattr(start_store, "reserve", AsyncMock(return_value=True))
     monkeypatch.setattr(start_store, "publish", publish)
-    monkeypatch.setattr(start_store, "cancel", AsyncMock())
+    cancel = AsyncMock()
+    monkeypatch.setattr(start_store, "cancel", cancel)
+    monkeypatch.setattr(agent_lifecycle, "assert_no_active_run", gate)
     start, stop = AsyncMock(return_value="cid"), AsyncMock(return_value=True)
     monkeypatch.setattr(agents_api.agent_manager, "start_container", start)
     monkeypatch.setattr(agents_api.agent_manager, "stop_container", stop)
-    return SimpleNamespace(user=user, stale=stale, fresh=fresh, start=start, stop=stop, persisted=persisted, gate=gate)
+    return SimpleNamespace(
+        user=user, stale=stale, fresh=fresh, start=start, stop=stop, cancel=cancel, persisted=persisted, gate=gate
+    )
 
 
 async def test_start_and_stop_act_on_the_fresh_row_not_the_stale_authorization_snapshot(lifecycle):
@@ -267,6 +271,7 @@ async def test_start_and_stop_are_refused_while_an_upgrade_is_active(lifecycle):
         _ = await agents_api.stop_agent(lifecycle.stale.id, lifecycle.user)
     lifecycle.start.assert_not_awaited()
     lifecycle.stop.assert_not_awaited()
+    lifecycle.cancel.assert_not_awaited()
     assert lifecycle.persisted == []
 
 

@@ -479,7 +479,7 @@ async def test_an_unready_recreated_guest_is_quiesced_like_any_new_writer(env, m
     workspace_usage(monkeypatch, agent, files=GIB, layer=2 * GIB)
     _ = watch_remeasure(monkeypatch, docker)
 
-    async def unready(_client, _reference):
+    async def unready(_client, _reference, *, halted=None):
         return False
 
     monkeypatch.setattr(guest_start, "guest_ready", unready)

@@ -305,6 +305,8 @@ measurement.
 - Lock order is the per-agent flock first, then the shared agents-root
   `_setup_locks/_guest_admission.lock`. The global lock spans inventory,
   replacement and Docker creation, or the existing-container start on resume.
+  A start waits for it in bounded one-second attempts and checks its start operation
+  between them, so Stop can end a queued start.
   All cooperating engine processes must share that filesystem/agents root,
   Docker daemon, deployment network and consistent
   settings. Lock or Docker inventory failure is a preparation failure, not
@@ -531,8 +533,10 @@ Authenticated callers with agent management access use
 |---|---|
 | Setup incomplete | 409 `guest_setup_incomplete`; no start |
 | Current agent/creator/tenant is ineligible | 409 `guest_start_ineligible`; no new start operation |
+| Stop pressed while the start runs (or a later start replaced its operation) | 409 `guest_start_cancelled`; a candidate it created is stopped; no failure code, no retry |
+| Agent stops qualifying mid-start (expiry, disable, transfer) | 409 `guest_start_ineligible`; the operation is cancelled and a candidate it created is stopped; no failure code, no retry |
 | Preparation, ownership or readiness refusal | 502 `guest_start_failed`; no automatic replacement of an existing guest; committed start intent remains recoverable |
-| Start cannot publish its result | 502 `guest_start_failed`; worker recovery resolves pending intent against current eligibility |
+| Start cannot publish its result while its operation is still active | 502 `guest_start_failed`; worker recovery resolves pending intent against current eligibility |
 | Manager stop returns `False` | 502 `guest_stop_failed`; `stopped` intent is persisted with the reference retained for the existing worker retry |
 
 Start intent is committed independently in `agent_start_operations` before Docker
@@ -589,10 +593,54 @@ an attempt. Other retryable failures retain the reserved schedule.
 
 Stop cancels start intent and commits its runtime outcome inside the per-agent
 flock before returning a manager-result failure. A 502 does not roll back that
-durable stop intent. A missing guest can be a successful stop. The explicit
+durable stop intent. See [Stopping A Start In Progress](#stopping-a-start-in-progress)
+for a stop that arrives while a start holds the flock. A missing guest can be a successful stop. The explicit
 no-Docker compatibility path records `idle` without reporting a failed start; it
 does not prove that a container was created. A published `running` result proves
 the bounded readiness check passed, not that the application will stay healthy.
+
+### Stopping A Start In Progress
+
+A start holds the per-agent flock for its whole run, and cancelling its task does not
+stop it (start sections drain on cancellation, and reconciler starts run in the
+worker process). So [Stop](../app/services/agent_lifecycle.py) first runs its
+refusal checks (an active OpenClaw upgrade, pending company-transfer cleanup), then
+commits the cancel to `agent_start_operations` **before** waiting for the flock, and
+cancels again once it holds it. A refused stop cancels nothing.
+
+The start notices at its next checkpoint, a read-only
+[probe](../app/services/agent_start_store.py) of the same condition publication
+checks (pending operation, same creator, tenant and expected container, current
+eligibility) taken without row locks:
+
+- before the image pull, so a stopped start does not begin one;
+- on entry to [admission](../app/services/guest_admission.py), whether or not
+  aggregate admission is on, and between bounded one-second waits for the
+  `_guest_admission` lock;
+- after workspace state is prepared, as the last check before Docker creates a
+  container;
+- when the resume is recorded, which refuses a cancelled or replaced operation;
+- on each [readiness](../app/services/guest_readiness.py) poll, reported apart from a
+  failed or timed-out probe.
+
+A probe that cannot read the database logs a warning and lets the start go on to its
+next checkpoint; publication still checks the operation under its row lock.
+
+A cancelled or replaced operation ends the start with 409 `guest_start_cancelled`; an
+agent that stopped qualifying (expiry, deactivation, transfer) ends it with 409
+`guest_start_ineligible`. The same mapping applies when publication is refused for
+either reason. No container is created after the stop is seen. A candidate the start
+created is stopped, and cancelled-start cleanup stops only the exactly owned
+candidate. Nothing is recorded as a failure and nothing is retried; the reconciler
+logs the outcome at info level. Start-new-container passes the code through and
+restores its image pin and snapshot as for any failed start. The stop then takes the
+flock and stops the guest as usual.
+
+These steps are not preemptible, so a stop waits for the one in progress: an image
+pull (up to `OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS`), a single Docker CLI call
+(bounded by its own deadline), materializing workspace state, and a running OpenClaw
+upgrade cutover, which Stop refuses outright. Lock order is unchanged: the per-agent
+flock, then `_guest_admission`.
 
 ## Required Setup And Skill Snapshots
 

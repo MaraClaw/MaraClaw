@@ -1,15 +1,18 @@
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from pywhales.exceptions import DockerException
 
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.runtime import lifecycle
 from app.services import agent_start_reconciler as module
+from app.services.guest_admission import GuestStartStoppedError
 from producer_admission_fixtures import producer_admission
 from worker_progress_fixtures import WorkerHTTP, worker_http
 
@@ -83,6 +86,77 @@ async def test_start_caught_operation_error_does_not_beat_for_a_selected_row(
         )
     await worker_http.pacing.step()
     await worker_http.ready(expected=True)
+
+
+@pytest.mark.parametrize("reason", ["cancelled", "ineligible"])
+async def test_start_stopped_at_a_checkpoint_is_superseded_without_failure_or_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_http: WorkerHTTP,
+    start_operation: AgentStartOperation,
+    reason: str,
+) -> None:
+    # Given a reconciler start that a Stop, or the agent no longer qualifying, halts at a checkpoint.
+    halted = AsyncMock(side_effect=GuestStartStoppedError("cancelled" if reason == "cancelled" else "ineligible"))
+    fail, cleanup = AsyncMock(), AsyncMock()
+    log = SimpleNamespace(info=Mock(), warning=Mock(), error=Mock())
+    monkeypatch.setattr(module.agent_manager, "start_container", halted)
+    monkeypatch.setattr(module.start_store, "fail", fail)
+    monkeypatch.setattr(module, "cleanup_cancelled_start", cleanup)
+    monkeypatch.setattr(module, "logger", log)
+    monkeypatch.setattr(module, "sleep", worker_http.pacing.wait)
+    # When the reconcile loop runs it.
+    worker_http.runtime.tasks.start(
+        "start", module.agent_start_reconciler_loop(), requirement="loop", progress_budget_seconds=300
+    )
+    await worker_http.pacing.paused()
+    for _ in range(4):
+        await worker_http.pacing.step()
+    # Then each pass completes as superseded: settled like an unpublished start, with no failure code,
+    # no error log and progress still observed.
+    await worker_http.ready(expected=True)
+    fail.assert_not_awaited()
+    cleanup.assert_awaited_with(start_operation)
+    log.warning.assert_not_called()
+    log.error.assert_not_called()
+    log.info.assert_called()
+
+
+async def test_stopped_start_releases_the_request_transaction_before_recovery_locks_the_agent(
+    monkeypatch: pytest.MonkeyPatch, start_operation: AgentStartOperation
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        module.agent_manager, "start_container", AsyncMock(side_effect=GuestStartStoppedError("cancelled"))
+    )
+    monkeypatch.setattr(module, "flush_request_transaction", AsyncMock(side_effect=lambda: calls.append("flush")))
+    monkeypatch.setattr(
+        module.start_store, "recover", AsyncMock(side_effect=lambda _operation: calls.append("recover"))
+    )
+    monkeypatch.setattr(module, "cleanup_cancelled_start", AsyncMock(side_effect=lambda _op: calls.append("cleanup")))
+    agent = AgentRecord(id=start_operation.agent_id, name="Guest", creator_id=uuid4(), status=AgentStatus.IDLE)
+
+    with pytest.raises(GuestStartStoppedError):
+        _ = await module._execute_start(start_operation, agent)
+
+    assert calls == ["flush", "recover", "cleanup"]
+
+
+@pytest.mark.parametrize(
+    "failure", [DockerException(["docker", "stop"], 1, stderr=b"daemon unavailable"), OSError("pool down")]
+)
+async def test_failed_settlement_never_hides_the_stop(
+    monkeypatch: pytest.MonkeyPatch, start_operation: AgentStartOperation, failure: Exception
+) -> None:
+    monkeypatch.setattr(
+        module.agent_manager, "start_container", AsyncMock(side_effect=GuestStartStoppedError("ineligible"))
+    )
+    monkeypatch.setattr(module, "cleanup_cancelled_start", AsyncMock(side_effect=failure))
+    agent = AgentRecord(id=start_operation.agent_id, name="Guest", creator_id=uuid4(), status=AgentStatus.IDLE)
+
+    with pytest.raises(GuestStartStoppedError) as stop:
+        _ = await module._execute_start(start_operation, agent)
+
+    assert stop.value.reason == "ineligible"
 
 
 @pytest.mark.parametrize("dependency", ["outstanding", "recover", "reserve", "publish"])

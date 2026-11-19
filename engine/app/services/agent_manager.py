@@ -38,7 +38,7 @@ from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
 from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token as ensure_grok_token
-from app.services.guest_admission import GuestStartPreflightError, guest_admission
+from app.services.guest_admission import GuestStartPreflightError, assert_start_active, guest_admission
 from app.services.guest_identity import (
     GuestOwnershipError,
     guest_container_name,
@@ -687,8 +687,16 @@ class AgentManager:
         except (OSError, ValueError, HTTPError, HTTPException) as exc:
             raise GuestStartPreflightError("Guest start preparation failed") from exc
 
+        # A stopped start does not begin a pull, which is not preemptible once it runs.
+        await assert_start_active(operation_id)
         await ensure_guest_image(client, guest_image)
-        async with guest_admission(client, agent, self._agent_dir(agent.id).parent, memory_limit=limits.memory_bytes):
+        async with guest_admission(
+            client,
+            agent,
+            self._agent_dir(agent.id).parent,
+            memory_limit=limits.memory_bytes,
+            operation_id=operation_id,
+        ):
             try:
                 guests = await to_thread.run_sync(owned_guest_containers, client, agent)
             except (ClientNotFoundError, DockerException) as exc:
@@ -706,6 +714,8 @@ class AgentManager:
                     agent_dir, container_envs, gogcli_volumes = await self._apply_guest_state(
                         agent, models, rehydrate=rehydrate
                     )
+                    # Last checkpoint before Docker creates a container: a stop seen here creates nothing.
+                    await assert_start_active(operation_id)
                 except (OSError, ValueError, HTTPError, HTTPException) as exc:
                     if not guests:
                         raise GuestStartPreflightError("Guest start preparation failed") from exc

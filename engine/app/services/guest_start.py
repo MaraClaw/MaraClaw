@@ -18,7 +18,12 @@ from app.records.agent import AgentRecord
 from app.services.agent_mcp_sync import restore_existing_guest
 from app.services.agent_start_store import start_store
 from app.services.agent_workspace_quota import layer_caused_block, remeasure_after_recreation
-from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, guest_admission
+from app.services.guest_admission import (
+    GuestAdmissionError,
+    GuestStartPreflightError,
+    GuestStartStoppedError,
+    guest_admission,
+)
 from app.services.guest_identity import guest_resolutions, inspect_guest_container, owned_guest_containers
 from app.services.guest_limits import GuestLimits, limits_differ, resolve_guest_limits
 from app.services.guest_readiness import guest_ready
@@ -51,16 +56,31 @@ async def _apply_limits(client: DockerClient, agent: AgentRecord, reference: str
         raise GuestStartPreflightError("Guest limits could not be updated", code="runtime_failed") from exc
 
 
+async def _quiesce(client: DockerClient, agent: AgentRecord, reference: str, *, created: bool) -> None:
+    guest_resolutions.drop(agent.id)
+    if created:
+        # A new writer that will not be published is quiesced; its durable operation retains discovery ownership.
+        await to_thread.run_sync(client.container.stop, reference)
+
+
 async def _await_ready(client: DockerClient, agent: AgentRecord, *, created: bool) -> str:
     """Require bounded application readiness of the agent's recorded guest before publishing ``running``."""
     reference = agent.container_id
     if reference is None:
         raise GuestStartPreflightError("Guest reference is missing")
-    if not await guest_ready(client, reference):
-        guest_resolutions.drop(agent.id)
-        if created:
-            # A failed new writer is quiesced; its durable operation retains discovery ownership.
-            await to_thread.run_sync(client.container.stop, reference)
+    operation = start_operation_id.get()
+    halted = None if operation is None else partial(start_store.halted, operation)
+    try:
+        ready = await guest_ready(client, reference, halted=halted)
+    except GuestStartStoppedError:
+        try:
+            await _quiesce(client, agent, reference, created=created)
+        except DockerException:
+            # The cancelled operation keeps cleanup ownership, so cancelled-start cleanup retries the stop.
+            logger.warning("Stopped start could not quiesce guest {} for agent {}", reference[:12], agent.id)
+        raise
+    if not ready:
+        await _quiesce(client, agent, reference, created=created)
         agent.status = AgentStatus.ERROR
         raise GuestStartPreflightError("Guest did not become ready", code="readiness_failed")
     agent.status = AgentStatus.RUNNING
@@ -120,7 +140,11 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
                     # so a refusal leaves the guest unchanged.
                     await stack.enter_async_context(
                         guest_admission(
-                            client, agent, manager._agent_dir(agent.id).parent, memory_limit=target.memory_bytes
+                            client,
+                            agent,
+                            manager._agent_dir(agent.id).parent,
+                            memory_limit=target.memory_bytes,
+                            operation_id=start_operation_id.get(),
                         )
                     )
                     if limits_differ(host_config, target):
@@ -138,7 +162,8 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
                 agent.container_port = port or agent.container_port
                 operation = start_operation_id.get()
                 if operation is not None and not await start_store.observe(operation, agent):
-                    raise GuestStartPreflightError("Guest start was superseded")
+                    # Stop cancelled the operation, or a later start replaced it, before the resume.
+                    raise GuestStartStoppedError("cancelled")
                 if resume:
                     guest_resolutions.drop(agent.id)
                     await to_thread.run_sync(client.container.start, guest.id)

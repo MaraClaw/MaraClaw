@@ -2,7 +2,8 @@ from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, override
+from typing import Final, Literal, override
+from uuid import UUID
 
 from anyio import to_thread
 from pywhales import ClientNotFoundError, DockerClient
@@ -11,10 +12,14 @@ from pywhales.exceptions import DockerException
 
 from app.config import get_settings
 from app.records.agent import AgentRecord
-from app.services.agent_setup_lock import setup_workspace_lock
+from app.records.agent_start import StartHalt
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
+from app.services.agent_start_store import start_store
 from app.services.guest_identity import AGENT_LABEL
 
 settings = get_settings()
+# Bounded waits for the aggregate admission lock, so a queued start sees a stop between them.
+ADMISSION_LOCK_POLL_SECONDS: Final = 1.0
 
 
 @dataclass(eq=False, slots=True)
@@ -37,6 +42,26 @@ class GuestAdmissionError(RuntimeError):
     @override
     def __str__(self) -> str:
         return self.message
+
+
+@dataclass(eq=False, slots=True)
+class GuestStartStoppedError(RuntimeError):
+    """A checkpoint found the start's operation cancelled or its agent no longer eligible: nothing failed."""
+
+    reason: StartHalt
+
+    @override
+    def __str__(self) -> str:
+        return f"Guest start {self.reason}"
+
+
+async def assert_start_active(operation_id: UUID | None) -> None:
+    """Start checkpoint: raise once the durable operation may no longer proceed. Untracked starts always proceed."""
+    if operation_id is None:
+        return
+    reason = await start_store.halted(operation_id)
+    if reason is not None:
+        raise GuestStartStoppedError(reason)
 
 
 def _check_capacity(client: DockerClient, agent: AgentRecord, memory_limit: int | None = None) -> None:
@@ -69,15 +94,30 @@ def _check_capacity(client: DockerClient, agent: AgentRecord, memory_limit: int 
 
 @asynccontextmanager
 async def guest_admission(
-    client: DockerClient, agent: AgentRecord, agents_root: Path, *, memory_limit: int | None = None
+    client: DockerClient,
+    agent: AgentRecord,
+    agents_root: Path,
+    *,
+    memory_limit: int | None = None,
+    operation_id: UUID | None = None,
 ) -> AsyncGenerator[None]:
+    await assert_start_active(operation_id)
     if settings.OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES == 0:
         yield
         return
     # Callers hold the per-agent lock first; this lock spans the check and Docker run or resume.
     async with AsyncExitStack() as stack:
         try:
-            await stack.enter_async_context(setup_workspace_lock(agents_root / "_guest_admission"))
+            while True:
+                try:
+                    await stack.enter_async_context(
+                        setup_workspace_lock(
+                            agents_root / "_guest_admission", timeout_seconds=ADMISSION_LOCK_POLL_SECONDS
+                        )
+                    )
+                    break
+                except WorkspaceLockTimeoutError:
+                    await assert_start_active(operation_id)
             await to_thread.run_sync(_check_capacity, client, agent, memory_limit)
         except (DockerException, ParsingError) as exc:
             raise GuestStartPreflightError("Could not establish guest memory capacity", code="runtime_failed") from exc

@@ -14,7 +14,7 @@ from pywhales import DockerClient, client_config
 from pywhales.components.container import cli_wrapper as container_cli
 
 from app.services import guest_readiness, openclaw_update_executor
-from app.services.guest_admission import GuestStartPreflightError
+from app.services.guest_admission import GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_probe import probe_guest
 from app.services.openclaw_update_docker import UpgradeDocker
 from test_guest_start_safety import env
@@ -153,6 +153,31 @@ async def test_readiness_ends_early_only_when_docker_rules_the_guest_out(env, mo
     # Then a stopped, removed or crash-looping guest ends the wait at once; anything else uses the whole budget.
     assert result is False
     assert len(calls) == probes
+
+
+async def test_readiness_reports_a_stop_at_its_next_poll_apart_from_failure(monkeypatch):
+    # Given a guest that is not ready, and an agent that stops qualifying after the first poll.
+    probes = []
+    reasons = iter((None, "ineligible"))
+
+    def probe(_client, reference, _timeout):
+        probes.append(reference)
+        return False
+
+    async def halted():
+        return next(reasons)
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
+    monkeypatch.setattr(
+        guest_readiness, "observe_guest", lambda _client, _reference, restarts, _until: (restarts, None)
+    )
+    monkeypatch.setattr(guest_readiness, "READY_INTERVAL_SECONDS", 0)
+    # When readiness polls under that checkpoint.
+    with pytest.raises(GuestStartStoppedError) as stop:
+        await guest_readiness.guest_ready(DockerClient(), "guest", halted=halted)
+    # Then the stop ends the wait at the next poll with its reason, rather than as a failed or timed-out probe.
+    assert stop.value.reason == "ineligible"
+    assert probes == ["guest"]
 
 
 async def test_readiness_stops_waiting_for_a_worker_thread_at_the_deadline(monkeypatch):
