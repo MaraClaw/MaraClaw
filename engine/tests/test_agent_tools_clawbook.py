@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from app.core.notification_kinds import NotificationKind
 from app.services import agent_tools, notification_service
 from app.services.sandbox import registry as sandbox_registry
 
@@ -46,6 +47,39 @@ def _agent(agent_id, **overrides):
     }
     attributes.update(overrides)
     return SimpleNamespace(**attributes)
+
+
+def _forbid_roster_scans(monkeypatch, clawbook):
+    async def roster_scan(*_args, **_kwargs):
+        raise AssertionError("mention resolution must not load a roster")
+
+    monkeypatch.setattr(clawbook.agent_dao, "list_for_tenant", roster_scan)
+    monkeypatch.setattr(clawbook.agent_dao, "get_all", roster_scan)
+
+
+def _record_notifications(monkeypatch):
+    notifications = []
+
+    async def fake_send_notification(*args, **kwargs):
+        notifications.append((args, kwargs))
+
+    monkeypatch.setattr(notification_service, "send_notification", fake_send_notification)
+    return notifications
+
+
+def _stub_comment_scene(monkeypatch, clawbook, agent):
+    """A human-authored post, so a comment notifies the author and nobody else besides mentions."""
+    post = SimpleNamespace(
+        id=uuid.uuid4(), author_id=uuid.uuid4(), author_type="human", author_name="Mira", comments_count=0
+    )
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "get_post", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(
+        clawbook.clawbook_comment_dao, "create_comment", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+    )
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "increment_comments_count", AsyncMock(return_value=post))
+    monkeypatch.setattr(clawbook.clawbook_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[]))
+    return post
 
 
 @pytest.mark.parametrize(
@@ -154,14 +188,10 @@ async def test_create_post_truncates_content_and_deduplicates_tenant_mentions(mo
     monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=agent))
     create_post = AsyncMock(return_value=post)
     monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", create_post)
-    list_for_tenant = AsyncMock(return_value=[_agent(mentioned_id, name="Bob", tenant_id=tenant_id)])
-    monkeypatch.setattr(clawbook.agent_dao, "list_for_tenant", list_for_tenant)
-    notifications = []
-
-    async def fake_send_notification(*args, **kwargs):
-        notifications.append((args, kwargs))
-
-    monkeypatch.setattr(notification_service, "send_notification", fake_send_notification)
+    find_by_mention_names = AsyncMock(return_value={"bob": _agent(mentioned_id, name="Bob", tenant_id=tenant_id)})
+    monkeypatch.setattr(clawbook.agent_dao, "find_by_mention_names", find_by_mention_names)
+    _forbid_roster_scans(monkeypatch, clawbook)
+    notifications = _record_notifications(monkeypatch)
 
     result = await agent_tools._clawbook_create_post(agent_id, {"content": content})
 
@@ -169,10 +199,69 @@ async def test_create_post_truncates_content_and_deduplicates_tenant_mentions(mo
     assert create_post.await_args is not None
     obj_in = create_post.await_args.args[0] if create_post.await_args.args else create_post.await_args.kwargs["obj_in"]
     assert obj_in["content"] == content[:1000]
-    list_for_tenant.assert_awaited_once_with(tenant_id)
-    assert [notification[1]["agent_id"] for notification in notifications] == [mentioned_id]
-    assert notifications[0][1]["notification_kind"] == "mention"
-    assert notifications[0][1]["body"] == content[:150]
+    find_by_mention_names.assert_awaited_once_with({"bob"}, tenant_id=tenant_id, exclude_id=agent_id)
+    assert [notification[1] for notification in notifications] == [
+        {
+            "agent_id": mentioned_id,
+            "notification_kind": NotificationKind.MENTION,
+            "title": "Ada mentioned you in a clawbook post",
+            "body": content[:150],
+            "link": f"/clawbook?post={post_id}",
+            "ref_id": post_id,
+            "sender_name": "Ada",
+        }
+    ]
+
+
+async def test_create_post_looks_up_only_distinct_lowercased_tokens_and_notifies_in_mention_order(
+    monkeypatch, clawbook
+):
+    agent_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    post_id = uuid.uuid4()
+    cara, bob = _agent(uuid.uuid4(), name="Cara"), _agent(uuid.uuid4(), name="Bob")
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=_agent(agent_id, tenant_id=tenant_id)))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", AsyncMock(return_value=SimpleNamespace(id=post_id)))
+    # "@ALICE," keeps its comma, so its token matches no name.
+    find_by_mention_names = AsyncMock(return_value={"cara": cara, "bob": bob})
+    monkeypatch.setattr(clawbook.agent_dao, "find_by_mention_names", find_by_mention_names)
+    _forbid_roster_scans(monkeypatch, clawbook)
+    notifications = _record_notifications(monkeypatch)
+
+    await agent_tools._clawbook_create_post(agent_id, {"content": "@Cara @Bob @ALICE, @cara @Bob"})
+
+    find_by_mention_names.assert_awaited_once_with({"cara", "bob", "alice,"}, tenant_id=tenant_id, exclude_id=agent_id)
+    assert [notification[1]["agent_id"] for notification in notifications] == [cara.id, bob.id]
+
+
+async def test_create_post_without_a_tenant_keeps_the_database_wide_scope(monkeypatch, clawbook):
+    agent_id = uuid.uuid4()
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=_agent(agent_id, tenant_id=None)))
+    monkeypatch.setattr(
+        clawbook.clawbook_post_dao, "create_post", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+    )
+    find_by_mention_names = AsyncMock(return_value={})
+    monkeypatch.setattr(clawbook.agent_dao, "find_by_mention_names", find_by_mention_names)
+    _forbid_roster_scans(monkeypatch, clawbook)
+
+    await agent_tools._clawbook_create_post(agent_id, {"content": "@Bob hello"})
+
+    find_by_mention_names.assert_awaited_once_with({"bob"}, tenant_id=None, exclude_id=agent_id)
+
+
+async def test_create_post_without_a_mention_makes_no_lookup(monkeypatch, clawbook):
+    agent_id = uuid.uuid4()
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=_agent(agent_id)))
+    monkeypatch.setattr(
+        clawbook.clawbook_post_dao, "create_post", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+    )
+    find_by_mention_names = AsyncMock(return_value={})
+    monkeypatch.setattr(clawbook.agent_dao, "find_by_mention_names", find_by_mention_names)
+    _forbid_roster_scans(monkeypatch, clawbook)
+
+    await agent_tools._clawbook_create_post(agent_id, {"content": "Hello team"})
+
+    find_by_mention_names.assert_not_awaited()
 
 
 async def test_create_post_swallows_notification_failure_and_commits(monkeypatch, clawbook):
@@ -183,8 +272,8 @@ async def test_create_post_swallows_notification_failure_and_commits(monkeypatch
     monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", AsyncMock(return_value=SimpleNamespace(id=post_id)))
     monkeypatch.setattr(
         clawbook.agent_dao,
-        "list_for_tenant",
-        AsyncMock(return_value=[_agent(uuid.uuid4(), name="Bob")]),
+        "find_by_mention_names",
+        AsyncMock(return_value={"bob": _agent(uuid.uuid4(), name="Bob")}),
     )
 
     async def failing_notification(*_args, **_kwargs):
@@ -195,6 +284,22 @@ async def test_create_post_swallows_notification_failure_and_commits(monkeypatch
     result = await agent_tools._clawbook_create_post(agent_id, {"content": "@Bob hello"})
 
     assert result == f"Post published! (ID: {post_id})"
+
+
+async def test_create_post_swallows_mention_lookup_failure_and_commits(monkeypatch, clawbook):
+    agent_id = uuid.uuid4()
+    post_id = uuid.uuid4()
+    monkeypatch.setattr(clawbook.agent_dao, "get", AsyncMock(return_value=_agent(agent_id)))
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", AsyncMock(return_value=SimpleNamespace(id=post_id)))
+    monkeypatch.setattr(
+        clawbook.agent_dao, "find_by_mention_names", AsyncMock(side_effect=RuntimeError("lookup unavailable"))
+    )
+    notifications = _record_notifications(monkeypatch)
+
+    result = await agent_tools._clawbook_create_post(agent_id, {"content": "@Bob hello"})
+
+    assert result == f"Post published! (ID: {post_id})"
+    assert notifications == []
 
 
 async def test_create_post_truncates_database_failure(monkeypatch, clawbook):
@@ -286,17 +391,10 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
             return_value=[(post_author_id, "agent"), (other_commenter_id, "agent"), (other_commenter_id, "agent")]
         ),
     )
-    monkeypatch.setattr(
-        clawbook.agent_dao,
-        "list_for_tenant",
-        AsyncMock(return_value=[_agent(mentioned_id, name="Bob")]),
-    )
-    notifications = []
-
-    async def fake_send_notification(*args, **kwargs):
-        notifications.append((args, kwargs))
-
-    monkeypatch.setattr(notification_service, "send_notification", fake_send_notification)
+    find_by_mention_names = AsyncMock(return_value={"bob": _agent(mentioned_id, name="Bob")})
+    monkeypatch.setattr(clawbook.agent_dao, "find_by_mention_names", find_by_mention_names)
+    _forbid_roster_scans(monkeypatch, clawbook)
+    notifications = _record_notifications(monkeypatch)
 
     result = await agent_tools._clawbook_add_comment(agent_id, {"post_id": post_id, "content": content})
 
@@ -318,7 +416,57 @@ async def test_add_comment_truncates_content_notifies_participants_and_mentions(
     assert notifications[0][1]["agent_id"] == post_author_id
     assert notifications[1][1]["user_id"] == creator_id
     assert notifications[2][1]["agent_id"] == other_commenter_id
-    assert notifications[3][1]["agent_id"] == mentioned_id
+    find_by_mention_names.assert_awaited_once_with({"bob"}, tenant_id=agent.tenant_id, exclude_id=agent_id)
+    assert notifications[3][1] == {
+        "agent_id": mentioned_id,
+        "notification_kind": NotificationKind.MENTION,
+        "title": "Ada mentioned you in a comment",
+        "body": content[:150],
+        "link": f"/clawbook?post={post_id}",
+        "ref_id": post_id,
+        "sender_name": "Ada",
+    }
+
+
+async def test_add_comment_without_a_mention_makes_no_lookup(monkeypatch, clawbook):
+    agent_id = uuid.uuid4()
+    post = _stub_comment_scene(monkeypatch, clawbook, _agent(agent_id))
+    find_by_mention_names = AsyncMock(return_value={})
+    monkeypatch.setattr(clawbook.agent_dao, "find_by_mention_names", find_by_mention_names)
+    _forbid_roster_scans(monkeypatch, clawbook)
+    _record_notifications(monkeypatch)
+
+    result = await agent_tools._clawbook_add_comment(agent_id, {"post_id": post.id, "content": "Nice post"})
+
+    assert result == "Comment added to post by Mira."
+    find_by_mention_names.assert_not_awaited()
+
+
+async def test_add_comment_without_a_tenant_keeps_the_database_wide_scope(monkeypatch, clawbook):
+    agent_id = uuid.uuid4()
+    post = _stub_comment_scene(monkeypatch, clawbook, _agent(agent_id, tenant_id=None))
+    find_by_mention_names = AsyncMock(return_value={})
+    monkeypatch.setattr(clawbook.agent_dao, "find_by_mention_names", find_by_mention_names)
+    _forbid_roster_scans(monkeypatch, clawbook)
+    _record_notifications(monkeypatch)
+
+    await agent_tools._clawbook_add_comment(agent_id, {"post_id": post.id, "content": "@Bob @BOB nice"})
+
+    find_by_mention_names.assert_awaited_once_with({"bob"}, tenant_id=None, exclude_id=agent_id)
+
+
+async def test_add_comment_swallows_mention_lookup_failure(monkeypatch, clawbook):
+    agent_id = uuid.uuid4()
+    post = _stub_comment_scene(monkeypatch, clawbook, _agent(agent_id))
+    monkeypatch.setattr(
+        clawbook.agent_dao, "find_by_mention_names", AsyncMock(side_effect=RuntimeError("lookup unavailable"))
+    )
+    notifications = _record_notifications(monkeypatch)
+
+    result = await agent_tools._clawbook_add_comment(agent_id, {"post_id": post.id, "content": "@Bob nice"})
+
+    assert result == "Comment added to post by Mira."
+    assert [notification[1]["notification_kind"] for notification in notifications] == ["clawbook_reply"]
 
 
 async def test_add_comment_notifies_a_human_post_author(monkeypatch, clawbook):

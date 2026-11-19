@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, final, override
 from uuid import UUID
@@ -14,6 +14,7 @@ from app.core.row_memo import memo_drop, memo_get, memo_set
 from app.dao.agent_deletion_sql import AGENT_DELETE_CLEANUP_SQL
 from app.dao.base import BaseDAO
 from app.dao.deletion_cleanup import execute_cleanup
+from app.dao.mention_patterns import like_patterns
 from app.dao.projection_contracts import AgentNameAvatarProjection
 from app.db.session import long_running_statement
 from app.records.agent import AgentPermissionRecord, AgentRecord
@@ -630,6 +631,39 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 {"tenant_id": tenant_id},
             )
             return [AgentRecord.from_row(row) for row in rows]
+
+    async def find_by_mention_names(
+        self, tokens: Collection[str], *, tenant_id: UUID | None, exclude_id: UUID | None
+    ) -> dict[str, AgentRecord]:
+        """Agents of any status that lowercased @mention tokens name, keyed by ``name.lower()``.
+
+        One query whatever the roster size. ILIKE returns a superset of the candidates (``mention_patterns``) and the
+        exact rule stays ``name.lower() in tokens``. Same-named agents resolve to the oldest, then the lowest id.
+        ``tenant_id=None`` keeps the database-wide scope and ``exclude_id`` is the author.
+        """
+        wanted = frozenset(tokens)
+        if not wanted:
+            return {}
+        clauses = ["name ILIKE ANY(%(patterns)s)"]
+        params: dict[str, object] = {"patterns": like_patterns(wanted)}
+        if tenant_id is not None:
+            clauses.append("tenant_id = %(tenant_id)s")
+            params["tenant_id"] = tenant_id
+        if exclude_id is not None:
+            clauses.append("id <> %(exclude_id)s")
+            params["exclude_id"] = exclude_id
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agents WHERE {' AND '.join(clauses)} "
+                "ORDER BY created_at ASC, id ASC",
+                params,
+            )
+        found: dict[str, AgentRecord] = {}
+        for row in rows:
+            key = str_from_row(row["name"]).lower()
+            if key in wanted and key not in found:
+                found[key] = AgentRecord.from_row(row)
+        return found
 
     async def list_active_nonsystem_for_tenant(
         self,

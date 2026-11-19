@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from app.api import clawbook
 from app.core.domain.users import UserRole
+from app.core.notification_kinds import NotificationKind
 from app.records.agent import AgentRecord
 from app.records.clawbook import ClawbookCommentRecord, ClawbookPostRecord
 from app.records.user import UserRecord
@@ -45,6 +46,23 @@ def post(actor: UserRecord) -> ClawbookPostRecord:
     )
 
 
+def _targeted_lookups(monkeypatch, agents=None, users=None):
+    """Fake the two mention lookups and make every roster scan fail the test."""
+
+    async def roster_scan(*_args, **_kwargs):
+        raise AssertionError("mention resolution must not load a roster")
+
+    monkeypatch.setattr(clawbook.agent_dao, "list_for_tenant", roster_scan)
+    monkeypatch.setattr(clawbook.agent_dao, "get_all", roster_scan)
+    monkeypatch.setattr(clawbook.user_dao, "list_active_for_tenant", roster_scan)
+    monkeypatch.setattr(clawbook.user_dao, "get_all", roster_scan)
+    find_agents = AsyncMock(return_value=agents or {})
+    find_users = AsyncMock(return_value=users or {})
+    monkeypatch.setattr(clawbook.agent_dao, "find_by_mention_names", find_agents)
+    monkeypatch.setattr(clawbook.user_dao, "find_active_by_mention_names", find_users)
+    return find_agents, find_users
+
+
 @pytest.mark.parametrize("operation", ["post", "comment"])
 async def test_human_writes_and_notifications_ignore_spoofed_identity(client, actor, post, monkeypatch, operation):
     spoofed_id = uuid4()
@@ -70,8 +88,7 @@ async def test_human_writes_and_notifications_ignore_spoofed_identity(client, ac
     monkeypatch.setattr(
         clawbook.clawbook_comment_dao, "list_distinct_comment_authors", AsyncMock(return_value=[(prior_agent, "agent")])
     )
-    monkeypatch.setattr(clawbook.agent_dao, "list_for_tenant", AsyncMock(return_value=[]))
-    monkeypatch.setattr(clawbook.user_dao, "list_active_for_tenant", AsyncMock(return_value=[mentioned]))
+    find_agents, find_users = _targeted_lookups(monkeypatch, users={"colleague": mentioned})
     notify = AsyncMock()
     monkeypatch.setattr(notification_service, "send_notification", notify)
     endpoint = "/api/clawbook/posts" if operation == "post" else f"/api/clawbook/posts/{post.id}/comments"
@@ -101,8 +118,93 @@ async def test_human_writes_and_notifications_ignore_spoofed_identity(client, ac
     assert {
         call.kwargs.get("user_id", call.kwargs.get("agent_id")) for call in notify.await_args_list
     } == expected_recipients
+    find_agents.assert_awaited_once_with({"colleague"}, tenant_id=actor.tenant_id, exclude_id=actor.id)
+    find_users.assert_awaited_once_with({"colleague"}, tenant_id=actor.tenant_id, exclude_user_id=actor.id)
+    assert [
+        call.kwargs for call in notify.await_args_list if call.kwargs["notification_kind"] == NotificationKind.MENTION
+    ] == [
+        {
+            "user_id": spoofed_id,
+            "notification_kind": NotificationKind.MENTION,
+            "title": f"{actor.display_name} mentioned you in a post",
+            "body": "@Colleague hello",
+            "link": f"/clawbook?post={post.id}",
+            "ref_id": post.id,
+            "sender_name": actor.display_name,
+        }
+    ]
     if operation == "post":
         assert written["tenant_id"] == actor.tenant_id
+
+
+async def test_mentions_resolve_with_one_lookup_per_kind_and_notify_each_recipient_once(monkeypatch):
+    tenant_id, author_id, post_id = uuid4(), uuid4(), uuid4()
+    bob_agent = AgentRecord(id=uuid4(), name="Bob", tenant_id=tenant_id, creator_id=author_id)
+    bob_user = UserRecord(id=uuid4(), display_name="Bob", tenant_id=tenant_id)
+    cara_user = UserRecord(id=uuid4(), display_name="Cara", tenant_id=tenant_id)
+    find_agents, find_users = _targeted_lookups(
+        monkeypatch, agents={"bob": bob_agent}, users={"bob": bob_user, "cara": cara_user}
+    )
+    notify = AsyncMock()
+    monkeypatch.setattr(notification_service, "send_notification", notify)
+
+    await clawbook._notify_mentions("@Cara @Bob @ALICE, @bob @Bob", author_id, "Author", post_id, tenant_id)
+
+    tokens = {"cara", "bob", "alice,"}
+    find_agents.assert_awaited_once_with(tokens, tenant_id=tenant_id, exclude_id=author_id)
+    find_users.assert_awaited_once_with(tokens, tenant_id=tenant_id, exclude_user_id=author_id)
+    assert [call.kwargs.get("user_id", call.kwargs.get("agent_id")) for call in notify.await_args_list] == [
+        cara_user.id,
+        bob_agent.id,
+        bob_user.id,
+    ]
+
+
+async def test_a_mention_naming_nobody_sends_nothing(monkeypatch):
+    _targeted_lookups(monkeypatch)
+    notify = AsyncMock()
+    monkeypatch.setattr(notification_service, "send_notification", notify)
+
+    await clawbook._notify_mentions("@Nobody, hi", uuid4(), "Author", uuid4(), uuid4())
+
+    notify.assert_not_awaited()
+
+
+async def test_content_without_a_mention_makes_no_lookup(monkeypatch):
+    find_agents, find_users = _targeted_lookups(monkeypatch)
+    notify = AsyncMock()
+    monkeypatch.setattr(notification_service, "send_notification", notify)
+
+    await clawbook._notify_mentions("Update with no one tagged", uuid4(), "Author", uuid4(), uuid4())
+
+    find_agents.assert_not_awaited()
+    find_users.assert_not_awaited()
+    notify.assert_not_awaited()
+
+
+async def test_a_post_without_a_tenant_keeps_the_database_wide_scope(monkeypatch):
+    author_id = uuid4()
+    find_agents, find_users = _targeted_lookups(monkeypatch)
+    monkeypatch.setattr(notification_service, "send_notification", AsyncMock())
+
+    await clawbook._notify_mentions("@Bob", author_id, "Author", uuid4(), None)
+
+    find_agents.assert_awaited_once_with({"bob"}, tenant_id=None, exclude_id=author_id)
+    find_users.assert_awaited_once_with({"bob"}, tenant_id=None, exclude_user_id=author_id)
+
+
+async def test_a_failing_mention_lookup_never_fails_the_post(client, post, monkeypatch):
+    monkeypatch.setattr(clawbook.clawbook_post_dao, "create_post", AsyncMock(return_value=post))
+    find_agents, _ = _targeted_lookups(monkeypatch)
+    find_agents.side_effect = RuntimeError("lookup unavailable")
+    notify = AsyncMock()
+    monkeypatch.setattr(notification_service, "send_notification", notify)
+
+    response = await client.post("/api/clawbook/posts", json={"content": "@Colleague hello"})
+
+    assert response.status_code == 200
+    assert response.json()["id"] == str(post.id)
+    notify.assert_not_awaited()
 
 
 async def test_post_content_accepts_1000_characters_and_rejects_1001_before_writing(client, post, monkeypatch):

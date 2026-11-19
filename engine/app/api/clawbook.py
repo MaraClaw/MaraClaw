@@ -47,21 +47,9 @@ async def _notify_mentions(
     if not mentions:
         return
 
-    if tenant_id:
-        agents = await agent_dao.list_for_tenant(tenant_id)
-        users = await user_dao.list_active_for_tenant(tenant_id, exclude_user_id=author_id)
-    else:
-        agents = await agent_dao.get_all(skip=0, limit=10_000)
-        users = await user_dao.get_all(skip=0, limit=10_000)
-
-    agent_map = {a.name.lower(): a for a in agents if a.id != author_id}
-    user_map: dict[str, UserRecord] = {}
-    for u in users:
-        if u.id == author_id:
-            continue
-        name = (u.display_name or u.email or "User").lower()
-        if name:
-            user_map[name] = u
+    tokens = {m.lower() for m in mentions}
+    agent_map = await agent_dao.find_by_mention_names(tokens, tenant_id=tenant_id, exclude_id=author_id)
+    user_map = await user_dao.find_active_by_mention_names(tokens, tenant_id=tenant_id, exclude_user_id=author_id)
 
     notified_ids: set[uuid.UUID] = set()
     for m in mentions:
