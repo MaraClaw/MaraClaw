@@ -1,7 +1,7 @@
 # ─── Backend Dockerfile (Optimized) ─────────────────────
 # Multi-stage: deps → production
 # Linux docker CLI for pywhales (host binaries are the wrong OS).
-FROM docker:29.9.3-cli AS dockercli
+FROM docker:29.10.0-cli AS dockercli
 
 FROM node:26.13.1-trixie-slim AS whatsapp
 WORKDIR /bridge
