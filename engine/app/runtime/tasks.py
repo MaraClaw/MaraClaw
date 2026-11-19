@@ -14,17 +14,19 @@ from typing import Literal, TypeIs
 
 from app.core.incident_reporting import report_exception
 from app.core.logging import logger
+from app.runtime.shutdown_budget import join
 
 
-async def cancel_tasks(tasks: Iterable[asyncio.Task[object]]) -> None:
+async def cancel_tasks(tasks: Iterable[asyncio.Task[object]], *, label: str = "Owned") -> None:
+    """Cancel and join ``tasks``; inside a shutdown step the join stops at the step's deadline and names the rest."""
     owned = tuple(tasks)
     for task in owned:
         if not task.done():
             _ = task.cancel()
-    results = await asyncio.gather(*owned, return_exceptions=True)
-    for result in results:
-        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
-            logger.warning("[shutdown] Owned task failed: {}", result)
+    await join(owned, f"{label} tasks")
+    for task in owned:
+        if task.done() and not task.cancelled() and (error := task.exception()) is not None:
+            logger.warning("[shutdown] Owned task failed: {}", error)
 
 
 class AdmissionClosedError(Exception):
@@ -84,7 +86,7 @@ class TaskAdmission:
         _, pending = await asyncio.wait(owned, timeout=max(0.0, grace_seconds))
         if pending:
             logger.warning("[shutdown] {} drain timed out; cancelling {} owned tasks", self.label, len(pending))
-            await cancel_tasks(pending)
+            await cancel_tasks(pending, label=self.label)
 
 
 class RequiredLoopExitedError(RuntimeError):

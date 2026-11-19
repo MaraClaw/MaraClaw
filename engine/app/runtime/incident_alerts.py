@@ -11,12 +11,12 @@ from app.core.events import get_cache_redis
 from app.core.incident_reporting import IncidentSink, install_sink, uninstall_sink
 from app.core.logging import logger, new_trace_id
 from app.core.redis_cache import cache_key
+from app.runtime.shutdown_budget import join
 from app.services.incident_report import IncidentReport
 
 _COOLDOWN_SECONDS = 900
 _LOCAL_LIMIT = 256
 _REDIS_TIMEOUT = 0.9
-_DRAIN_SECONDS = 20.0
 _RELEASE = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 
 
@@ -99,23 +99,23 @@ class IncidentAlerts:
                     except Exception as error:
                         logger.warning("[incidents] Cooldown release failed: {}", type(error).__name__)
 
-    async def stop(self) -> None:
-        """Uninstall, drain within the deadline, then cancel/join only our consumer."""
+    async def stop(self, grace_seconds: float = 20.0) -> None:
+        """Uninstall, drain within the grace period, then cancel only our consumer and join it until the deadline."""
         uninstall_sink(self._sink)
         consumer = self._consumer
         if consumer is None:
             return
         joined = asyncio.create_task(self._queue.join(), name="incident-drain", context=Context())
         try:
-            _ = await asyncio.wait((joined, consumer), timeout=_DRAIN_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+            _ = await asyncio.wait((joined, consumer), timeout=grace_seconds, return_when=asyncio.FIRST_COMPLETED)
         finally:
             for task in (joined, consumer):
                 if not task.done():
                     _ = task.cancel()
-            results = await asyncio.gather(joined, consumer, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.warning("[incidents] Consumer stopped: {}", type(result).__name__)
+            await join((joined, consumer), "Incident alert tasks")
+            for task in (joined, consumer):
+                if task.done() and not task.cancelled() and isinstance(error := task.exception(), Exception):
+                    logger.warning("[incidents] Consumer stopped: {}", type(error).__name__)
             lost = self._outstanding + self._overflow
             while not self._queue.empty():
                 _ = self._queue.get_nowait()

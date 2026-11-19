@@ -15,6 +15,10 @@ from app.services.sandbox.config import SandboxConfig, SandboxType
 # Retention settings stop at 100 years, which keeps ``now - timedelta(days=...)`` far from datetime overflow.
 MAX_RETENTION_DAYS: Final = 36500
 MIN_TRIGGER_EXECUTION_RETENTION_DAYS: Final = 7
+# A container stop sends SIGTERM, waits its stop timeout, then SIGKILLs. Fargate allows a stopTimeout of at most 120 s,
+# and the stop timeout must cover the uvicorn window, the cleanup budget and this margin for interpreter exit.
+FARGATE_MAX_STOP_TIMEOUT_SECONDS: Final = 120
+SHUTDOWN_KILL_MARGIN_SECONDS: Final = 10
 
 
 def _running_in_container() -> bool:
@@ -190,6 +194,26 @@ class Settings(BaseSettings):
 
     # Process role
     PROCESS_ROLE: str = "all"
+    # Graceful stop: uvicorn finishes in-flight HTTP within the window (entrypoint.sh exports it as
+    # UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN), then the lifespan cleanup runs within the budget.
+    SHUTDOWN_HTTP_GRACE_SECONDS: int = Field(default=30, ge=1)
+    SHUTDOWN_CLEANUP_BUDGET_SECONDS: int = Field(default=75, ge=1)
+
+    @model_validator(mode="after")
+    def validate_shutdown_window(self) -> Settings:
+        from app.runtime.shutdown_budget import TAIL_SECONDS
+
+        if self.SHUTDOWN_CLEANUP_BUDGET_SECONDS < TAIL_SECONDS:
+            raise ValueError(
+                f"Shutdown cleanup budget must cover the {TAIL_SECONDS:g} s reserved for closing resources"
+            )
+        window = self.SHUTDOWN_HTTP_GRACE_SECONDS + self.SHUTDOWN_CLEANUP_BUDGET_SECONDS + SHUTDOWN_KILL_MARGIN_SECONDS
+        if window > FARGATE_MAX_STOP_TIMEOUT_SECONDS:
+            raise ValueError(
+                f"Shutdown HTTP grace + cleanup budget + {SHUTDOWN_KILL_MARGIN_SECONDS} s margin must not exceed "
+                f"the {FARGATE_MAX_STOP_TIMEOUT_SECONDS} s Fargate stop timeout"
+            )
+        return self
 
     # Docker (for Agent containers)
     DOCKER_NETWORK: str = "maraclaw_network"

@@ -3,8 +3,9 @@
 import asyncio
 import os
 import sys
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Protocol
 
 import anyio
@@ -22,6 +23,7 @@ from app.runtime.diagnostics import log_bwrap_startup_status
 from app.runtime.incident_alerts import IncidentAlerts
 from app.runtime.proxy import ShadowsocksProxy
 from app.runtime.readiness import Readiness
+from app.runtime.shutdown_budget import SETTLE_FRACTION, ShutdownBudget, abandoned, joins_until
 from app.runtime.tasks import OwnedTasks, loop_progress
 from app.services.channels.outbound_http import shutdown_outbound_client
 from app.services.heartbeat import close_heartbeat_admission, drain_heartbeat_tasks, open_heartbeat_admission
@@ -362,11 +364,18 @@ class Runtime:
         self.readiness.initialized = True
 
     @staticmethod
-    async def _cleanup(name: str, close: Callable[[], Awaitable[None]]) -> None:
-        try:
-            await close()
-        except (Exception, asyncio.CancelledError) as exc:
-            logger.warning("[shutdown] Cleanup {} failed: {}", name, exc)
+    async def _cleanup(name: str, close: Callable[[], Coroutine[object, object, None]], seconds: float) -> None:
+        """Wait at most ``seconds`` for one step, whose joins stop a little earlier; never cancel an overrunning step."""
+        loop = asyncio.get_running_loop()
+        with joins_until(loop.time() + seconds * (1 - SETTLE_FRACTION)):
+            step = asyncio.create_task(close(), name=f"shutdown: {name}")
+        _ = await asyncio.wait((step,), timeout=seconds)
+        if not step.done():
+            abandoned(f"Cleanup {name}", (step,))
+        elif step.cancelled():
+            logger.warning("[shutdown] Cleanup {} failed: cancelled", name)
+        elif (error := step.exception()) is not None:
+            logger.warning("[shutdown] Cleanup {} failed: {}", name, error)
 
     def begin_drain(self) -> None:
         """Fail readiness and close producer admission synchronously, before any cleanup awaits."""
@@ -376,26 +385,38 @@ class Runtime:
         close_wake_admission()
 
     async def stop(self) -> None:
+        """Run every cleanup step in order within SHUTDOWN_CLEANUP_BUDGET_SECONDS; resources always get their tail."""
         self.begin_drain()
-        await self._cleanup("route background tasks", drain_background_tasks)
-        await self._cleanup("wrappers", self.tasks.stop)
-        await self._cleanup("schedule executions", stop_schedule_tasks)
-        for manager in self.managers:
-            await self._cleanup(type(manager).__name__, manager.stop_all)
-        await self._cleanup("trigger invocations", drain_trigger_tasks)
-        await self._cleanup("heartbeats", drain_heartbeat_tasks)
-        await self._cleanup("inbox wakes", drain_wake_tasks)
-        await self._cleanup("ss-local", self.proxy.stop)
+        budget = ShutdownBudget(get_settings().SHUTDOWN_CLEANUP_BUDGET_SECONDS, asyncio.get_running_loop().time)
+
+        async def cleanup(name: str, close: Callable[[], Coroutine[object, object, None]]) -> None:
+            await self._cleanup(name, close, budget.slice(name))
+
+        async def drain(name: str, close: Callable[[float], Coroutine[object, object, None]]) -> None:
+            # A drain waits half its slice for the work to finish, then cancels it and joins it until the deadline.
+            seconds = budget.slice(name)
+            await self._cleanup(name, partial(close, seconds / 2), seconds)
+
+        await drain("route background tasks", drain_background_tasks)
+        await cleanup("wrappers", self.tasks.stop)
+        await cleanup("schedule executions", stop_schedule_tasks)
+        for index, manager in enumerate(self.managers):
+            seconds = budget.slice("connector managers", parts=len(self.managers) - index)
+            await self._cleanup(type(manager).__name__, manager.stop_all, seconds)
+        await drain("trigger invocations", drain_trigger_tasks)
+        await drain("heartbeats", drain_heartbeat_tasks)
+        await drain("inbox wakes", drain_wake_tasks)
+        await cleanup("ss-local", self.proxy.stop)
         if self.realtime_attempted:
-            await self._cleanup("realtime", realtime_router.stop)
-        await self._cleanup("incident alerts", self.incidents.stop)
+            await cleanup("realtime", realtime_router.stop)
+        await drain("incident alerts", self.incidents.stop)
         if self.pool_attempted:
-            await self._cleanup("database", close_pool)
-            await self._cleanup("redis", close_redis)
-            await self._cleanup("LLM clients", shutdown_llm_clients)
-            await self._cleanup("outbound HTTP client", shutdown_outbound_client)
-            await self._cleanup("Tavily HTTP client", shutdown_tavily_client)
-            await self._cleanup("MCP sessions", shutdown_mcp_sessions)
+            await cleanup("database", close_pool)
+            await cleanup("redis", close_redis)
+            await cleanup("LLM clients", shutdown_llm_clients)
+            await cleanup("outbound HTTP client", shutdown_outbound_client)
+            await cleanup("Tavily HTTP client", shutdown_tavily_client)
+            await cleanup("MCP sessions", shutdown_mcp_sessions)
         if self.logging_attempted:
             try:
                 shutdown_logging()

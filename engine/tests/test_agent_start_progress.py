@@ -136,7 +136,7 @@ async def test_start_guest_contract_is_exempt_and_shutdown_drains_publication(
         published.append(operation)
         return True
 
-    async def first_cleanup() -> None:
+    async def first_cleanup(_grace_seconds: float) -> None:
         stopping.set()
 
     monkeypatch.setattr(module.agent_manager, "start_container", start)
