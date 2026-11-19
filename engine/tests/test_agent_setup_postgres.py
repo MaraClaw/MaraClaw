@@ -71,8 +71,11 @@ async def create_pending(actor: UUID, agent_id: UUID | None = None) -> UUID:
     return agent.id
 
 
-async def new_creating_agent(db: DbConnection, actor: UUID) -> tuple[UUID, UUID]:
-    """A creating agent owned by an active creator in an active tenant; returns (agent id, tenant id)."""
+async def new_setup_agent(db: DbConnection, actor: UUID) -> tuple[UUID, UUID]:
+    """A never-started agent owned by an active creator in an active tenant; returns (agent id, tenant id).
+
+    Its status is `idle`, as creation records it; a setup retry is what moves a failed agent to `creating`.
+    """
     identity_id, tenant_id = uuid4(), uuid4()
     await db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity_id})
     await db.execute(
@@ -84,7 +87,7 @@ async def new_creating_agent(db: DbConnection, actor: UUID) -> tuple[UUID, UUID]
     )
     agent_id = await create_pending(actor)
     await db.execute(
-        "UPDATE agents SET status = 'creating', tenant_id = %(tenant)s WHERE id = %(id)s",
+        "UPDATE agents SET status = 'idle', tenant_id = %(tenant)s WHERE id = %(id)s",
         {"id": agent_id, "tenant": tenant_id},
     )
     return agent_id, tenant_id
@@ -256,7 +259,7 @@ async def test_postgres_http_create_survives_api_exit_and_worker_recovery(setup_
 
 async def test_postgres_setup_success_queues_first_start(setup_db):
     db, actor = setup_db
-    agent_id, tenant_id = await new_creating_agent(db, actor)
+    agent_id, tenant_id = await new_setup_agent(db, actor)
     await finish_next_setup()
     operations = await start_operations(db, agent_id)
     assert len(operations) == 1
@@ -274,16 +277,16 @@ async def test_postgres_setup_success_queues_first_start(setup_db):
 
 async def test_postgres_setup_failure_queues_no_start(setup_db):
     db, actor = setup_db
-    agent_id, _tenant_id = await new_creating_agent(db, actor)
+    agent_id, _tenant_id = await new_setup_agent(db, actor)
     await finish_next_setup("setup_failed")
     assert await start_operations(db, agent_id) == []
     assert await agent_state(db, agent_id) == {"status": "error", "setup_pending": True}
 
 
-@pytest.mark.parametrize(("status", "container"), [("stopped", None), ("creating", "existing-container")])
+@pytest.mark.parametrize(("status", "container"), [("stopped", None), ("idle", "existing-container")])
 async def test_postgres_setup_success_queues_no_start_outside_first_creation(setup_db, status, container):
     db, actor = setup_db
-    agent_id, _tenant_id = await new_creating_agent(db, actor)
+    agent_id, _tenant_id = await new_setup_agent(db, actor)
     await db.execute(
         "UPDATE agents SET status = %(status)s::agent_status_enum, container_id = %(container)s WHERE id = %(id)s",
         {"id": agent_id, "status": status, "container": container},
@@ -303,7 +306,7 @@ async def test_postgres_setup_success_queues_no_start_outside_first_creation(set
 )
 async def test_postgres_setup_success_queues_no_start_for_ineligible_agent(setup_db, statement):
     db, actor = setup_db
-    agent_id, _tenant_id = await new_creating_agent(db, actor)
+    agent_id, _tenant_id = await new_setup_agent(db, actor)
     await db.execute(statement, {"id": agent_id})
     await finish_next_setup()
     assert await start_operations(db, agent_id) == []
@@ -312,7 +315,7 @@ async def test_postgres_setup_success_queues_no_start_for_ineligible_agent(setup
 
 async def test_postgres_retried_setup_queues_first_start_once_it_succeeds(setup_db):
     db, actor = setup_db
-    agent_id, _tenant_id = await new_creating_agent(db, actor)
+    agent_id, _tenant_id = await new_setup_agent(db, actor)
     await finish_next_setup("setup_failed")
     assert await agent_setup_dao.retry_failed(agent_id) is not None
     assert await start_operations(db, agent_id) == []

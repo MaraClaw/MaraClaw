@@ -134,8 +134,9 @@ class AgentSetupDAO(BaseDAO[AgentSetupRecord]):
                     WHERE id = %(id)s""",
                     {"id": claim.agent_id},
                 )
-                # The first start is queued in this transaction, after setup_pending clears (eligibility requires it).
-                if agent is not None and agent["status"] == "creating" and agent["container_id"] is None:
+                # A never-started agent (`idle` from creation, `creating` after a setup retry) gets its first start
+                # queued here, after setup_pending clears (eligibility requires it). Stopped during setup: no start.
+                if agent is not None and agent["status"] in ("idle", "creating") and agent["container_id"] is None:
                     _ = await agent_start_dao.enqueue_if_eligible(db, claim.agent_id)
             memo_drop("agent", claim.agent_id)
             return True
