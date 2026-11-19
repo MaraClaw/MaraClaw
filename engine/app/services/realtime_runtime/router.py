@@ -19,7 +19,12 @@ from app.core.events import get_redis
 from app.core.json_types import json_loads_object, json_object_from
 from app.core.logging import logger
 from app.schemas.chat_wire import ChatEventType
-from app.services.realtime_runtime.chat_authorization import authorize_chat_delivery, read_shared_acl_version
+from app.services.realtime_runtime.chat_authorization import (
+    DeliveryVerdict,
+    authorize_chat_delivery,
+    cancel_pending_decisions,
+    read_shared_acl_version,
+)
 from app.services.realtime_runtime.contracts import (
     LocalDeliverer,
     RealtimeEnvelope,
@@ -42,6 +47,12 @@ PUBSUB_PREFIX = "realtime:ws"
 DEFAULT_SEND_TIMEOUT_SECONDS = 5.0
 TERMINAL_SEND_TIMEOUT_SECONDS = 15.0
 TERMINAL_EVENT_TYPES = frozenset({ChatEventType.DONE, ChatEventType.ERROR})
+# How long one delivery waits for a shared-session authorization decision, counted from the decision's start rather
+# than from the event, so a slow decision holds the serial subscriber loop once and the events after it skip at once.
+# The decision keeps running past a wait and still fills the socket's cache. These bound a wait, never a send.
+CHUNK_AUTHORIZATION_WAIT_SECONDS = 2.0
+DEFAULT_AUTHORIZATION_WAIT_SECONDS = 5.0
+TERMINAL_AUTHORIZATION_WAIT_SECONDS = 15.0
 
 type ResubscribeHook = Callable[[], Awaitable[object]]
 
@@ -51,6 +62,16 @@ def resolve_send_timeout(message: Mapping[str, object]) -> float:
     return (
         TERMINAL_SEND_TIMEOUT_SECONDS if message.get("type") in TERMINAL_EVENT_TYPES else DEFAULT_SEND_TIMEOUT_SECONDS
     )
+
+
+def resolve_authorization_wait(message: Mapping[str, object]) -> float:
+    """Return how long a delivery of this event waits for a shared-session decision, counted from its start."""
+    event_type = message.get("type")
+    if event_type == ChatEventType.CHUNK:
+        return CHUNK_AUTHORIZATION_WAIT_SECONDS
+    if event_type in TERMINAL_EVENT_TYPES:
+        return TERMINAL_AUTHORIZATION_WAIT_SECONDS
+    return DEFAULT_AUTHORIZATION_WAIT_SECONDS
 
 
 class RealtimeRouter:
@@ -183,12 +204,14 @@ class RealtimeRouter:
         Local sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``; the event is serialized once and,
         for a shared session, the ACL version is read once before any socket authorizes. ``send_timeout`` bounds
         only ``ws.send_text``, the one wait a client controls; without one, ``resolve_send_timeout`` picks the default
-        or terminal bound. Authorization and Redis presence are never cancelled by it: aborting authorization discards
-        the positive decision it would cache, and aborting routing skips remote instances.
+        or terminal bound. A shared-session socket waits for its authorization decision only until
+        ``resolve_authorization_wait`` after that decision started, and is skipped for this event (``skipped``)
+        when the decision is late or fails transiently; the decision itself is never cancelled, and neither is the
+        Redis presence lookup: aborting routing skips remote instances.
 
-        ``observer`` owns the sockets: it hears every successful send and every send timeout (so it can evict a socket
-        that keeps stalling), and a socket it no longer reports live is skipped right before its send. The router
-        keeps no socket state of its own.
+        ``observer`` owns the sockets: it hears every successful send, every send timeout (so it can evict a socket
+        that keeps stalling) and every revoked socket (so it can close it), and a socket it no longer reports live is
+        skipped right before its send. The router keeps no socket state of its own.
         """
         targets = [
             (ws, local_session_id)
@@ -198,7 +221,8 @@ class RealtimeRouter:
         presence = asyncio.create_task(self._remote_targets(agent_id, session_id, user_id), name="realtime-presence")
         try:
             bound = resolve_send_timeout(message) if send_timeout is None else send_timeout
-            local = await self._deliver_local(agent_id, message, targets, bound, observer)
+            wait = resolve_authorization_wait(message)
+            local = await self._deliver_local(agent_id, message, targets, bound, wait, observer)
             remote_targets = await presence
         finally:
             if not presence.done():
@@ -236,23 +260,31 @@ class RealtimeRouter:
         message: dict[str, object],
         targets: list[tuple[WebSocket, str | None]],
         send_timeout: float,
+        authorization_wait: float,
         observer: SendObserver | None,
     ) -> RoutingOutcome:
         if not targets:
             return RoutingOutcome()
         text = encode_event_text(message)
         acl_version = await read_shared_acl_version(agent_id, (target_session for _, target_session in targets))
-        failed = evicted = 0
+        failed = evicted = skipped = 0
 
         async def deliver(target: tuple[WebSocket, str | None]) -> bool:
-            nonlocal failed, evicted
+            nonlocal failed, evicted, skipped
             ws, target_session = target
             try:
-                if not await authorize_chat_delivery(ws, agent_id, target_session, acl_version=acl_version):
-                    return False
+                verdict = await authorize_chat_delivery(
+                    ws, agent_id, target_session, acl_version=acl_version, wait_seconds=authorization_wait
+                )
             except Exception as exc:
-                failed += 1
+                skipped += 1
                 logger.warning(f"[Realtime] Failed to authorize local websocket delivery: {exc!r}")
+                return False
+            if verdict is not DeliveryVerdict.ALLOWED:
+                if verdict is DeliveryVerdict.SKIPPED:
+                    skipped += 1
+                elif verdict.close_code is not None and observer is not None:
+                    observer.refused(agent_id, ws, verdict.close_code)
                 return False
             # Authorization may have awaited while another delivery evicted this socket from our snapshot.
             if observer is not None and not observer.is_live(ws):
@@ -276,7 +308,9 @@ class RealtimeRouter:
             return True
 
         delivered = await fan_out(targets, deliver)
-        return RoutingOutcome(local_targets=len(targets), delivered=delivered, failed=failed, evicted=evicted)
+        return RoutingOutcome(
+            local_targets=len(targets), delivered=delivered, failed=failed, evicted=evicted, skipped=skipped
+        )
 
     async def _remote_targets(self, agent_id: str, session_id: str | None, user_id: str | None) -> dict[str, int]:
         remote_targets: dict[str, int] = {}
@@ -307,6 +341,7 @@ class RealtimeRouter:
         )
 
     async def stop(self) -> None:
+        """Stop the subscriber, then cancel and await the shared-session decisions still running, before the pool closes."""
         self._started = False
         if self._subscription is not None:
             self._subscription.acknowledged = False
@@ -321,6 +356,7 @@ class RealtimeRouter:
                 with suppress(asyncio.CancelledError):
                     await task
             self._subscriber_task = None
+        await cancel_pending_decisions()
         self._subscription = None
         self._started = False
 

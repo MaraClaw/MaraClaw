@@ -7,6 +7,7 @@ import pytest
 
 from app.records.gateway_message import GatewayMessageRecord
 from app.services import turn_timing
+from app.services.realtime_runtime.contracts import RoutingOutcome
 from app.services.turn_timing import AdapterTiming, RelayTimeline, TurnTimeline
 
 CREATED = datetime(2026, 11, 6, 3, 0, tzinfo=UTC)
@@ -110,6 +111,19 @@ def test_dropped_chunks_share_the_one_turn_line_with_published_and_slowest_witho
         "slowest_chunk_ms": 1750,
     }
     assert "private prompt" not in json.dumps(payload)
+
+
+def test_a_chunk_a_viewer_skipped_while_awaiting_authorization_counts_as_dropped(lines) -> None:
+    timeline = TurnTimeline(uuid4(), uuid4(), CREATED)
+    timeline.mark("claimed", at(5))
+    for outcome in (
+        RoutingOutcome(local_targets=2, delivered=1, skipped=1),
+        RoutingOutcome(local_targets=2, delivered=2),
+    ):
+        timeline.chunk_published(0.25, dropped=outcome.dropped)
+    timeline.emit("terminal")
+    ((_, payload),) = lines
+    assert (payload["chunks_published"], payload["chunks_dropped"]) == (2, 1)
 
 
 def test_turn_without_published_chunks_keeps_the_line_unchanged(lines) -> None:

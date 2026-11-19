@@ -45,9 +45,23 @@ def ticket_key(ticket: str) -> str:
     return f"{get_settings().REDIS_KEY_PREFIX}:chat-ticket:{digest}"
 
 
+def is_expired(binding: ChatTicketBinding) -> bool:
+    """The binding outlived its absolute deadline, the expiry of the access token it was issued from."""
+    return time.time() >= binding.auth_deadline
+
+
 async def authorize(binding: ChatTicketBinding) -> tuple[UserRecord, AgentRecord, str]:
-    if time.time() >= binding.auth_deadline:
+    if is_expired(binding):
         raise HTTPException(401, "Authentication expired")
+    return await authorize_identity(binding)
+
+
+async def authorize_identity(binding: ChatTicketBinding) -> tuple[UserRecord, AgentRecord, str]:
+    """Everything ``authorize`` checks except the deadline, which belongs to each socket rather than to its identity.
+
+    Shared-session delivery runs this once for every socket bound to the same identity and checks each socket's own
+    deadline with ``is_expired``.
+    """
     user = await load_user_principal(binding.user_id, fresh=True)
     if user.identity is None:
         raise HTTPException(401, "Identity unavailable")

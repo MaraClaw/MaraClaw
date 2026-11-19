@@ -1,5 +1,6 @@
 import json
 import time
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -15,8 +16,36 @@ from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.user import UserRecord
 from app.services import chat_tickets
+from app.services.realtime_runtime import chat_authorization
 from app.services.realtime_runtime.router import RealtimeRouter
 from app.services.shared_chat import shared_session_id
+
+
+@pytest.fixture(autouse=True)
+def connection_scope(monkeypatch):
+    """Decisions take a pool checkout; these tests have no pool, and their DAO reads are faked."""
+    monkeypatch.setattr(chat_authorization, "connection_ctx", nullcontext)
+
+
+async def deliver(monkeypatch, *, remote, agent_id, session_id, connections):
+    """Deliver one `done` event through the receiver or the publisher, both observed by one manager; return it once
+    every close the delivery started has finished."""
+    manager = ConnectionManager()
+    manager.active_connections[str(agent_id)] = connections
+    if remote:
+        await manager.deliver_pubsub_message(agent_id=str(agent_id), session_id=session_id, payload={"type": "done"})
+    else:
+        router = RealtimeRouter()
+        monkeypatch.setattr(router, "_list_presence", AsyncMock(return_value=[]))
+        await router.route_message(
+            agent_id=str(agent_id),
+            session_id=session_id,
+            message={"type": "done"},
+            local_connections=connections,
+            observer=manager,
+        )
+    await manager.drain_evictions()
+    return manager
 
 
 def socket_with_binding(agent_id, user_id, frames):
@@ -46,27 +75,21 @@ async def test_passive_shared_delivery_reauthorizes_each_recipient(monkeypatch, 
     await socket.accept()
     frames.clear()
     authorize = AsyncMock(side_effect=HTTPException(403, "Permission revoked"))
-    monkeypatch.setattr(chat_tickets, "authorize", authorize)
+    monkeypatch.setattr(chat_tickets, "authorize_identity", authorize)
     monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
     connections: list[WebSocketConnection] = [(socket, str(shared_session_id(agent_id)), str(user_id))]
 
-    if remote:
-        manager = ConnectionManager()
-        manager.active_connections[str(agent_id)] = connections
-        await manager.deliver_pubsub_message(
-            agent_id=str(agent_id), session_id=str(shared_session_id(agent_id)), payload={"type": "done"}
-        )
-    else:
-        router = RealtimeRouter()
-        monkeypatch.setattr(router, "_list_presence", AsyncMock(return_value=[]))
-        await router.route_message(
-            agent_id=str(agent_id),
-            session_id=str(shared_session_id(agent_id)),
-            message={"type": "done"},
-            local_connections=connections,
-        )
+    manager = await deliver(
+        monkeypatch,
+        remote=remote,
+        agent_id=agent_id,
+        session_id=str(shared_session_id(agent_id)),
+        connections=connections,
+    )
 
-    assert not frames
+    # The revoked viewer gets no event, only the 4003 close, and leaves the manager.
+    assert frames == [{"type": "websocket.close", "code": 4003, "reason": ""}]
+    assert manager.active_connections[str(agent_id)] == []
     authorize.assert_awaited_once_with(socket.state.chat_binding)
 
 
@@ -100,26 +123,19 @@ async def test_shared_delivery_requires_current_matching_binding(monkeypatch, re
     agent = AgentRecord(id=agent_id, name="Agent", creator_id=uuid4())
     authorize = AsyncMock(return_value=(user, agent, "use"))
     session = AsyncMock()
-    monkeypatch.setattr(chat_tickets, "authorize", authorize)
+    monkeypatch.setattr(chat_tickets, "authorize_identity", authorize)
     monkeypatch.setattr(chat_tickets, "authorized_session", session)
     connections: list[WebSocketConnection] = [(socket, str(shared_session_id(agent_id)), str(user_id))]
 
-    if remote:
-        manager = ConnectionManager()
-        manager.active_connections[str(agent_id)] = connections
-        await manager.deliver_pubsub_message(
-            agent_id=str(agent_id), session_id=str(shared_session_id(agent_id)), payload={"type": "done"}
-        )
-    else:
-        router = RealtimeRouter()
-        monkeypatch.setattr(router, "_list_presence", AsyncMock(return_value=[]))
-        await router.route_message(
-            agent_id=str(agent_id),
-            session_id=str(shared_session_id(agent_id)),
-            message={"type": "done"},
-            local_connections=connections,
-        )
+    _ = await deliver(
+        monkeypatch,
+        remote=remote,
+        agent_id=agent_id,
+        session_id=str(shared_session_id(agent_id)),
+        connections=connections,
+    )
 
+    # A socket that is not a viewer of this session is passed over: no event and no close.
     assert len(frames) == (1 if binding_state == "current" else 0)
     if binding_state == "current":
         authorize.assert_awaited_once_with(socket.state.chat_binding)
@@ -150,23 +166,19 @@ async def test_shared_delivery_uses_fresh_principal_and_agent(monkeypatch, remot
     session = ChatSessionRecord(
         id=shared_session_id(agent_id), agent_id=agent_id, user_id=uuid4(), source_channel=source
     )
-    monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(user, agent, "use")))
+    monkeypatch.setattr(chat_tickets, "authorize_identity", AsyncMock(return_value=(user, agent, "use")))
     monkeypatch.setattr(chat_tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=session))
     connections: list[WebSocketConnection] = [(socket, str(session.id), str(user_id))]
-    if remote:
-        manager = ConnectionManager()
-        manager.active_connections[str(agent_id)] = connections
-        await manager.deliver_pubsub_message(
-            agent_id=str(agent_id), session_id=str(session.id), payload={"type": "done"}
-        )
-    else:
-        router = RealtimeRouter()
-        monkeypatch.setattr(router, "_list_presence", AsyncMock(return_value=[]))
-        await router.route_message(
-            agent_id=str(agent_id), session_id=str(session.id), message={"type": "done"}, local_connections=connections
-        )
 
-    assert frames == ([{"type": "websocket.send", "text": '{"type":"done"}'}] if allowed else [])
+    _ = await deliver(
+        monkeypatch, remote=remote, agent_id=agent_id, session_id=str(session.id), connections=connections
+    )
+
+    assert frames == (
+        [{"type": "websocket.send", "text": '{"type":"done"}'}]
+        if allowed
+        else [{"type": "websocket.close", "code": 4003, "reason": ""}]
+    )
 
 
 async def test_shared_redis_envelope_excludes_archive_presence_and_user_fallback(monkeypatch):
@@ -214,20 +226,11 @@ async def test_acl_version_is_read_once_per_delivery_and_only_for_the_shared_ses
         return_value=(UserRecord(id=user_id), AgentRecord(id=agent_id, name="Agent", creator_id=uuid4()), "use")
     )
     monkeypatch.setattr(access_cache, "read_acl_version", read_version)
-    monkeypatch.setattr(chat_tickets, "authorize", authorize)
+    monkeypatch.setattr(chat_tickets, "authorize_identity", authorize)
     monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
     connections: list[WebSocketConnection] = [(socket, session_id, str(user_id)) for socket in sockets]
 
-    if remote:
-        manager = ConnectionManager()
-        manager.active_connections[str(agent_id)] = connections
-        await manager.deliver_pubsub_message(agent_id=str(agent_id), session_id=session_id, payload={"type": "done"})
-    else:
-        router = RealtimeRouter()
-        monkeypatch.setattr(router, "_list_presence", AsyncMock(return_value=[]))
-        await router.route_message(
-            agent_id=str(agent_id), session_id=session_id, message={"type": "done"}, local_connections=connections
-        )
+    _ = await deliver(monkeypatch, remote=remote, agent_id=agent_id, session_id=session_id, connections=connections)
 
     assert len(frames) == len(sockets)
     assert read_version.await_count == (1 if shared else 0)

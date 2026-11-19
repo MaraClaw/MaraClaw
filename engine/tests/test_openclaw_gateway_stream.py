@@ -412,6 +412,7 @@ async def test_chunk_timing_counts_a_publication_that_raised(monkeypatch):
 DROPPED_BY_ROUTING = {
     "failed": RoutingOutcome(local_targets=2, delivered=1, failed=1),
     "evicted": RoutingOutcome(local_targets=2, delivered=1, evicted=1),
+    "skipped": RoutingOutcome(local_targets=2, delivered=1, skipped=1),
     "remote": RoutingOutcome(local_targets=1, delivered=1, remote_instances=2, remote_publish_errors=1),
     "delivered": RoutingOutcome(local_targets=1, delivered=1, remote_instances=1),
     "refused": RoutingOutcome(local_targets=1),
@@ -421,7 +422,16 @@ DROPPED_BY_ROUTING = {
 
 @pytest.mark.parametrize(
     ("routing", "dropped"),
-    [("raised", 1), ("failed", 1), ("evicted", 1), ("remote", 1), ("delivered", 0), ("refused", 0), ("unheard", 0)],
+    [
+        ("raised", 1),
+        ("failed", 1),
+        ("evicted", 1),
+        ("skipped", 1),
+        ("remote", 1),
+        ("delivered", 0),
+        ("refused", 0),
+        ("unheard", 0),
+    ],
 )
 async def test_chunk_timing_counts_lost_chunks_as_dropped_but_not_unheard_ones(monkeypatch, routing, dropped):
     message = GatewayMessageRecord(uuid4(), uuid4(), "hello", conversation_id=str(uuid4()))
