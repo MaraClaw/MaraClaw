@@ -554,14 +554,18 @@ general auto-restart policy. A failed readiness check quiesces a newly created
 guest; it does not destroy an existing one to retry.
 
 A new agent's first start is queued by setup. When required setup succeeds for an
-agent that is still `creating` with no container, the transaction that clears
-`setup_pending` and records `idle` also commits start intent through the same
-eligibility check as an explicit start, and the reconciler starts the guest on its
-next pass without any request. That intent has the same retry schedule, failure
-codes, Stop cancellation and explicit-Start retry as any other. A failed setup, an
-agent that is not `creating` or already has a container, and an ineligible agent
-(expired, inactive creator, identity or company, tenant mismatch, pending transfer
-cleanup) get no intent: they keep their status and need a manual Start.
+agent that has never had a container (`idle` as creation records it, or
+`creating` after a setup retry), the transaction that clears `setup_pending` and
+records `idle` also commits start intent through the same eligibility check as an
+explicit start, and the reconciler starts the guest on its next pass without any
+request. That intent has the same retry schedule, failure codes, Stop cancellation
+and explicit-Start retry as any other. A failed setup gets no intent, and Start
+keeps refusing it with `guest_setup_incomplete` until a setup retry succeeds,
+which then queues the start as above. An agent stopped during setup or that
+already has a container keeps its status and needs a manual Start. An ineligible
+agent (expired, inactive creator, identity or company, tenant mismatch, pending
+transfer cleanup) gets no intent, and an explicit Start returns 409
+`guest_start_ineligible` until that condition is resolved.
 
 [Retry metadata](../app/dao/agent_start_retry_dao.py) lives in
 `agent_start_retry_metadata`, keyed by operation UUID. Before Docker work, an
