@@ -6,7 +6,9 @@ import math
 from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
+from dataclasses import dataclass
 from functools import wraps
+from random import random as system_random
 from time import monotonic
 from typing import Literal, TypeIs
 
@@ -92,6 +94,56 @@ class RequiredLoopExitedError(RuntimeError):
 def capped_backoff(failures: int, *, base_seconds: float, cap_seconds: float) -> float:
     """Delay after ``failures`` consecutive failures: ``base`` doubling up to ``cap``."""
     return min(cap_seconds, base_seconds * (1 << min(failures, 32)))
+
+
+def jittered_backoff(
+    failures: int, *, base_seconds: float, cap_seconds: float, random: Callable[[], float] = system_random
+) -> float:
+    """Delay after ``failures`` consecutive failures, drawn from the upper half of the next doubling step.
+
+    The window is ``[max(base, step / 2), step]`` for ``step = capped_backoff(failures + 1)``: even the first retry is
+    spread, the floor never drops as failures grow, and the result stays within ``[base, cap]`` for any ``random``
+    (its value is clamped to ``[0, 1]``). Pure: no sleeping, no I/O.
+    """
+    if base_seconds <= 0 or cap_seconds < base_seconds:
+        raise ValueError("base_seconds must be positive and cap_seconds at least base_seconds")
+    step = capped_backoff(failures + 1, base_seconds=base_seconds, cap_seconds=cap_seconds)
+    low = max(base_seconds, step / 2)
+    return low + min(max(random(), 0.0), 1.0) * (step - low)
+
+
+@dataclass(slots=True)
+class ReconnectBackoff:
+    """Jittered reconnect delays that escalate until a run stays healthy.
+
+    A run that lasted ``healthy_seconds`` on the monotonic ``clock`` proved the connection worked, so the next
+    failure starts over at the first delay; anything shorter, including a run that ended the moment it connected,
+    keeps escalating. Read ``started()`` before each attempt and pass it to ``next_delay`` when the attempt ends.
+    """
+
+    base_seconds: float
+    cap_seconds: float
+    healthy_seconds: float
+    random: Callable[[], float] = system_random
+    clock: Callable[[], float] = monotonic
+    failures: int = 0
+
+    def started(self) -> float:
+        return self.clock()
+
+    def settle(self, started_at: float) -> None:
+        """Start over if the run that began at ``started_at`` has lasted ``healthy_seconds``."""
+        if self.clock() - started_at >= self.healthy_seconds:
+            self.failures = 0
+
+    def next_delay(self, started_at: float) -> float:
+        """Delay before the next attempt, after the attempt that began at ``started_at`` ended."""
+        self.settle(started_at)
+        delay = jittered_backoff(
+            self.failures, base_seconds=self.base_seconds, cap_seconds=self.cap_seconds, random=self.random
+        )
+        self.failures += 1
+        return delay
 
 
 class LoopProgress:

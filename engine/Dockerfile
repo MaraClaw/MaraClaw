@@ -1,7 +1,7 @@
 # ─── Backend Dockerfile (Optimized) ─────────────────────
 # Multi-stage: deps → production
 # Linux docker CLI for pywhales (host binaries are the wrong OS).
-FROM docker:29.9.3-cli AS dockercli
+FROM docker:29.10.0-cli AS dockercli
 
 FROM node:26.13.1-trixie-slim AS whatsapp
 WORKDIR /bridge
@@ -30,7 +30,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     apt-get install -y --no-install-recommends \
         gcc=4:14.2.0-1 \
         libc6-dev=2.41-12+deb13u4 \
-        libpq-dev=17.11-0+deb13u1 \
+        libpq-dev=17.12-0+deb13u1 \
         libcairo2=1.18.4-1+b1 \
         libpango-1.0-0=1.56.3-1 \
         libpangocairo-1.0-0=1.56.3-1 \
@@ -64,7 +64,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         "tini=${TINI_VERSION}" \
-        libpq5=17.11-0+deb13u1 \
+        libpq5=17.12-0+deb13u1 \
         curl=8.14.1-2+deb13u7 \
         shadowsocks-libev=3.3.5+ds-16 \
         gosu=1.17-3+b4 \

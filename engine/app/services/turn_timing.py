@@ -48,6 +48,7 @@ class TurnTimeline:
     marks: dict[TurnMark, datetime] = field(default_factory=dict)
     adapter_timing: AdapterTiming | None = field(default=None, init=False)
     chunks_published: int = field(default=0, init=False)
+    chunks_dropped: int = field(default=0, init=False)
     slowest_chunk_ms: int = field(default=0, init=False)
     emitted: bool = field(default=False, init=False)
 
@@ -66,10 +67,15 @@ class TurnTimeline:
         if timing is not None:
             self.adapter_timing = timing
 
-    def chunk_published(self, seconds: float) -> None:
-        """Count one chunk publication, failed or not, and keep the slowest in whole milliseconds."""
+    def chunk_published(self, seconds: float, *, dropped: bool = False) -> None:
+        """Count one chunk publication, failed or not, and keep the slowest in whole milliseconds.
+
+        ``dropped`` marks a publication that raised, or whose routing failed or evicted a recipient or could not reach
+        a remote instance. A chunk nobody was connected to receive is not dropped.
+        """
         with suppress(Exception):
             self.chunks_published += 1
+            self.chunks_dropped += int(dropped)
             self.slowest_chunk_ms = max(self.slowest_chunk_ms, int(seconds * 1000))
 
     def emit(self, outcome: TurnOutcomeKind) -> None:
@@ -100,7 +106,11 @@ class TurnTimeline:
                     }
                 )
             if self.chunks_published:
-                fields.update(chunks_published=self.chunks_published, slowest_chunk_ms=self.slowest_chunk_ms)
+                fields.update(
+                    chunks_published=self.chunks_published,
+                    chunks_dropped=self.chunks_dropped,
+                    slowest_chunk_ms=self.slowest_chunk_ms,
+                )
             logger.info("[TurnTiming] {}", json.dumps(fields, separators=(",", ":")))
 
 

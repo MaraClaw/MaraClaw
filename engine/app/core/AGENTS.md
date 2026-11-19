@@ -13,7 +13,7 @@
 
 ## Security
 
-- `outbound_policy.py` and `outbound_transport.py` enforce public-only destinations for untrusted MCP, webpage reads, and URL polling. Use `public_http_client` to pin each dial to validated DNS answers while retaining TLS hostname verification and disabling environment proxies. MCP clients additionally bind requests to their configured origin.
+- `outbound_policy.py` and `outbound_transport.py` enforce public-only destinations for untrusted MCP, webpage reads, and URL polling. Use `public_http_client` to pin each dial to validated DNS answers while retaining TLS hostname verification and disabling environment proxies. MCP clients additionally bind requests to their configured origin. Pooled MCP sessions (`app/services/mcp_client.py`) also get their long-lived client from `public_http_client`; never wrap such a shared client in `async with`, which closes it after one use.
 - `security.py` owns JWT creation/decoding, password hashing, and FastAPI auth dependencies.
 - Shared loader: `load_user_from_access_token(token, require_active=..., enforce_password_change=...)` loads `UserRecord` **with identity** and optionally enforces `must_change_password`.
 - Use from route modules:

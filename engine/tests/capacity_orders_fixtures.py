@@ -193,6 +193,7 @@ class CapacityScenario:
         grace_until: date | None = None,
         source_order_id: UUID | None = None,
         tenant: str = "acme",
+        created_at: datetime | None = None,
     ) -> UUID:
         """A row exactly as the engine would leave it in ``status``, for ledger scenarios that need other months."""
         order_id = uuid4()
@@ -204,11 +205,13 @@ class CapacityScenario:
             "billing_month, extra_accounts, extra_agents, account_unit_usd, agent_unit_usd, days_charged, "
             "days_in_month, amount_usd_cents, usd_vnd_rate, amount_vnd, recipient, grace_until, "
             "evidence_storage_key, evidence_content_type, evidence_filename, evidence_size_bytes, evidence_sha256, "
-            "submitted_at, reviewed_at, review_note) "
+            "submitted_at, reviewed_at, review_note, created_at) "
             "VALUES (%(id)s, %(tenant)s, %(reference)s, %(kind)s, %(status)s, %(source)s, 'pro', %(month)s, "
             "%(accounts)s, %(agents)s, 5, 35, %(days)s, %(days)s, 500, 25000, 125000, %(recipient)s, %(grace)s, "
-            "%(key)s, %(content_type)s, %(filename)s, %(size)s, %(sha)s, %(submitted_at)s, %(reviewed_at)s, %(note)s)",
+            "%(key)s, %(content_type)s, %(filename)s, %(size)s, %(sha)s, %(submitted_at)s, %(reviewed_at)s, %(note)s, "
+            "COALESCE(%(created_at)s::timestamptz, now()))",
             {
+                "created_at": created_at,
                 "id": order_id,
                 "tenant": self.tenants[tenant],
                 "reference": new_reference(),

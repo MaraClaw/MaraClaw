@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from contextlib import suppress
+from dataclasses import replace
 from typing import assert_never, cast
 
 from fastapi import WebSocket
@@ -24,6 +25,8 @@ from app.services.realtime_runtime.contracts import (
     RealtimeEnvelope,
     RealtimePresence,
     ReceivedEnvelope,
+    RoutingOutcome,
+    SendObserver,
     presence_adapter,
 )
 from app.services.realtime_runtime.fanout import encode_event_text, fan_out
@@ -137,22 +140,28 @@ class RealtimeRouter:
         connection_id_raw = getattr(websocket.state, "realtime_connection_id", None)
         if not isinstance(connection_id_raw, str) or not connection_id_raw:
             return
-        connection_id = connection_id_raw
+        await self.unregister_connection_id(agent_id=agent_id, connection_id=connection_id_raw)
+
+    async def unregister_connection_id(self, *, agent_id: str, connection_id: str) -> None:
+        """Remove one presence record by id, for a socket whose state no longer carries it (an evicted socket)."""
         redis = await get_redis()
         async with redis.pipeline(transaction=True) as pipe:
             _ = pipe.srem(self._agent_index_key(agent_id), connection_id)
             _ = pipe.delete(self._connection_key(connection_id))
             _ = await pipe.execute()
 
-    async def is_user_viewing_session(self, *, agent_id: str, session_id: str, user_id: str) -> bool:
-        for record in await self._list_presence(agent_id):
+    async def is_user_viewing_session(
+        self, *, agent_id: str, session_id: str, user_id: str, hidden: Collection[str] = ()
+    ) -> bool:
+        """``hidden`` connection ids are skipped: presence this instance already withdrew but Redis may still list."""
+        for record in await self._list_presence(agent_id, hidden=hidden):
             if record.get("session_id") == session_id and record.get("user_id") == user_id:
                 return True
         return False
 
-    async def get_active_session_ids(self, agent_id: str) -> list[str]:
+    async def get_active_session_ids(self, agent_id: str, *, hidden: Collection[str] = ()) -> list[str]:
         seen: set[str] = set()
-        for record in await self._list_presence(agent_id):
+        for record in await self._list_presence(agent_id, hidden=hidden):
             session_id = (record.get("session_id") or "").strip()
             if session_id:
                 seen.add(session_id)
@@ -167,15 +176,19 @@ class RealtimeRouter:
         session_id: str | None = None,
         user_id: str | None = None,
         send_timeout: float | None = None,
-    ) -> None:
-        """Deliver locally while the presence lookup runs, then route to remote instances.
+        observer: SendObserver | None = None,
+    ) -> RoutingOutcome:
+        """Deliver locally while the presence lookup runs, then route to remote instances; report what happened.
 
         Local sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``; the event is serialized once and,
         for a shared session, the ACL version is read once before any socket authorizes. ``send_timeout`` bounds
         only ``ws.send_text``, the one wait a client controls; without one, ``resolve_send_timeout`` picks the default
         or terminal bound. Authorization and Redis presence are never cancelled by it: aborting authorization discards
-        the positive decision it would cache, and aborting routing skips remote instances. A stalled socket is skipped
-        like any other failed send.
+        the positive decision it would cache, and aborting routing skips remote instances.
+
+        ``observer`` owns the sockets: it hears every successful send and every send timeout (so it can evict a socket
+        that keeps stalling), and a socket it no longer reports live is skipped right before its send. The router
+        keeps no socket state of its own.
         """
         targets = [
             (ws, local_session_id)
@@ -185,13 +198,13 @@ class RealtimeRouter:
         presence = asyncio.create_task(self._remote_targets(agent_id, session_id, user_id), name="realtime-presence")
         try:
             bound = resolve_send_timeout(message) if send_timeout is None else send_timeout
-            local_sent = await self._deliver_local(agent_id, message, targets, bound)
+            local = await self._deliver_local(agent_id, message, targets, bound, observer)
             remote_targets = await presence
         finally:
             if not presence.done():
                 _ = presence.cancel()
         if not remote_targets:
-            return
+            return local
 
         redis = await get_redis()
         payload: RealtimeEnvelope = {
@@ -205,10 +218,17 @@ class RealtimeRouter:
         publish_tasks = [
             redis.publish(f"{PUBSUB_PREFIX}:instance:{instance_id}", envelope) for instance_id in remote_targets
         ]
-        _ = await asyncio.gather(*publish_tasks, return_exceptions=True)
+        results = await asyncio.gather(*publish_tasks, return_exceptions=True)
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            logger.warning(
+                f"[Realtime] Failed to publish to {len(errors)} of {len(remote_targets)} remote instances "
+                f"agent={agent_id}: {type(errors[0]).__name__}"
+            )
         logger.debug(
-            f"[Realtime] Routed agent={agent_id} local={local_sent} remote_instances={list(remote_targets.keys())}"
+            f"[Realtime] Routed agent={agent_id} local={local.delivered} remote_instances={list(remote_targets.keys())}"
         )
+        return replace(local, remote_instances=len(remote_targets), remote_publish_errors=len(errors))
 
     @staticmethod
     async def _deliver_local(
@@ -216,25 +236,47 @@ class RealtimeRouter:
         message: dict[str, object],
         targets: list[tuple[WebSocket, str | None]],
         send_timeout: float,
-    ) -> int:
+        observer: SendObserver | None,
+    ) -> RoutingOutcome:
         if not targets:
-            return 0
+            return RoutingOutcome()
         text = encode_event_text(message)
         acl_version = await read_shared_acl_version(agent_id, (target_session for _, target_session in targets))
+        failed = evicted = 0
 
         async def deliver(target: tuple[WebSocket, str | None]) -> bool:
+            nonlocal failed, evicted
             ws, target_session = target
             try:
                 if not await authorize_chat_delivery(ws, agent_id, target_session, acl_version=acl_version):
                     return False
+            except Exception as exc:
+                failed += 1
+                logger.warning(f"[Realtime] Failed to authorize local websocket delivery: {exc!r}")
+                return False
+            # Authorization may have awaited while another delivery evicted this socket from our snapshot.
+            if observer is not None and not observer.is_live(ws):
+                evicted += 1
+                return False
+            try:
                 async with asyncio.timeout(send_timeout):
                     await ws.send_text(text)
+            except TimeoutError:
+                failed += 1
+                if observer is not None and observer.timed_out(agent_id, ws):
+                    evicted += 1
+                logger.warning(f"[Realtime] Local websocket send timed out after {send_timeout}s agent={agent_id}")
+                return False
             except Exception as exc:
+                failed += 1
                 logger.warning(f"[Realtime] Failed to send local websocket message: {exc!r}")
                 return False
+            if observer is not None:
+                observer.sent(ws)
             return True
 
-        return await fan_out(targets, deliver)
+        delivered = await fan_out(targets, deliver)
+        return RoutingOutcome(local_targets=len(targets), delivered=delivered, failed=failed, evicted=evicted)
 
     async def _remote_targets(self, agent_id: str, session_id: str | None, user_id: str | None) -> dict[str, int]:
         remote_targets: dict[str, int] = {}
@@ -347,12 +389,14 @@ class RealtimeRouter:
         except Exception as exc:
             logger.warning("[Realtime] Failed to deliver pubsub message: {}", exc)
 
-    async def _list_presence(self, agent_id: str) -> list[RealtimePresence]:
+    async def _list_presence(self, agent_id: str, *, hidden: Collection[str] = ()) -> list[RealtimePresence]:
         redis_client: Redis = await get_redis()
         connection_ids = await redis_client.smembers(self._agent_index_key(agent_id))
-        if not connection_ids:
+        connection_id_texts = [
+            text for text in (_redis_text(connection_id) for connection_id in connection_ids) if text not in hidden
+        ]
+        if not connection_id_texts:
             return []
-        connection_id_texts = [_redis_text(connection_id) for connection_id in connection_ids]
         async with redis_client.pipeline(transaction=False) as pipe:
             for connection_id_text in connection_id_texts:
                 _ = pipe.hgetall(self._connection_key(connection_id_text))

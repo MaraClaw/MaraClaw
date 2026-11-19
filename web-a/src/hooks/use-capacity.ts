@@ -33,17 +33,17 @@ export function useCapacityOverview(tenantId: string | null) {
   return useQuery(capacityOverviewOptions(useCompanyScope(tenantId), canView && tenantId !== null))
 }
 
-export function useCapacityOrders(tenantId: string | null, limit: number, offset = 0) {
+export function useCapacityOrders(tenantId: string | null, limit: number, cursor: string | null = null) {
   const { canView } = useCapacityAccess()
-  return useQuery(capacityOrdersOptions(useCompanyScope(tenantId), limit, offset, canView && tenantId !== null))
+  return useQuery(capacityOrdersOptions(useCompanyScope(tenantId), limit, cursor, canView && tenantId !== null))
 }
 
 export function useCapacityOrder(id: CapacityOrderId | null) {
   return useQuery(capacityOrderOptions(id, useCapacityAccess().canView))
 }
 
-export function useCapacityReviewOrders(status: CapacityOrderStatus, offset: number) {
-  return useQuery(capacityReviewListOptions(status, offset, useCapacityAccess().canReview))
+export function useCapacityReviewOrders(status: CapacityOrderStatus, cursor: string | null) {
+  return useQuery(capacityReviewListOptions(status, cursor, useCapacityAccess().canReview))
 }
 
 export function useCapacityReviewOrder(id: CapacityOrderId | null) {

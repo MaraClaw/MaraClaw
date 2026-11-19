@@ -7,11 +7,11 @@ import { RequestErrorToast } from '@/components/request-error-toast'
 function setupMessage(setup: AgentSetup | undefined) {
   if (!setup) return { title: 'Checking setup status', detail: 'Start stays unavailable until setup status is confirmed.' }
   switch (setup.state) {
-    case 'pending': return { title: 'Setup pending', detail: 'Setup is queued. Start stays unavailable until setup finishes.' }
-    case 'running': return { title: 'Setup in progress', detail: 'Setup is running. Start stays unavailable until setup finishes.' }
+    case 'pending': return { title: 'Setup pending', detail: 'Setup is queued. The agent starts automatically when setup finishes.' }
+    case 'running': return { title: 'Setup in progress', detail: 'Setup is running. The agent starts automatically when setup finishes.' }
     case 'failed': return { title: 'Setup failed', detail: setup.retryable ? 'Setup could not finish. Retry setup to try again.' : 'Setup could not finish. Contact your company admin for help.' }
     case 'succeeded': return { title: 'Setup complete', detail: 'Required setup has finished.' }
-    case null: return setup.setup_pending ? { title: 'Setup pending', detail: 'Start stays unavailable until setup finishes.' } : null
+    case null: return setup.setup_pending ? { title: 'Setup pending', detail: 'The agent starts automatically when setup finishes.' } : null
     default: return setup.state satisfies never
   }
 }

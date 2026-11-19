@@ -1,8 +1,9 @@
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
-from uuid import uuid4
+from typing import override
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -10,12 +11,20 @@ from fastapi import FastAPI
 
 from app.api import tools as tools_api
 from app.core.outbound_policy import OutboundPolicyError
+from app.core.outbound_transport import _PublicHTTPTransport
 from app.core.security import get_current_user
 from app.records.tool import ToolRecord
 from app.records.user import UserRecord
-from app.services import mcp_installation, resource_discovery
+from app.services import mcp_client, mcp_installation, resource_discovery
 from app.services.agent_tool_exec.mcp_tools import _execute_mcp_tool
-from app.services.mcp_client import MCPClient
+from app.services.mcp_client import (
+    MCP_MAX_REDIRECT_BODY_BYTES,
+    MCP_MAX_RESPONSE_BYTES,
+    MCPClient,
+    MCPResponseTooLargeError,
+    MCPSessionPool,
+    Transport,
+)
 
 
 def install_wire(
@@ -24,6 +33,7 @@ def install_wire(
     requests: list[httpx.Request] = []
 
     async def send(_transport: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
+        _ = await request.aread()
         requests.append(request)
         return respond(request)
 
@@ -79,7 +89,7 @@ async def test_sse_cross_origin_endpoint_is_blocked_before_post(
 
 @pytest.mark.parametrize("transport", [None, "streamable", "sse"])
 async def test_cross_origin_redirect_is_blocked_without_protocol_fallback(
-    monkeypatch: pytest.MonkeyPatch, transport: str | None
+    monkeypatch: pytest.MonkeyPatch, transport: Transport | None
 ):
     # Given: every attempted MCP request redirects to a foreign destination.
     requests = install_wire(
@@ -264,3 +274,341 @@ async def test_execution_returns_safe_error_for_stored_cross_origin_redirect(mon
     assert "hidden-secret" not in result
     assert "https://" not in result
     assert len(requests) == 1
+
+
+def streamable_reply(request: httpx.Request) -> httpx.Response:
+    if request.method == "DELETE":
+        return httpx.Response(200)
+    return httpx.Response(
+        200,
+        headers={"mcp-session-id": "session-secret"},
+        json={"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "completed"}]}},
+    )
+
+
+async def pooled_call(pool: MCPSessionPool, agent_id: UUID, server_url: str = "https://8.8.8.8/mcp") -> str:
+    return await pool.call_tool(
+        agent_id=agent_id, server_url=server_url, api_key=None, tool_name="lookup", arguments={}
+    )
+
+
+async def test_pooled_session_client_comes_from_public_http_client_for_the_normalized_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Given: the real public transport below a spy on the pool's client factory.
+    requests = install_wire(monkeypatch, streamable_reply)
+    built: list[tuple[float, bool, str | None]] = []
+    real_factory = mcp_client.public_http_client
+
+    def spy(*, timeout: float, follow_redirects: bool = False, origin: str | None = None) -> httpx.AsyncClient:
+        built.append((timeout, follow_redirects, origin))
+        return real_factory(timeout=timeout, follow_redirects=follow_redirects, origin=origin)
+
+    monkeypatch.setattr(mcp_client, "public_http_client", spy)
+    pool = MCPSessionPool()
+    agent_id = uuid4()
+    try:
+        # When: one agent calls twice through a URL carrying its key and a trailing slash.
+        for _ in range(2):
+            assert await pooled_call(pool, agent_id, "https://8.8.8.8/mcp/?apiKey=bearer-secret") == "completed"
+        [entry] = pool._entries.values()
+        transport = entry.http._transport
+    finally:
+        await pool.shutdown()
+
+    # Then: one pinned public client bound to the normalized origin carried every request, the DELETE included.
+    assert built == [(30, True, "https://8.8.8.8/mcp")]
+    assert isinstance(transport, _PublicHTTPTransport)
+    assert [request.method for request in requests] == ["POST", "POST", "POST", "POST", "DELETE"]
+    assert all(str(request.url) == "https://8.8.8.8/mcp" for request in requests)
+    assert all(request.headers["authorization"] == "Bearer bearer-secret" for request in requests)
+    assert requests[-1].headers["mcp-session-id"] == "session-secret"
+
+
+async def test_pooled_session_checks_the_origin_on_every_request(monkeypatch: pytest.MonkeyPatch):
+    # Given: an established pooled session whose server later redirects to another origin.
+    redirect: list[bool] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if redirect:
+            return httpx.Response(307, headers={"location": "https://1.1.1.1/stolen?token=secret"})
+        return streamable_reply(request)
+
+    requests = install_wire(monkeypatch, respond)
+    pool = MCPSessionPool()
+    agent_id = uuid4()
+    try:
+        assert await pooled_call(pool, agent_id) == "completed"
+        redirect.append(True)
+
+        # When / Then: the reused client still refuses the foreign hop, and the policy error is not wrapped.
+        with pytest.raises(OutboundPolicyError):
+            await pooled_call(pool, agent_id)
+    finally:
+        redirect.clear()
+        await pool.shutdown()
+    assert [request.url.host for request in requests] == ["8.8.8.8"] * 5
+
+
+def install_stored_agent_tool(monkeypatch: pytest.MonkeyPatch) -> MCPSessionPool:
+    """Store ``mcp_example`` at https://8.8.8.8/mcp with an embedded key and route agent calls to a fresh pool."""
+
+    async def lookup(_name: str) -> ToolRecord:
+        return ToolRecord(
+            id=uuid4(), name="mcp_example", type="mcp", mcp_server_url="https://8.8.8.8/mcp?apiKey=hidden-secret"
+        )
+
+    async def no_assignment(_agent_id: UUID, _tool_id: UUID) -> None:
+        return None
+
+    monkeypatch.setattr(resource_discovery.tool_dao, "get_by_name", lookup)
+    monkeypatch.setattr(resource_discovery.agent_tool_dao, "get_assignment", no_assignment)
+    pool = MCPSessionPool()
+    monkeypatch.setattr(mcp_client, "mcp_session_pool", pool)
+    return pool
+
+
+async def test_pooled_initialize_policy_failure_returns_the_blocked_message(monkeypatch: pytest.MonkeyPatch):
+    # Given: an agent's stored server redirects its very first initialize to another origin.
+    requests = install_wire(
+        monkeypatch,
+        lambda _request: httpx.Response(307, headers={"location": "https://1.1.1.1/mcp?token=hidden-secret"}),
+    )
+    pool = install_stored_agent_tool(monkeypatch)
+
+    # When: the agent executes the tool through the pooled path.
+    try:
+        result = await _execute_mcp_tool("mcp_example", {}, uuid4())
+    finally:
+        await pool.shutdown()
+
+    # Then: the existing blocked message comes back and nothing else was sent.
+    assert result == "MCP tool execution blocked: server destination is not allowed."
+    assert len(requests) == 1
+    assert json.loads(requests[0].content)["method"] == "initialize"
+
+
+class CountingStream(httpx.AsyncByteStream):
+    """A body of ``count`` copies of ``chunk`` after an optional ``first`` chunk; ``sent`` counts the copies read."""
+
+    def __init__(self, chunk: bytes, count: int, first: bytes = b"") -> None:
+        self.chunk: bytes = chunk
+        self.count: int = count
+        self.first: bytes = first
+        self.sent: int = 0
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        if self.first:
+            yield self.first
+        for _ in range(self.count):
+            self.sent += 1
+            yield self.chunk
+
+
+@pytest.mark.parametrize("declared", [True, False], ids=["content-length", "chunked"])
+async def test_oversized_streamable_response_fails_before_parsing(monkeypatch: pytest.MonkeyPatch, declared: bool):
+    # Given: a 1 KiB cap and a tools/call reply of 50 KiB, announced by Content-Length or not.
+    monkeypatch.setattr(mcp_client, "MCP_MAX_RESPONSE_BYTES", 1024)
+    parsed: list[int] = []
+    real_loads = mcp_client.json_loads_value
+
+    def recording_loads(value: str | bytes | bytearray) -> object:
+        parsed.append(len(value))
+        return real_loads(value)
+
+    monkeypatch.setattr(mcp_client, "json_loads_value", recording_loads)
+    bodies: list[CountingStream] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content)["method"] != "tools/call":
+            return httpx.Response(200, headers={"mcp-session-id": "session"}, json={"result": {}})
+        body = CountingStream(b"x" * 512, 100, first=b'{"result": "')
+        bodies.append(body)
+        headers = {"content-type": "application/json"}
+        if declared:
+            headers["content-length"] = str(512 * 100 + 12)
+        return httpx.Response(200, headers=headers, stream=body)
+
+    install_wire(monkeypatch, respond)
+    client = MCPClient("https://8.8.8.8/mcp")
+
+    # When: the transport reads the reply, and when the public call_tool does.
+    with pytest.raises(MCPResponseTooLargeError):
+        await client._streamable_request("tools/call", {"name": "lookup", "arguments": {}})
+    result = await client.call_tool("lookup", {})
+
+    # Then: a declared size is refused unread, a chunked body stops just past the cap, and neither is parsed.
+    assert result.startswith("❌")
+    assert [body.sent for body in bodies] == ([0, 0] if declared else [2, 2])
+    assert parsed
+    assert all(size < 1024 for size in parsed)
+
+
+@pytest.mark.parametrize("connect_only", [False, True])
+async def test_oversized_sse_stream_fails_before_parsing(monkeypatch: pytest.MonkeyPatch, connect_only: bool):
+    # Given: a 1 KiB cap and an SSE stream that floods one endless line, before or after its endpoint event.
+    monkeypatch.setattr(mcp_client, "MCP_MAX_RESPONSE_BYTES", 1024)
+    streams: list[CountingStream] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            endpoint = b"" if connect_only else b"event: endpoint\ndata: /messages?session=1\n\nevent: message\n"
+            stream = CountingStream(b"data: " + b"x" * 506, 100, first=endpoint)
+            streams.append(stream)
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
+        return httpx.Response(202)
+
+    install_wire(monkeypatch, respond)
+    client = MCPClient("https://8.8.8.8/sse")
+    operation = (
+        client._sse_connect()
+        if connect_only
+        else client._sse_request("tools/call", {"name": "lookup", "arguments": {}})
+    )
+
+    # When / Then: reading stops with the size error shortly after the cap instead of buffering the stream.
+    with pytest.raises(MCPResponseTooLargeError):
+        await operation
+    assert [stream.sent for stream in streams] == [3]
+
+
+class ChunkedStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks: list[bytes] = chunks
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self.chunks:
+            yield chunk
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "event: endpoint\r\ndata: /messages\r\n\r\n",
+        "data: a\rdata: b\ndata: c",
+        "a\u2028b\x85c\x0cd\x1ce",
+        "ends with cr\r",
+        "x\n\r",
+        "\r\n\r\n",
+        "data: héllo wörld 😀\n\n",
+    ],
+)
+async def test_sse_lines_split_like_splitlines_at_every_chunk_size(text: str):
+    # Given: a stream body, cut into chunks of every size so breaks, "\r\n" pairs and UTF-8 sequences straddle them.
+    body = text.encode()
+    for size in range(1, len(body) + 1):
+        stream = ChunkedStream([body[start : start + size] for start in range(0, len(body), size)])
+        response = httpx.Response(200, stream=stream)
+
+        # When: the capped reader yields its lines.
+        lines = [line async for line in mcp_client._capped_lines(response, mcp_client._ByteBudget(len(body)))]
+
+        # Then: they are exactly str.splitlines of the whole text.
+        assert lines == text.splitlines(), size
+
+
+def rpc_or_verb(request: httpx.Request) -> str:
+    return str(json.loads(request.content)["method"]) if request.content else request.method
+
+
+@pytest.mark.parametrize("declared", [True, False], ids=["content-length", "chunked"])
+async def test_oversized_redirect_body_is_refused_before_httpx_buffers_it(
+    monkeypatch: pytest.MonkeyPatch, declared: bool
+):
+    # Given: /mcp answers with a same-origin 307 carrying a 4 MiB body, announced by Content-Length or not.
+    chunk = 1024
+    bodies: list[CountingStream] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/mcp":
+            return streamable_reply(request)
+        body = CountingStream(b"x" * chunk, MCP_MAX_RESPONSE_BYTES // chunk)
+        bodies.append(body)
+        headers = {"location": "/mcp/"}
+        if declared:
+            headers["content-length"] = str(MCP_MAX_RESPONSE_BYTES)
+        return httpx.Response(307, headers=headers, stream=body)
+
+    requests = install_wire(monkeypatch, respond)
+    pool = MCPSessionPool()
+
+    # When: a per-call client initializes through the redirect, and so does an agent's pooled call.
+    with pytest.raises(MCPResponseTooLargeError):
+        await MCPClient("https://8.8.8.8/mcp")._streamable_request("tools/call", {"name": "lookup", "arguments": {}})
+    try:
+        result = await pooled_call(pool, uuid4())
+    finally:
+        await pool.shutdown()
+
+    # Then: a declared size is refused unread, a streamed one stops at the first chunk past the redirect cap,
+    # and the redirect target is never requested.
+    first_chunk_past_cap = MCP_MAX_REDIRECT_BODY_BYTES // chunk + 1
+    assert result.startswith("❌")
+    assert [body.sent for body in bodies] == ([0, 0] if declared else [first_chunk_past_cap] * 2)
+    assert [(request.url.path, rpc_or_verb(request)) for request in requests] == [("/mcp", "initialize")] * 2
+
+
+async def test_same_origin_redirect_keeps_the_request_body_and_session(monkeypatch: pytest.MonkeyPatch):
+    # Given: a server mounted at /mcp/ answers the slash-stripped /mcp with a 307 and a short streamed body.
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/mcp":
+            return httpx.Response(307, headers={"location": "/mcp/"}, stream=CountingStream(b"Moved to /mcp/", 1))
+        return streamable_reply(request)
+
+    requests = install_wire(monkeypatch, respond)
+    pool = MCPSessionPool()
+    agent_id = uuid4()
+    try:
+        # When: one agent calls the tool twice, then the pool shuts down.
+        for _ in range(2):
+            result = await pool.call_tool(
+                agent_id=agent_id,
+                server_url="https://8.8.8.8/mcp",
+                api_key="bearer-secret",
+                tool_name="lookup",
+                arguments={"query": "MC-16"},
+            )
+            assert result == "completed"
+    finally:
+        await pool.shutdown()
+
+    # Then: each request took exactly one hop to /mcp/ with its method, body, credential and session intact,
+    # and the second call reused the session.
+    hops = list(zip(requests[::2], requests[1::2], strict=True))
+    assert [(sent.url.path, followed.url.path) for sent, followed in hops] == [("/mcp", "/mcp/")] * 5
+    assert all(sent.method == followed.method and sent.content == followed.content for sent, followed in hops)
+    assert all(followed.headers["authorization"] == "Bearer bearer-secret" for _, followed in hops)
+    assert [rpc_or_verb(followed) for _, followed in hops] == [
+        "initialize",
+        "notifications/initialized",
+        "tools/call",
+        "tools/call",
+        "DELETE",
+    ]
+    assert [followed.headers.get("mcp-session-id") for _, followed in hops] == [None] + ["session-secret"] * 4
+    assert json.loads(hops[2][1].content)["params"] == {"name": "lookup", "arguments": {"query": "MC-16"}}
+
+
+async def test_cross_origin_hop_after_a_followed_redirect_returns_the_blocked_message(monkeypatch: pytest.MonkeyPatch):
+    # Given: an agent's stored server redirects /mcp to /mcp/ on its origin, which then redirects to another origin.
+    def respond(request: httpx.Request) -> httpx.Response:
+        location = "/mcp/" if request.url.path == "/mcp" else "https://1.1.1.1/mcp/?token=hidden-secret"
+        return httpx.Response(307, headers={"location": location}, stream=CountingStream(b"Moved", 1))
+
+    requests = install_wire(monkeypatch, respond)
+    pool = install_stored_agent_tool(monkeypatch)
+
+    # When: the agent executes the tool through the pooled path.
+    try:
+        result = await _execute_mcp_tool("mcp_example", {}, uuid4())
+    finally:
+        await pool.shutdown()
+
+    # Then: the same-origin hop is followed, the foreign hop never reaches the wire, and the blocked message returns.
+    assert result == "MCP tool execution blocked: server destination is not allowed."
+    assert [(request.url.host, request.url.path, rpc_or_verb(request)) for request in requests] == [
+        ("8.8.8.8", "/mcp", "initialize"),
+        ("8.8.8.8", "/mcp/", "initialize"),
+    ]

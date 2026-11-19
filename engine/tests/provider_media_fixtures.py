@@ -87,7 +87,39 @@ class MediaCase:
                     tuple(google_chat_media.GoogleChatAttachment.model_validate(item) for item in attachments),
                 )
 
-    async def invoke(self, monkeypatch: pytest.MonkeyPatch, caption: str) -> httpx.Response | str | None:
+    def distinct(self, count: int) -> list[dict[str, object]]:
+        """``count`` attachments that differ in native ID, resource and file name, in provider order."""
+        items: list[dict[str, object]] = []
+        for index in range(count):
+            name = f"report{index}.docx"
+            item = dict(self.raw)
+            match self.name:
+                case "teams":
+                    item["name"] = name
+                    item["content"] = {
+                        "uniqueId": str(index),
+                        "downloadUrl": f"https://tenant-my.sharepoint.com/personal/a/{name}?auth=canary",
+                    }
+                case "google_chat":
+                    resource = f"spaces/S/messages/M/attachments/A{index}"
+                    item.update(
+                        {"name": resource, "contentName": name, "attachmentDataRef": {"resourceName": resource}}
+                    )
+                case _:
+                    item.update(
+                        {
+                            "id": str(index + 2),
+                            "filename": name,
+                            "url": f"https://cdn.discordapp.com/attachments/1/{index + 2}/{name}?ex=123&hm=canary",
+                        }
+                    )
+            items.append(item)
+        return items
+
+    async def invoke(
+        self, monkeypatch: pytest.MonkeyPatch, caption: str, attachments: Sequence[dict[str, object]] | None = None
+    ) -> httpx.Response | str | None:
+        items = list(attachments) if attachments is not None else [self.raw]
         config = channel_config(
             "discord"
             if self.name.startswith("discord")
@@ -102,7 +134,7 @@ class MediaCase:
                 message = GatewayMessage(
                     author=GatewayAuthor(),
                     channel=GatewayChannel(),
-                    attachments=[SimpleNamespace(**self.raw)],
+                    attachments=[SimpleNamespace(**item) for item in items],
                 )
                 return await discord_gateway.DiscordGatewayManager()._handle_message(
                     AGENT_ID, message, caption, source=stream_source(config)
@@ -122,9 +154,9 @@ class MediaCase:
                             "name": "ask",
                             "options": [
                                 {"name": "message", "value": caption},
-                                {"name": "attachment", "type": 11, "value": "2"},
+                                *({"name": "attachment", "type": 11, "value": str(item["id"])} for item in items),
                             ],
-                            "resolved": {"attachments": {"2": self.raw}},
+                            "resolved": {"attachments": {str(item["id"]): item for item in items}},
                         },
                     }
                 ).encode()
@@ -143,7 +175,7 @@ class MediaCase:
                     "from": {"id": "4"},
                     "conversation": {"id": "1"},
                     "serviceUrl": config.extra_config["service_url"],
-                    "attachments": [self.raw],
+                    "attachments": items,
                 }
                 monkeypatch.setattr(teams.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
                 monkeypatch.setattr(teams, "authenticate_teams_activity", AsyncMock(return_value=activity))
@@ -164,7 +196,7 @@ class MediaCase:
                         "argumentText": caption,
                         "sender": {"name": "users/4", "type": "HUMAN"},
                         "space": {"name": "spaces/S", "type": "DM"},
-                        "attachment": [self.raw],
+                        "attachment": items,
                     },
                 }
                 async with webhook_client(google_chat.router) as client:

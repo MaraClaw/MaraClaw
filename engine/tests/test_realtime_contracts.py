@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, call
@@ -6,9 +7,10 @@ import pytest
 from fastapi import WebSocket
 from starlette.types import Message
 
+from app.api import websocket
 from app.core.json_types import json_loads_object, object_attr
 from app.services.realtime_runtime import router
-from app.services.realtime_runtime.contracts import LocalDeliverer
+from app.services.realtime_runtime.contracts import LocalDeliverer, RoutingOutcome
 
 
 @pytest.mark.parametrize("encoding", ["mapping", "text", "bytes", "bytearray"])
@@ -261,3 +263,185 @@ async def test_routing_is_local_first_and_publishes_once_per_matching_remote(mon
             },
         )
     ]
+
+
+class Peer:
+    """An accepted socket that records its frames; ``stalled`` never completes a text send, ``stall_close`` a close."""
+
+    def __init__(self, *, stalled: bool = False, stall_close: bool = False) -> None:
+        self.frames: list[Message] = []
+        self.closes: list[int] = []
+        self.close_cancelled = False
+        self.stalled = stalled
+        self.stall_close = stall_close
+        self.socket = WebSocket({"type": "websocket", "headers": []}, self._receive, self._send)
+
+    async def _receive(self) -> Message:
+        return {"type": "websocket.connect"}
+
+    async def _send(self, frame: Message) -> None:
+        if frame["type"] == "websocket.send" and self.stalled:
+            await asyncio.Event().wait()
+        if frame["type"] == "websocket.close":
+            self.closes.append(frame["code"])
+            if self.stall_close:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.close_cancelled = True
+                    raise
+        self.frames.append(frame)
+
+    async def accepted(self) -> WebSocket:
+        await self.socket.accept()
+        self.frames.clear()
+        return self.socket
+
+
+class Observer:
+    """A ``SendObserver`` that records what the router hands back and evicts on the first timeout."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, WebSocket]] = []
+        self.evicted: list[WebSocket] = []
+
+    def is_live(self, websocket: WebSocket) -> bool:
+        self.calls.append(("is_live", websocket))
+        return websocket not in self.evicted
+
+    def sent(self, websocket: WebSocket) -> None:
+        self.calls.append(("sent", websocket))
+
+    def timed_out(self, agent_id: str, websocket: WebSocket) -> bool:
+        assert agent_id == "agent"
+        self.calls.append(("timed_out", websocket))
+        self.evicted.append(websocket)
+        return True
+
+
+async def test_routing_returns_its_outcome_counts_remote_publish_errors_and_keeps_no_socket_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    healthy, stalled, refused = (
+        await Peer().accepted(),
+        await Peer(stalled=True).accepted(),
+        await Peer().accepted(),
+    )
+    instance = router.RealtimeRouter()
+    instance.instance_id = "local"
+    published: list[str] = []
+    warnings: list[str] = []
+
+    async def authorize(socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None) -> bool:
+        return socket is not refused
+
+    async def presence(_agent: str) -> list[dict[str, str]]:
+        return [{"instance_id": identity, "session_id": "session", "user_id": "user"} for identity in ("up", "down")]
+
+    async def publish(channel: str, _payload: str) -> int:
+        published.append(channel)
+        if channel.endswith(":down"):
+            raise ConnectionError("instance channel unavailable")
+        return 1
+
+    monkeypatch.setattr(router, "authorize_chat_delivery", authorize)
+    monkeypatch.setattr(instance, "_list_presence", presence)
+    monkeypatch.setattr(router, "get_redis", AsyncMock(return_value=SimpleNamespace(publish=publish)))
+    monkeypatch.setattr(router, "logger", SimpleNamespace(debug=lambda _message: None, warning=warnings.append))
+    observer = Observer()
+    state_before = dict(vars(instance))
+
+    outcome = await asyncio.wait_for(
+        instance.route_message(
+            agent_id="agent",
+            message={"type": "chunk", "seq": 0},
+            local_connections=[(socket, "session", "user") for socket in (healthy, stalled, refused)],
+            session_id="session",
+            send_timeout=0.0,
+            observer=observer,
+        ),
+        5,
+    )
+
+    assert outcome == RoutingOutcome(
+        local_targets=3, delivered=1, failed=1, evicted=1, remote_instances=2, remote_publish_errors=1
+    )
+    assert outcome.dropped
+    assert sorted(published) == ["realtime:ws:instance:down", "realtime:ws:instance:up"]
+    assert any("ConnectionError" in warning for warning in warnings)
+    # The stalled socket went back to its owner; the router remembers nothing about any socket.
+    assert sorted(name for name, socket in observer.calls if socket is stalled) == ["is_live", "timed_out"]
+    assert sorted(name for name, socket in observer.calls if socket is healthy) == ["is_live", "sent"]
+    assert not [name for name, socket in observer.calls if socket is refused]
+    assert vars(instance) == state_before
+
+
+@pytest.mark.parametrize("listener", ["none", "refused"])
+async def test_an_event_nobody_may_receive_is_not_dropped(monkeypatch: pytest.MonkeyPatch, listener: str) -> None:
+    instance = router.RealtimeRouter()
+    instance.instance_id = "local"
+    socket = await Peer().accepted()
+
+    async def refuse(_socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None) -> bool:
+        return False
+
+    async def presence(_agent: str) -> list[dict[str, str]]:
+        return []
+
+    monkeypatch.setattr(router, "authorize_chat_delivery", refuse)
+    monkeypatch.setattr(instance, "_list_presence", presence)
+
+    outcome = await instance.route_message(
+        agent_id="agent",
+        message={"type": "chunk", "seq": 0},
+        local_connections=[] if listener == "none" else [(socket, "session", "user")],
+        session_id="session",
+        observer=Observer(),
+    )
+
+    assert outcome == RoutingOutcome(local_targets=0 if listener == "none" else 1)
+    assert not outcome.dropped
+
+
+async def test_eviction_closes_once_with_its_own_code_in_a_bounded_task_the_manager_holds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(websocket, "EVICTION_CLOSE_TIMEOUT_SECONDS", 0.0)  # expires at the close's first suspension
+    threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
+    manager = websocket.ConnectionManager()
+    peer = Peer(stall_close=True)
+    socket = await peer.accepted()
+    manager.active_connections["agent"] = [(socket, "session", "user")]
+
+    evictions = [manager.timed_out("agent", socket) for _ in range(threshold)]
+
+    assert evictions == [False] * (threshold - 1) + [True]
+    assert not manager.is_live(socket)
+    assert manager.active_connections["agent"] == []
+    (task,) = manager._eviction_tasks
+    assert not task.done()
+    await asyncio.wait_for(manager.drain_evictions(), 5)
+    assert task.done()
+    assert not manager._eviction_tasks
+    assert peer.closes == [websocket.EVICTION_CLOSE_CODE]
+    assert peer.closes[0] not in (websocket.RESUBSCRIBE_CLOSE_CODE, 4001, 4003)
+    assert peer.close_cancelled
+    assert manager.timed_out("agent", socket) is False
+    assert not manager._eviction_tasks
+
+
+async def test_resubscribe_still_closes_every_listed_socket_with_1012_and_not_the_evicted_one() -> None:
+    manager = websocket.ConnectionManager()
+    live, evicted = Peer(), Peer()
+    manager.active_connections["agent"] = [
+        (await live.accepted(), "session", "user"),
+        (await evicted.accepted(), "session", "user"),
+    ]
+    for _ in range(websocket.STALLED_SEND_EVICTION_THRESHOLD):
+        _ = manager.timed_out("agent", evicted.socket)
+
+    await asyncio.wait_for(manager.close_local_connections(), 5)
+    await asyncio.wait_for(manager.drain_evictions(), 5)
+
+    assert live.closes == [websocket.RESUBSCRIBE_CLOSE_CODE] == [1012]
+    assert evicted.closes == [websocket.EVICTION_CLOSE_CODE]

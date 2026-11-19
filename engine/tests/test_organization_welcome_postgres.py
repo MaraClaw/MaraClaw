@@ -10,6 +10,7 @@ from app.schemas.notification_responses import NotificationResponse, Notificatio
 from app.schemas.schemas import RegisterInitResponse
 from app.services import company_admission_decisions
 from company_admission_fixtures import AdmissionScenario, admission_scenario
+from invitation_fixtures import put_code
 
 __all__ = ["admission_scenario"]
 
@@ -206,13 +207,14 @@ async def test_welcome_failure_rolls_back_approval(
 async def test_registration_with_pending_invitation_sends_no_welcome(
     admission_scenario: AdmissionScenario,
 ) -> None:
-    # Given an invitation to Acme and an account which does not exist yet.
+    # Given an invitation to Acme addressed to an account which does not exist yet.
     scenario = admission_scenario
+    await put_code(scenario, "NEWCOMER", invited_email="newcomer@example.com")
 
     # When registration creates a default-organization membership pending review.
     response = await scenario.client.post(
         "/api/auth/register/init",
-        json={"email": "newcomer@example.com", "password": "qa-password", "invitation_code": "JOIN"},
+        json={"email": "newcomer@example.com", "password": "qa-password", "invitation_code": "NEWCOMER"},
     )
 
     # Then neither organization gets a welcome before approval, including through its real token.

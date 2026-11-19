@@ -9,7 +9,7 @@ export function isSetupActive(setup: AgentSetup | undefined) {
   return setup?.state === 'pending' || setup?.state === 'running' || (setup?.setup_pending === true && setup.state === null)
 }
 
-function refreshAgent(scope: SessionQueryScope, agentId: string) {
+export function refreshAgent(scope: SessionQueryScope, agentId: string) {
   scope.assertCurrent()
   void scope.client.invalidateQueries({ queryKey: ['agent', agentId] })
   void scope.client.invalidateQueries({ queryKey: ['agents'] })

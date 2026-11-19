@@ -9,7 +9,14 @@ from app.records.channel_config import ChannelConfigRecord
 from app.records.chat_attachment import ChatAttachment
 from app.services.storage import store_agent_upload
 
-from .media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from .media_limits import (
+    MediaBudget,
+    MediaTooLargeError,
+    limit_attachments,
+    read_capped,
+    skipped_attachments_note,
+    too_large_note,
+)
 from .submissions import ChannelEvent, accept_channel_event, is_channel_event_replay
 
 
@@ -40,7 +47,8 @@ async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject) -> b
     enriched = text
     attachments: list[ChatAttachment] = []
     budget = MediaBudget()
-    for file in files:
+    retrieved, skipped = limit_attachments(files)
+    for file in retrieved:
         url = json_as_str_or(file.get("url_private_download")) or json_as_str_or(file.get("url_private"))
         filename = json_as_str_or(file.get("name")) or f"slack_{json_as_str_or(file.get('id'))}.bin"
         try:
@@ -59,6 +67,8 @@ async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject) -> b
         _, workspace_path, _ = await store_agent_upload(config.agent_id, filename, data, content_type=content_type)
         attachments.append(ChatAttachment(path=workspace_path, name=PurePosixPath(workspace_path).name))
         enriched = f"{enriched}\n[file:{workspace_path}]".strip()
+    if skipped:
+        enriched = f"{enriched}\n{skipped_attachments_note(skipped)}".strip()
     await accept_channel_event(
         replace(native, attachments=tuple(attachments)), content=enriched, saved_content=enriched
     )

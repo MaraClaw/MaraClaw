@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from pathlib import Path
+from random import random as system_random
 from time import monotonic
 from typing import Final
 from uuid import UUID
@@ -8,7 +9,7 @@ import anyio
 
 from app.core.logging import logger
 from app.dao.whatsapp_personal_dao import candidates, claim
-from app.runtime.tasks import loop_progress
+from app.runtime.tasks import ReconnectBackoff, loop_progress
 from app.services.channels.whatsapp_personal_child import run_child
 from app.services.channels.whatsapp_personal_diagnostics import error_summary
 
@@ -16,30 +17,48 @@ _COMMAND = ("node", str(Path(__file__).resolve().parents[3] / "connectors/whatsa
 _POLL_SECONDS = 1.0
 _BACKOFF_START_SECONDS = 1.0
 _BACKOFF_MAX_SECONDS = 30.0
-_COOLDOWN_SECONDS = 30.0
+_COOLDOWN_BASE_SECONDS: Final = 30.0
+_COOLDOWN_CAP_SECONDS: Final = 300.0
+_HEALTHY_CHILD_SECONDS: Final = 120.0
 PROGRESS_BUDGET_SECONDS: Final = 300.0
 
 
-async def personal_supervisor(clock: Callable[[], float] = monotonic) -> None:
+async def personal_supervisor(
+    clock: Callable[[], float] = monotonic, random: Callable[[], float] = system_random
+) -> None:
     running: set[UUID] = set()
     cooldowns: dict[UUID, float] = {}
+    escalation: dict[UUID, ReconnectBackoff] = {}
     backoff = _BACKOFF_START_SECONDS
     progress = loop_progress()
     async with anyio.create_task_group() as tasks:
 
         async def owned(config_id: UUID) -> None:
+            started = clock()
             try:
                 connection = await claim(config_id)
                 if connection is not None:
                     await run_child(connection, _COMMAND)
             except Exception as error:
                 # Unclassified: leave stored credentials alone (no fail_connection) and keep siblings running.
-                cooldowns[config_id] = clock() + _COOLDOWN_SECONDS
+                policy = escalation.get(config_id)
+                if policy is None:
+                    policy = escalation[config_id] = ReconnectBackoff(
+                        base_seconds=_COOLDOWN_BASE_SECONDS,
+                        cap_seconds=_COOLDOWN_CAP_SECONDS,
+                        healthy_seconds=_HEALTHY_CHILD_SECONDS,
+                        random=random,
+                        clock=clock,
+                    )
+                cooldowns[config_id] = clock() + policy.next_delay(started)
                 logger.warning(
                     "[WhatsAppPersonal] connection_task_failed config_id={} error_kind={}",
                     config_id,
                     error_summary(error).get("error_kind", "other"),
                 )
+            else:
+                if (policy := escalation.get(config_id)) is not None:
+                    policy.settle(started)
             finally:
                 running.discard(config_id)
 
@@ -57,6 +76,11 @@ async def personal_supervisor(clock: Callable[[], float] = monotonic) -> None:
                 continue
             backoff = _BACKOFF_START_SECONDS
             now = clock()
+            current = {connection.config_id for connection in found} | running
+            for config_id in cooldowns.keys() - current:
+                del cooldowns[config_id]
+            for config_id in escalation.keys() - current:
+                del escalation[config_id]
             for config_id in [config_id for config_id, until in cooldowns.items() if until <= now]:
                 del cooldowns[config_id]
             for connection in found:

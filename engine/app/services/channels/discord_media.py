@@ -17,7 +17,14 @@ from app.core.json_types import json_as_int, json_object_from_response
 from app.core.outbound_transport import public_http_client
 from app.records.chat_attachment import ChatAttachment
 from app.services.channels import submissions
-from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from app.services.channels.media_limits import (
+    MediaBudget,
+    MediaTooLargeError,
+    limit_attachments,
+    read_capped,
+    skipped_attachments_note,
+    too_large_note,
+)
 from app.services.channels.stream_source import authorize_stream_source
 from app.services.storage import store_agent_upload
 
@@ -55,7 +62,8 @@ async def accept_discord_media(event: submissions.ChannelEvent, attachments: tup
     if await submissions.is_channel_event_replay(event):
         return
     budget, refs, parts = MediaBudget(), [], [event.text] if event.text else []
-    for attachment in attachments[:10]:
+    retrieved, skipped = limit_attachments(attachments)
+    for attachment in retrieved:
         # Only Discord's documented CDN attachment paths; no bot credential is needed on signed URLs.
         match = re.fullmatch(
             r"https://(cdn\.discordapp\.com|media\.discordapp\.net)(/attachments/[0-9]+/[0-9]+/[^/?#\\\s]+)(?:\?[^#\\\s]*)?",
@@ -86,8 +94,8 @@ async def accept_discord_media(event: submissions.ChannelEvent, attachments: tup
         )
         refs.append(ChatAttachment(path=path, name=PurePosixPath(path).name))
         parts.append(f"[file: {path}]")
-    if len(attachments) > 10:
-        parts.append("[files skipped: maximum 10 attachments per message]")
+    if skipped:
+        parts.append(skipped_attachments_note(skipped))
     content = "\n".join(parts)
     await submissions.accept_channel_event(
         replace(event, attachments=tuple(refs)), content=content, saved_content=content

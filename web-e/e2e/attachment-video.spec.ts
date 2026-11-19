@@ -19,7 +19,8 @@ test('video plays only on demand and closes with a released source and object UR
   await page.screenshot({ path: testInfo.outputPath('video-playing.png') })
   await page.getByRole('button', { name: 'Close preview', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  expect(await element.evaluate((video) => ({ src: video.getAttribute('src'), paused: video.paused, networkState: video.networkState })))
+  // load() without a source reports NETWORK_NO_SOURCE until Chromium's resource-selection task settles it to NETWORK_EMPTY.
+  await expect.poll(() => element.evaluate((video) => ({ src: video.getAttribute('src'), paused: video.paused, networkState: video.networkState })))
     .toEqual({ src: null, paused: true, networkState: 0 })
   expect(await page.evaluate(() => document.documentElement.dataset.revokedPreviewUrl)).toBe(source)
   await page.getByRole('button', { name: 'Preview', exact: true }).click()

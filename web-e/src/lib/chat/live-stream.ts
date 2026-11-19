@@ -44,27 +44,76 @@ export function clearLiveStream(state: LiveStream, finishedTurnId?: string | nul
 
 export type LiveStreamStore = ReturnType<typeof createLiveStreamStore>
 
-export function createLiveStreamStore() {
-  let snapshot = createLiveStream()
+export type FrameScheduler = {
+  readonly request: (callback: () => void) => number
+  readonly cancel: (handle: number) => void
+}
+
+// Resolves the globals per call so an installed or mocked frame clock is honored.
+export const animationFrames: FrameScheduler = {
+  request: (callback) => requestAnimationFrame(() => callback()),
+  cancel: (handle) => cancelAnimationFrame(handle),
+}
+
+/**
+ * Chunks are accepted synchronously into `latest()`, so sequence and turn checks never wait for a paint.
+ * Subscribers only see them through `getSnapshot()`, which advances at most once per frame.
+ * A terminal clear or reset publishes at once and invalidates the pending frame.
+ */
+export function createLiveStreamStore(frames: FrameScheduler = animationFrames) {
+  let accepted = createLiveStream()
+  let snapshot = accepted
+  let pending: { handle: number } | null = null
   const listeners = new Set<() => void>()
-  function publish(next: LiveStream) {
-    if (snapshot === next) return
-    snapshot = next
+  function publish() {
+    if (snapshot === accepted) return
+    snapshot = accepted
     for (const listener of listeners) listener()
+  }
+  function cancelFrame() {
+    if (!pending) return
+    frames.cancel(pending.handle)
+    pending = null
+  }
+  function schedule() {
+    if (pending) return
+    const frame = { handle: 0 }
+    pending = frame
+    frame.handle = frames.request(() => {
+      // A scheduler that ignores `cancel` must not publish for a frame that was already invalidated.
+      if (pending !== frame) return
+      pending = null
+      publish()
+    })
   }
   return {
     getSnapshot: () => snapshot,
+    latest: () => accepted,
     hasLive: () => Boolean(snapshot.text),
     subscribe: (listener: () => void) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
     chunk: (chunk: ChunkEvent) => {
-      const previous = snapshot
-      publish(applyLiveChunk(previous, chunk))
-      return snapshot !== previous
+      const next = applyLiveChunk(accepted, chunk)
+      if (next === accepted) return false
+      accepted = next
+      schedule()
+      return true
     },
-    clear: (finishedTurnId?: string | null) => publish(clearLiveStream(snapshot, finishedTurnId)),
-    reset: () => publish(createLiveStream()),
+    clear: (finishedTurnId?: string | null) => {
+      const next = clearLiveStream(accepted, finishedTurnId)
+      // Finishing another turn keeps the active text; its unpublished chunks still wait for their frame.
+      const foreign = next.turnId !== null && next.turnId === accepted.turnId
+      accepted = next
+      if (foreign && pending) return
+      cancelFrame()
+      publish()
+    },
+    reset: () => {
+      cancelFrame()
+      accepted = createLiveStream()
+      publish()
+    },
   }
 }

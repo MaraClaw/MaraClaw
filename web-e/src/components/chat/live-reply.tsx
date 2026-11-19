@@ -8,7 +8,7 @@ export const LiveReply = memo(function LiveReply({ store, onRender }: {
   readonly onRender: () => void
 }) {
   const live = useSyncExternalStore(store.subscribe, store.getSnapshot)
-  useLayoutEffect(onRender)
+  useLayoutEffect(() => { onRender() }, [live.text, onRender])
   return live.text ? <article className="chat-bubble chat-agent-bubble ml-2 rounded-tl-none text-sm" aria-live="polite" aria-atomic="false">
     <ResponseCopy text={live.text} />
     <ChatMarkdown text={live.text} />

@@ -23,6 +23,7 @@ from app.services import (
     openclaw_gateway_stream as streaming,
 )
 from app.services.realtime_runtime import fanout, router as realtime
+from app.services.realtime_runtime.contracts import RoutingOutcome
 from app.services.shared_chat import shared_session_id
 from test_openclaw_gateway_coalescing import IngestProbe, delta_line
 from test_openclaw_gateway_rpc import _Turn, wire_terminal
@@ -54,13 +55,27 @@ class Gate:
 
 
 class Link:
-    """A fake socket transport that records frames and can stall, gate or fail every text send."""
+    """A fake socket transport that records frames and can stall, gate or fail text sends.
 
-    def __init__(self, *, stalled: bool = False, gate: Gate | None = None, fail: bool = False) -> None:
+    ``stalled`` stalls every text send and ``stalls`` only the listed attempts (0-based), like a phone that misses a
+    few frames and then reads again. Close codes are recorded as they are sent.
+    """
+
+    def __init__(
+        self,
+        *,
+        stalled: bool = False,
+        gate: Gate | None = None,
+        fail: bool = False,
+        stalls: frozenset[int] = frozenset(),
+    ) -> None:
         self.frames: list[Message] = []
         self.stalled = stalled
+        self.stalls = stalls
         self.gate = gate
         self.fail = fail
+        self.attempts = 0
+        self.closes: list[int] = []
         self.send_cancelled = False
         self.sent = asyncio.Event()
         self.socket = WebSocket({"type": "websocket", "headers": []}, self._receive, self._send)
@@ -70,10 +85,12 @@ class Link:
 
     async def _send(self, message: Message) -> None:
         if message["type"] == "websocket.send":
+            attempt = self.attempts
+            self.attempts += 1
             if self.fail:
                 raise RuntimeError("socket closed")
             try:
-                if self.stalled:
+                if self.stalled or attempt in self.stalls:
                     await asyncio.Event().wait()
                 if self.gate is not None:
                     await self.gate.pass_through()
@@ -81,10 +98,15 @@ class Link:
                 self.send_cancelled = True
                 raise
             self.sent.set()
+        elif message["type"] == "websocket.close":
+            self.closes.append(message["code"])
         self.frames.append(message)
 
+    def sends(self) -> list[Message]:
+        return [frame for frame in self.frames if frame["type"] == "websocket.send"]
+
     def seqs(self) -> list[int]:
-        return [json.loads(str(frame["text"]))["seq"] for frame in self.frames]
+        return [json.loads(str(frame["text"]))["seq"] for frame in self.sends()]
 
 
 class SlowPresence(MemoryPresence):
@@ -131,10 +153,13 @@ class Pipeline:
         self.authorization_cancelled = False
         self.store = MemoryPresence(str(self.agent_id), {})
         self.authorize = AsyncMock(side_effect=self._authorize)
-        router = realtime.RealtimeRouter()
-        router.instance_id = "local"
-        monkeypatch.setattr(websocket, "realtime_router", router)
-        monkeypatch.setattr(websocket.manager, "active_connections", {str(self.agent_id): []})
+        self.outcomes: list[RoutingOutcome] = []
+        self.router = realtime.RealtimeRouter()
+        self.router.instance_id = "local"
+        self.manager = websocket.ConnectionManager()
+        self.manager.active_connections[str(self.agent_id)] = []
+        monkeypatch.setattr(websocket, "realtime_router", self.router)
+        monkeypatch.setattr(websocket, "manager", self.manager)
         monkeypatch.setattr(realtime, "get_redis", self._redis)
         self.read_version = AsyncMock(side_effect=lambda _agent: self.version)
         monkeypatch.setattr(access_cache, "read_acl_version", self.read_version)
@@ -158,8 +183,15 @@ class Pipeline:
             raise HTTPException(403, "Permission revoked")
         return object(), object(), "use"
 
-    async def connect(self, *, stalled: bool = False, gate: Gate | None = None, fail: bool = False) -> Link:
-        link = Link(stalled=stalled, gate=gate, fail=fail)
+    async def connect(
+        self,
+        *,
+        stalled: bool = False,
+        gate: Gate | None = None,
+        fail: bool = False,
+        stalls: frozenset[int] = frozenset(),
+    ) -> Link:
+        link = Link(stalled=stalled, gate=gate, fail=fail, stalls=stalls)
         await link.socket.accept()
         link.frames.clear()
         if self.shared:
@@ -181,7 +213,7 @@ class Pipeline:
             delta = streaming.GatewayDelta.model_validate(
                 {"kind": "delta", "messageId": str(self.message.id), "seq": seq, "text": f"t{seq}", "replace": False}
             )
-            await delivery.publish_chunk(self.message, delta)
+            self.outcomes.append(await delivery.publish_chunk(self.message, delta))
 
 
 async def test_slow_shared_authorization_cannot_starve_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -368,8 +400,10 @@ class Receiver:
         self.manager = websocket.ConnectionManager()
         self.manager.active_connections[str(pipe.agent_id)] = []
 
-    async def connect(self, *, stalled: bool = False, gate: Gate | None = None) -> Link:
-        link = Link(stalled=stalled, gate=gate)
+    async def connect(
+        self, *, stalled: bool = False, gate: Gate | None = None, stalls: frozenset[int] = frozenset()
+    ) -> Link:
+        link = Link(stalled=stalled, gate=gate, stalls=stalls)
         await link.socket.accept()
         link.frames.clear()
         self.manager.active_connections[str(self.pipe.agent_id)].append(
@@ -454,10 +488,11 @@ async def test_stalled_done_socket_is_bounded_and_the_next_event_still_reaches_h
 
     for event in events:
         await asyncio.wait_for(receiver.manager.deliver_pubsub_message(agent_id=str(pipe.agent_id), payload=event), 5)
+    await asyncio.wait_for(receiver.manager.drain_evictions(), 5)
 
     assert [json.loads(str(frame["text"]))["type"] for frame in healthy.frames] == ["done", "chunk", "error"]
     assert stalled.send_cancelled
-    assert not stalled.frames
+    assert not stalled.sends()
     assert asyncio.all_tasks() == {asyncio.current_task()}
 
 
@@ -531,12 +566,174 @@ async def test_chunks_reach_local_and_remote_sockets_in_seq_order_despite_stalle
 
     await asyncio.wait_for(pipe.publish(0, 1, 2, 3), 10)
     await asyncio.wait_for(receiver.receive(), 10)
+    await asyncio.wait_for(pipe.manager.drain_evictions(), 5)
+    await asyncio.wait_for(receiver.manager.drain_evictions(), 5)
 
     assert healthy.seqs() == remote_healthy.seqs() == [0, 1, 2, 3]
     assert stalled.send_cancelled
     assert remote_stalled.send_cancelled
-    assert not stalled.frames
-    assert not remote_stalled.frames
+    assert not stalled.sends()
+    assert not remote_stalled.sends()
+
+
+async def test_publisher_evicts_a_stalled_socket_after_consecutive_timeouts_and_keeps_the_healthy_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
+    threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
+    pipe = Pipeline(monkeypatch, shared=False)
+    stalled = await pipe.connect(stalled=True)
+    healthy = await pipe.connect()
+    seqs = list(range(threshold + 2))
+
+    await asyncio.wait_for(pipe.publish(*seqs), 10)
+    await asyncio.wait_for(pipe.manager.drain_evictions(), 5)
+
+    assert healthy.seqs() == seqs
+    # Only the sends before eviction waited on the stalled socket; later chunks never tried it.
+    assert stalled.attempts == threshold
+    assert not stalled.sends()
+    assert stalled.closes == [websocket.EVICTION_CLOSE_CODE]
+    assert [outcome.evicted for outcome in pipe.outcomes] == [0] * (threshold - 1) + [1, 0, 0]
+    assert [outcome.dropped for outcome in pipe.outcomes] == [True] * threshold + [False, False]
+    assert [ws for ws, _, _ in pipe.manager.active_connections[str(pipe.agent_id)]] == [healthy.socket]
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_receiver_evicts_a_stalled_socket_and_the_healthy_one_keeps_every_chunk_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
+    threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
+    pipe = Pipeline(monkeypatch, shared=False)
+    pipe.store = remote_presence(pipe)
+    seqs = list(range(threshold + 2))
+    await asyncio.wait_for(pipe.publish(*seqs), 5)
+    receiver = Receiver(pipe)
+    stalled = await receiver.connect(stalled=True)
+    healthy = await receiver.connect()
+
+    await asyncio.wait_for(receiver.receive(), 10)
+    await asyncio.wait_for(receiver.manager.drain_evictions(), 5)
+
+    assert healthy.seqs() == seqs
+    assert stalled.attempts == threshold
+    assert not stalled.sends()
+    assert stalled.closes == [websocket.EVICTION_CLOSE_CODE]
+    assert [ws for ws, _, _ in receiver.manager.active_connections[str(pipe.agent_id)]] == [healthy.socket]
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+@pytest.mark.parametrize("path", ["publisher", "receiver"])
+async def test_a_slow_but_healthy_socket_that_reads_again_between_timeouts_is_never_evicted(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)
+    threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
+    pipe = Pipeline(monkeypatch, shared=False)
+    seqs = list(range(2 * threshold))
+    # One timeout short of eviction, then one send that goes through, twice over.
+    stalls = frozenset(seq for seq in seqs if seq % threshold != threshold - 1)
+    if path == "publisher":
+        manager = pipe.manager
+        slow = await pipe.connect(stalls=stalls)
+        healthy = await pipe.connect()
+        await asyncio.wait_for(pipe.publish(*seqs), 10)
+        assert not any(outcome.evicted for outcome in pipe.outcomes)
+    else:
+        pipe.store = remote_presence(pipe)
+        await asyncio.wait_for(pipe.publish(*seqs), 10)
+        receiver = Receiver(pipe)
+        manager = receiver.manager
+        slow = await receiver.connect(stalls=stalls)
+        healthy = await receiver.connect()
+        await asyncio.wait_for(receiver.receive(), 10)
+
+    assert healthy.seqs() == seqs
+    assert slow.seqs() == [threshold - 1, 2 * threshold - 1]
+    assert slow.attempts == len(seqs)
+    assert slow.closes == []
+    assert manager.is_live(slow.socket)
+    assert slow.socket in [ws for ws, _, _ in manager.active_connections[str(pipe.agent_id)]]
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_a_snapshot_taken_before_eviction_sends_nothing_more_to_the_evicted_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)
+    threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
+    pipe = Pipeline(monkeypatch, shared=False)
+    stalled = await pipe.connect(stalled=True)
+    healthy = await pipe.connect()
+    snapshot = list(pipe.manager.active_connections[str(pipe.agent_id)])
+    await asyncio.wait_for(pipe.publish(*range(threshold)), 10)
+
+    # A delivery that copied the connection list before the eviction, with a bound it must never pay.
+    late: dict[str, object] = {
+        "type": "chunk",
+        "content": "late",
+        "turn_id": str(pipe.message.id),
+        "seq": threshold,
+        "replace": False,
+    }
+    outcome = await asyncio.wait_for(
+        pipe.router.route_message(
+            agent_id=str(pipe.agent_id),
+            message=late,
+            local_connections=snapshot,
+            session_id=str(pipe.session_id),
+            send_timeout=60.0,
+            observer=pipe.manager,
+        ),
+        5,
+    )
+    await asyncio.wait_for(pipe.manager.drain_evictions(), 5)
+
+    assert stalled.attempts == threshold
+    assert healthy.seqs() == [*range(threshold), threshold]
+    assert (outcome.local_targets, outcome.delivered, outcome.failed, outcome.evicted) == (2, 1, 0, 1)
+    assert outcome.dropped
+
+
+async def test_receiver_skips_a_socket_evicted_while_its_delivery_was_authorizing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 60.0)  # a send the stalled socket must never get
+    monkeypatch.setattr(websocket, "EVICTION_CLOSE_TIMEOUT_SECONDS", 60.0)
+    pipe = Pipeline(monkeypatch, shared=False)
+    receiver = Receiver(pipe)
+    stalled = await receiver.connect(stalled=True)
+    stalled.socket.state.realtime_connection_id = "stalled-connection"
+    healthy = await receiver.connect()
+    gate = Gate(saturate_at=2)
+    removal = asyncio.Event()
+
+    async def authorize(_ws: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None) -> bool:
+        await gate.pass_through()
+        return True
+
+    async def remove_presence(*, agent_id: str, connection_id: str) -> None:
+        assert (agent_id, connection_id) == (str(pipe.agent_id), "stalled-connection")
+        await removal.wait()  # the Redis round trip that comes before the eviction's close
+
+    monkeypatch.setattr(websocket, "authorize_chat_delivery", authorize)
+    monkeypatch.setattr(pipe.router, "unregister_connection_id", remove_presence)
+    payload: dict[str, object] = {"type": "chunk", "content": "x", "turn_id": str(uuid4()), "seq": 0, "replace": False}
+    task = asyncio.create_task(receiver.manager.deliver_pubsub_message(agent_id=str(pipe.agent_id), payload=payload))
+    await asyncio.wait_for(gate.saturated.wait(), 5)
+
+    for _ in range(websocket.STALLED_SEND_EVICTION_THRESHOLD):
+        _ = receiver.manager.timed_out(str(pipe.agent_id), stalled.socket)
+    gate.open.set()
+    await asyncio.wait_for(task, 5)
+    removal.set()
+    await asyncio.wait_for(receiver.manager.drain_evictions(), 5)
+
+    assert stalled.attempts == 0
+    assert healthy.seqs() == [0]
+    assert stalled.closes == [websocket.EVICTION_CLOSE_CODE]
 
 
 async def test_revocation_during_slow_authorization_refuses_every_later_chunk(monkeypatch: pytest.MonkeyPatch) -> None:

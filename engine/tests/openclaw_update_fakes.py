@@ -7,12 +7,16 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
+import anyio
+import pytest
 from pywhales.exceptions import DockerException
 
 from app.dao.openclaw_update_dao import SUCCEEDED_SWEEP_LIMIT
 from app.records.agent import AgentRecord
 from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal
+from app.services import openclaw_update_executor
 from app.services.agent_manager import guest_container_name
 from app.services.openclaw_update_docker import ContainerInfo
 
@@ -38,6 +42,12 @@ class FakeDocker:
     ready_results: dict[str, list[bool]] = field(default_factory=dict[str, list[bool]])
     on_ready: Callable[[str], None] | None = None
     calls: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
+    probe_seconds: float = 1.0
+    probe_clock: float = 0.0
+
+    def clock(self) -> float:
+        """Virtual time that advances only by ``probe_seconds`` per readiness probe, whatever the machine's load."""
+        return self.probe_clock
 
     def _find(self, ref: str) -> FakeContainer | None:
         for container in self.containers.values():
@@ -91,6 +101,7 @@ class FakeDocker:
 
     def ready(self, reference: str, timeout: float) -> bool:
         assert timeout > 0
+        self.probe_clock += self.probe_seconds
         if self.on_ready is not None:
             self.on_ready(reference)
         found = self._find(reference)
@@ -98,6 +109,13 @@ class FakeDocker:
         if script:
             return script.pop(0)
         return found is not None and found.running
+
+
+def use_probe_clock(monkeypatch: pytest.MonkeyPatch, docker: FakeDocker) -> None:
+    """Measure the executor's readiness budget on ``docker.clock`` instead of the event loop's wall clock."""
+    monkeypatch.setattr(
+        openclaw_update_executor, "anyio", SimpleNamespace(current_time=docker.clock, sleep=anyio.sleep)
+    )
 
 
 class FakeManager:

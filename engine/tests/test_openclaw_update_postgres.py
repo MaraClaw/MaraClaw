@@ -33,7 +33,7 @@ from app.services.openclaw_update_gate import (
 )
 from app.services.openclaw_update_store import PostgresUpgradeStore
 from app.services.shared_chat import shared_session_id
-from openclaw_update_fakes import NEW_IMAGE, OLD_IMAGE, FakeContainer, FakeDocker, FakeManager
+from openclaw_update_fakes import NEW_IMAGE, OLD_IMAGE, FakeContainer, FakeDocker, FakeManager, use_probe_clock
 
 
 @pytest.fixture
@@ -146,8 +146,10 @@ async def shared_queue(db: DbConnection) -> tuple[UUID, UUID]:
     return agent_id, session_id
 
 
-async def test_upgrade_preserves_uncertain_delivery_without_replay(db: DbConnection, tmp_path) -> None:
-    agent_id, _notice, run, _docker, _manager, executor = await _executor_env(db, tmp_path)
+async def test_upgrade_preserves_uncertain_delivery_without_replay(
+    db: DbConnection, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id, _notice, run, _docker, _manager, executor = await _executor_env(db, tmp_path, monkeypatch)
     delivered = await gateway_message_dao.create(
         obj_in={
             "agent_id": agent_id,
@@ -434,7 +436,7 @@ async def test_deleting_an_agent_removes_its_runs(db: DbConnection):
     assert await one(db, "SELECT count(*) FROM openclaw_update_runs") == 0
 
 
-async def _executor_env(db: DbConnection, tmp_path):
+async def _executor_env(db: DbConnection, tmp_path, monkeypatch: pytest.MonkeyPatch):
     t = await tenant(db)
     agent_id = await agent(db, t, await member(db, t))
     await db.execute("UPDATE agents SET created_at = now() - interval '1 day' WHERE id = %(id)s", {"id": agent_id})
@@ -445,12 +447,15 @@ async def _executor_env(db: DbConnection, tmp_path):
     docker.containers["old"] = FakeContainer("old", guest_container_name(agent_id), OLD_IMAGE, agent_id=str(agent_id))
     manager = FakeManager(docker, Path(tmp_path))
     (manager._agent_dir(agent_id) / "workspace").mkdir(parents=True)
-    executor = UpgradeExecutor(PostgresUpgradeStore(), docker, manager, ready_timeout=0.05, ready_interval=0)
+    use_probe_clock(monkeypatch, docker)
+    executor = UpgradeExecutor(PostgresUpgradeStore(), docker, manager, ready_timeout=10, ready_interval=0)
     return agent_id, notice, run, docker, manager, executor
 
 
-async def test_executor_with_the_real_store_publishes_pins_and_lifts_the_gate(db: DbConnection, tmp_path):
-    agent_id, _notice, run, docker, _manager, executor = await _executor_env(db, tmp_path)
+async def test_executor_with_the_real_store_publishes_pins_and_lifts_the_gate(
+    db: DbConnection, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    agent_id, _notice, run, docker, _manager, executor = await _executor_env(db, tmp_path, monkeypatch)
     await executor.process(run.id)
     row = await db.fetchone(
         "SELECT container_id, openclaw_image_id, status FROM agents WHERE id = %(id)s", {"id": agent_id}
@@ -463,9 +468,9 @@ async def test_executor_with_the_real_store_publishes_pins_and_lifts_the_gate(db
 
 
 async def test_executor_with_the_real_store_rolls_back_without_resurrecting_a_disabled_agent(
-    db: DbConnection, tmp_path
+    db: DbConnection, tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
-    agent_id, _notice, run, docker, manager, executor = await _executor_env(db, tmp_path)
+    agent_id, _notice, run, docker, manager, executor = await _executor_env(db, tmp_path, monkeypatch)
 
     async def admin_disables() -> None:
         await db.execute("UPDATE agents SET status = 'stopped' WHERE id = %(id)s", {"id": agent_id})
@@ -484,8 +489,10 @@ async def test_executor_with_the_real_store_rolls_back_without_resurrecting_a_di
         await assert_work_allowed(agent_id)
 
 
-async def test_executor_with_the_real_store_survives_the_agent_being_deleted_mid_cutover(db: DbConnection, tmp_path):
-    agent_id, _notice, run, docker, manager, executor = await _executor_env(db, tmp_path)
+async def test_executor_with_the_real_store_survives_the_agent_being_deleted_mid_cutover(
+    db: DbConnection, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    agent_id, _notice, run, docker, manager, executor = await _executor_env(db, tmp_path, monkeypatch)
 
     async def admin_deletes() -> None:
         await db.execute("DELETE FROM agents WHERE id = %(id)s", {"id": agent_id})

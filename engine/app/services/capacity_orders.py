@@ -17,7 +17,7 @@ from app.core.acl_locks import lock_tenants
 from app.core.domain.approvals import ApprovalAction
 from app.core.domain.users import UserRole
 from app.core.security import load_user_principal
-from app.dao.capacity_order_dao import capacity_order_dao as orders
+from app.dao.capacity_order_dao import OrderPosition, capacity_order_dao as orders
 from app.dao.tenant_dao import tenant_dao
 from app.db.session import connection_ctx
 from app.records.capacity_order import (
@@ -42,6 +42,7 @@ from app.services.capacity_evidence import (
     store_evidence,
 )
 from app.services.capacity_notifications import notify_decision, notify_platform_admins_submitted
+from app.services.capacity_order_cursor import CapacityOrderCursor, company_view, review_view
 from app.services.capacity_payment_settings import load_payment_settings
 from app.services.capacity_pricing import days_in_month, month_start, quote_purchase, remaining_days
 from app.services.capacity_renewals import eligible_tier, supplement_late_approval
@@ -55,6 +56,13 @@ from app.services.storage_runtime.facade import get_storage_backend
 class CapacityOrderView:
     order: CapacityOrderRecord
     tenant_name: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CapacityOrderListing:
+    items: list[CapacityOrderView]
+    has_more: bool
+    next_cursor: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,23 +248,45 @@ async def create_order(
         return await _view(order)
 
 
+def _seek_position(cursor: str | None, offset: int, view: str) -> OrderPosition | None:
+    """Where a cursor request resumes; call only once the caller is authorized."""
+    if cursor is None:
+        return None
+    if offset:
+        raise HTTPException(400, "A cursor cannot be combined with an offset")
+    position = CapacityOrderCursor.decode(cursor, view)
+    return position.created_at, position.id
+
+
+async def _listing(rows: list[CapacityOrderRecord], limit: int, view: str) -> CapacityOrderListing:
+    """One page of the ``limit + 1`` rows read; the extra row only proves there is more and never leaves."""
+    page = rows[:limit]
+    has_more = len(rows) > limit
+    next_cursor = CapacityOrderCursor.after(page[-1], view).encode() if has_more else None
+    return CapacityOrderListing(await _views(page), has_more, next_cursor)
+
+
 async def list_company_orders(
-    user_id: UUID, tenant_id: UUID | None, *, limit: int, offset: int
-) -> tuple[list[CapacityOrderView], bool]:
+    user_id: UUID, tenant_id: UUID | None, *, limit: int, offset: int, cursor: str | None = None
+) -> CapacityOrderListing:
     async with connection_ctx():
         user = await _principal(user_id)
         target = _reader_tenant(user, tenant_id)
-        rows = await orders.list_for_tenant(target, limit=limit + 1, offset=offset)
-        return await _views(rows[:limit]), len(rows) > limit
+        view = company_view(target)
+        after = _seek_position(cursor, offset, view)
+        rows = await orders.list_for_tenant(target, limit=limit + 1, offset=offset, after=after)
+        return await _listing(rows, limit, view)
 
 
 async def list_review_orders(
-    user_id: UUID, status: CapacityOrderStatus | None, *, limit: int, offset: int
-) -> tuple[list[CapacityOrderView], bool]:
+    user_id: UUID, status: CapacityOrderStatus | None, *, limit: int, offset: int, cursor: str | None = None
+) -> CapacityOrderListing:
     async with connection_ctx():
         _require_platform_admin(await _principal(user_id))
-        rows = await orders.list_by_status(status, limit=limit + 1, offset=offset)
-        return await _views(rows[:limit]), len(rows) > limit
+        view = review_view(status)
+        after = _seek_position(cursor, offset, view)
+        rows = await orders.list_by_status(status, limit=limit + 1, offset=offset, after=after)
+        return await _listing(rows, limit, view)
 
 
 async def get_order(user_id: UUID, order_id: UUID, *, platform_only: bool = False) -> CapacityOrderView:

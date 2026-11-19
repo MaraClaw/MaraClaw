@@ -10,16 +10,21 @@ import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from functools import wraps
-from typing import TypeIs, cast
+from random import random as system_random
+from typing import Final, TypeIs, cast
 from unittest.mock import patch
 
 from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject, JsonValue
 from app.core.logging import logger
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
+from app.runtime.tasks import jittered_backoff
 from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
 
 _WECOM_SDK_PROXY_DISABLED = False
+CONNECT_RETRY_BASE_SECONDS: Final = 5.0
+CONNECT_RETRY_CAP_SECONDS: Final = 120.0
+_random_source: Callable[[], float] = system_random
 
 # SDK WsFrame is too narrow for tests/mocks; keep these names for call sites.
 type _WeComFrame = object
@@ -349,8 +354,7 @@ class WeComStreamManager:
             stream_client.on("disconnected", on_disconnected)
 
             # The SDK handles reconnects after a successful connection.
-            retry_delay = 5  # Start with 5 seconds
-            max_retry_delay = 120  # Cap at 2 minutes
+            connect_failures = 0
             while True:
                 try:
                     logger.info(f"[WeCom Stream] Connecting for agent {agent_id}...")
@@ -363,9 +367,17 @@ class WeComStreamManager:
                 except Exception as e:
                     if self._clients.get(agent_id) is stream_client:
                         self._connected[agent_id] = False
-                    logger.error(f"[WeCom Stream] Connection error for {agent_id}: {e}, retrying in {retry_delay}s...")
+                    retry_delay = jittered_backoff(
+                        connect_failures,
+                        base_seconds=CONNECT_RETRY_BASE_SECONDS,
+                        cap_seconds=CONNECT_RETRY_CAP_SECONDS,
+                        random=_random_source,
+                    )
+                    connect_failures += 1
+                    logger.error(
+                        f"[WeCom Stream] Connection error for {agent_id}: {e}, retrying in {retry_delay:.1f}s..."
+                    )
                     await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, max_retry_delay)
 
             await asyncio.Future[None]()
 

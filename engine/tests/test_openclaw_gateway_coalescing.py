@@ -10,6 +10,7 @@ from app.api.websocket import manager
 from app.config import get_settings
 from app.records.gateway_message import GatewayMessageRecord
 from app.services import openclaw_gateway_stream as streaming
+from app.services.realtime_runtime.contracts import RoutingOutcome
 
 REF = "openrouter/nvidia/nemotron-3.5-super-vl:free"
 BRAND = get_settings().APP_NAME
@@ -54,6 +55,7 @@ class SlowFirstSend(IngestProbe):
             if len(self.sent) == 1:
                 self.in_flight.set()
                 await self.release.wait()
+            return RoutingOutcome()
 
         monkeypatch.setattr(manager, "send_to_session", send)
 

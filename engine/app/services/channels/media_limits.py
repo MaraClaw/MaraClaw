@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import tempfile
 import zlib
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +19,7 @@ from typing import Final, override
 
 import httpx
 
+from app.config import get_settings
 from app.core.json_types import http_header
 from app.services.document_parser import IMAGE_EXTENSIONS, IMAGE_UPLOAD_MAX_BYTES, MAX_INPUT_BYTES
 
@@ -151,6 +152,21 @@ async def _bounded_chunks(response: httpx.Response, chunk_size: int) -> AsyncGen
                 del chunk
                 if decoder.eof or (not pending and not output_full):
                     break
+
+
+def limit_attachments[Descriptor](descriptors: Sequence[Descriptor]) -> tuple[tuple[Descriptor, ...], int]:
+    """Split a native message's eligible descriptors, in provider order, into those to process and the skipped count.
+
+    Every eligible descriptor takes a slot, including one that later proves too large or fails to upload, so a skipped
+    descriptor is never fetched to fill an earlier gap. Callers apply this before any lookup, token, download or write.
+    """
+    limit = get_settings().CHANNEL_MEDIA_MAX_ATTACHMENTS
+    return tuple(descriptors[:limit]), max(0, len(descriptors) - limit)
+
+
+def skipped_attachments_note(skipped: int) -> str:
+    """The one notice a message carries when ``limit_attachments`` skipped ``skipped`` descriptors."""
+    return f"[files skipped: {skipped} beyond the {get_settings().CHANNEL_MEDIA_MAX_ATTACHMENTS} attachment limit]"
 
 
 def too_large_note(filename: str, limit: int) -> str:

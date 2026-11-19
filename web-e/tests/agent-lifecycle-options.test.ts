@@ -4,6 +4,7 @@ import { MutationObserver, QueryObserver } from '@tanstack/react-query'
 
 import { agentLifecycleKey, agentLifecycleOptions, retryMCPOptions } from '../src/hooks/agent-lifecycle-options.ts'
 import { fenceMutationOptions } from '../src/hooks/session-query-scope.ts'
+import type { AgentLifecycle } from '../src/lib/agent-lifecycle-api.ts'
 import { lifecycle, mcpWarning } from './agent-lifecycle-fixture.ts'
 import { agentId, fixture } from './openclaw-update-fixture.ts'
 
@@ -21,6 +22,31 @@ test('use-only observers do not fetch the manage-only lifecycle projection', (t)
   assert.equal(requests, 0)
   assert.equal(observer.getCurrentResult().fetchStatus, 'idle')
 })
+
+const idle: AgentLifecycle = { ...lifecycle, runtime: { ...lifecycle.runtime, recorded_status: 'idle' } }
+const polls: ReadonlyArray<{ readonly change: string; readonly previous: AgentLifecycle; readonly next: AgentLifecycle; readonly refreshed: boolean }> = [
+  { change: 'start pending -> succeeded', previous: idle, next: { ...idle, start: idle.start && { ...idle.start, state: 'succeeded' } }, refreshed: true },
+  { change: 'recorded status idle -> running', previous: { ...idle, start: null },
+    next: { ...idle, start: null, runtime: { ...idle.runtime, recorded_status: 'running' } }, refreshed: true },
+  { change: 'no start or recorded status change', previous: idle, next: { ...idle, as_of: '2030-01-01T00:00:02Z' }, refreshed: false },
+]
+
+for (const { change, previous, next, refreshed } of polls) {
+  test(`lifecycle poll with ${change} ${refreshed ? 'refreshes' : 'leaves'} agent caches`, async (t) => {
+    // Given
+    const { client, scope } = fixture()
+    t.after(() => client.clear())
+    client.setQueryData(agentLifecycleKey(agentId), previous)
+    client.setQueryData(['agent', agentId], {})
+    client.setQueryData(['agents'], [])
+    t.mock.method(globalThis, 'fetch', async () => Response.json(next))
+    // When
+    await client.fetchQuery(agentLifecycleOptions(scope, agentId, true))
+    // Then
+    assert.deepEqual(client.getQueryData(agentLifecycleKey(agentId)), next)
+    for (const queryKey of [['agent', agentId], ['agents']]) assert.equal(client.getQueryState(queryKey)?.isInvalidated, refreshed)
+  })
+}
 
 test('exact-server retry cancels stale reads and invalidates only the current agent lifecycle', async (t) => {
   // Given

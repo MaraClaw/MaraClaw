@@ -71,6 +71,42 @@ async def create_pending(actor: UUID, agent_id: UUID | None = None) -> UUID:
     return agent.id
 
 
+async def new_setup_agent(db: DbConnection, actor: UUID) -> tuple[UUID, UUID]:
+    """A never-started agent owned by an active creator in an active tenant; returns (agent id, tenant id).
+
+    Its status is `idle`, as creation records it; a setup retry is what moves a failed agent to `creating`.
+    """
+    identity_id, tenant_id = uuid4(), uuid4()
+    await db.execute("INSERT INTO identities (id) VALUES (%(id)s)", {"id": identity_id})
+    await db.execute(
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, 'Start QA', 'start-qa', 'ultra')", {"id": tenant_id}
+    )
+    await db.execute(
+        "UPDATE users SET identity_id = %(identity)s, tenant_id = %(tenant)s WHERE id = %(id)s",
+        {"identity": identity_id, "tenant": tenant_id, "id": actor},
+    )
+    agent_id = await create_pending(actor)
+    await db.execute(
+        "UPDATE agents SET status = 'idle', tenant_id = %(tenant)s WHERE id = %(id)s",
+        {"id": agent_id, "tenant": tenant_id},
+    )
+    return agent_id, tenant_id
+
+
+async def finish_next_setup(failure_code: str | None = None) -> None:
+    claim = await agent_setup_dao.claim()
+    assert claim is not None
+    assert await agent_setup_dao.finish(claim, failure_code)
+
+
+async def start_operations(db: DbConnection, agent_id: UUID) -> list[DictRow]:
+    return await db.fetchall("SELECT * FROM agent_start_operations WHERE agent_id = %(id)s", {"id": agent_id})
+
+
+async def agent_state(db: DbConnection, agent_id: UUID) -> DictRow | None:
+    return await db.fetchone("SELECT status, setup_pending FROM agents WHERE id = %(id)s", {"id": agent_id})
+
+
 async def test_postgres_competing_workers_claim_only_once(setup_db):
     _db, actor = setup_db
     agent_id = await create_pending(actor)
@@ -219,3 +255,71 @@ async def test_postgres_http_create_survives_api_exit_and_worker_recovery(setup_
         assert "api_key" not in fetched.json()
     finally:
         app.dependency_overrides.clear()
+
+
+async def test_postgres_setup_success_queues_first_start(setup_db):
+    db, actor = setup_db
+    agent_id, tenant_id = await new_setup_agent(db, actor)
+    await finish_next_setup()
+    operations = await start_operations(db, agent_id)
+    assert len(operations) == 1
+    operation = operations[0]
+    assert operation["state"] == "pending"
+    assert operation["expected_container_id"] is None
+    assert (operation["creator_id"], operation["tenant_id"]) == (actor, tenant_id)
+    due = await db.fetchval(
+        "SELECT next_retry_at <= now() FROM agent_start_retry_metadata WHERE operation_id = %(op)s",
+        {"op": operation["operation_id"]},
+    )
+    assert due is True
+    assert await agent_state(db, agent_id) == {"status": "idle", "setup_pending": False}
+
+
+async def test_postgres_setup_failure_queues_no_start(setup_db):
+    db, actor = setup_db
+    agent_id, _tenant_id = await new_setup_agent(db, actor)
+    await finish_next_setup("setup_failed")
+    assert await start_operations(db, agent_id) == []
+    assert await agent_state(db, agent_id) == {"status": "error", "setup_pending": True}
+
+
+@pytest.mark.parametrize(("status", "container"), [("stopped", None), ("idle", "existing-container")])
+async def test_postgres_setup_success_queues_no_start_outside_first_creation(setup_db, status, container):
+    db, actor = setup_db
+    agent_id, _tenant_id = await new_setup_agent(db, actor)
+    await db.execute(
+        "UPDATE agents SET status = %(status)s::agent_status_enum, container_id = %(container)s WHERE id = %(id)s",
+        {"id": agent_id, "status": status, "container": container},
+    )
+    await finish_next_setup()
+    assert await start_operations(db, agent_id) == []
+    assert await agent_state(db, agent_id) == {"status": status, "setup_pending": False}
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE users SET is_active = false WHERE id = (SELECT creator_id FROM agents WHERE id = %(id)s)",
+        "UPDATE agents SET is_expired = true WHERE id = %(id)s",
+    ],
+    ids=["inactive_creator", "expired_agent"],
+)
+async def test_postgres_setup_success_queues_no_start_for_ineligible_agent(setup_db, statement):
+    db, actor = setup_db
+    agent_id, _tenant_id = await new_setup_agent(db, actor)
+    await db.execute(statement, {"id": agent_id})
+    await finish_next_setup()
+    assert await start_operations(db, agent_id) == []
+    assert await agent_state(db, agent_id) == {"status": "idle", "setup_pending": False}
+
+
+async def test_postgres_retried_setup_queues_first_start_once_it_succeeds(setup_db):
+    db, actor = setup_db
+    agent_id, _tenant_id = await new_setup_agent(db, actor)
+    await finish_next_setup("setup_failed")
+    assert await agent_setup_dao.retry_failed(agent_id) is not None
+    assert await start_operations(db, agent_id) == []
+    await finish_next_setup()
+    operations = await start_operations(db, agent_id)
+    assert [operation["state"] for operation in operations] == ["pending"]
+    assert await agent_state(db, agent_id) == {"status": "idle", "setup_pending": False}

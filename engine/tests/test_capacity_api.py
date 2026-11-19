@@ -1,9 +1,11 @@
 """Capacity order HTTP contract and authorization matrix with fakes (real behavior: test_capacity_orders_postgres)."""
 
+import json
+from base64 import urlsafe_b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -18,6 +20,7 @@ from app.api import admin_capacity, capacity, capacity_evidence, enterprise
 from app.core.domain.approvals import ApprovalAction
 from app.core.domain.users import UserRole
 from app.core.security import get_current_user
+from app.dao.capacity_order_dao import OrderPosition
 from app.db.connection import DbConnection
 from app.records.capacity_order import (
     CapacityEvidence,
@@ -34,6 +37,7 @@ from app.schemas.capacity import CapacityEvidenceOut, CapacityOrderOut
 from app.services import capacity_orders, capacity_payment_settings, company_capacity
 from app.services.capacity_evidence import MAX_EVIDENCE_BYTES
 from app.services.capacity_ledger import CapacityExtras
+from app.services.capacity_order_cursor import CapacityOrderCursor, company_view, review_view
 from app.services.capacity_orders import EvidenceFile
 from app.services.capacity_payment_settings import RESERVED_SETTING_KEYS, SETTINGS_KEY, PaymentSettings
 
@@ -80,17 +84,28 @@ class FakeOrders:
 
     get_locked = get
 
-    async def list_for_tenant(self, tenant_id: UUID, *, limit: int, offset: int) -> list[CapacityOrderRecord]:
-        del limit, offset
+    @staticmethod
+    def _page(
+        rows: list[CapacityOrderRecord], limit: int, offset: int, after: OrderPosition | None
+    ) -> list[CapacityOrderRecord]:
+        """What the DAO's SQL returns: newest first by ``(created_at, id)``, strictly below ``after``."""
+        newest_first = sorted(rows, key=lambda row: (row.created_at, row.id), reverse=True)
+        if after is not None:
+            newest_first = [row for row in newest_first if (row.created_at, row.id) < after]
+        return newest_first[offset : offset + limit]
+
+    async def list_for_tenant(
+        self, tenant_id: UUID, *, limit: int, offset: int = 0, after: OrderPosition | None = None
+    ) -> list[CapacityOrderRecord]:
         self.listed.append(f"tenant:{tenant_id}")
-        return [row for row in self.rows.values() if row.tenant_id == tenant_id]
+        return self._page([row for row in self.rows.values() if row.tenant_id == tenant_id], limit, offset, after)
 
     async def list_by_status(
-        self, status: CapacityOrderStatus | None, *, limit: int, offset: int
+        self, status: CapacityOrderStatus | None, *, limit: int, offset: int = 0, after: OrderPosition | None = None
     ) -> list[CapacityOrderRecord]:
-        del limit, offset
         self.listed.append(f"status:{status}")
-        return list(self.rows.values())
+        matching = [row for row in self.rows.values() if status is None or row.status is status]
+        return self._page(matching, limit, offset, after)
 
 
 @pytest.fixture
@@ -215,11 +230,9 @@ async def test_the_review_queue_is_for_platform_admins_only(world: Callable[...,
 
     reviewer = person("platform_admin", None, genesis=False)
     _ = world(reviewer, order_of(TENANT_A), order_of(TENANT_B))
-    views, has_more = await capacity_orders.list_review_orders(
-        reviewer.id, CapacityOrderStatus.SUBMITTED, limit=10, offset=0
-    )
-    assert (len(views), has_more) == (2, False)
-    assert {view.tenant_name for view in views} == {f"Company {TENANT_A.int}", f"Company {TENANT_B.int}"}
+    page = await capacity_orders.list_review_orders(reviewer.id, CapacityOrderStatus.SUBMITTED, limit=10, offset=0)
+    assert (len(page.items), page.has_more, page.next_cursor) == (2, False, None)
+    assert {view.tenant_name for view in page.items} == {f"Company {TENANT_A.int}", f"Company {TENANT_B.int}"}
 
 
 async def test_the_company_list_is_own_company_for_org_admins_and_named_for_platform_admins(
@@ -227,8 +240,8 @@ async def test_the_company_list_is_own_company_for_org_admins_and_named_for_plat
 ):
     admin = person("org_admin", TENANT_A)
     table = world(admin, order_of(TENANT_A), order_of(TENANT_B))
-    views, _ = await capacity_orders.list_company_orders(admin.id, None, limit=10, offset=0)
-    assert [view.order.tenant_id for view in views] == [TENANT_A]
+    own = await capacity_orders.list_company_orders(admin.id, None, limit=10, offset=0)
+    assert [view.order.tenant_id for view in own.items] == [TENANT_A]
     assert table.listed == [f"tenant:{TENANT_A}"]
     with pytest.raises(HTTPException) as foreign:
         _ = await capacity_orders.list_company_orders(admin.id, TENANT_B, limit=10, offset=0)
@@ -239,14 +252,268 @@ async def test_the_company_list_is_own_company_for_org_admins_and_named_for_plat
     with pytest.raises(HTTPException) as unnamed:
         _ = await capacity_orders.list_company_orders(reviewer.id, None, limit=10, offset=0)
     assert status_of(unnamed) == 400
-    named, _ = await capacity_orders.list_company_orders(reviewer.id, TENANT_B, limit=10, offset=0)
-    assert [view.order.tenant_id for view in named] == [TENANT_B]
+    named = await capacity_orders.list_company_orders(reviewer.id, TENANT_B, limit=10, offset=0)
+    assert [view.order.tenant_id for view in named.items] == [TENANT_B]
 
     member = person("member", TENANT_A)
     _ = world(member)
     with pytest.raises(HTTPException) as refused:
         _ = await capacity_orders.list_company_orders(member.id, None, limit=10, offset=0)
     assert status_of(refused) == 403
+
+
+# ── cursor paging of the two lists ──────────────────────────────────────
+
+NOON = datetime(2027, 1, 1, 12, tzinfo=UTC)
+
+
+def stamped(
+    tenant: UUID, created_at: datetime, number: int, status: CapacityOrderStatus = CapacityOrderStatus.SUBMITTED
+) -> CapacityOrderRecord:
+    return replace(order_of(tenant, status=status), created_at=created_at, id=UUID(int=number))
+
+
+def tied_orders(tenant: UUID = TENANT_A) -> list[CapacityOrderRecord]:
+    """Five orders sharing one instant, one newer and two older: the page boundary must fall inside the tie."""
+    ties = [stamped(tenant, NOON, number) for number in (10, 11, 12, 13, 14)]
+    return [
+        stamped(tenant, NOON + timedelta(hours=1), 1),
+        *ties,
+        *(stamped(tenant, NOON - timedelta(hours=1), n) for n in (20, 21)),
+    ]
+
+
+NEWEST_FIRST = [1, 14, 13, 12, 11, 10, 21, 20]
+
+
+def forged(**fields: object) -> str:
+    """A cursor for TENANT_A's history with the given fields replaced (a field set to ``...`` is left out)."""
+    body: dict[str, object] = {
+        "v": 1,
+        "view": company_view(TENANT_A),
+        "created_at": "2027-01-01T12:00:00Z",
+        "id": str(UUID(int=14)),
+        **fields,
+    }
+    payload = json.dumps({name: value for name, value in body.items() if value is not ...}).encode()
+    return urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+async def walk_company(admin: UserRecord, tenant_id: UUID | None, limit: int) -> list[list[int]]:
+    pages: list[list[int]] = []
+    cursor: str | None = None
+    while True:
+        page = await capacity_orders.list_company_orders(admin.id, tenant_id, limit=limit, offset=0, cursor=cursor)
+        pages.append([view.order.id.int for view in page.items])
+        assert (page.next_cursor is not None) == page.has_more
+        if page.next_cursor is None:
+            return pages
+        cursor = page.next_cursor
+
+
+async def walk_review(reviewer: UserRecord, status: CapacityOrderStatus, limit: int) -> list[list[int]]:
+    pages: list[list[int]] = []
+    cursor: str | None = None
+    while True:
+        page = await capacity_orders.list_review_orders(reviewer.id, status, limit=limit, offset=0, cursor=cursor)
+        pages.append([view.order.id.int for view in page.items])
+        assert (page.next_cursor is not None) == page.has_more
+        if page.next_cursor is None:
+            return pages
+        cursor = page.next_cursor
+
+
+async def test_orders_that_share_a_timestamp_are_each_visited_once_by_id_in_both_lists(
+    world: Callable[..., FakeOrders],
+):
+    admin = person("org_admin", TENANT_A)
+    _ = world(admin, *tied_orders(), stamped(TENANT_B, NOON, 99))
+    assert await walk_company(admin, None, limit=2) == [[1, 14], [13, 12], [11, 10], [21, 20]]
+    assert await walk_company(admin, None, limit=3) == [[1, 14, 13], [12, 11, 10], [21, 20]]
+
+    reviewer = person("platform_admin", None)
+    _ = world(reviewer, *tied_orders(), stamped(TENANT_B, NOON, 99))
+    walked = await walk_review(reviewer, CapacityOrderStatus.SUBMITTED, limit=4)
+    assert [number for page in walked for number in page] == [1, 99, 14, 13, 12, 11, 10, 21, 20]
+
+
+async def test_next_cursor_names_the_last_returned_order_and_only_when_more_remain(world: Callable[..., FakeOrders]):
+    admin = person("org_admin", TENANT_A)
+    _ = world(admin, *tied_orders())
+
+    first = await capacity_orders.list_company_orders(admin.id, None, limit=3, offset=0)
+    exact = await capacity_orders.list_company_orders(admin.id, None, limit=8, offset=0)
+    beyond = await capacity_orders.list_company_orders(admin.id, None, limit=100, offset=0)
+
+    assert first.has_more
+    assert first.next_cursor is not None
+    last = first.items[-1].order
+    position = CapacityOrderCursor.decode(first.next_cursor, company_view(TENANT_A))
+    assert (position.created_at, position.id) == (last.created_at, last.id) == (NOON, UUID(int=13))
+    assert [(page.has_more, page.next_cursor) for page in (exact, beyond)] == [(False, None), (False, None)]
+
+
+async def test_an_order_that_leaves_the_queue_between_pages_neither_skips_nor_repeats_a_row(
+    world: Callable[..., FakeOrders],
+):
+    reviewer = person("platform_admin", None)
+    table = world(reviewer, *tied_orders())
+    first = await capacity_orders.list_review_orders(reviewer.id, CapacityOrderStatus.SUBMITTED, limit=3, offset=0)
+    assert [view.order.id.int for view in first.items] == [1, 14, 13]
+
+    # Another reviewer decides the newest order and the very order the cursor points at, and a newer one arrives.
+    for number in (1, 13):
+        table.rows[UUID(int=number)] = replace(table.rows[UUID(int=number)], status=CapacityOrderStatus.APPROVED)
+    arrival = stamped(TENANT_B, NOON + timedelta(hours=2), 2)
+    table.rows[arrival.id] = arrival
+
+    second = await capacity_orders.list_review_orders(
+        reviewer.id, CapacityOrderStatus.SUBMITTED, limit=3, offset=0, cursor=first.next_cursor
+    )
+    assert [view.order.id.int for view in second.items] == [12, 11, 10]
+    third = await capacity_orders.list_review_orders(
+        reviewer.id, CapacityOrderStatus.SUBMITTED, limit=3, offset=0, cursor=second.next_cursor
+    )
+    assert [view.order.id.int for view in third.items] == [21, 20]
+    assert (third.has_more, third.next_cursor) == (False, None)
+
+
+async def test_a_cursor_only_resumes_the_list_that_issued_it(world: Callable[..., FakeOrders]):
+    reviewer = person("platform_admin", None)
+    _ = world(reviewer, *tied_orders(TENANT_A), *(stamped(TENANT_B, NOON, number) for number in (30, 31, 32)))
+    company_a = (await capacity_orders.list_company_orders(reviewer.id, TENANT_A, limit=2, offset=0)).next_cursor
+    submitted = (
+        await capacity_orders.list_review_orders(reviewer.id, CapacityOrderStatus.SUBMITTED, limit=2, offset=0)
+    ).next_cursor
+    assert company_a is not None
+    assert submitted is not None
+
+    with pytest.raises(HTTPException) as other_company:
+        _ = await capacity_orders.list_company_orders(reviewer.id, TENANT_B, limit=2, offset=0, cursor=company_a)
+    with pytest.raises(HTTPException) as company_on_queue:
+        _ = await capacity_orders.list_review_orders(
+            reviewer.id, CapacityOrderStatus.SUBMITTED, limit=2, offset=0, cursor=company_a
+        )
+    with pytest.raises(HTTPException) as other_status:
+        _ = await capacity_orders.list_review_orders(
+            reviewer.id, CapacityOrderStatus.APPROVED, limit=2, offset=0, cursor=submitted
+        )
+    with pytest.raises(HTTPException) as queue_on_company:
+        _ = await capacity_orders.list_company_orders(reviewer.id, TENANT_A, limit=2, offset=0, cursor=submitted)
+
+    assert [status_of(error) for error in (other_company, company_on_queue, other_status, queue_on_company)] == [
+        400
+    ] * 4
+    resumed = await capacity_orders.list_company_orders(reviewer.id, TENANT_A, limit=2, offset=0, cursor=company_a)
+    assert [view.order.id.int for view in resumed.items] == [13, 12]
+
+
+async def test_an_org_admin_cursor_is_bound_to_the_company_they_read(world: Callable[..., FakeOrders]):
+    admin = person("org_admin", TENANT_A)
+    _ = world(admin, *tied_orders())
+    own = (await capacity_orders.list_company_orders(admin.id, None, limit=2, offset=0)).next_cursor
+
+    assert own is not None
+    named = await capacity_orders.list_company_orders(admin.id, TENANT_A, limit=2, offset=0, cursor=own)
+    assert [view.order.id.int for view in named.items] == [13, 12]
+    assert CapacityOrderCursor.decode(own, company_view(TENANT_A)).view == company_view(TENANT_A)
+    assert review_view(CapacityOrderStatus.SUBMITTED) != review_view(CapacityOrderStatus.APPROVED) != review_view(None)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        "",
+        "!!!",
+        "bm90IGpzb24",
+        "x" * 2_000,
+        forged() + "=",
+        forged(v=2),
+        forged(v=0),
+        forged(v="1"),
+        forged(view=company_view(TENANT_B)),
+        forged(view=review_view(CapacityOrderStatus.SUBMITTED)),
+        forged(created_at="2027-01-01T12:00:00"),
+        forged(created_at="yesterday"),
+        forged(id="not-a-uuid"),
+        forged(id=...),
+        forged(created_at=...),
+        forged(view=...),
+        forged(v=...),
+        forged(offset=20),
+    ],
+    ids=lambda value: str(value)[:24],
+)
+async def test_a_malformed_or_foreign_cursor_is_a_bad_request(world: Callable[..., FakeOrders], cursor: str):
+    admin = person("org_admin", TENANT_A)
+    _ = world(admin, *tied_orders())
+
+    with pytest.raises(HTTPException) as refused:
+        _ = await capacity_orders.list_company_orders(admin.id, None, limit=2, offset=0, cursor=cursor)
+
+    assert (status_of(refused), refused.value.detail) == (400, "Invalid cursor")
+
+
+async def test_a_well_formed_cursor_is_accepted_whoever_minted_it(world: Callable[..., FakeOrders]):
+    admin = person("org_admin", TENANT_A)
+    _ = world(admin, *tied_orders())
+
+    page = await capacity_orders.list_company_orders(admin.id, None, limit=2, offset=0, cursor=forged())
+
+    assert [view.order.id.int for view in page.items] == [13, 12]
+
+
+async def test_a_cursor_combined_with_an_offset_is_a_bad_request(world: Callable[..., FakeOrders]):
+    admin = person("org_admin", TENANT_A)
+    _ = world(admin, *tied_orders())
+    cursor = forged()
+
+    with pytest.raises(HTTPException) as company:
+        _ = await capacity_orders.list_company_orders(admin.id, None, limit=2, offset=1, cursor=cursor)
+    reviewer = person("platform_admin", None)
+    _ = world(reviewer, *tied_orders())
+    with pytest.raises(HTTPException) as queue:
+        _ = await capacity_orders.list_review_orders(
+            reviewer.id, CapacityOrderStatus.SUBMITTED, limit=2, offset=1, cursor=cursor
+        )
+    zero = await capacity_orders.list_company_orders(reviewer.id, TENANT_A, limit=2, offset=0, cursor=cursor)
+
+    assert (status_of(company), status_of(queue)) == (400, 400)
+    assert [view.order.id.int for view in zero.items] == [13, 12]
+
+
+@pytest.mark.parametrize(
+    "cursor", [forged(), "!!!", forged(view=company_view(TENANT_B))], ids=["valid", "malformed", "foreign"]
+)
+async def test_access_is_decided_before_the_cursor_is_looked_at(world: Callable[..., FakeOrders], cursor: str):
+    member = person("member", TENANT_A)
+    stranger = person("org_admin", TENANT_B)
+    unnamed = person("platform_admin", None)
+
+    outcomes: list[int] = []
+    for caller, call in (
+        (member, lambda c: capacity_orders.list_company_orders(c.id, None, limit=2, offset=1, cursor=cursor)),
+        (stranger, lambda c: capacity_orders.list_company_orders(c.id, TENANT_A, limit=2, offset=0, cursor=cursor)),
+        (
+            stranger,
+            lambda c: capacity_orders.list_review_orders(
+                c.id, CapacityOrderStatus.SUBMITTED, limit=2, offset=1, cursor=cursor
+            ),
+        ),
+        (
+            member,
+            lambda c: capacity_orders.list_review_orders(
+                c.id, CapacityOrderStatus.SUBMITTED, limit=2, offset=0, cursor=cursor
+            ),
+        ),
+        (unnamed, lambda c: capacity_orders.list_company_orders(c.id, None, limit=2, offset=0, cursor=cursor)),
+    ):
+        _ = world(caller, *tied_orders())
+        with pytest.raises(HTTPException) as refused:
+            _ = await call(caller)
+        outcomes.append(status_of(refused))
+
+    assert outcomes == [403, 403, 403, 403, 400]
 
 
 @pytest.mark.parametrize(
@@ -530,6 +797,76 @@ async def test_a_valid_order_request_reaches_the_service(
     assert body["tenant_name"] == "Acme"
     assert body["recipient"] == {"bank_name": "ACB", "account_number": "123", "branch_name": "HCM"}
     assert "storage_key" not in str(body)
+
+
+async def test_the_company_history_pages_by_cursor_and_legacy_offsets_still_work(
+    client: tuple[AsyncClient, FastAPI, UserRecord], world: Callable[..., FakeOrders]
+):
+    http, _, admin = client
+    _ = world(admin, *tied_orders())
+
+    first = (await http.get("/api/capacity/orders", params={"limit": 3})).json()
+    second = (await http.get("/api/capacity/orders", params={"limit": 3, "cursor": first["next_cursor"]})).json()
+    last = (await http.get("/api/capacity/orders", params={"limit": 3, "cursor": second["next_cursor"]})).json()
+    legacy = (await http.get("/api/capacity/orders", params={"limit": 3, "offset": 3})).json()
+    zero_offset = (
+        await http.get("/api/capacity/orders", params={"limit": 3, "offset": 0, "cursor": first["next_cursor"]})
+    ).json()
+
+    ids = [[UUID(item["id"]).int for item in page["items"]] for page in (first, second, last, legacy, zero_offset)]
+    assert ids == [[1, 14, 13], [12, 11, 10], [21, 20], [12, 11, 10], [12, 11, 10]]
+    assert [page["has_more"] for page in (first, second, last, legacy)] == [True, True, False, True]
+    assert [page["next_cursor"] is None for page in (first, second, last, legacy)] == [False, False, True, False]
+    assert legacy["next_cursor"] == second["next_cursor"]
+
+
+async def test_the_review_queue_pages_by_cursor_and_names_the_status_it_was_issued_for(
+    client: tuple[AsyncClient, FastAPI, UserRecord], world: Callable[..., FakeOrders]
+):
+    http, app, _ = client
+    reviewer = person("platform_admin", None)
+    app.dependency_overrides[get_current_user] = lambda: reviewer
+    _ = world(reviewer, *tied_orders(), stamped(TENANT_B, NOON, 50, CapacityOrderStatus.APPROVED))
+
+    first = (await http.get("/api/admin/capacity-orders", params={"limit": 4})).json()
+    second = (await http.get("/api/admin/capacity-orders", params={"limit": 4, "cursor": first["next_cursor"]})).json()
+    other_status = await http.get(
+        "/api/admin/capacity-orders", params={"status": "approved", "cursor": first["next_cursor"]}
+    )
+
+    assert [UUID(item["id"]).int for item in first["items"] + second["items"]] == NEWEST_FIRST
+    assert (first["has_more"], second["has_more"], second["next_cursor"]) == (True, False, None)
+    assert (other_status.status_code, other_status.json()["detail"]) == (400, "Invalid cursor")
+
+
+async def test_a_cursor_with_a_nonzero_offset_is_refused_on_both_routes(
+    client: tuple[AsyncClient, FastAPI, UserRecord], world: Callable[..., FakeOrders]
+):
+    http, app, admin = client
+    _ = world(admin, *tied_orders())
+    company = await http.get("/api/capacity/orders", params={"offset": 1, "cursor": forged()})
+    reviewer = person("platform_admin", None)
+    app.dependency_overrides[get_current_user] = lambda: reviewer
+    _ = world(reviewer, *tied_orders())
+    queue = await http.get("/api/admin/capacity-orders", params={"offset": 1, "cursor": forged()})
+
+    assert [response.status_code for response in (company, queue)] == [400, 400]
+
+
+@pytest.mark.parametrize(
+    "user", [person("member", TENANT_A), person("org_admin", TENANT_B)], ids=["member", "stranger"]
+)
+async def test_a_caller_without_access_gets_their_403_whatever_the_cursor_holds(
+    client: tuple[AsyncClient, FastAPI, UserRecord], world: Callable[..., FakeOrders], user: UserRecord
+):
+    http, app, _ = client
+    app.dependency_overrides[get_current_user] = lambda: user
+    _ = world(user, *tied_orders())
+
+    for cursor in (forged(), "!!!", forged(view=company_view(TENANT_B))):
+        company = await http.get("/api/capacity/orders", params={"tenant_id": str(TENANT_A), "cursor": cursor})
+        queue = await http.get("/api/admin/capacity-orders", params={"offset": 3, "cursor": cursor})
+        assert (company.status_code, queue.status_code) == (403, 403), cursor
 
 
 @pytest.mark.parametrize(

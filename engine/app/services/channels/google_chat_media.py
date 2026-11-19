@@ -16,7 +16,14 @@ from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat_attachment import ChatAttachment
 from app.services.channels import google_chat, submissions
-from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from app.services.channels.media_limits import (
+    MediaBudget,
+    MediaTooLargeError,
+    limit_attachments,
+    read_capped,
+    skipped_attachments_note,
+    too_large_note,
+)
 from app.services.storage import store_agent_upload
 
 
@@ -59,8 +66,9 @@ async def accept_google_chat_media(
     sa_info = google_chat._service_account_info(config)
     if sa_info is None or not sa_info:
         raise HTTPException(422, "Google Chat media requires service_account_json with the chat.bot scope")
+    retrieved, skipped = limit_attachments(attachments)
     # Validate every selected resource before exchanging credentials or downloading anything.
-    for item in attachments[:10]:
+    for item in retrieved:
         resource = item.attachment_data_ref.resource_name
         if not re.fullmatch(r"spaces/[\w-]+/messages/[\w.~-]+/attachments/[\w.~-]+", resource, flags=re.ASCII) or any(
             segment in (".", "..") for segment in resource.split("/")
@@ -68,7 +76,7 @@ async def accept_google_chat_media(
             raise HTTPException(422, "Google Chat attachment requires its attachmentDataRef.resourceName")
     budget, refs, parts = MediaBudget(), [], [event.text] if event.text else []
     token: str | None = None
-    for item in attachments[:10]:
+    for item in retrieved:
         try:
             limit = budget.limit_for(item.content_name)
             if token is None:
@@ -99,8 +107,8 @@ async def accept_google_chat_media(
         _, path, _ = await store_agent_upload(event.agent_id, item.content_name, data, content_type=item.content_type)
         refs.append(ChatAttachment(path=path, name=PurePosixPath(path).name))
         parts.append(f"[file: {path}]")
-    if len(attachments) > 10:
-        parts.append("[files skipped: maximum 10 attachments per message]")
+    if skipped:
+        parts.append(skipped_attachments_note(skipped))
     content = "\n".join(parts)
     await submissions.accept_channel_event(
         replace(event, attachments=tuple(refs)), content=content, saved_content=content

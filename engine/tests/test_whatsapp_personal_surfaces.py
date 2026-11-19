@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from time import monotonic
@@ -21,10 +22,10 @@ from app.db import session as db_session
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.records.whatsapp_personal import PersonalConnection
-from app.services.channels import whatsapp_personal_supervisor as supervisor
+from app.services.channels import whatsapp_personal_child as child_module, whatsapp_personal_supervisor as supervisor
 from app.services.channels.whatsapp_personal_child import PersonalChild
 from app.services.channels.whatsapp_personal_control import start
-from worker_progress_fixtures import WorkerHTTP, worker_http
+from worker_progress_fixtures import Pacing, WorkerHTTP, worker_http
 
 __all__ = ["channel_db", "receipt_db", "worker_http"]
 
@@ -172,50 +173,180 @@ async def stop_supervisor(task: asyncio.Task[None]) -> None:
     assert task.cancelled()
 
 
-@pytest.mark.parametrize("failing_stage", ["claim", "run_child"])
-async def test_supervisor_contains_a_failing_connection_and_respawns_it_after_the_cooldown(monkeypatch, failing_stage):
-    # Given one connection that raises an unclassified error and a healthy sibling.
-    monkeypatch.setattr(supervisor, "_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(supervisor, "_COOLDOWN_SECONDS", 0.2)
-    bad, good = pending_connection(), pending_connection()
-    claims: dict[object, list[float]] = {bad.config_id: [], good.config_id: []}
-    retried, sibling_cancelled = asyncio.Event(), asyncio.Event()
-    hold = asyncio.Event()
+async def forever() -> None:
+    await asyncio.Event().wait()
 
-    async def candidates():
-        return [bad, good]
+
+async def explodes() -> None:
+    raise RuntimeError("child exploded")
+
+
+def lives_until(release: asyncio.Event, *, then_explodes: bool) -> Callable[[], Awaitable[None]]:
+    async def run() -> None:
+        await release.wait()
+        if then_explodes:
+            await explodes()
+
+    return run
+
+
+class Scripted:
+    """A connection whose bridge child plays the next scripted behaviour per spawn, then stays up."""
+
+    def __init__(
+        self, pacing: Pacing, *script: Callable[[], Awaitable[None]], failing_stage: str = "run_child"
+    ) -> None:
+        self.connection = pending_connection()
+        self.pacing = pacing
+        self.script = list(script)
+        self.failing_stage = failing_stage
+        self.spawns: list[float] = []
+
+    async def play(self) -> None:
+        await (self.script.pop(0) if self.script else forever)()
+
+    async def claim(self) -> PersonalConnection:
+        self.spawns.append(self.pacing.now)
+        if self.failing_stage == "claim":
+            await self.play()
+        return self.connection
+
+    async def run_child(self) -> None:
+        if self.failing_stage == "run_child":
+            await self.play()
+        else:
+            await forever()
+
+
+def supervise(
+    monkeypatch: pytest.MonkeyPatch, pacing: Pacing, *children: Scripted, value: float = 0.0
+) -> tuple[asyncio.Task[None], AsyncMock]:
+    by_id = {child.connection.config_id: child for child in children}
+    candidates = AsyncMock(return_value=[child.connection for child in children])
 
     async def claim(config_id):
-        claims[config_id].append(monotonic())
-        if config_id == bad.config_id and failing_stage == "claim" and len(claims[config_id]) == 1:
-            raise RuntimeError("claim exploded")
-        if config_id == bad.config_id and len(claims[config_id]) == 2:
-            retried.set()
-        return bad if config_id == bad.config_id else good
+        return await by_id[config_id].claim()
 
     async def run_child(connection, _command):
-        if connection is bad and failing_stage == "run_child" and len(claims[bad.config_id]) == 1:
-            raise RuntimeError("child exploded")
-        try:
-            await hold.wait()
-        except asyncio.CancelledError:
-            if connection is good:
-                sibling_cancelled.set()
-            raise
+        await by_id[connection.config_id].run_child()
 
     monkeypatch.setattr(supervisor, "candidates", candidates)
     monkeypatch.setattr(supervisor, "claim", claim)
     monkeypatch.setattr(supervisor, "run_child", run_child)
-    # When the supervisor runs until the failing connection has been respawned.
-    task = asyncio.create_task(supervisor.personal_supervisor())
-    await asyncio.wait_for(retried.wait(), 5)
-    # Then the supervisor and the sibling survive, and the respawn waited out the cooldown.
+    monkeypatch.setattr(supervisor.anyio, "sleep", pacing.wait)
+    return asyncio.create_task(supervisor.personal_supervisor(pacing.clock, lambda: value)), candidates
+
+
+@pytest.mark.parametrize(
+    ("value", "failing_stage", "cooldowns"),
+    [
+        (0.0, "run_child", [30, 60, 120, 150, 150]),
+        (1.0, "run_child", [60, 120, 240, 300, 300]),
+        (0.0, "claim", [30, 60]),
+    ],
+)
+async def test_supervisor_escalates_a_failing_connections_cooldown_and_leaves_its_sibling_alone(
+    monkeypatch, value, failing_stage, cooldowns
+):
+    # Given one connection that raises an unclassified error every time and a healthy sibling.
+    pacing, fail_connection = Pacing(), AsyncMock()
+    monkeypatch.setattr(child_module, "fail_connection", fail_connection)
+    bad = Scripted(pacing, *[explodes] * 8, failing_stage=failing_stage)
+    good = Scripted(pacing)
+    task, _ = supervise(monkeypatch, pacing, bad, good, value=value)
+    await pacing.paused()
+    assert bad.spawns == [0.0]
+    # When the clock runs through each cooldown.
+    for respawns, cooldown in enumerate(cooldowns, start=1):
+        await pacing.step(cooldown - 1)
+        # Then the connection stays down until its cooldown ends, and the next cooldown is longer.
+        assert len(bad.spawns) == respawns
+        await pacing.step(1)
+        assert len(bad.spawns) == respawns + 1
     assert not task.done()
-    assert not sibling_cancelled.is_set()
-    assert len(claims[good.config_id]) == 1
-    first, second = claims[bad.config_id][:2]
-    assert second - first >= 0.2
+    assert len(good.spawns) == 1
+    fail_connection.assert_not_awaited()
     await stop_supervisor(task)
+
+
+@pytest.mark.parametrize(
+    ("run_seconds", "cooldown"),
+    [(supervisor._HEALTHY_CHILD_SECONDS - 1, 60), (supervisor._HEALTHY_CHILD_SECONDS, 30)],
+)
+async def test_supervisor_restarts_escalation_only_after_a_healthy_child_run(monkeypatch, run_seconds, cooldown):
+    # Given a connection that fails fast once and then fails again after running for run_seconds.
+    pacing, release = Pacing(), asyncio.Event()
+    bad = Scripted(pacing, explodes, lives_until(release, then_explodes=True))
+    task, _ = supervise(monkeypatch, pacing, bad)
+    await pacing.paused()
+    await pacing.step(30)
+    assert len(bad.spawns) == 2
+    await pacing.step(run_seconds)
+    release.set()
+    await pacing.step(0)
+    assert len(bad.spawns) == 2
+    # When the clock runs through the cooldown that failure earned.
+    await pacing.step(cooldown - 1)
+    assert len(bad.spawns) == 2
+    await pacing.step(1)
+    # Then only a healthy run earned the first cooldown again, and a shorter one the second.
+    assert len(bad.spawns) == 3
+    await stop_supervisor(task)
+
+
+async def test_supervisor_clears_failures_when_a_healthy_child_exits_cleanly(monkeypatch):
+    # Given a connection that fails fast, then runs a healthy stretch and exits cleanly, then fails again.
+    pacing, release = Pacing(), asyncio.Event()
+    bad = Scripted(pacing, explodes, lives_until(release, then_explodes=False), explodes)
+    task, _ = supervise(monkeypatch, pacing, bad)
+    await pacing.paused()
+    await pacing.step(30)
+    await pacing.step(supervisor._HEALTHY_CHILD_SECONDS)
+    release.set()
+    # When the clean exit is respawned at once and fails.
+    await pacing.step(0)
+    assert len(bad.spawns) == 3
+    # Then that failure earns the first cooldown again.
+    await pacing.step(29)
+    assert len(bad.spawns) == 3
+    await pacing.step(1)
+    assert len(bad.spawns) == 4
+    await stop_supervisor(task)
+
+
+async def test_supervisor_drops_a_connections_cooldown_and_failures_when_it_leaves_the_candidates(monkeypatch):
+    # Given a connection that fails every time and then stops being a candidate for one pass.
+    pacing = Pacing()
+    bad = Scripted(pacing, *[explodes] * 4)
+    task, candidates = supervise(monkeypatch, pacing, bad)
+    await pacing.paused()
+    candidates.return_value = []
+    await pacing.step(1)
+    # When it comes back as a candidate.
+    candidates.return_value = [bad.connection]
+    await pacing.step(1)
+    # Then it is not held back by its old cooldown, and its escalation has started over.
+    assert bad.spawns == [0.0, 2.0]
+    await pacing.step(29)
+    assert len(bad.spawns) == 2
+    await pacing.step(1)
+    assert bad.spawns == [0.0, 2.0, 32.0]
+    await stop_supervisor(task)
+
+
+async def test_supervisor_cancellation_ends_at_once_while_a_cooldown_is_pending(monkeypatch):
+    # Given a failed connection that is cooling down.
+    pacing = Pacing()
+    bad = Scripted(pacing, explodes)
+    task, _ = supervise(monkeypatch, pacing, bad)
+    await pacing.paused()
+    # When the supervisor is cancelled.
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=2)
+    # Then it ends at once, cancelled, without waiting out the cooldown.
+    assert task in done
+    assert task.cancelled()
+    assert bad.spawns == [0.0]
 
 
 async def test_supervisor_backs_off_when_candidates_fails(monkeypatch):
@@ -338,4 +469,28 @@ async def test_supervisor_bridge_child_failures_never_make_the_loop_stale(monkey
         # Then the failing child never makes the loop stale.
         await worker_http.ready(expected=True)
     await asyncio.wait_for(respawned.wait(), 2)
+    assert not task.done()
+
+
+async def test_supervisor_cooling_down_children_never_keep_a_failing_candidates_read_ready(monkeypatch, worker_http):
+    # Given a connection whose child failed and is cooling down, and a candidates read that then starts failing.
+    connection = pending_connection()
+    candidates = AsyncMock(return_value=[connection])
+    spawned = asyncio.Event()
+
+    async def claim(_config_id):
+        spawned.set()
+        raise RuntimeError("claim exploded")
+
+    monkeypatch.setattr(supervisor, "candidates", candidates)
+    monkeypatch.setattr(supervisor, "claim", claim)
+    task = run_supervisor(monkeypatch, worker_http)
+    await asyncio.wait_for(spawned.wait(), 2)
+    await worker_http.pacing.paused()
+    candidates.side_effect = OSError("database unavailable")
+    # When failing passes outlast the budget.
+    for _ in range(4):
+        await worker_http.pacing.step()
+    # Then neither the failed child nor its cooldown keeps the loop ready.
+    await worker_http.ready(expected=False)
     assert not task.done()

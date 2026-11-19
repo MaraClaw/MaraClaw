@@ -21,7 +21,14 @@ from app.core.outbound_transport import public_http_client
 from app.records.chat_attachment import ChatAttachment
 from app.services.storage import store_agent_upload
 
-from .media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from .media_limits import (
+    MediaBudget,
+    MediaTooLargeError,
+    limit_attachments,
+    read_capped,
+    skipped_attachments_note,
+    too_large_note,
+)
 
 WECHAT_CDN_ORIGIN: Final = "https://novac2c.cdn.weixin.qq.com"
 
@@ -81,7 +88,8 @@ async def store_wechat_media(agent_id: UUID, media: tuple[WeChatMedia, ...]) -> 
     budget = MediaBudget()
     lines: list[str] = []
     attachments: list[ChatAttachment] = []
-    for item in media[:10]:
+    retrieved, skipped = limit_attachments(media)
+    for item in retrieved:
         try:
             limit = budget.limit_for("image.jpg" if item.kind == "image" else item.filename)
             ensure_same_origin(WECHAT_CDN_ORIGIN, item.url)
@@ -102,6 +110,6 @@ async def store_wechat_media(agent_id: UUID, media: tuple[WeChatMedia, ...]) -> 
         _, path, _ = await store_agent_upload(agent_id, item.filename, data)
         attachments.append(ChatAttachment(path=path, name=PurePosixPath(path).name))
         lines.append(f"[file:{path}]")
-    if len(media) > 10:
-        lines.append("[files skipped: maximum 10 attachments per message]")
+    if skipped:
+        lines.append(skipped_attachments_note(skipped))
     return "\n".join(lines), tuple(attachments)

@@ -40,7 +40,9 @@ from app.services.channels import inbound as channel_inbound
 from app.services.channels.media_limits import (
     MediaBudget,
     MediaTooLargeError,
+    limit_attachments,
     read_capped,
+    skipped_attachments_note,
     too_large_note,
     too_large_reply,
 )
@@ -332,7 +334,8 @@ async def slack_event_webhook(
     _too_large: list[tuple[str, int]] = []
     _media_budget = MediaBudget()
     _bot_token = config.app_secret or ""
-    for _sf in slack_files:
+    _retrieved_files, _skipped_files = limit_attachments(slack_files)
+    for _sf in _retrieved_files:
         _fname = (
             json_as_str(_sf.get("name"))
             or json_as_str(_sf.get("title"))
@@ -377,16 +380,18 @@ async def slack_event_webhook(
     _attachment_markers = [f"[file:{p.split('/')[-1]}]" for p in _file_user_messages]
     _attachment_markers += [too_large_note(_n, _l) for _n, _l in _too_large]
     _size_replies = [too_large_reply(_n, _l) for _n, _l in _too_large]
+    _skipped_note = [skipped_attachments_note(_skipped_files)] if _skipped_files else []
+    _attachment_markers += _skipped_note
 
     if not user_text and not _file_user_messages and slack_files:
         _ack_parts = list(_size_replies)
-        if len(_too_large) < len(slack_files):
-            _file_names = ", ".join(json_as_str_or(_sf.get("name"), "file") for _sf in slack_files)
+        if len(_too_large) < len(_retrieved_files):
+            _file_names = ", ".join(json_as_str_or(_sf.get("name"), "file") for _sf in _retrieved_files)
             _ack_parts.append(
                 f"I received the file(s) {_file_names}, but I cannot download their content yet. "
                 "Please verify that the Slack app has the files:read permission."
             )
-        _ack = " ".join(_ack_parts)
+        _ack = " ".join([*_ack_parts, *_skipped_note])
         _ = await chat_message_dao.insert_message(
             agent_id=agent_id,
             user_id=platform_user_id,

@@ -13,7 +13,9 @@ from app.core.json_types import JsonObject
 from app.core.outbound_policy import OutboundPolicyError
 from app.services import wechat_channel, wechat_message_processor
 from app.services.channels import submissions, wechat_media
+from app.services.channels.media_limits import skipped_attachments_note
 from app.services.storage_runtime import facade
+from channel_media_fixtures import set_attachment_limit
 from im_webhook_fixtures import channel_config
 
 
@@ -183,6 +185,28 @@ async def test_ilink_count_and_50mib_event_limits_stop_more_downloads(intake, ca
     assert len(wire.requests) == len(event.attachments) == (10 if cap == "count" else 5)
     assert len({item.path for item in event.attachments}) == len(event.attachments)
     assert "skipped" in accept.await_args.kwargs["saved_content"]
+
+
+async def test_ilink_limit_stops_downloads_keeps_the_caption_and_the_original_fingerprint(intake, monkeypatch):
+    # Given: a caption with three small images and a limit of two
+    config, wire, replay, accept, _ = intake
+    set_attachment_limit(monkeypatch, 2)
+    wire.payload = b"x"
+    # When
+    await wechat_message_processor.process_wechat_message(
+        config.agent_id, message(2, "plain", count=3, caption="question first"), config
+    )
+    # Then: only two downloads and stored files, the caption first and one notice last
+    native = replay.await_args.args[0]
+    event = accept.await_args.args[0]
+    assert len(wire.requests) == len(event.attachments) == 2
+    assert accept.await_args.kwargs["saved_content"] == "\n".join(
+        ["question first", *(f"[file:{item.path}]" for item in event.attachments), skipped_attachments_note(1)]
+    )
+    assert accept.await_args.kwargs["content"] == accept.await_args.kwargs["saved_content"]
+    # And: the receipt still sees all three images
+    assert len(native.media_ids) == 3
+    assert event.fingerprint() == native.fingerprint()
 
 
 @pytest.mark.parametrize("storage_fails", [False, True])

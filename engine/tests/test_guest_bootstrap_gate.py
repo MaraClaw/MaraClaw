@@ -9,7 +9,7 @@ from app.services.guest_admission import GuestStartPreflightError
 from app.services.guest_probe import probe_guest
 from app.services.openclaw_update_docker import UpgradeDocker
 from guest_bootstrap_fakes import CHECK_READY, boot_cli
-from openclaw_update_fakes import FakeDocker
+from openclaw_update_fakes import FakeDocker, use_probe_clock
 from test_openclaw_update_executor import Harness
 
 env = start_fixtures.env
@@ -126,14 +126,15 @@ async def test_upgrade_and_rollback_readiness_share_the_current_boot_gate(tmp_pa
     cli = boot_cli(tmp_path)
     cli.guest("old-id", boot="B1", event="B1")
     h = Harness(tmp_path)
-    h.executor.ready_timeout = 1.0
+    use_probe_clock(monkeypatch, h.docker)
     start = FakeDocker.start
 
     def restart(docker, reference):
         start(docker, reference)
         cli.guest(reference, boot="B2", event="B2" if old_finishes else "B1")
 
-    def ready(_docker, reference, timeout):
+    def ready(docker, reference, timeout):
+        docker.probe_clock += docker.probe_seconds
         return UpgradeDocker(cli.client()).ready(reference, timeout)
 
     monkeypatch.setattr(FakeDocker, "ready", ready)

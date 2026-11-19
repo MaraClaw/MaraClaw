@@ -2,10 +2,11 @@ import asyncio
 import contextvars
 import itertools
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import override
 
 import pytest
 
@@ -52,17 +53,88 @@ def claimed_trigger(agent_id: uuid.UUID) -> AgentTriggerRecord:
     )
 
 
-def patch_claim(
-    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, claim: Callable[[], Awaitable[None]]
-) -> list[AgentTriggerRecord]:
-    claimed = [claimed_trigger(agent_id)]
+def patch_claim_groups(
+    monkeypatch: pytest.MonkeyPatch,
+    agent_ids: list[uuid.UUID],
+    claim: Callable[[], Awaitable[None]],
+    budgets: list[int] | None = None,
+) -> dict[uuid.UUID, list[AgentTriggerRecord]]:
+    groups = {agent_id: [claimed_trigger(agent_id)] for agent_id in agent_ids}
+    queued = dict(groups)
 
-    async def claim_ready(_now: datetime) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
+    async def claim_ready(
+        _now: datetime, *, max_agents: int
+    ) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
+        if budgets is not None:
+            budgets.append(max_agents)
         await claim()
-        return {agent_id: claimed}, {agent_id}
+        # Like the real claim: never more agent groups than the budget, and a leased group is not leased again.
+        selected = dict(itertools.islice(queued.items(), max_agents))
+        for agent_id in selected:
+            del queued[agent_id]
+        return selected, set(selected)
 
     monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim_ready)
-    return claimed
+    return groups
+
+
+def patch_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: uuid.UUID,
+    claim: Callable[[], Awaitable[None]],
+    budgets: list[int] | None = None,
+) -> list[AgentTriggerRecord]:
+    return patch_claim_groups(monkeypatch, [agent_id], claim, budgets)[agent_id]
+
+
+class ObservedCapacity(trigger_daemon.InvocationCapacity):
+    """The real ledger, signalling when a wake starts waiting for a claim to settle."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(limit)
+        self.wake_waiting: asyncio.Event = asyncio.Event()
+
+    @override
+    async def reserve_for_wake(self) -> trigger_daemon.SlotReservation:
+        if not self.free and self.unsettled_claims:
+            self.wake_waiting.set()
+        return await super().reserve_for_wake()
+
+
+def limit_capacity(monkeypatch: pytest.MonkeyPatch, limit: int) -> ObservedCapacity:
+    capacity = ObservedCapacity(limit)
+    monkeypatch.setattr(trigger_daemon, "_capacity", capacity)
+    return capacity
+
+
+class HeldInvocations:
+    """Invocations that keep their slot until their agent is finished."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.started: list[uuid.UUID] = []
+        self.tasks: dict[uuid.UUID, asyncio.Task[object]] = {}
+        self._finish: dict[uuid.UUID, asyncio.Event] = {}
+        self._progress: asyncio.Event = asyncio.Event()
+        monkeypatch.setattr(trigger_daemon, "_invoke_agent_for_triggers", self._invoke)
+
+    async def _invoke(self, agent_id: uuid.UUID, _triggers: list[AgentTriggerRecord]) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        self.tasks[agent_id] = task
+        self.started.append(agent_id)
+        self._progress.set()
+        _ = await self._finish.setdefault(agent_id, asyncio.Event()).wait()
+
+    async def wait_started(self, count: int) -> None:
+        async with asyncio.timeout(1):
+            while len(self.started) < count:
+                self._progress.clear()
+                _ = await self._progress.wait()
+
+    async def finish(self, *agent_ids: uuid.UUID) -> None:
+        for agent_id in agent_ids:
+            self._finish.setdefault(agent_id, asyncio.Event()).set()
+        _ = await asyncio.gather(*(self.tasks[agent_id] for agent_id in agent_ids))
 
 
 async def test_tick_does_not_claim_once_admission_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -172,14 +244,16 @@ async def test_invocation_cancelled_after_grace_goes_to_lease_recovery(monkeypat
         return None
 
     patch_claim(monkeypatch, agent_id, claim)
+    capacity = trigger_daemon._capacity
     foreign = asyncio.create_task(asyncio.Event().wait())
     await trigger_daemon._tick()
     await started.wait()
     trigger_daemon.close_trigger_admission()
     # When the grace period expires
     await trigger_daemon.drain_trigger_tasks(grace_seconds=0.01)
-    # Then the invocation was cancelled without any terminal status and unrelated tasks were left alone
+    # Then the invocation was cancelled without any terminal status, returned its slot, and unrelated tasks were left
     assert settled == []
+    assert capacity.held == 0
     assert not trigger_daemon._BACKGROUND_TASKS
     assert not foreign.done()
     foreign.cancel()
@@ -250,12 +324,16 @@ async def test_claim_outliving_grace_is_cancelled_and_joined_before_drain_return
 
     patch_claim(monkeypatch, agent_id, claim)
     monkeypatch.setattr(trigger_daemon, "_invoke_agent_for_triggers", invoke)
+    capacity = trigger_daemon._capacity
     tick = asyncio.create_task(trigger_daemon._tick())
     await in_claim.wait()
+    assert capacity.free == 0
     # When the drain gives up on it
     await trigger_daemon.drain_trigger_tasks(grace_seconds=0.01)
-    # Then the claim was cancelled and finalized before the drain returned, so nothing runs against a closed pool
+    # Then the claim was cancelled and finalized before the drain returned, so nothing runs against a closed pool,
+    # and its reservation came back
     assert finalized.is_set()
+    assert capacity.held == 0
     await tick
     never.set()
     await asyncio.sleep(0)
@@ -307,6 +385,239 @@ async def test_reopened_gate_admits_again(monkeypatch: pytest.MonkeyPatch) -> No
     await trigger_daemon.drain_trigger_tasks(grace_seconds=1)
 
 
+def patch_sender(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
+    lookups: list[uuid.UUID] = []
+
+    async def lookup(agent_id: uuid.UUID) -> SimpleNamespace:
+        lookups.append(agent_id)
+        return SimpleNamespace(name="Sender")
+
+    monkeypatch.setattr(trigger_daemon.agent_dao, "get", lookup)
+    return lookups
+
+
+def suspended_claim() -> tuple[Callable[[], Awaitable[None]], asyncio.Event, asyncio.Event]:
+    in_claim, finish_claim = asyncio.Event(), asyncio.Event()
+
+    async def claim() -> None:
+        in_claim.set()
+        _ = await finish_claim.wait()
+
+    return claim, in_claim, finish_claim
+
+
+async def test_wake_arriving_mid_claim_waits_and_takes_the_slot_the_claim_left(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given two slots and a tick suspended in a claim that will lease one agent's work
+    leased, woken, sender = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    capacity = limit_capacity(monkeypatch, 2)
+    claim, in_claim, finish_claim = suspended_claim()
+    budgets: list[int] = []
+    _ = patch_claim_groups(monkeypatch, [leased], claim, budgets)
+    lookups = patch_sender(monkeypatch)
+    held = HeldInvocations(monkeypatch)
+    tick = asyncio.create_task(trigger_daemon._tick())
+    await in_claim.wait()
+    # When a wake arrives while the claim holds every slot
+    wake = asyncio.create_task(trigger_daemon.wake_agent_with_context(woken, "hello", from_agent_id=sender))
+    await asyncio.wait_for(capacity.wake_waiting.wait(), 1)
+    # Then it waits without consuming a guard or a slot the claim may need
+    assert budgets == [2]
+    assert capacity.held == 2
+    assert trigger_daemon._last_invoke == {}
+    assert trigger_daemon._A2A_WAKE_CHAIN == {}
+    assert lookups == []
+    # And once the claim keeps one slot, the wake gets the other with its sender lookup
+    finish_claim.set()
+    await tick
+    await wake
+    await held.wait_started(2)
+    assert sorted(held.started) == sorted([leased, woken])
+    assert capacity.held == 2
+    assert lookups == [sender]
+    assert {f"{sender}->{woken}": 1} == trigger_daemon._A2A_WAKE_CHAIN
+    await held.finish(leased, woken)
+    assert capacity.held == 0
+
+
+async def test_wake_arriving_mid_claim_is_refused_without_side_effects_when_the_claim_fills_the_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given two slots and a suspended claim that will lease two agents
+    first, second, woken, sender = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    capacity = limit_capacity(monkeypatch, 2)
+    claim, in_claim, finish_claim = suspended_claim()
+    _ = patch_claim_groups(monkeypatch, [first, second], claim)
+    lookups = patch_sender(monkeypatch)
+    held = HeldInvocations(monkeypatch)
+    tick = asyncio.create_task(trigger_daemon._tick())
+    await in_claim.wait()
+    wake = asyncio.create_task(trigger_daemon.wake_agent_with_context(woken, "hello", from_agent_id=sender))
+    await asyncio.wait_for(capacity.wake_waiting.wait(), 1)
+    # When the claim keeps both slots
+    finish_claim.set()
+    await tick
+    await wake
+    await held.wait_started(2)
+    # Then the wake was refused: no invocation, sender lookup, dedup window or chain depth, and no slot over the limit
+    assert sorted(held.started) == sorted([first, second])
+    assert capacity.held == 2
+    assert lookups == []
+    assert woken not in trigger_daemon._last_invoke
+    assert trigger_daemon._A2A_WAKE_CHAIN == {}
+    # And the same wake retried once a slot is free is admitted at depth one, outside any dedup window
+    await held.finish(first)
+    await trigger_daemon.wake_agent_with_context(woken, "hello", from_agent_id=sender)
+    await held.wait_started(3)
+    assert held.started[-1] == woken
+    assert {f"{sender}->{woken}": 1} == trigger_daemon._A2A_WAKE_CHAIN
+    await held.finish(second, woken)
+    assert capacity.held == 0
+
+
+async def test_failed_invocation_launch_leaves_its_slot_in_the_reservation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a claim reservation holding the only slot
+    capacity = limit_capacity(monkeypatch, 1)
+    reservation = capacity.reserve_for_claim()
+    agent_id = uuid.uuid4()
+
+    def refuse(coro: Coroutine[object, object, None], **_kwargs: object) -> asyncio.Task[None]:
+        coro.close()
+        raise RuntimeError("task creation refused")
+
+    # When creating the invocation task fails
+    with monkeypatch.context() as patched:
+        patched.setattr(asyncio, "create_task", refuse)
+        with pytest.raises(RuntimeError):
+            trigger_daemon._start_invocation(agent_id, [claimed_trigger(agent_id)], reservation)
+    # Then the slot never left the reservation, so the caller's release frees the process
+    assert reservation.slots == 1
+    reservation.release()
+    assert capacity.held == 0
+    assert not trigger_daemon._BACKGROUND_TASKS
+
+
+async def test_claim_during_a_suspended_sender_lookup_leaves_the_wake_its_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given two slots and a wake suspended in its sender lookup
+    woken, sender = uuid.uuid4(), uuid.uuid4()
+    queued = [uuid.uuid4(), uuid.uuid4()]
+    capacity = limit_capacity(monkeypatch, 2)
+    in_lookup, finish_lookup = asyncio.Event(), asyncio.Event()
+
+    async def lookup(_agent_id: uuid.UUID) -> SimpleNamespace:
+        in_lookup.set()
+        _ = await finish_lookup.wait()
+        return SimpleNamespace(name="Sender")
+
+    async def claim() -> None:
+        return None
+
+    budgets: list[int] = []
+    _ = patch_claim_groups(monkeypatch, queued, claim, budgets)
+    monkeypatch.setattr(trigger_daemon.agent_dao, "get", lookup)
+    held = HeldInvocations(monkeypatch)
+    wake = asyncio.create_task(trigger_daemon.wake_agent_with_context(woken, "hello", from_agent_id=sender))
+    await in_lookup.wait()
+    # When a tick claims while the lookup is pending
+    await trigger_daemon._tick()
+    # Then the claim was offered only the slot the wake does not hold
+    assert budgets == [1]
+    assert capacity.held == 2
+    finish_lookup.set()
+    await wake
+    await held.wait_started(2)
+    assert sorted(held.started) == sorted([queued[0], woken])
+    assert capacity.held == 2
+    await held.finish(queued[0], woken)
+    assert capacity.held == 0
+
+
+async def test_repeated_ticks_lease_only_what_the_process_can_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given two slots, three agents with queued work and a trigger evaluated on every tick
+    agents = [uuid.uuid4(), uuid.uuid4(), uuid.uuid4()]
+    capacity = limit_capacity(monkeypatch, 2)
+    evaluated: list[str] = []
+
+    async def evaluate(trigger: AgentTriggerRecord, _now: datetime, _zone: str | None = None) -> bool:
+        evaluated.append(trigger.name)
+        return False
+
+    async def claim() -> None:
+        return None
+
+    _ = patch_scan(monkeypatch, [scan_trigger("poll")], evaluate)
+    budgets: list[int] = []
+    _ = patch_claim_groups(monkeypatch, agents, claim, budgets)
+    held = HeldInvocations(monkeypatch)
+    # When the first tick fills the process and a second tick runs before anything finishes
+    await trigger_daemon._tick()
+    await held.wait_started(2)
+    await trigger_daemon._tick()
+    # Then the saturated tick still evaluated triggers and ran the claim phase (recovery), but leased nothing
+    assert budgets == [2, 0]
+    assert evaluated == ["poll", "poll"]
+    assert held.started == agents[:2]
+    assert capacity.held == 2
+    # And the tick after one invocation ends leases exactly one more agent
+    await held.finish(agents[0])
+    assert capacity.held == 1
+    await trigger_daemon._tick()
+    await held.wait_started(3)
+    assert budgets == [2, 0, 1]
+    assert held.started == agents
+    assert capacity.held == 2
+    await held.finish(agents[1], agents[2])
+    assert capacity.held == 0
+
+
+async def test_shutdown_during_claim_returns_every_reservation_and_the_next_lifespan_starts_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given one slot, a claim stuck on the database and a wake waiting for it to settle
+    agent_id, woken = uuid.uuid4(), uuid.uuid4()
+    capacity = limit_capacity(monkeypatch, 1)
+    in_claim = asyncio.Event()
+    stuck = True
+
+    async def claim() -> None:
+        if stuck:
+            in_claim.set()
+            _ = await asyncio.Event().wait()
+
+    budgets: list[int] = []
+    _ = patch_claim_groups(monkeypatch, [agent_id], claim, budgets)
+    lookups = patch_sender(monkeypatch)
+    held = HeldInvocations(monkeypatch)
+    tick = asyncio.create_task(trigger_daemon._tick())
+    await in_claim.wait()
+    wake = asyncio.create_task(trigger_daemon.wake_agent_with_context(woken, "hello", from_agent_id=uuid.uuid4()))
+    await asyncio.wait_for(capacity.wake_waiting.wait(), 1)
+    # When shutdown runs out of grace during the claim
+    trigger_daemon.close_trigger_admission()
+    await trigger_daemon.drain_trigger_tasks(grace_seconds=0.01)
+    await tick
+    await wake
+    # Then both were cancelled and joined, the ledger is empty, and the wake left no guard behind
+    assert capacity.held == 0
+    assert capacity.unsettled_claims == set()
+    assert held.started == []
+    assert lookups == []
+    assert trigger_daemon._last_invoke == {}
+    assert trigger_daemon._A2A_WAKE_CHAIN == {}
+    assert not trigger_daemon._BACKGROUND_TASKS
+    # And the next lifespan claims the still-queued work with every configured slot
+    stuck = False
+    trigger_daemon.open_trigger_admission()
+    limit = trigger_daemon.get_settings().TRIGGER_MAX_CONCURRENT_INVOCATIONS
+    assert trigger_daemon._capacity is not capacity
+    assert trigger_daemon._capacity.free == limit
+    await trigger_daemon._tick()
+    await held.wait_started(1)
+    assert budgets == [1, limit]
+    assert held.started == [agent_id]
+    await held.finish(agent_id)
+    assert trigger_daemon._capacity.held == 0
+
+
 _scan_ids = itertools.count(1)
 
 
@@ -338,7 +649,9 @@ def patch_scan(
 ) -> list[datetime]:
     claims: list[datetime] = []
 
-    async def claim_ready(now: datetime) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
+    async def claim_ready(
+        now: datetime, *, max_agents: int
+    ) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
         claims.append(now)
         return {}, set()
 

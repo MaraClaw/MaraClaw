@@ -443,7 +443,7 @@ def legacy_feishu(monkeypatch):
     monkeypatch.setattr(feishu_api.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(feishu_api, "_load_agent_and_model", AsyncMock(return_value=(None, None, None)))
     monkeypatch.setattr(feishu_api.channel_inbound, "load_agent", AsyncMock(return_value=None))
-    requested = []
+    requested, messages = [], []
 
     async def deliver(entry, resource, keys=(IMAGE_KEY,)):
         def serve_file(request):
@@ -451,8 +451,6 @@ def legacy_feishu(monkeypatch):
             return resource(request)
 
         serve_resource(monkeypatch, serve_file)
-        if entry == "post_images":
-            return await feishu_api._download_post_images(AGENT_ID, config, "message-id", list(keys))
         if entry == "file":
             message: JsonObject = {"message_type": "image", "content": json.dumps({"image_key": keys[0]})}
             return await feishu_api._handle_feishu_file(
@@ -466,6 +464,7 @@ def legacy_feishu(monkeypatch):
             "chat_id": "oc_chat",
             "content": json.dumps(post),
         }
+        messages.append(post_message)
         event: JsonObject = {
             "sender": {"sender_id": {"open_id": "ou_open", "user_id": "tenant-user"}},
             "message": post_message,
@@ -473,28 +472,28 @@ def legacy_feishu(monkeypatch):
         body: JsonObject = {"header": {"event_id": "evt", "event_type": "im.message.receive_v1"}, "event": event}
         return await feishu_api.process_feishu_event(AGENT_ID, body)
 
-    return SimpleNamespace(deliver=deliver, requested=requested, store=store, send=send)
+    return SimpleNamespace(deliver=deliver, requested=requested, messages=messages, store=store, send=send)
 
 
 @pytest.mark.asyncio
-async def test_legacy_feishu_post_spends_an_aborted_read_so_the_next_image_is_never_requested(
-    legacy_feishu, monkeypatch
-):
-    # Given: an event allowance of three read chunks, and a post of two images
-    monkeypatch.setattr(feishu_api, "MediaBudget", lambda: MediaBudget(remaining=3 * READ_CHUNK_BYTES))
+async def test_legacy_feishu_post_without_a_message_id_fetches_no_image_and_keeps_the_text(legacy_feishu, monkeypatch):
+    # Given: a post of three images and no message id, which the native path cannot accept
+    download = AsyncMock()
+    monkeypatch.setattr(feishu_api.feishu_service, "download_message_resource", download)
+    keys = [*POST_KEYS, "img_key_00000002"]
     # When
-    await legacy_feishu.deliver(
-        "post", lambda _: httpx.Response(200, stream=CountingStream(total=10 * READ_CHUNK_BYTES)), POST_KEYS
-    )
-    # Then: only the first image was requested
-    assert legacy_feishu.requested == POST_KEYS[:1]
+    result = await legacy_feishu.deliver("post", lambda _: httpx.Response(200, content=b"image-bytes"), keys)
+    # Then: no token or resource request and no write happened, and only the text reaches the text handler
+    download.assert_not_awaited()
+    assert legacy_feishu.requested == []
     legacy_feishu.store.assert_not_awaited()
+    assert json.loads(legacy_feishu.messages[0]["content"]) == {"text": "hello"}
+    assert result == {"code": 1, "msg": "Agent not found"}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("entry", ["file", "post", "post_images"])
 @pytest.mark.parametrize("failure", ["status_503", "read_timeout", "storage_quota"])
-async def test_legacy_feishu_media_handlers_let_transient_failures_propagate(legacy_feishu, entry, failure):
+async def test_legacy_feishu_file_handler_lets_transient_failures_propagate(legacy_feishu, failure):
     # Given
     def resource(request):
         if failure == "read_timeout":
@@ -505,23 +504,8 @@ async def test_legacy_feishu_media_handlers_let_transient_failures_propagate(leg
     expected = {"status_503": httpx.HTTPStatusError, "read_timeout": httpx.ReadTimeout}.get(failure, StorageQuotaError)
     # When / Then: the failure is not turned into the missing-permission tip
     with pytest.raises(expected):
-        await legacy_feishu.deliver(entry, resource)
+        await legacy_feishu.deliver("file", resource)
     legacy_feishu.send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_legacy_post_image_downloads_charge_aborted_bytes_before_requesting_the_next_image(
-    legacy_feishu, monkeypatch
-):
-    # Given: the first image exhausts the event while being rejected.
-    monkeypatch.setattr(feishu_api, "MediaBudget", lambda: MediaBudget(remaining=3 * READ_CHUNK_BYTES))
-    stream = CountingStream(total=10 * READ_CHUNK_BYTES)
-    # When
-    await legacy_feishu.deliver("post_images", lambda _: httpx.Response(200, stream=stream), POST_KEYS)
-    # Then: the remaining image causes no network or storage work.
-    assert legacy_feishu.requested == POST_KEYS[:1]
-    assert stream.consumed == 4 * READ_CHUNK_BYTES
-    legacy_feishu.store.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -531,16 +515,6 @@ async def test_legacy_feishu_file_handler_still_explains_a_refused_download(lega
     await legacy_feishu.deliver("file", lambda _: httpx.Response(403))
     # Then: the sender is pointed at the im:resource permission and nothing was stored
     assert "im:resource" in json.loads(legacy_feishu.send.await_args_list[0].args[4])["text"]
-    legacy_feishu.store.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_legacy_feishu_post_skips_a_refused_image_and_keeps_processing(legacy_feishu):
-    # Given: Feishu answers the image download with 403
-    # When
-    result = await legacy_feishu.deliver("post", lambda _: httpx.Response(403))
-    # Then: the message is still processed
-    assert result == {"code": 1, "msg": "Agent not found"}
     legacy_feishu.store.assert_not_awaited()
 
 

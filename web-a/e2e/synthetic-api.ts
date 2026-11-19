@@ -2,7 +2,7 @@ import type { BrowserContext } from '@playwright/test'
 import { purchaseOrder } from '../tests/capacity-fixtures.ts'
 import { pendingTransfer } from '../tests/transfer-review-fixtures.ts'
 import { organizationAdmission } from '../tests/organization-admission-fixtures.ts'
-import { capacityPaymentSettingsRequestSchema, capacityPaymentSettingsSchema } from '../src/lib/capacity-api.ts'
+import { capacityPaymentSettingsRequestSchema, capacityPaymentSettingsSchema, type CapacityOrder } from '../src/lib/capacity-api.ts'
 import { organizationAdmissionDecisionSchema } from '../src/lib/organization-admissions-api.ts'
 
 export type Actor = 'platform_admin' | 'genesis_platform_admin' | 'org_admin' | 'member' | 'forced' | 'anonymous'
@@ -10,6 +10,9 @@ export const paymentAliases = [
   { path: `/transfer-payments/${pendingTransfer.id}`, heading: 'Transfer payment' },
   { path: `/capacity-payments/${purchaseOrder.id}`, heading: 'Capacity payment' },
 ] as const
+
+export type CapacityQueuePage = { readonly items: readonly CapacityOrder[]; readonly next_cursor: string | null }
+export const capacityQueueKey = (status: string, cursor: string | null) => `${status}|${cursor ?? ''}`
 
 const company = {
   id: '11111111-1111-4111-8111-111111111111', name: 'Synthetic Company', slug: 'synthetic-company',
@@ -43,6 +46,8 @@ export function syntheticState(actor: Actor = 'platform_admin', theme: 'light' |
     holdCreate: false,
     createStatus: 200,
     admission: organizationAdmission,
+    capacityQueue: new Map<string, CapacityQueuePage>(),
+    capacityQueueRequests: [] as { status: string | null; cursor: string | null; offset: string | null; limit: string | null }[],
     paymentSettings: capacityPaymentSettingsSchema.parse({
       configured: true, bank_name: 'Example Bank', account_number: '0123456789',
       branch_name: 'District 1 Branch', usd_vnd_rate: 25000,
@@ -84,8 +89,15 @@ export async function installSyntheticApi(context: BrowserContext, baseURL: stri
     else if (method === 'GET' && path === `/api/admin/capacity-orders/${purchaseOrder.id}`) body = purchaseOrder
     else if (method === 'GET' && path === '/api/users/admin-audit-logs/page') body = { items: [], next_cursor: null }
     else if (method === 'GET' && path === '/api/company-admissions/transfers/review/page') body = { items: [], next_cursor: null }
-    else if (method === 'GET' && path === '/api/admin/capacity-orders') body = { items: [], has_more: false }
-    else if (path === '/api/admin/capacity-payment-settings' && state.actor === 'genesis_platform_admin' && (method === 'GET' || method === 'PUT')) {
+    else if (method === 'GET' && path === '/api/admin/capacity-orders') {
+      const queueStatus = url.searchParams.get('status')
+      const cursor = url.searchParams.get('cursor')
+      state.capacityQueueRequests.push({ status: queueStatus, cursor, offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') })
+      const queued = state.capacityQueue.get(capacityQueueKey(queueStatus ?? '', cursor))
+      if (queued) body = { items: queued.items, has_more: queued.next_cursor !== null, next_cursor: queued.next_cursor }
+      else if (cursor === null) body = { items: [], has_more: false, next_cursor: null }
+      else { status = 400; body = { detail: 'Invalid cursor' } }
+    } else if (path === '/api/admin/capacity-payment-settings' && state.actor === 'genesis_platform_admin' && (method === 'GET' || method === 'PUT')) {
       if (method === 'PUT') state.paymentSettings = capacityPaymentSettingsSchema.parse({
         ...capacityPaymentSettingsRequestSchema.parse(request.postDataJSON()), configured: true,
       })

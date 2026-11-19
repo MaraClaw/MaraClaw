@@ -60,13 +60,20 @@ export async function fetchCapacityOverview(tenantId: string | null, signal?: Ab
   return apiRequest(`/api/capacity/overview?${query}`, { schema: capacityOverviewSchema, signal })
 }
 
+/** The server's `next_cursor`, opaque to the client: sent back exactly as received. */
+const capacityCursorSchema = z.string().min(1)
+const capacityPositionSchema = z.object({ cursor: capacityCursorSchema.nullable(), offset: z.int().nonnegative() })
+  .refine((position) => position.cursor === null || position.offset === 0, 'A cursor cannot be combined with an offset')
+
 export async function fetchCapacityOrders(
-  scope: { readonly tenantId: string | null; readonly limit?: number; readonly offset?: number }, signal?: AbortSignal,
+  scope: {
+    readonly tenantId: string | null; readonly limit?: number; readonly offset?: number; readonly cursor?: string | null
+  }, signal?: AbortSignal,
 ) {
-  const query = new URLSearchParams({
-    limit: String(z.int().min(1).max(100).parse(scope.limit ?? CAPACITY_ORDERS_PAGE_SIZE)),
-    offset: String(z.int().nonnegative().parse(scope.offset ?? 0)),
-  })
+  const query = new URLSearchParams({ limit: String(z.int().min(1).max(100).parse(scope.limit ?? CAPACITY_ORDERS_PAGE_SIZE)) })
+  const position = capacityPositionSchema.parse({ cursor: scope.cursor ?? null, offset: scope.offset ?? 0 })
+  if (position.cursor === null) query.set('offset', String(position.offset))
+  else query.set('cursor', position.cursor)
   if (scope.tenantId !== null) query.set('tenant_id', z.uuid().parse(scope.tenantId))
   return apiRequest(`/api/capacity/orders?${query}`, { schema: capacityOrderPageSchema, signal })
 }
@@ -101,11 +108,10 @@ export async function fetchCapacityEvidence(id: CapacityOrderId, signal?: AbortS
   return apiBinaryRequest(`/api/capacity/orders/${id}/evidence`, { signal })
 }
 
-export async function fetchCapacityReviewOrders(status: CapacityOrderStatus, offset = 0, signal?: AbortSignal) {
-  const query = new URLSearchParams({
-    status: capacityOrderStatusSchema.parse(status), limit: String(CAPACITY_ORDERS_PAGE_SIZE),
-    offset: String(z.int().nonnegative().parse(offset)),
-  })
+/** One page of the review queue for `status`: the first when `cursor` is null, else the page the server's cursor names. */
+export async function fetchCapacityReviewOrders(status: CapacityOrderStatus, cursor: string | null = null, signal?: AbortSignal) {
+  const query = new URLSearchParams({ status: capacityOrderStatusSchema.parse(status), limit: String(CAPACITY_ORDERS_PAGE_SIZE) })
+  if (cursor !== null) query.set('cursor', capacityCursorSchema.parse(cursor))
   return apiRequest(`/api/admin/capacity-orders?${query}`, { schema: capacityOrderPageSchema, signal })
 }
 

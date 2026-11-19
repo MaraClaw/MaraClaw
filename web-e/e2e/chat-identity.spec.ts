@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { accept, chatPath, complete, firstMessage, firstSession, message, prepareChat, submitted } from './chat-identity-fixture'
+import { handled, paintFrame } from './chat-stream-fixture'
 import { originalAgent } from './session-fencing-fixture'
 
 test('busy polling still recovers a persisted reply without a completion frame', async ({ page }) => {
@@ -198,6 +199,8 @@ test('a DONE lost after a CHUNK releases the stale live turn once history ends i
   const envelope = submitted(socket)
   accept(socket, envelope.client_submission_id, question.message_id)
   socket.route.send(chunk(0, 'Partial streamed text'))
+  await handled(page, socket)
+  await paintFrame(page)
   await expect(page.getByText('Partial streamed text')).toBeVisible()
   chat.setHistory([{ ...question, client_submission_id: envelope.client_submission_id }, reply])
   const refreshed = messagesRefreshed(page)
@@ -229,10 +232,14 @@ test('a turn that keeps streaming is never released while history already ends i
   await page.clock.pauseAt(new Date('2030-01-01T01:00:00Z'))
   await expect(page.getByText(earlier.content, { exact: true })).toBeVisible()
   socket.route.send(chunk(0, 'First streamed part'))
+  await handled(page, socket)
+  await paintFrame(page)
   await expect(page.getByText('First streamed part')).toBeVisible()
   // When more than the quiet interval passes in total, but a chunk arrives inside it
   await page.clock.runFor(10_000)
   socket.route.send(chunk(1, ' and the second part'))
+  await handled(page, socket)
+  await paintFrame(page)
   await expect(page.getByText('First streamed part and the second part')).toBeVisible()
   await page.clock.runFor(10_000)
   // Then the live text is still there and the composer stays busy

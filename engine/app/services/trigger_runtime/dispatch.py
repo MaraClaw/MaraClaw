@@ -86,13 +86,18 @@ async def enqueue_due_trigger(trigger: AgentTriggerRecord, now: datetime) -> Non
 
 async def claim_ready_trigger_invocations(
     now: datetime,
+    *,
+    max_agents: int,
 ) -> tuple[dict[uuid.UUID, list[AgentTriggerRecord]], set[uuid.UUID]]:
+    """Recover abandoned executions, then claim ready work grouped into at most ``max_agents`` agent invocations."""
     del now
     fired_by_agent: dict[uuid.UUID, list[AgentTriggerRecord]] = {}
     force_invoke_agents: set[uuid.UUID] = set()
 
     _ = await fail_abandoned_trigger_executions()
-    claimed_executions = await claim_pending_trigger_executions()
+    if max_agents == 0:
+        return fired_by_agent, force_invoke_agents
+    claimed_executions = await claim_pending_trigger_executions(max_agents=max_agents)
 
     for execution, trigger in claimed_executions:
         runtime_trigger = build_execution_runtime_trigger(trigger, execution)

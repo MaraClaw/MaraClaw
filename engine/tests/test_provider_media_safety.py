@@ -1,11 +1,11 @@
 import httpx
 import pytest
 from fastapi import HTTPException
-from tests.channel_media_fixtures import CountingStream
+from tests.channel_media_fixtures import CountingStream, set_attachment_limit
 from tests.provider_media_fixtures import REAL_CLIENT, media_case
 
 from app.services.channels import teams_media
-from app.services.channels.media_limits import READ_CHUNK_BYTES
+from app.services.channels.media_limits import READ_CHUNK_BYTES, skipped_attachments_note, too_large_note
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES, MAX_INPUT_BYTES
 
 HELPERS = ("discord_interaction", "teams", "google_chat")
@@ -57,7 +57,60 @@ async def test_provider_caps_refs_at_ten_and_normalizes_colliding_filenames(monk
     assert len(refs) == len(case.requests) == 10
     assert len({ref.path for ref in refs}) == 10
     assert all(ref.name == ref.path.removeprefix("workspace/uploads/") for ref in refs)
-    assert "maximum 10" in case.accept.call_args.kwargs["saved_content"]
+    assert case.accept.call_args.kwargs["saved_content"].count(skipped_attachments_note(1)) == 1
+
+
+@pytest.mark.parametrize("name", HELPERS)
+async def test_provider_limit_counts_the_oversized_file_and_fetches_nothing_for_the_rest(monkeypatch, tmp_path, name):
+    # Given: a limit of two, four attachments, and a first file whose declared size is over the cap
+    case = media_case(name, monkeypatch, tmp_path)
+    set_attachment_limit(monkeypatch, 2)
+    requests = []
+
+    def response(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(200, headers={"content-length": str(MAX_INPUT_BYTES + 1)})
+        return httpx.Response(200, content=b"office")
+
+    monkeypatch.setattr(
+        case.module,
+        "public_http_client",
+        lambda **kwargs: REAL_CLIENT(transport=httpx.MockTransport(response), follow_redirects=False),
+    )
+    # When
+    await case.enrich(case.distinct(4))
+    # Then: the oversized file kept its slot, the second was stored, and the others were never requested
+    refs = case.accept.call_args.args[0].attachments
+    expected = [
+        "caption",
+        too_large_note("report0.docx", MAX_INPUT_BYTES),
+        "[file: workspace/uploads/report1.docx]",
+        skipped_attachments_note(2),
+    ]
+    assert len(requests) == 2
+    assert [ref.name for ref in refs] == ["report1.docx"]
+    assert case.accept.call_args.kwargs["saved_content"] == "\n".join(expected)
+    assert case.accept.call_args.kwargs["content"] == "\n".join(expected)
+    # And: credentials were fetched only for retrieved attachments
+    assert case.token.await_count == (1 if name == "google_chat" else 0)
+
+
+async def test_teams_never_fetches_a_bot_token_for_skipped_inline_media(monkeypatch, tmp_path):
+    # Given: a limit of one, a preauthorized file first and a token-dependent inline image second
+    case = media_case("teams", monkeypatch, tmp_path)
+    set_attachment_limit(monkeypatch, 1)
+    inline = {
+        "contentType": "image/png",
+        "name": "photo.png",
+        "contentUrl": "https://smba.trafficmanager.net/amer/v3/attachments/one/views/original",
+    }
+    # When
+    await case.enrich([case.raw, inline])
+    # Then: no credential was requested at all, and only the file was downloaded
+    case.token.assert_not_awaited()
+    assert len(case.requests) == 1
+    assert len(case.accept.call_args.args[0].attachments) == 1
 
 
 @pytest.mark.parametrize("name", HELPERS)

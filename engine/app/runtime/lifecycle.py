@@ -26,6 +26,7 @@ from app.runtime.tasks import OwnedTasks, loop_progress
 from app.services.channels.outbound_http import shutdown_outbound_client
 from app.services.heartbeat import close_heartbeat_admission, drain_heartbeat_tasks, open_heartbeat_admission
 from app.services.llm.client_cache import shutdown_llm_clients
+from app.services.mcp_client import shutdown_mcp_sessions
 from app.services.openclaw_routing import close_wake_admission, drain_wake_tasks, open_wake_admission
 from app.services.realtime import realtime_router
 from app.services.scheduler_tasks import start_schedule_tasks, stop_schedule_tasks
@@ -394,6 +395,7 @@ class Runtime:
             await self._cleanup("LLM clients", shutdown_llm_clients)
             await self._cleanup("outbound HTTP client", shutdown_outbound_client)
             await self._cleanup("Tavily HTTP client", shutdown_tavily_client)
+            await self._cleanup("MCP sessions", shutdown_mcp_sessions)
         if self.logging_attempted:
             try:
                 shutdown_logging()

@@ -82,10 +82,13 @@ async def list_capacity_orders(
     tenant_id: UUID | None = None,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    cursor: str | None = None,
     user: UserRecord = Depends(get_current_user),
 ) -> CapacityOrderPage:
-    views, has_more = await list_company_orders(user.id, tenant_id, limit=limit, offset=offset)
-    return CapacityOrderPage(items=[_order(view) for view in views], has_more=has_more)
+    page = await list_company_orders(user.id, tenant_id, limit=limit, offset=offset, cursor=cursor)
+    return CapacityOrderPage(
+        items=[_order(view) for view in page.items], has_more=page.has_more, next_cursor=page.next_cursor
+    )
 
 
 @router.get("/orders/{order_id}", response_model=CapacityOrderOut)

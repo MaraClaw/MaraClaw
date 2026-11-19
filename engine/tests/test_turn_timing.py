@@ -90,8 +90,26 @@ def test_chunk_publication_count_and_slowest_are_integer_milliseconds_without_te
         timeline.chunk_published(seconds)
     timeline.emit("terminal")
     ((_, payload),) = lines
-    assert (payload["chunks_published"], payload["slowest_chunk_ms"]) == (3, 1750)
+    assert (payload["chunks_published"], payload["chunks_dropped"], payload["slowest_chunk_ms"]) == (3, 0, 1750)
     assert all(isinstance(value, (str, int)) for value in payload.values())
+
+
+def test_dropped_chunks_share_the_one_turn_line_with_published_and_slowest_without_text(lines) -> None:
+    message = GatewayMessageRecord(uuid4(), uuid4(), "private prompt", created_at=CREATED, delivered_at=at(5))
+    timeline = TurnTimeline.claimed(message)
+    timeline.chunk_published(0.25)
+    timeline.chunk_published(1.75, dropped=True)
+    timeline.chunk_published(float("nan"), dropped=True)
+    timeline.emit("terminal")
+    timeline.emit("failed")
+    ((template, payload),) = lines
+    assert template == "[TurnTiming] {}"
+    assert {key: value for key, value in payload.items() if "chunk" in key} == {
+        "chunks_published": 3,
+        "chunks_dropped": 2,
+        "slowest_chunk_ms": 1750,
+    }
+    assert "private prompt" not in json.dumps(payload)
 
 
 def test_turn_without_published_chunks_keeps_the_line_unchanged(lines) -> None:
@@ -100,6 +118,7 @@ def test_turn_without_published_chunks_keeps_the_line_unchanged(lines) -> None:
     timeline.emit("terminal")
     ((_, payload),) = lines
     assert "chunks_published" not in payload
+    assert "chunks_dropped" not in payload
     assert "slowest_chunk_ms" not in payload
 
 

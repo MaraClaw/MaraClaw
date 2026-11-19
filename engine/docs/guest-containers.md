@@ -3,7 +3,8 @@
 This describes the implemented engine policy, not live-host validation or a
 capacity recommendation. It never changes a running guest's limits (a stopped
 guest gets its current [limits](#guest-limits) when it resumes) and does not
-restart arbitrary idle or stopped agents. Runtime recovery uses durable
+restart arbitrary idle or stopped agents; the one automatic start is a new agent's
+first, queued when its required setup succeeds. Runtime recovery uses durable
 start intent and deletion cleanup; setup has separate worker-owned queues described
 below. Deployment admission is not documented here.
 
@@ -552,6 +553,20 @@ operation, not an unrelated replacement. This is pending-intent replay, not a
 general auto-restart policy. A failed readiness check quiesces a newly created
 guest; it does not destroy an existing one to retry.
 
+A new agent's first start is queued by setup. When required setup succeeds for an
+agent that has never had a container (`idle` as creation records it, or
+`creating` after a setup retry), the transaction that clears `setup_pending` and
+records `idle` also commits start intent through the same eligibility check as an
+explicit start, and the reconciler starts the guest on its next pass without any
+request. That intent has the same retry schedule, failure codes, Stop cancellation
+and explicit-Start retry as any other. A failed setup gets no intent, and Start
+keeps refusing it with `guest_setup_incomplete` until a setup retry succeeds,
+which then queues the start as above. An agent stopped during setup or that
+already has a container keeps its status and needs a manual Start. An ineligible
+agent (expired, inactive creator, identity or company, tenant mismatch, pending
+transfer cleanup) gets no intent, and an explicit Start returns 409
+`guest_start_ineligible` until that condition is resolved.
+
 [Retry metadata](../app/dao/agent_start_retry_dao.py) lives in
 `agent_start_retry_metadata`, keyed by operation UUID. Before Docker work, an
 independent transaction records the attempt and reserves `next_retry_at` using
@@ -595,8 +610,9 @@ fail with 422 `agent_setup_skill_folder_conflict`. See the
 Setup snapshots the selected skill file bytes and rendered agent files for replay;
 a retry does not select again from a changed skill catalog. Required execution
 writes the gateway key, missing files and the tenant setup hook. It does not start
-a container or run optional MCP imports. An optional integration warning cannot
-hold required setup pending.
+a container itself (success queues the first start, described above) or run
+optional MCP imports. An optional integration warning cannot hold required setup
+pending.
 
 Managers use `GET /api/agents/{id}/setup` for safe `setup_pending`, `state`,
 `failure_code` and `retryable` fields, and `POST /api/agents/{id}/setup/retry` to
@@ -605,7 +621,8 @@ setup returns 409 `agent_setup_not_retryable`; retry never steals a running clai
 even if its lease has expired. The setup worker owns lease recovery. Old claim
 tokens cannot publish after a new attempt. Successful setup clears `setup_pending`
 and persisted replay inputs, including the encrypted gateway key; a newly created
-agent without a container becomes `idle`.
+agent without a container becomes `idle`, and in the same transaction its first
+start is queued if the agent is still eligible.
 
 Both endpoints freshly check manage access and current principal/tenant state.
 Retry reauthorizes after waiting for the per-agent flock, then acquires its

@@ -13,13 +13,11 @@ from app.records.agent import AgentRecord
 from app.services.agent_tool_exec.registry import ToolArgumentMapping
 
 
-async def _agents_name_map_excluding(agent: AgentRecord) -> dict[str, AgentRecord]:
-    """Map lowercased agent names for @mention resolution within the same tenant scope."""
-    if agent.tenant_id:
-        agents: Sequence[AgentRecord] = await agent_dao.list_for_tenant(agent.tenant_id)
-    else:
-        agents = await agent_dao.get_all(skip=0, limit=10_000)
-    return {a.name.lower(): a for a in agents if a.id != agent.id}
+async def _mentioned_agents(agent: AgentRecord, mentions: Sequence[str]) -> dict[str, AgentRecord]:
+    """Agents the mentions name, by lowercased name, within the author's tenant scope and excluding the author."""
+    return await agent_dao.find_by_mention_names(
+        {mention.lower() for mention in mentions}, tenant_id=agent.tenant_id, exclude_id=agent.id
+    )
 
 
 async def _clawbook_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMapping) -> str:
@@ -104,7 +102,7 @@ async def _clawbook_create_post(agent_id: uuid.UUID, arguments: ToolArgumentMapp
             if mentions:
                 from app.services.notification_service import send_notification
 
-                a_map = await _agents_name_map_excluding(agent)
+                a_map = await _mentioned_agents(agent, mentions)
                 notified: set[uuid.UUID] = set()
                 for mention in mentions:
                     ma = a_map.get(mention.lower())
@@ -227,7 +225,7 @@ async def _clawbook_add_comment(agent_id: uuid.UUID, arguments: ToolArgumentMapp
             if mentions:
                 from app.services.notification_service import send_notification
 
-                a_map = await _agents_name_map_excluding(agent)
+                a_map = await _mentioned_agents(agent, mentions)
                 notified_m: set[uuid.UUID] = set()
                 for mention in mentions:
                     ma = a_map.get(mention.lower())

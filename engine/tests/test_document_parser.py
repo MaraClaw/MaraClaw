@@ -251,7 +251,7 @@ def test_max_input_budget_matches_read_document_ceiling() -> None:
 def test_pyproject_pins_published_firecrawl_anydoc() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
-    assert "firecrawl-anydoc==0.2.4" in pyproject.read_text(encoding="utf-8")
+    assert "firecrawl-anydoc==0.2.5" in pyproject.read_text(encoding="utf-8")
     dockerfile_text = dockerfile.read_text(encoding="utf-8")
     assert "FROM python:3.15.2-slim-trixie AS production" in dockerfile_text
     assert "python /app/scripts/verify_anydoc.py" in dockerfile_text

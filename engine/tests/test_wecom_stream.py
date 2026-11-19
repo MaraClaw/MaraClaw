@@ -3,6 +3,7 @@ import sys
 import uuid
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
+from typing import override
 
 import pytest
 
@@ -275,6 +276,97 @@ async def test_initial_connection_failure_is_retried_by_manager(monkeypatch: pyt
     assert manager.status() == {str(agent_id): True}
 
     await manager.stop_client(agent_id)
+
+
+class FailingConnectWSClient(FakeWSClient):
+    def __init__(self, failures: int, *, park: Callable[[], Awaitable[None]] | None = None) -> None:
+        super().__init__({})
+        self.failures = failures
+        self.park = park
+
+    @override
+    async def connect_async(self) -> None:
+        self.connect_calls += 1
+        if self.park is not None:
+            await self.park()
+        if self.connect_calls <= self.failures:
+            raise RuntimeError("initial connection failed")
+        self.initial_connection.set()
+
+
+def install_sdk(monkeypatch: pytest.MonkeyPatch, client: object) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "wecom_aibot_sdk",
+        SimpleNamespace(WSClient=lambda _options: client, WSClientOptions=FakeWSClientOptions, generate_req_id=str),
+    )
+    monkeypatch.setattr(wecom_stream, "_disable_wecom_sdk_proxy", lambda: None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(0.0, [5, 10, 20, 40, 60, 60, 60]), (1.0, [10, 20, 40, 80, 120, 120, 120])],
+)
+async def test_initial_connection_retries_are_jittered_within_the_window_and_capped(
+    monkeypatch: pytest.MonkeyPatch, value: float, expected: list[float]
+) -> None:
+    # Given an SDK client whose first seven connection attempts fail.
+    client = FailingConnectWSClient(failures=7)
+    install_sdk(monkeypatch, client)
+    monkeypatch.setattr(wecom_stream, "_random_source", lambda: value)
+    original_sleep = asyncio.sleep
+    delays: list[float] = []
+
+    async def advance_without_waiting(delay: float) -> None:
+        delays.append(delay)
+        await original_sleep(0)
+
+    monkeypatch.setattr(wecom_stream.asyncio, "sleep", advance_without_waiting)
+    manager = WeComStreamManager()
+    agent_id = uuid.uuid4()
+
+    # When the stream client starts and retries until it connects.
+    connection_config(monkeypatch, agent_id, "wecom")
+    await manager.start_client(agent_id, "bot", "secret")
+    await asyncio.wait_for(client.initial_connection.wait(), timeout=1)
+
+    # Then each wait came from the doubling window and stayed within the 5 to 120 second bounds.
+    assert delays == expected
+    assert manager.status() == {str(agent_id): True}
+    await manager.stop_client(agent_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parked_in", ["retry_wait", "connect"])
+async def test_cancellation_during_an_initial_connection_retry_is_re_raised_at_once(
+    monkeypatch: pytest.MonkeyPatch, parked_in: str
+) -> None:
+    # Given a client that is parked either in its retry wait or in the connection attempt itself.
+    parked = asyncio.Event()
+
+    async def park() -> None:
+        parked.set()
+        await asyncio.Event().wait()
+
+    client = FailingConnectWSClient(failures=1_000, park=park if parked_in == "connect" else None)
+    if parked_in == "retry_wait":
+        monkeypatch.setattr(wecom_stream.asyncio, "sleep", lambda _delay: park())
+    install_sdk(monkeypatch, client)
+    manager = WeComStreamManager()
+    agent_id = uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "wecom")
+    await manager.start_client(agent_id, "bot", "secret")
+    task = manager._tasks[agent_id]
+    await asyncio.wait_for(parked.wait(), timeout=1)
+
+    # When the client is stopped.
+    await manager.stop_client(agent_id)
+
+    # Then the task ends cancelled without another connection attempt.
+    assert task.cancelled()
+    assert client.connect_calls == 1
+    assert manager.status() == {}
 
 
 @pytest.mark.asyncio

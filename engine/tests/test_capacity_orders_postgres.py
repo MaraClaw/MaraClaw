@@ -3,11 +3,17 @@
 import asyncio
 import hashlib
 import re
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
+from typing import cast
 from unittest.mock import AsyncMock
+from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.dao.capacity_order_dao import capacity_order_dao
+from app.db.connection import DbConnection, Row
 from app.records.capacity_order import CapacityOrderStatus
 from app.services import capacity_orders
 from app.services.capacity_ledger import CapacityExtras
@@ -591,6 +597,225 @@ async def test_the_overview_is_read_only_for_platform_admins_and_uncapped_compan
     assert body["capped"] is False
     assert (body["tier"], body["account_limit"], body["agent_limit"]) == ("ultra", None, None)
     assert (body["extra_accounts"], body["extra_agents"]) == (0, 0)
+
+
+# ── cursor paging ───────────────────────────────────────────────────────
+
+T0 = datetime(2026, 11, 14, 3, tzinfo=UTC)
+
+
+async def _seed_submitted(s: CapacityScenario, created_at: datetime, count: int, tenant: str = "acme") -> list[UUID]:
+    month = s.clock.today.replace(day=1)
+    return [
+        await s.insert_order(status="submitted", month=month, created_at=created_at, tenant=tenant)
+        for _ in range(count)
+    ]
+
+
+async def _walk(s: CapacityScenario, who: str, path: str, limit: int, **query: object) -> list[list[str]]:
+    """Every page of a list reached by following ``next_cursor`` only, as the ids of each page."""
+    pages: list[list[str]] = []
+    cursor: str | None = None
+    while True:
+        params = {**query, "limit": limit, **({"cursor": cursor} if cursor is not None else {})}
+        response = await s.call(who, "GET", f"{path}?{urlencode(params)}")
+        assert response.status_code == 200, response.text
+        pages.append([str(item["id"]) for item in listed(response)])
+        cursor = cast("str | None", payload(response)["next_cursor"])
+        assert (cursor is not None) == payload(response)["has_more"]
+        if cursor is None:
+            return pages
+
+
+async def _newest_first(s: CapacityScenario, *, tenant: UUID | None = None, status: str | None = None) -> list[str]:
+    rows = await s.rows(
+        "SELECT id FROM capacity_orders WHERE (%(tenant)s::uuid IS NULL OR tenant_id = %(tenant)s) "
+        "AND (%(status)s::text IS NULL OR status = %(status)s) ORDER BY created_at DESC, id DESC",
+        {"tenant": tenant, "status": status},
+    )
+    return [str(row["id"]) for row in rows]
+
+
+async def test_orders_sharing_one_timestamp_are_traversed_completely_by_cursor_in_both_lists(
+    capacity_scenario: CapacityScenario,
+):
+    s = capacity_scenario
+    _ = await _seed_submitted(s, T0 + timedelta(hours=1), 1)
+    _ = await _seed_submitted(s, T0, 5)
+    _ = await _seed_submitted(s, T0 - timedelta(hours=1), 2)
+    _ = await _seed_submitted(s, T0, 2, tenant="other")
+
+    for limit in (2, 3, 100):
+        queue = await _walk(s, "extra_pa", "/admin/capacity-orders", limit, status="submitted")
+        history = await _walk(s, "oa2", "/capacity/orders", limit)
+
+        flat_queue = [order for page in queue for order in page]
+        assert flat_queue == await _newest_first(s, status="submitted")
+        assert len(flat_queue) == len(set(flat_queue)) == 10
+        assert [order for page in history for order in page] == await _newest_first(s, tenant=s.tenant_id)
+        assert all(len(page) == limit for page in queue[:-1])
+
+
+async def test_the_seek_returns_exactly_the_rows_below_every_position_of_a_tied_list(
+    capacity_scenario: CapacityScenario,
+):
+    s = capacity_scenario
+    _ = await _seed_submitted(s, T0, 4)
+    _ = await _seed_submitted(s, T0 - timedelta(minutes=1), 3)
+    rows = await s.rows("SELECT id, created_at FROM capacity_orders ORDER BY created_at DESC, id DESC")
+
+    for index, anchor in enumerate(rows):
+        position = (cast("datetime", anchor["created_at"]), cast("UUID", anchor["id"]))
+        below = await capacity_order_dao.list_for_tenant(s.tenant_id, limit=100, after=position)
+        queue = await capacity_order_dao.list_by_status(CapacityOrderStatus.SUBMITTED, limit=2, after=position)
+        assert [order.id for order in below] == [row["id"] for row in rows[index + 1 :]]
+        assert [order.id for order in queue] == [row["id"] for row in rows[index + 1 : index + 3]]
+
+
+async def test_orders_decided_between_pages_leave_the_queue_without_a_skip_or_a_repeat(
+    capacity_scenario: CapacityScenario,
+):
+    s = capacity_scenario
+    await s.configure()
+    oldest_first = [str((await s.purchase(accounts=1, approve=False))["id"]) for _ in range(6)]
+    queue = "/admin/capacity-orders?status=submitted"
+    first = payload(await s.call("extra_pa", "GET", f"{queue}&limit=2"))
+    assert [item["id"] for item in cast("list[dict[str, object]]", first["items"])] == oldest_first[:3:-1]
+
+    # Another reviewer approves the newest order and the very one the cursor points at.
+    for order_id in oldest_first[:3:-1]:
+        assert (await s.decide(order_id, who="genesis_pa")).status_code == 200
+    second = payload(
+        await s.call("extra_pa", "GET", f"{queue}&limit=2&{urlencode({'cursor': str(first['next_cursor'])})}")
+    )
+    third = payload(
+        await s.call("extra_pa", "GET", f"{queue}&limit=2&{urlencode({'cursor': str(second['next_cursor'])})}")
+    )
+
+    assert [item["id"] for item in cast("list[dict[str, object]]", second["items"])] == oldest_first[3:1:-1]
+    assert [item["id"] for item in cast("list[dict[str, object]]", third["items"])] == oldest_first[1::-1]
+    assert (third["has_more"], third["next_cursor"]) == (False, None)
+
+
+async def test_access_is_checked_again_on_every_page(capacity_scenario: CapacityScenario):
+    s = capacity_scenario
+    _ = await _seed_submitted(s, T0, 3)
+    company = payload(await s.call("oa2", "GET", "/capacity/orders?limit=2"))
+    queue = payload(await s.call("extra_pa", "GET", "/admin/capacity-orders?limit=2"))
+    company_next = f"/capacity/orders?{urlencode({'limit': 2, 'cursor': str(company['next_cursor'])})}"
+    queue_next = f"/admin/capacity-orders?{urlencode({'limit': 2, 'cursor': str(queue['next_cursor'])})}"
+    assert [
+        (await s.call(who, "GET", path)).status_code for who, path in (("oa2", company_next), ("extra_pa", queue_next))
+    ] == [200, 200]
+
+    for who in ("oa2", "extra_pa"):
+        await s.db.execute("UPDATE users SET role = 'member' WHERE id = %(id)s", {"id": s[who].id})
+        await s.db.execute(
+            "UPDATE identities SET is_platform_admin = false WHERE id = (SELECT identity_id FROM users WHERE id = %(id)s)",
+            {"id": s[who].id},
+        )
+
+    assert [
+        (await s.call(who, "GET", path)).status_code for who, path in (("oa2", company_next), ("extra_pa", queue_next))
+    ] == [403, 403]
+
+
+async def test_a_cursor_is_refused_outside_the_view_that_issued_it_over_the_real_routers(
+    capacity_scenario: CapacityScenario,
+):
+    s = capacity_scenario
+    _ = await _seed_submitted(s, T0, 3)
+    _ = await _seed_submitted(s, T0, 3, tenant="other")
+    company = str(payload(await s.call("oa", "GET", "/capacity/orders?limit=1"))["next_cursor"])
+    queue = str(payload(await s.call("extra_pa", "GET", "/admin/capacity-orders?limit=1"))["next_cursor"])
+    foreign = urlencode({"cursor": company})
+    same = urlencode({"cursor": queue})
+
+    answers = {
+        "another company, named by a platform admin": await s.call(
+            "extra_pa", "GET", f"/capacity/orders?tenant_id={s.tenants['other']}&{foreign}"
+        ),
+        "another company's own admin": await s.call("other_oa", "GET", f"/capacity/orders?{foreign}"),
+        "a company cursor on the queue": await s.call("extra_pa", "GET", f"/admin/capacity-orders?{foreign}"),
+        "another status": await s.call("extra_pa", "GET", f"/admin/capacity-orders?status=approved&{same}"),
+        "a queue cursor on a company": await s.call("oa", "GET", f"/capacity/orders?{same}"),
+        "a malformed cursor": await s.call("extra_pa", "GET", "/admin/capacity-orders?cursor=%21%21%21"),
+        "a cursor with an offset": await s.call("extra_pa", "GET", f"/admin/capacity-orders?offset=1&{same}"),
+        "no access, valid cursor": await s.call("oa", "GET", f"/admin/capacity-orders?{same}"),
+        "no access, malformed cursor and offset": await s.call(
+            "member", "GET", "/capacity/orders?cursor=%21%21%21&offset=2"
+        ),
+    }
+
+    assert {name: response.status_code for name, response in answers.items()} == {
+        "another company, named by a platform admin": 400,
+        "another company's own admin": 400,
+        "a company cursor on the queue": 400,
+        "another status": 400,
+        "a queue cursor on a company": 400,
+        "a malformed cursor": 400,
+        "a cursor with an offset": 400,
+        "no access, valid cursor": 403,
+        "no access, malformed cursor and offset": 403,
+    }
+    assert (await s.call("extra_pa", "GET", f"/admin/capacity-orders?{same}")).status_code == 200
+
+
+async def test_the_cursor_queries_seek_the_scoped_indexes_without_a_sort(
+    capacity_scenario: CapacityScenario, monkeypatch: pytest.MonkeyPatch
+):
+    s = capacity_scenario
+    await s.db.execute(
+        "INSERT INTO capacity_orders (id, tenant_id, reference, kind, status, tier, billing_month, extra_accounts, "
+        "extra_agents, account_unit_usd, agent_unit_usd, days_charged, days_in_month, amount_usd_cents, usd_vnd_rate, "
+        "amount_vnd, recipient, evidence_storage_key, evidence_content_type, evidence_filename, evidence_size_bytes, "
+        "evidence_sha256, submitted_at, created_at) "
+        "SELECT gen_random_uuid(), (ARRAY[%(acme)s::uuid, %(other)s::uuid])[1 + g %% 2], "
+        "'MC' || translate(lpad(g::text, 8, '0'), '0189', 'ABCD'), 'purchase', 'submitted', 'pro', '2026-11-01', 1, 0, "
+        "5, 35, 17, 30, 500, 25000, 125000, '{}'::jsonb, 'seed/' || g, 'image/png', 'proof.png', 10, repeat('ab', 32), "
+        "%(t0)s, %(t0)s - (g %% 500) * interval '1 second' FROM generate_series(1, 6000) AS g",
+        {"acme": s.tenants["acme"], "other": s.tenants["other"], "t0": T0},
+    )
+    await s.db.execute("ANALYZE capacity_orders")
+    position = (T0 - timedelta(seconds=250), uuid4())
+    seen: list[tuple[str, Mapping[str, object] | None]] = []
+    fetch_all = DbConnection.fetchall
+
+    async def spy(self: DbConnection, query: str, params: Mapping[str, object] | None = None) -> list[Row]:
+        seen.append((query, params))
+        return await fetch_all(self, query, params)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(DbConnection, "fetchall", spy)
+        _ = await capacity_order_dao.list_for_tenant(s.tenant_id, limit=51, after=position)
+        _ = await capacity_order_dao.list_by_status(CapacityOrderStatus.SUBMITTED, limit=51, after=position)
+    tenant_query, status_query = (entry for entry in seen if "ORDER BY created_at DESC, id DESC" in entry[0])
+
+    for (query, params), index in (
+        (tenant_query, "ix_capacity_orders_tenant_created"),
+        (status_query, "ix_capacity_orders_status_created"),
+    ):
+        explained = await s.db.fetchone(f"EXPLAIN (FORMAT JSON) {query}", params)
+        assert explained is not None
+        nodes = _plan_nodes(explained["QUERY PLAN"])
+        shape = [
+            (node["Node Type"], node.get("Index Name"), node.get("Index Cond"), node.get("Filter")) for node in nodes
+        ]
+        assert not [node for node in nodes if "Sort" in str(node["Node Type"])], shape
+        scans = [node for node in nodes if node.get("Index Name") == index]
+        assert len(scans) == 1, shape
+        assert "ROW(created_at, id) <" in str(scans[0].get("Index Cond")), shape
+        assert "created_at" not in str(scans[0].get("Filter")), shape
+
+
+def _plan_nodes(plan: object) -> list[dict[str, object]]:
+    found: list[dict[str, object]] = []
+    stack = [cast("list[dict[str, object]]", plan)[0]["Plan"]]
+    while stack:
+        node = cast("dict[str, object]", stack.pop(0))
+        found.append(node)
+        stack.extend(cast("list[object]", node.get("Plans", [])))
+    return found
 
 
 # ── evidence download ───────────────────────────────────────────────────

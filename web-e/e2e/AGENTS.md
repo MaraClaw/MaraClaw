@@ -32,6 +32,7 @@ npm run test:e2e
 - Files that export a `register…Tests()` function (for example `*-cases.ts`, `selected-notification-moves.ts`) are case registrars. The owning `*.spec.ts` invokes them at top level; they are not independent specs.
 - Screenshot evidence uses `testInfo.outputPath(...)`, not a shared fixed output filename.
 - `chat-receipt-visual.spec.ts`: widths 390/1440/1920, light/dark, controlled clock and reduced motion.
+- `chat-stream-fixture.ts`: frame control for live replies. `installFrameClock` before `goto`, `holdFrames` once the chat has settled, `paintFrame` for one frame, and `handled` as an ordered barrier proving earlier socket frames were accepted.
 
 ## Invariants for new tests
 

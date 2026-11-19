@@ -25,7 +25,15 @@ from app.services.guest_identity import GuestOwnershipError
 from app.services.openclaw_update_docker import ContainerInfo
 from app.services.openclaw_update_executor import READY_PASSES, UpgradeExecutor
 from app.services.openclaw_update_snapshot import commit_snapshot, drop_snapshot, restore_snapshot, snapshot_path
-from openclaw_update_fakes import NEW_IMAGE, OLD_IMAGE, FakeContainer, FakeDocker, FakeManager, FakeStore
+from openclaw_update_fakes import (
+    NEW_IMAGE,
+    OLD_IMAGE,
+    FakeContainer,
+    FakeDocker,
+    FakeManager,
+    FakeStore,
+    use_probe_clock,
+)
 
 
 class Harness:
@@ -51,11 +59,7 @@ class Harness:
         (self.agent_dir / "workspace").mkdir(parents=True)
         (self.agent_dir / "workspace" / "memory.md").write_text("before", encoding="utf-8")
         self.executor: UpgradeExecutor = UpgradeExecutor(
-            self.store,
-            self.docker,
-            self.manager,
-            ready_timeout=0.05,
-            ready_interval=0,
+            self.store, self.docker, self.manager, ready_timeout=10, ready_interval=0
         )
 
     @property
@@ -71,8 +75,10 @@ class Harness:
 
 
 @pytest.fixture
-def h(tmp_path: Path) -> Harness:
-    return Harness(tmp_path)
+def h(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
+    harness = Harness(tmp_path)
+    use_probe_clock(monkeypatch, harness.docker)
+    return harness
 
 
 @pytest.mark.parametrize("initial_status", ["running", "stopped"])

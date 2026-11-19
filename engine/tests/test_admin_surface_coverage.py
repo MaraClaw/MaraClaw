@@ -30,7 +30,12 @@ from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.schemas.company_admission import AdmissionTenant, RequestSummary
 from app.schemas.schemas import TokenResponse
-from app.services import admin_provisioning as provisioning
+from app.services import (
+    admin_provisioning as provisioning,
+    company_admission_auto,
+    company_admissions,
+    company_transfer_entrypoint,
+)
 from app.services.admin_audit import write_admin_audit
 from app.services.storage_runtime.base import StorageReadLimitExceededError
 from app.services.tenant_provisioning import AdminEmailTakenError
@@ -113,11 +118,11 @@ def pending_admission(monkeypatch):
         submit = AsyncMock(return_value=SimpleNamespace(status=AdmissionStatus.PENDING))
         admit = AsyncMock(return_value=SimpleNamespace(status=AdmissionStatus.APPROVED))
         summarize = AsyncMock(return_value=summary)
-        monkeypatch.setattr("app.services.company_admissions.submit_request", submit)
-        monkeypatch.setattr("app.services.company_admissions.summarize", summarize)
-        monkeypatch.setattr("app.services.company_admission_auto.submit_request", submit)
-        monkeypatch.setattr("app.services.company_admission_auto.admit_with_invitation", admit)
-        monkeypatch.setattr("app.services.company_transfer_entrypoint.summarize", summarize)
+        monkeypatch.setattr(company_admissions, "submit_request", submit)
+        monkeypatch.setattr(company_admissions, "summarize", summarize)
+        monkeypatch.setattr(company_admission_auto, "submit_request", submit)
+        monkeypatch.setattr(company_admission_auto, "admit_with_invitation", admit)
+        monkeypatch.setattr(company_transfer_entrypoint, "summarize", summarize)
         return SimpleNamespace(submit=submit, admit=admit, summarize=summarize, summary=summary)
 
     return configure

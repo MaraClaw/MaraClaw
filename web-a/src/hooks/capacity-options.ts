@@ -15,9 +15,9 @@ import { notificationKeys } from './notification-options.ts'
 export const capacityKeys = {
   all: ['admin-capacity'] as const,
   overview: (tenantId: string | null) => ['admin-capacity', 'overview', tenantId] as const,
-  orders: (tenantId: string | null, limit: number, offset: number) => ['admin-capacity', 'orders', tenantId, limit, offset] as const,
+  orders: (tenantId: string | null, limit: number, cursor: string | null) => ['admin-capacity', 'orders', tenantId, limit, cursor] as const,
   order: (id: CapacityOrderId | null) => ['admin-capacity', 'order', id] as const,
-  reviewList: (status: CapacityOrderStatus, offset: number) => ['admin-capacity', 'review', status, offset] as const,
+  reviewList: (status: CapacityOrderStatus, cursor: string | null) => ['admin-capacity', 'review', status, cursor] as const,
   reviewDetail: (id: CapacityOrderId | null) => ['admin-capacity', 'review-detail', id] as const,
   settings: ['admin-capacity', 'settings'] as const,
 }
@@ -30,10 +30,10 @@ export function capacityOverviewOptions(tenantId: string | null, enabled: boolea
   })
 }
 
-export function capacityOrdersOptions(tenantId: string | null, limit: number, offset: number, enabled: boolean) {
+export function capacityOrdersOptions(tenantId: string | null, limit: number, cursor: string | null, enabled: boolean) {
   return queryOptions({
-    queryKey: capacityKeys.orders(tenantId, limit, offset),
-    queryFn: ({ signal }) => fetchCapacityOrders({ tenantId, limit, offset }, signal),
+    queryKey: capacityKeys.orders(tenantId, limit, cursor),
+    queryFn: ({ signal }) => fetchCapacityOrders({ tenantId, limit, cursor }, signal),
     enabled, retry: false, refetchInterval: 60_000,
   })
 }
@@ -46,10 +46,10 @@ export function capacityOrderOptions(id: CapacityOrderId | null, enabled: boolea
   })
 }
 
-export function capacityReviewListOptions(status: CapacityOrderStatus, offset: number, enabled: boolean) {
+export function capacityReviewListOptions(status: CapacityOrderStatus, cursor: string | null, enabled: boolean) {
   return queryOptions({
-    queryKey: capacityKeys.reviewList(status, offset),
-    queryFn: ({ signal }) => fetchCapacityReviewOrders(status, offset, signal),
+    queryKey: capacityKeys.reviewList(status, cursor),
+    queryFn: ({ signal }) => fetchCapacityReviewOrders(status, cursor, signal),
     enabled, retry: false, refetchInterval: 30_000,
   })
 }

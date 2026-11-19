@@ -62,6 +62,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 10. Agent transfer reads (`gcTime: 0`, `staleTime: 0`, no retry) fetch the source detail and every recipient page. Success cancels and invalidates transfers, users, user, companies, deletion queries and notifications; a 403 or 409 invalidates only transfers. No automatic retry.
 11. Invitation reads need a non-null tenant and key on `[tenant, page]`; send and revoke invalidate `invitationKeys.tenant`.
 12. Capacity reads use `useCapacityAccess`; company-scoped reads omit `tenant_id` for OAs and send the selected company for PAs.
+    Order lists key on the view and the page boundary (`capacityKeys.orders(tenant, limit, cursor)`, `capacityKeys.reviewList(status, cursor)`; `null` is the first page); the cursor is the server's opaque `next_cursor`, never parsed.
     Every capacity mutation guards before requesting with local 403 `CapacityGuardError` (translation key via `capacityGuardKey`) and disables retries.
     Evidence/cancel/decision share `capacity-order-{id}`; create uses `capacity-order-create`, settings uses `capacity-payment-settings`.
     Order mutations store the returned order (decision uses the review-detail key); success cancels/invalidates capacity and invalidates notifications. Their 404/409/403 handler cancels/invalidates only capacity.

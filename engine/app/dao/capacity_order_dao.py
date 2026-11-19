@@ -15,6 +15,8 @@ from app.records.capacity_order import (
 
 REFERENCE_ATTEMPTS: Final = 5
 
+OrderPosition = tuple[datetime, UUID]
+
 _OPEN_STATUSES: Final = (CapacityOrderStatus.AWAITING_PAYMENT.value, CapacityOrderStatus.SUBMITTED.value)
 _PRIMARY_RENEWAL: Final = "kind = 'renewal' AND source_order_id IS NULL"
 
@@ -105,26 +107,36 @@ class CapacityOrderDAO(BaseDAO[CapacityOrderRecord]):
             )
             return self.record_factory(row) if row is not None else None
 
-    async def list_for_tenant(self, tenant_id: UUID, *, limit: int, offset: int) -> list[CapacityOrderRecord]:
+    async def _page(
+        self, where: str, params: dict[str, object], *, limit: int, offset: int, after: OrderPosition | None
+    ) -> list[CapacityOrderRecord]:
+        """Newest first by ``(created_at, id)``; ``after`` seeks strictly below that position instead of skipping."""
+        if after is not None:
+            where = f"{where} AND (created_at, id) < (%(after_created_at)s, %(after_id)s)"
+            params = {**params, "after_created_at": after[0], "after_id": after[1]}
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM {self.table} WHERE tenant_id = %(tenant_id)s "
+                f"SELECT {self._select_list()} FROM {self.table} WHERE {where} "
                 "ORDER BY created_at DESC, id DESC LIMIT %(limit)s OFFSET %(offset)s",
-                {"tenant_id": tenant_id, "limit": limit, "offset": offset},
+                {**params, "limit": limit, "offset": offset},
             )
             return [self.record_factory(row) for row in rows]
 
-    async def list_by_status(
-        self, status: CapacityOrderStatus | None, *, limit: int, offset: int
+    async def list_for_tenant(
+        self, tenant_id: UUID, *, limit: int, offset: int = 0, after: OrderPosition | None = None
     ) -> list[CapacityOrderRecord]:
-        async with self.session() as db:
-            rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM {self.table} "
-                "WHERE (%(status)s::text IS NULL OR status = %(status)s) "
-                "ORDER BY created_at DESC, id DESC LIMIT %(limit)s OFFSET %(offset)s",
-                {"status": status.value if status is not None else None, "limit": limit, "offset": offset},
-            )
-            return [self.record_factory(row) for row in rows]
+        return await self._page(
+            "tenant_id = %(tenant_id)s", {"tenant_id": tenant_id}, limit=limit, offset=offset, after=after
+        )
+
+    async def list_by_status(
+        self, status: CapacityOrderStatus | None, *, limit: int, offset: int = 0, after: OrderPosition | None = None
+    ) -> list[CapacityOrderRecord]:
+        if status is None:
+            return await self._page("TRUE", {}, limit=limit, offset=offset, after=after)
+        return await self._page(
+            "status = %(status)s", {"status": status.value}, limit=limit, offset=offset, after=after
+        )
 
     async def open_for_tenant(self, tenant_id: UUID) -> list[CapacityOrderRecord]:
         """Orders still in play: awaiting payment or awaiting review, newest first."""

@@ -4490,6 +4490,7 @@
         "type": "object"
       },
       "CapacityOrderPage": {
+        "description": "``next_cursor`` resumes after the last returned order; it is null on the last page.",
         "properties": {
           "has_more": {
             "title": "Has More",
@@ -4501,11 +4502,23 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           }
         },
         "required": [
           "items",
-          "has_more"
+          "has_more",
+          "next_cursor"
         ],
         "title": "CapacityOrderPage",
         "type": "object"
@@ -21435,7 +21448,7 @@
   },
   "info": {
     "title": "MaraClaw",
-    "version": "1.1.1"
+    "version": "1.1.2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -21755,6 +21768,22 @@
               "minimum": 0,
               "title": "Offset",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],
@@ -35628,6 +35657,22 @@
               "minimum": 0,
               "title": "Offset",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],

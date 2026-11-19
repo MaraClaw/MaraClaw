@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar, final, override
@@ -27,6 +27,7 @@ from app.core.session_cache import (
     set_cached_user,
 )
 from app.dao.base import BaseDAO, as_uuid
+from app.dao.mention_patterns import like_patterns
 from app.dao.projection_contracts import UserNameAvatarProjection
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
@@ -442,6 +443,43 @@ class UserDAO(BaseDAO[UserRecord]):
                 params,
             )
             return [UserRecord.from_row(row) for row in rows]
+
+    async def find_active_by_mention_names(
+        self, tokens: Collection[str], *, tenant_id: UUID | None, exclude_user_id: UUID | None
+    ) -> dict[str, UserRecord]:
+        """Active members that lowercased @mention tokens name, keyed by ``(display_name or "User").lower()``.
+
+        One query whatever the roster size, with no identity join: an empty display name is the literal ``User``
+        because the email fallback never ran. ILIKE returns a superset of the candidates (``mention_patterns``) and
+        the exact rule stays that key in ``tokens``. Same-named members resolve to the oldest, then the lowest id.
+        ``tenant_id=None`` keeps the database-wide scope and ``exclude_user_id`` is the author.
+        """
+        wanted = frozenset(tokens)
+        if not wanted:
+            return {}
+        name_match = "u.display_name ILIKE ANY(%(patterns)s)"
+        if "user" in wanted:
+            name_match += " OR u.display_name = ''"
+        clauses = ["u.is_active IS TRUE", f"({name_match})"]
+        params: dict[str, object] = {"patterns": like_patterns(wanted)}
+        if tenant_id is not None:
+            clauses.append("u.tenant_id = %(tenant_id)s")
+            params["tenant_id"] = tenant_id
+        if exclude_user_id is not None:
+            clauses.append("u.id <> %(exclude_user_id)s")
+            params["exclude_user_id"] = exclude_user_id
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('u')} FROM users u WHERE {' AND '.join(clauses)} "
+                "ORDER BY u.created_at ASC, u.id ASC",
+                params,
+            )
+        found: dict[str, UserRecord] = {}
+        for row in rows:
+            key = (str_from_row(row["display_name"]) or "User").lower()
+            if key in wanted and key not in found:
+                found[key] = UserRecord.from_row(row)
+        return found
 
     async def display_name_for_id(self, user_id: UUID) -> str | None:
         from app.core.row_memo import memo_get, memo_set

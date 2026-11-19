@@ -159,7 +159,7 @@ def claim_snapshots(monkeypatch, table, pairs):
 async def claimed_lease(monkeypatch, table):
     pair = queued(table)
     claim_snapshots(monkeypatch, table, [pair])
-    rows = await executions.claim_pending_trigger_executions()
+    rows = await executions.claim_pending_trigger_executions(max_agents=1)
     trigger = executions.build_execution_runtime_trigger(rows[0][1], rows[0][0])
     return executions.trigger_execution_leases([trigger])[0], trigger
 
@@ -170,7 +170,7 @@ async def test_takeover_fences_stale_owner(table, monkeypatch):
     stale, trigger = await claimed_lease(monkeypatch, table)
     row = table.rows[stale.execution_ids[0]]
     row["lease_expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
-    reclaimed = await executions.claim_pending_trigger_executions()
+    reclaimed = await executions.claim_pending_trigger_executions(max_agents=1)
     current = executions.trigger_execution_leases(
         [executions.build_execution_runtime_trigger(reclaimed[0][1], reclaimed[0][0])]
     )[0]
@@ -196,7 +196,7 @@ async def test_takeover_fences_stale_owner(table, monkeypatch):
 async def test_first_starts_count_inside_claim_transaction(table, monkeypatch):
     first, reclaim = queued(table), queued(table, started=True)
     claim_snapshots(monkeypatch, table, [first, reclaim])
-    await executions.claim_pending_trigger_executions()
+    await executions.claim_pending_trigger_executions(max_agents=1)
     raw = table.connections[0]
     sql = [(q, p) for q, p in raw.executed]
     updates = [(q, p) for q, p in sql if q.lstrip().startswith("UPDATE agent_triggers")]
@@ -211,7 +211,7 @@ async def test_first_starts_count_inside_claim_transaction(table, monkeypatch):
     assert all(commits == 0 for conn, _q, _p, commits in table.events if conn is raw)
     assert raw.commits == 1
     assert sum(q.lstrip().startswith("UPDATE trigger_executions") for q, _ in sql) == 1
-    await executions.claim_pending_trigger_executions()
+    await executions.claim_pending_trigger_executions(max_agents=1)
     assert not any(q.lstrip().startswith("UPDATE agent_triggers") for q, _ in table.connections[1].executed)
 
 
@@ -755,7 +755,7 @@ async def test_partial_confirmation_does_not_extend_deadline(table, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_recovery_sql_preserves_pending_enable_guard(table, monkeypatch):
-    await trigger_execution_dao.claim_pending(sources=["once"], now=datetime.now(UTC), limit=10)
+    await trigger_execution_dao.claim_pending(sources=["once"], now=datetime.now(UTC), max_agents=1, limit=10)
     query = table.connections[0].executed[0][0]
     assert "FOR UPDATE OF e SKIP LOCKED" in query
     assert "FOR NO KEY UPDATE OF t SKIP LOCKED" in query
@@ -792,14 +792,14 @@ async def test_dispatch_recovers_first_and_protects_payload(table, monkeypatch):
         order.append("recover")
         return []
 
-    async def claim():
-        order.append("claim")
+    async def claim(*, max_agents):
+        order.append(f"claim {max_agents}")
         return [(execution, trigger)]
 
     monkeypatch.setattr(dispatch, "fail_abandoned_trigger_executions", fail, raising=False)
     monkeypatch.setattr(dispatch, "claim_pending_trigger_executions", claim)
-    grouped, forced = await dispatch.claim_ready_trigger_invocations(datetime.now(UTC))
-    assert order == ["recover", "claim"]
+    grouped, forced = await dispatch.claim_ready_trigger_invocations(datetime.now(UTC), max_agents=3)
+    assert order == ["recover", "claim 3"]
     assert forced == {trigger.agent_id}
     leases = executions.trigger_execution_leases(grouped[trigger.agent_id])
     assert leases == [executions.ExecutionLease("trusted", (execution.id,))]
@@ -815,7 +815,7 @@ async def test_empty_tick_still_claims_and_invokes_in_fresh_context(table, monke
     async def enabled(*, after, limit):
         return []
 
-    async def claim(_now):
+    async def claim(_now, *, max_agents):
         return {trigger.agent_id: [trigger]}, {trigger.agent_id}
 
     async def invoke(_id, _triggers):
@@ -832,6 +832,104 @@ async def test_empty_tick_still_claims_and_invokes_in_fresh_context(table, monke
         await asyncio.gather(*trigger_daemon._BACKGROUND_TASKS)
         await asyncio.sleep(0)
     assert not trigger_daemon._BACKGROUND_TASKS
+
+
+@pytest.mark.asyncio
+async def test_ticks_pass_free_slots_down_to_the_claim_and_a_full_process_only_recovers(table, monkeypatch):
+    from app.services import trigger_daemon
+    from test_trigger_daemon_drain import HeldInvocations
+
+    # Given two slots and three agents with one queued execution each
+    pairs = [queued(table) for _ in range(3)]
+    asked: list[tuple[int, int]] = []
+    recovered: list[int] = []
+
+    async def claim_pending(*, sources, now, max_agents, limit):
+        asked.append((max_agents, limit))
+        ready = [(e, t) for e, t in pairs if table.rows[e.id]["status"] == "pending"][:max_agents]
+        return [(TriggerExecutionRecord(**table.rows[e.id]), replace(t)) for e, t in ready]
+
+    async def recover():
+        recovered.append(len(asked))
+        return []
+
+    async def enabled(*, after, limit):
+        return []
+
+    monkeypatch.setattr(trigger_execution_dao, "claim_pending", claim_pending)
+    monkeypatch.setattr(dispatch, "fail_abandoned_trigger_executions", recover, raising=False)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", enabled)
+    monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
+    capacity = trigger_daemon.InvocationCapacity(2)
+    monkeypatch.setattr(trigger_daemon, "_capacity", capacity)
+    held = HeldInvocations(monkeypatch)
+    # When a tick fills the process and the next one runs before anything finishes
+    await trigger_daemon._tick()
+    await held.wait_started(2)
+    await trigger_daemon._tick()
+    # Then the free slots reached the DAO with the 100-row ceiling, and the full tick only recovered
+    assert asked == [(2, 100)]
+    assert recovered == [0, 1]
+    assert [table.rows[e.id]["status"] for e, _t in pairs] == ["processing", "processing", "pending"]
+    # And once an invocation ends, the next tick leases the remaining agent with the one free slot
+    await held.finish(held.started[0])
+    await trigger_daemon._tick()
+    await held.wait_started(3)
+    assert asked == [(2, 100), (1, 100)]
+    assert [table.rows[e.id]["status"] for e, _t in pairs] == ["processing"] * 3
+    await held.finish(*held.started[1:])
+    assert capacity.held == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["completed", "failed", "commit_uncertain"])
+async def test_invocation_returns_its_slot_once_and_an_uncertain_commit_is_not_a_failure(table, monkeypatch, outcome):
+    from psycopg import OperationalError
+
+    from app.core.domain.triggers import TriggerExecutionStatus
+    from app.services import trigger_daemon
+
+    # Given a one-slot process whose tick launches the real invoker over a claimed lease
+    lease, trigger = await claimed_lease(monkeypatch, table)
+
+    async def llm(**_kwargs):
+        if outcome == "failed":
+            raise RuntimeError("model failed")
+        return "reply"
+
+    fake_invoker(monkeypatch, trigger, llm)
+    attempted = []
+    original_finish = trigger_execution_dao.finish
+
+    async def finish(execution_id, **kwargs):
+        attempted.append(kwargs["status"])
+        if outcome == "commit_uncertain":
+            raise OperationalError("server closed the connection unexpectedly")
+        return await original_finish(execution_id, **kwargs)
+
+    async def claim(_now, *, max_agents):
+        return {trigger.agent_id: [trigger]}, {trigger.agent_id}
+
+    async def enabled(*, after, limit):
+        return []
+
+    monkeypatch.setattr(trigger_execution_dao, "finish", finish)
+    monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", enabled)
+    monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
+    capacity = trigger_daemon.InvocationCapacity(1)
+    monkeypatch.setattr(trigger_daemon, "_capacity", capacity)
+    # When the invocation runs to its terminal write
+    await trigger_daemon._tick()
+    results = await asyncio.gather(*trigger_daemon._BACKGROUND_TASKS, return_exceptions=True)
+    # Then its slot came back exactly once, and an uncertain completion was neither rewritten as a failure nor
+    # settled: the row stays leased for lease recovery
+    assert capacity.held == 0
+    completed, failed = TriggerExecutionStatus.COMPLETED, TriggerExecutionStatus.FAILED
+    assert attempted == {"completed": [completed], "failed": [failed], "commit_uncertain": [completed]}[outcome]
+    status = {"completed": "completed", "failed": "failed", "commit_uncertain": "processing"}[outcome]
+    assert table.rows[lease.execution_ids[0]]["status"] == status
+    assert [type(result) for result in results] == [OperationalError if outcome == "commit_uncertain" else type(None)]
 
 
 @pytest.mark.asyncio

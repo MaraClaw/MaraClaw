@@ -1,15 +1,20 @@
 import asyncio
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import override
 
 import anyio
+import httpx
 import pytest
 from fastapi import FastAPI
 
 from app.api import background_tasks
 from app.runtime import lifecycle
 from app.runtime.tasks import OwnedTasks
+from app.services import mcp_client
+from app.services.mcp_client import MCPSessionPool
 from producer_admission_fixtures import producer_admission
+from test_mcp_recovery import TOOL_RESULT, FakeMCPServer, call
 from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS
 
 __all__ = ["producer_admission"]
@@ -67,22 +72,114 @@ def fake_resources(monkeypatch: pytest.MonkeyPatch, events: list[str]) -> None:
     monkeypatch.setattr(lifecycle, "shutdown_logging", lambda: events.append("logging"))
 
 
-async def test_shutdown_closes_tavily_after_outbound_client(monkeypatch: pytest.MonkeyPatch) -> None:
+def fake_http_pools(monkeypatch: pytest.MonkeyPatch, events: list[str]) -> None:
+    def close(name: str) -> Callable[[], Awaitable[None]]:
+        async def record() -> None:
+            events.append(name)
+
+        return record
+
+    monkeypatch.setattr(lifecycle, "shutdown_outbound_client", close("outbound"))
+    monkeypatch.setattr(lifecycle, "shutdown_tavily_client", close("tavily"))
+    monkeypatch.setattr(lifecycle, "shutdown_mcp_sessions", close("mcp"))
+
+
+async def test_shutdown_closes_tavily_then_mcp_after_outbound_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    fake_resources(monkeypatch, events)
+    fake_http_pools(monkeypatch, events)
+    runtime = lifecycle.Runtime()
+    runtime.pool_attempted = True
+    await runtime.stop()
+    assert events == ["database", "redis", "llm", "outbound", "tavily", "mcp"]
+
+
+def pooled_mcp(monkeypatch: pytest.MonkeyPatch, *, shutdown_timeout_seconds: float = 2.0) -> FakeMCPServer:
+    server = FakeMCPServer()
+    monkeypatch.setattr(mcp_client, "public_http_client", server.factory)
+    monkeypatch.setattr(
+        mcp_client, "mcp_session_pool", MCPSessionPool(shutdown_timeout_seconds=shutdown_timeout_seconds)
+    )
+    return server
+
+
+async def test_shutdown_ends_each_same_loop_mcp_session_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: three pooled sessions whose server answers DELETE with 200, 404 and 405, plus a session left over
+    # from an event loop that has since closed.
+    server = pooled_mcp(monkeypatch)
+    server.delete_status.update({"s2": 404, "s3": 405})
+    sessions = mcp_client.mcp_session_pool
+    for agent in range(1, 4):
+        assert await call(sessions, agent=uuid.UUID(int=agent)) == TOOL_RESULT
+
+    def call_in_another_loop() -> str:
+        return asyncio.run(call(sessions, agent=uuid.UUID(int=4)))
+
+    assert await asyncio.to_thread(call_in_another_loop) == TOOL_RESULT
     events: list[str] = []
     fake_resources(monkeypatch, events)
     runtime = lifecycle.Runtime()
-    runtime.pool_attempted = True
+    runtime.pool_attempted = runtime.logging_attempted = True
 
-    async def outbound() -> None:
-        events.append("outbound")
-
-    async def tavily() -> None:
-        events.append("tavily")
-
-    monkeypatch.setattr(lifecycle, "shutdown_outbound_client", outbound)
-    monkeypatch.setattr(lifecycle, "shutdown_tavily_client", tavily)
+    # When
     await runtime.stop()
-    assert events == ["database", "redis", "llm", "outbound", "tavily"]
+
+    # Then: one DELETE per same-loop session; their clients closed, the other loop's client dropped unawaited.
+    assert sorted(seen.session or "" for seen in server.seen if seen.http == "DELETE") == ["s1", "s2", "s3"]
+    assert [client.is_closed for client in server.clients] == [True, True, True, False]
+    assert not sessions._entries
+    assert events[-1] == "logging"
+
+
+async def test_mcp_shutdown_is_bounded_when_the_server_never_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: a pooled session whose server accepts the DELETE and never answers it.
+    server = pooled_mcp(monkeypatch, shutdown_timeout_seconds=0.05)
+    assert await call(mcp_client.mcp_session_pool) == TOOL_RESULT
+    entered = asyncio.Event()
+
+    async def hang(_request: httpx.Request) -> httpx.Response:
+        entered.set()
+        await asyncio.Event().wait()
+        return httpx.Response(200)
+
+    server.queue("DELETE", hang)
+
+    # When: shutdown runs under a guard far above its own bound.
+    async with asyncio.timeout(5):
+        await mcp_client.shutdown_mcp_sessions()
+
+    # Then: the DELETE was attempted, abandoned at the bound, and the client still closed.
+    assert entered.is_set()
+    assert server.clients[0].is_closed
+
+
+async def test_failing_mcp_client_close_is_logged_and_cleanup_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: two pooled sessions, the first of whose clients fails to close.
+    server = pooled_mcp(monkeypatch)
+    sessions = mcp_client.mcp_session_pool
+    for agent in (1, 2):
+        assert await call(sessions, agent=uuid.UUID(int=agent)) == TOOL_RESULT
+    failing, healthy = server.clients
+
+    async def broken_close() -> None:
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(failing, "aclose", broken_close)
+    warnings: list[str] = []
+    monkeypatch.setattr(mcp_client.logger, "warning", lambda message, *args: warnings.append(f"{message} {args}"))
+    events: list[str] = []
+    fake_resources(monkeypatch, events)
+    runtime = lifecycle.Runtime()
+    runtime.pool_attempted = runtime.logging_attempted = True
+
+    # When
+    await runtime.stop()
+
+    # Then: the failure was logged, the other client still closed and later cleanup still ran.
+    assert len([line for line in warnings if "close failed" in line]) == 1
+    assert healthy.is_closed
+    assert not sessions._entries
+    assert events[-1] == "logging"
 
 
 @pytest.mark.asyncio
@@ -554,7 +651,7 @@ async def test_setup_shutdown_drains_write_before_database_closes(monkeypatch) -
     assert events[:3] == ["setup-write-finished", "setup-released", "database"]
 
 
-async def test_shutdown_closes_both_http_pools_after_producer_drains(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_shutdown_closes_the_http_pools_after_producer_drains(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
     runtime = lifecycle.Runtime()
     runtime.pool_attempted = True
@@ -562,18 +659,11 @@ async def test_shutdown_closes_both_http_pools_after_producer_drains(monkeypatch
     async def drained() -> None:
         events.append("drained")
 
-    async def outbound() -> None:
-        events.append("outbound")
-
-    async def tavily() -> None:
-        events.append("tavily")
-
     monkeypatch.setattr(lifecycle, "drain_heartbeat_tasks", drained)
-    monkeypatch.setattr(lifecycle, "shutdown_outbound_client", outbound)
-    monkeypatch.setattr(lifecycle, "shutdown_tavily_client", tavily)
+    fake_http_pools(monkeypatch, events)
     fake_resources(monkeypatch, events)
     await runtime.stop()
-    assert events.index("drained") < events.index("outbound") < events.index("tavily")
+    assert events.index("drained") < events.index("outbound") < events.index("tavily") < events.index("mcp")
 
 
 def fake_producer_drains(monkeypatch: pytest.MonkeyPatch, events: list[str], failing: str | None = None) -> None:

@@ -1,11 +1,11 @@
 [project]
 name = "maraclaw"
-version = "1.1.1"
+version = "1.1.2"
 description = "Backend workspace for the MaraClaw enterprise digital employee platform."
 requires-python = ">=3.14.10"
 dependencies = [
     "alibabacloud-credentials>=1.0.12",
-    "fastapi[standard]>=0.163.1",
+    "fastapi[standard]>=0.165.0",
     "uvicorn[standard]>=0.54.0",
     "asyncpg>=0.32.0",
     "redis[hiredis]>=8.1.0",
@@ -13,9 +13,9 @@ dependencies = [
     "pydantic-settings>=2.16.3",
     "python-jose[cryptography]>=3.5.0",
     "passlib[bcrypt]>=1.7.4",
-    "python-multipart>=0.0.33",
+    "python-multipart>=0.0.34",
     "httpx[http2,socks]>=0.28.1",
-    "pywhales>=1.3.0",
+    "pywhales>=1.3.1",
     "websockets>=15.0.1",
     "aiofiles>=24.1.0,<25.0.0",
     "croniter>=7.0.0",
@@ -24,7 +24,7 @@ dependencies = [
     "lxml>=6.1.3",
     "lxml-html-clean>=0.4.6",
     "PyNaCl>=1.6.2",
-    "firecrawl-anydoc==0.2.4",
+    "firecrawl-anydoc==0.2.5",
     "python-docx>=1.2.0",
     "openpyxl>=3.1.5",
     "python-pptx>=1.0.2",
@@ -41,7 +41,7 @@ dependencies = [
     "weasyprint>=70.0",
     "markdown>=3.11.3",
     "beautifulsoup4>=4.15.0",
-    "boto3>=1.44.3",
+    "boto3>=1.44.6",
     "s3transfer>=0.19.3",
     "uvloop>=0.23.0",
     "httptools>=0.9.0",
@@ -75,7 +75,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "httpx>=0.28.1",
     "ruff>=0.17.5",
-    "ty>=0.0.104",
+    "ty>=0.0.107",
     "basedpyright>=1.40.2",
 ]
 

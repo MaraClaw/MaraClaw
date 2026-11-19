@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { chatPath, message, prepareChat } from './chat-identity-fixture'
+import { handled, paintFrame } from './chat-stream-fixture'
 
 const source = '  **Key directories:**\r\n| Directory | Purpose |\r\n| :--- | ---: |\r\n| `engine/` | **API** |\r\n| `a|b` | escaped \\| pipe |\r\nAfter table\r\n\r\n```ts\r\na|b\r\n\r\nc|d\r\n```\r\n  '
 
@@ -77,12 +78,16 @@ test('streamed assistant copy follows the current source as chunks arrive', asyn
   await page.clock.pauseAt(new Date('2030-01-01T00:00:01Z'))
   const turn = '11111111-1111-4111-8111-111111111111'
   socket.route.send(JSON.stringify({ type: 'chunk', turn_id: turn, seq: 0, content: '**First** ' }))
+  await handled(page, socket)
+  await paintFrame(page)
   const live = page.locator('article[aria-live="polite"]')
   await live.getByRole('button', { name: 'Copy response', exact: true }).click()
   await expect(live.getByRole('button', { name: 'Copied response', exact: true })).toBeVisible()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('**First** ')
   await page.clock.runFor(1000)
   socket.route.send(JSON.stringify({ type: 'chunk', turn_id: turn, seq: 1, content: '\nnext  ' }))
+  await handled(page, socket)
+  await paintFrame(page)
   await live.getByRole('button', { name: 'Copy response', exact: true }).click()
   await expect(live.getByRole('button', { name: 'Copied response', exact: true })).toBeVisible()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('**First** \nnext  ')

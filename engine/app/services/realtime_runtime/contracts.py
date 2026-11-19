@@ -1,8 +1,10 @@
 """Fixed Redis routing shapes without constraining websocket event payloads."""
 
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from typing import NotRequired, Protocol
 
+from fastapi import WebSocket
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict
 
@@ -43,3 +45,40 @@ class LocalDeliverer(Protocol):
         session_id: str | None,
         user_id: str | None,
     ) -> Awaitable[object]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingOutcome:
+    """What routing one event did.
+
+    ``local_targets`` matched the session/user filter; sockets authorization refused count nowhere else. ``failed``
+    sends raised or timed out (including the timeout that evicted a socket); ``evicted`` sockets were evicted by this
+    delivery or found already evicted in its snapshot. ``remote_publish_errors`` counts instance channels whose
+    ``redis.publish`` raised, and ``publication_failed`` a publication that raised before routing finished.
+    """
+
+    local_targets: int = 0
+    delivered: int = 0
+    failed: int = 0
+    evicted: int = 0
+    remote_instances: int = 0
+    remote_publish_errors: int = 0
+    publication_failed: bool = False
+
+    @property
+    def dropped(self) -> bool:
+        """Some recipient the event was meant for never got it. An event nobody could receive is not dropped."""
+        return bool(self.failed or self.evicted or self.remote_publish_errors or self.publication_failed)
+
+
+class SendObserver(Protocol):
+    """The owner of local socket state, told about each bounded send. Every method is synchronous: no await between
+    the liveness check and the send, and an eviction completes before the delivery moves on."""
+
+    def is_live(self, websocket: WebSocket) -> bool: ...
+
+    def sent(self, websocket: WebSocket) -> None: ...
+
+    def timed_out(self, agent_id: str, websocket: WebSocket) -> bool:
+        """Record a send that hit its bound; True when this timeout evicted the socket."""
+        ...

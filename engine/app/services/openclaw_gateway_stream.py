@@ -197,11 +197,12 @@ class DeltaRelay:
         while True:
             while (delta := self.pending.take()) is not None:
                 started = monotonic()
+                dropped = True  # unless publication returns an outcome in which every recipient got the chunk
                 try:
-                    await publish_chunk(self.message, delta)
+                    dropped = (await publish_chunk(self.message, delta)).dropped
                 finally:
                     if self.timing is not None:
-                        self.timing.chunk_published(monotonic() - started)
+                        self.timing.chunk_published(monotonic() - started, dropped=dropped)
             if self.closed:
                 return
             self.wake.clear()  # no await since `take` saw nothing, so no merge can slip in before the wait

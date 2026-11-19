@@ -131,7 +131,7 @@ async def test_claim_pending_updates_all_ids_in_one_statement(
     monkeypatch.setattr(trigger_executions.trigger_execution_dao, "claim_pending", fake_claim)
     monkeypatch.setattr(trigger_executions.settings, "INSTANCE_ID", "test-node")
 
-    claimed = await trigger_executions.claim_pending_trigger_executions(limit=10)
+    claimed = await trigger_executions.claim_pending_trigger_executions(max_agents=1, limit=10)
     assert len(claimed) == 1
     assert claimed[0][0].status == "processing"
     updates = [q for q, _p in raw.executed if q.lstrip().startswith("UPDATE trigger_executions")]
