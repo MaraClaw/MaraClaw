@@ -4,7 +4,7 @@
 # Multi-stage production image:
 #   1) deps    - install lockfile deps on Node 26.13.1 (cache-friendly layer)
 #   2) build   - typecheck + Vite production bundle
-#   3) runtime - unprivileged Caddy serves dist and proxies /api/, /ws/, /p/ to engine
+#   3) runtime - unprivileged Caddy serves dist and proxies /api/, /ws/, /p/, /f/ to engine
 #
 # Build:  docker build -t maraclaw-web-e .
 #         docker build -t maraclaw-web-e --build-arg VITE_API_BASE_URL=https://api.example.com .
