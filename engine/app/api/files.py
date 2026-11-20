@@ -1104,9 +1104,27 @@ async def delete_file(
     return {"status": "ok", "path": path}
 
 
-def _require_visible_skill_files(agent_id: uuid.UUID, folder_name: str, paths: Iterable[str]) -> None:
-    for rel in paths:
-        require_member_visible_path(agent_id, f"skills/{folder_name}/{rel}")
+def _skill_file_keys(agent_id: uuid.UUID, folder_name: str, paths: Iterable[str]) -> list[str]:
+    """Storage keys for a skill's files, all under ``skills/<folder_name>/``; refuses the import before any write."""
+    if folder_name in ("", ".", "..") or any(char in folder_name for char in "/\\\x00"):
+        raise HTTPException(status_code=400, detail="Invalid skill folder name")
+    folder = f"skills/{folder_name}/"
+    keys: list[str] = []
+    for path in paths:
+        rel = member_path(folder + path)
+        require_member_visible_path(agent_id, rel)
+        if not rel.startswith(folder):
+            raise HTTPException(status_code=400, detail="Skill file path escapes the skill folder")
+        keys.append(_agent_storage_key(agent_id, rel))
+    return keys
+
+
+async def _write_skill_files(agent_id: uuid.UUID, folder_name: str, files: list[tuple[str, str]]) -> list[str]:
+    keys = _skill_file_keys(agent_id, folder_name, (path for path, _content in files))
+    storage = get_storage_backend()
+    for key, (_path, content) in zip(keys, files, strict=True):
+        await storage.write_text(key, content, encoding="utf-8")
+    return [path for path, _content in files]
 
 
 class ImportSkillBody(BaseModel):
@@ -1144,13 +1162,7 @@ async def import_skill_to_agent(
             raise HTTPException(403, "Skill changed during import")
         skill_files = await skill_dao.list_files(skill_id)
 
-    _require_visible_skill_files(agent_id, skill.folder_name, (f.path for f in skill_files))
-    storage = get_storage_backend()
-    written = []
-    for f in skill_files:
-        skill_key = _agent_storage_key(agent_id, f"skills/{skill.folder_name}/{f.path}")
-        await storage.write_text(skill_key, f.content, encoding="utf-8")
-        written.append(f.path)
+    written = await _write_skill_files(agent_id, skill.folder_name, [(f.path, f.content) for f in skill_files])
 
     return {
         "status": "ok",
@@ -1448,20 +1460,8 @@ async def agent_import_from_clawhub(
         _ = await _fresh_agent_authority(current_user, agent)
 
     # 3. Write to agent workspace: skills/<slug>/
-    base = _agent_base_dir(agent_id)
     folder_name = slug
-    _require_visible_skill_files(agent_id, folder_name, (f["path"] for f in files))
-    skill_dir = base / "skills" / folder_name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-
-    written = []
-    for f in files:
-        file_path = (skill_dir / f["path"]).resolve()
-        if not str(file_path).startswith(str(base.resolve())):
-            continue
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        _ = file_path.write_text(f["content"], encoding="utf-8")
-        written.append(f["path"])
+    written = await _write_skill_files(agent_id, folder_name, [(f["path"], f["content"]) for f in files])
 
     return {
         "status": "ok",
@@ -1497,21 +1497,7 @@ async def agent_import_from_url(
 
     # Derive folder name
     folder_name = path.rstrip("/").split("/")[-1] if path else repo
-    _require_visible_skill_files(agent_id, folder_name, (f["path"] for f in files))
-
-    # Write to agent workspace
-    base = _agent_base_dir(agent_id)
-    skill_dir = base / "skills" / folder_name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-
-    written = []
-    for f in files:
-        file_path = (skill_dir / f["path"]).resolve()
-        if not str(file_path).startswith(str(base.resolve())):
-            continue
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        _ = file_path.write_text(f["content"], encoding="utf-8")
-        written.append(f["path"])
+    written = await _write_skill_files(agent_id, folder_name, [(f["path"], f["content"]) for f in files])
 
     return {
         "status": "ok",

@@ -520,6 +520,51 @@ IMPORT_ROUTES = ["import-skill", "import-from-clawhub", "import-from-url"]
 
 
 @pytest.mark.parametrize("route", IMPORT_ROUTES)
+async def test_skill_imports_refuse_files_that_leave_the_skill_folder(
+    api: Api, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    # Given
+    route, body = stage_import(api, monkeypatch, route, "../../memory/planted.md")
+    # When
+    response = await api.client.post(f"{api.url}/{route}", json=body, headers=AUTH)
+    # Then
+    assert (response.status_code, response.json()) == (400, {"detail": "Skill file path escapes the skill folder"})
+    assert not await api.storage.exists(f"{api.agent_id}/memory/planted.md")
+
+
+@pytest.mark.parametrize(
+    ("route", "folder"),
+    [("import-from-clawhub", "../memory"), ("import-from-clawhub", "a/b"), ("import-from-url", "..")],
+)
+async def test_skill_imports_refuse_a_folder_name_that_is_not_one_segment(
+    api: Api, monkeypatch: pytest.MonkeyPatch, route: str, folder: str
+) -> None:
+    # Given
+    route, _ = stage_import(api, monkeypatch, route, "SKILL.md")
+    body = {"slug": folder} if route == "import-from-clawhub" else {"url": f"https://github.com/o/r/tree/main/{folder}"}
+    # When
+    response = await api.client.post(f"{api.url}/{route}", json=body, headers=AUTH)
+    # Then
+    assert (response.status_code, response.json()) == (400, {"detail": "Invalid skill folder name"})
+    assert not await api.storage.exists(f"{api.agent_id}/memory/SKILL.md")
+    assert not await api.storage.exists(f"{api.agent_id}/SKILL.md")
+
+
+@pytest.mark.parametrize("route", IMPORT_ROUTES)
+async def test_skill_imports_write_through_storage_not_the_guest_disk(
+    api: Api, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    # Given
+    route, body = stage_import(api, monkeypatch, route, "SKILL.md")
+    # When
+    response = await api.client.post(f"{api.url}/{route}", json=body, headers=AUTH)
+    # Then
+    assert response.status_code == 200, response.text
+    on_guest_disk = (api.guest_root / str(api.agent_id) / "skills" / "demo" / "SKILL.md").exists()
+    assert on_guest_disk is not isinstance(api.storage, FallbackStorageBackend)
+
+
+@pytest.mark.parametrize("route", IMPORT_ROUTES)
 @pytest.mark.parametrize("file_path", ["../../openclaw.json", "../../../openclaw.json"])
 async def test_skill_imports_refuse_files_that_land_on_runtime_paths(
     api: Api, monkeypatch: pytest.MonkeyPatch, route: str, file_path: str
