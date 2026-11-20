@@ -1156,10 +1156,13 @@ _TRIGGER_ROWS = (
     "WHERE tgrelid IN ('agents'::regclass, 'chat_messages'::regclass) AND tgname LIKE 'revoke_openclaw_replies_on_%%' "
     "ORDER BY tgname"
 )
-_HELD_ON_HOT_TABLES = (
-    "SELECT c.relname, l.mode FROM pg_locks l JOIN pg_class c ON c.oid = l.relation "
-    "WHERE l.pid = pg_backend_pid() AND c.relname IN ('agents', 'chat_messages') "
-    "AND c.relnamespace = current_schema()::regnamespace ORDER BY c.relname, l.mode"
+_SCHEMA_TABLES = (
+    "SELECT count(*) AS total, string_agg(quote_ident(relname), ', ') AS names FROM pg_class "
+    "WHERE relnamespace = current_schema()::regnamespace AND relkind IN ('r', 'p')"
+)
+_HELD_BY_OTHERS = (
+    "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE l.pid <> pg_backend_pid() "
+    "AND l.mode = 'RowExclusiveLock' AND c.relnamespace = current_schema()::regnamespace AND c.relkind IN ('r', 'p')"
 )
 
 
@@ -1178,18 +1181,21 @@ def _bounded_lock_waits(monkeypatch: pytest.MonkeyPatch, milliseconds: int) -> N
     monkeypatch.setattr(bootstrap_db, "_MAX_ATTEMPTS", 1)
 
 
-async def test_a_rerun_takes_no_access_exclusive_lock_on_agents_or_chat_messages(schema_db: DbConnection) -> None:
-    # Given a bootstrapped schema.
+async def test_a_rerun_completes_while_writers_hold_every_table(
+    schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a bootstrapped schema and another session holding ROW EXCLUSIVE, the lock every write takes, on all its tables.
     await bootstrap_db.main()
-    statements = bootstrap_db._statement_bodies(bootstrap_db.SCHEMA_BASELINE.read_text())
-    # When the whole baseline reruns in one transaction, observed before it commits.
-    async with schema_db.raw.transaction():
-        for statement in statements:
-            await schema_db.execute(statement)
-        held = await schema_db.fetchall(_HELD_ON_HOT_TABLES)
-    # Then both tables were touched, and neither was locked ACCESS EXCLUSIVE, which is what DROP TRIGGER asks for.
-    assert {row["relname"] for row in held} == {"agents", "chat_messages"}
-    assert "AccessExclusiveLock" not in {row["mode"] for row in held}
+    _bounded_lock_waits(monkeypatch, 200)
+    tables = await schema_db.fetchone(_SCHEMA_TABLES)
+    assert tables is not None
+    async with _peer(schema_db) as writer:
+        await writer.execute(f"LOCK TABLE {tables['names']} IN ROW EXCLUSIVE MODE")
+        assert await schema_db.fetchval(_HELD_BY_OTHERS) == tables["total"]
+        # When the runner reruns, Then it completes: re-declaring an index, trigger or constraint that already exists
+        # would have locked its table against writes, waited out the 200 ms bound and failed.
+        with fail_after(10):
+            await bootstrap_db.main()
 
 
 async def test_a_rerun_completes_while_open_reads_hold_agents_and_chat_messages(

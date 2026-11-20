@@ -290,7 +290,8 @@ def test_schema_contract_uniqueness_cascades_defaults_and_due_index() -> None:
     assert "available_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()" in table
     assert "attempts INTEGER NOT NULL DEFAULT 0" in table
     assert (
-        "ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL;" in source
+        "ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL$ddl$);"
+        in source
     )
     assert (
         "terminal_reason TEXT CHECK (terminal_reason IN ( 'source_agent_unavailable', 'source_tenant_changed'," in table
