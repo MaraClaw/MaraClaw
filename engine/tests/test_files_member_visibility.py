@@ -603,3 +603,56 @@ async def test_skill_imports_still_write_under_skills(api: Api, monkeypatch: pyt
     # Then
     assert response.status_code == 200, response.text
     assert await api.storage.read_text(f"{api.agent_id}/skills/demo/SKILL.md") == "x"
+
+
+# Captured at import, before the `api` fixture swaps in its stub, so a test can run the real storage write.
+REAL_WRITE_WORKSPACE_FILE = files_api._write_workspace_file
+RACED_LINKS = ("workspace/leak.json", "workspace/up/openclaw.json", "workspace/other/AGENTS.md")
+
+
+def plant_guest_links_after_the_route_check(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The route check saw no link; the guest plants them right after, so only storage stands in the way."""
+    monkeypatch.setattr(file_storage_paths, "_crosses_symlink", lambda _agent_id, _normalized: False)
+    plant_guest_links(api)
+
+
+def assert_link_targets_untouched(api: Api) -> None:
+    agent_dir = api.guest_root / str(api.agent_id)
+    other = api.guest_root / (agent_dir / "workspace" / "other").readlink().name
+    assert (agent_dir / "gogcli" / "t.json").read_bytes() == RUNTIME_BYTES
+    assert [path.name for path in other.iterdir()] == ["AGENTS.md"]
+    assert (other / "AGENTS.md").read_text() == "other agent"
+
+
+@pytest.mark.parametrize("path", RACED_LINKS)
+async def test_download_refuses_a_guest_link_planted_after_the_route_check(
+    api: Api, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    # Given
+    plant_guest_links_after_the_route_check(api, monkeypatch)
+    # When
+    response = await _download(api, path)
+    # Then
+    assert response.status_code in {403, 404}, response.text
+    assert RUNTIME_BYTES not in response.content
+    assert b"other agent" not in response.content
+
+
+@pytest.mark.parametrize("path", RACED_LINKS)
+async def test_member_write_through_a_guest_link_planted_after_the_route_check_changes_nothing(
+    api: Api, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    # Given
+    plant_guest_links_after_the_route_check(api, monkeypatch)
+    monkeypatch.setattr(files_api, "_write_workspace_file", REAL_WRITE_WORKSPACE_FILE)
+    monkeypatch.setattr(files_api.workspace, "get_storage_backend", lambda: api.storage)
+    monkeypatch.setattr(files_api, "_persist_workspace_revision", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        files_api, "check_agent_access", AsyncMock(return_value=(SimpleNamespace(id=api.agent_id), "manage"))
+    )
+    # When
+    response = await _write(api, path)
+    # Then
+    assert response.status_code in {403, 404}, response.text
+    assert_link_targets_untouched(api)
+    await api.assert_runtime_untouched()

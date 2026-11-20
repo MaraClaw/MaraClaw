@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from tests.membership_generation_fixtures import pin_membership_generation
@@ -19,6 +19,7 @@ from app.core.security import create_access_token
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.services import file_download_tickets
+from app.services.storage_runtime.disposition import content_disposition
 from app.services.storage_runtime.local import LocalStorageBackend
 from materialize_fixtures import GatedObject, temp_files, temp_root
 
@@ -332,15 +333,17 @@ async def test_download_presigned_branch_redirects(monkeypatch, download, auth):
 
 
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
-async def test_download_local_branch_returns_file_response(monkeypatch, tmp_path, download, auth):
+async def test_download_local_branch_streams_the_contained_file(monkeypatch, tmp_path, download, auth):
     local = tmp_path / "report.pdf"
     local.write_bytes(b"local-bytes")
     storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", local_path=local)
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
     response = await _download(download, auth)
-    assert isinstance(response, FileResponse)
-    assert response.path == str(local)
-    assert response.headers["content-disposition"] == 'attachment; filename="report.pdf"'
+    assert isinstance(response, StreamingResponse)
+    assert b"".join([chunk async for chunk in response.body_iterator]) == b"local-bytes"
+    assert response.media_type == "application/pdf"
+    assert response.headers["content-length"] == "11"
+    assert response.headers["content-disposition"] == content_disposition("report.pdf", "attachment")
 
 
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
@@ -350,7 +353,7 @@ async def test_download_bytes_branch_sets_disposition(monkeypatch, download, aut
     response = await _download(download, auth, inline=True)
     assert response.body == b"report-bytes"
     assert response.media_type == "application/pdf"
-    assert response.headers["content-disposition"] == 'inline; filename="report.pdf"'
+    assert response.headers["content-disposition"] == content_disposition("report.pdf", "inline")
 
 
 async def test_bearer_wins_without_consuming_ticket(monkeypatch, download):

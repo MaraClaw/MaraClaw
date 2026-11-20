@@ -19,7 +19,7 @@ from fastapi import (
     UploadFile as UploadFileType,
     status,
 )
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -87,6 +87,8 @@ from app.services.storage_runtime.base import (
     WriteCondition,
 )
 from app.services.storage_runtime.dir_page import DirPageRequest, collect_visible_page
+from app.services.storage_runtime.disposition import content_disposition
+from app.services.storage_runtime.file_stream import open_contained_stream, stream_chunks
 from app.services.workspace_collaboration import (
     acquire_edit_lock,
     content_hash,
@@ -869,26 +871,24 @@ async def _downloadable_storage_key(agent_id: uuid.UUID, path: str, tenant_id: u
 
 async def _download_response(key: str, path: str, inline: bool) -> Response:
     storage = get_storage_backend()
-    presigned = await storage.presign_download_url(key, filename=Path(path).name, inline=inline)
+    filename = Path(path).name
+    presigned = await storage.presign_download_url(key, filename=filename, inline=inline)
     if presigned not in (None, ""):
         return Response(
             status_code=302,
             headers={"Location": presigned},
         )
+    media_type = guess_content_type(filename)
+    headers = {"Content-Disposition": content_disposition(filename, "inline" if inline else "attachment")}
     local_path = await storage.local_path_for(key)
     if local_path is not None:
-        return FileResponse(
-            path=str(local_path),
-            filename=Path(path).name,
-            content_disposition_type="inline" if inline else "attachment",
+        # Stream the descriptor an O_NOFOLLOW walk opened: a link the guest swaps in after the checks is refused.
+        stream, size = await asyncio.to_thread(open_contained_stream, local_path)
+        return StreamingResponse(
+            stream_chunks(stream, size), media_type=media_type, headers={**headers, "Content-Length": str(size)}
         )
     data = await storage.read_bytes(key)
-    disposition = "inline" if inline else "attachment"
-    return Response(
-        content=data,
-        media_type=guess_content_type(Path(path).name),
-        headers={"Content-Disposition": f'{disposition}; filename="{Path(path).name}"'},
-    )
+    return Response(content=data, media_type=media_type, headers=headers)
 
 
 @router.post("/download-ticket", response_model=file_download_tickets.DownloadTicketResponse)
