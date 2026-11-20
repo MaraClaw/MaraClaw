@@ -34,6 +34,7 @@ class Gate:
 @dataclass
 class S3State:
     objects: dict[str, bytes] = field(default_factory=dict)
+    content_types: dict[str, str] = field(default_factory=dict)
     calls: list[tuple[str, str]] = field(default_factory=list)
     put_faults: dict[str, PutFault] = field(default_factory=dict)
     gates: dict[str, Gate] = field(default_factory=dict)
@@ -166,6 +167,7 @@ class _Handler(BaseHTTPRequestHandler):
             _ = gate.release.wait(30)
         with state.lock:
             state.objects[key] = data
+            state.content_types[key] = self.headers.get("Content-Type", "")
         if gate is not None and gate.apply_before_hold:
             gate.arrived.set()
             _ = gate.release.wait(30)
