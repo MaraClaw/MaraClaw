@@ -42,7 +42,8 @@ def route_matches(connection: PersonalConnection, route: PersonalRoute) -> bool:
         and connection.account_id == route.account_id
         and route.self_jid in {connection.pn_jid, connection.lid_jid}
         and connection.desired
-        and connection.state == "connected"
+        # A transient retry keeps the route: pending replies wait for the reconnect instead of failing.
+        and connection.state in {"connected", "reconnecting"}
     )
 
 

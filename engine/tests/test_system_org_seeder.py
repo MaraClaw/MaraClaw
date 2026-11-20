@@ -47,6 +47,7 @@ class _TenantStore:
         self.rows = {row.slug: row for row in rows}
         self.created = []
         self.lock = AsyncMock()
+        self.seed_lock = AsyncMock()
 
     def install(self, monkeypatch):
         monkeypatch.setattr(seeder.tenant_dao, "get_by_slug", self.get_by_slug)
@@ -55,6 +56,7 @@ class _TenantStore:
         monkeypatch.setattr(seeder.tenant_dao, "tiers_for", self.tiers_for)
         monkeypatch.setattr(seeder.tenant_dao, "get_default_end_user_org", self.get_default_end_user_org)
         monkeypatch.setattr(seeder, "lock_tenants", self.lock)
+        monkeypatch.setattr(seeder, "_lock_seed", self.seed_lock)
         return self
 
     async def get_by_slug(self, slug):
@@ -297,6 +299,7 @@ async def test_ensure_system_orgs_commits_orgs_and_admin_in_one_transaction(monk
     assert attach.await_args.kwargs["tenant_id"] == kabers.id
     assert update.await_args_list == [call(db_obj=kabers, obj_in={"is_default_end_user_org": True, "is_system": True})]
     assert (pool.raw.commits, pool.raw.rollbacks, pool.checkouts) == (1, 0, 1)
+    store.seed_lock.assert_awaited_once()
 
 
 @pytest.mark.asyncio

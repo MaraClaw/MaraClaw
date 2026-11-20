@@ -3,6 +3,46 @@
 -- Do not rely on Alembic; this file is the schema source of truth for greenfield installs.
 BEGIN;
 
+-- Every start reruns this file against a live database. CREATE INDEX IF NOT EXISTS takes SHARE on its table and
+-- CREATE OR REPLACE TRIGGER takes SHARE ROW EXCLUSIVE before either finds there is nothing to do, and both locks
+-- block writers until the run commits. Indexes and triggers therefore go through these two helpers, which run the
+-- DDL only when it would change something, so a rerun on a current schema takes no lock a writer waits on. They are
+-- session-temporary (pg_temp): nothing is added to the schema, and a rolled-back run takes them with it.
+CREATE OR REPLACE FUNCTION pg_temp.baseline_ensure_index(ddl TEXT) RETURNS VOID LANGUAGE plpgsql AS $fn$
+DECLARE
+    index_name TEXT := substring(ddl FROM '^CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ([a-z_][a-z0-9_]*)\s');
+BEGIN
+    IF index_name IS NULL THEN
+        RAISE EXCEPTION 'Baseline index DDL has no index name: %', ddl;
+    END IF;
+    -- IF NOT EXISTS skips any relation of that name in the table's schema; so does this check, without the lock.
+    IF to_regclass(format('%I.%I', current_schema(), index_name)) IS NULL THEN
+        EXECUTE ddl;
+    END IF;
+END;
+$fn$;
+
+-- definition is the trigger as pg_get_triggerdef prints it after the name, with %s for the qualified table, so a
+-- trigger that is present, enabled and identical is left alone; anything else is (re)created.
+CREATE OR REPLACE FUNCTION pg_temp.baseline_ensure_trigger(target REGCLASS, trigger_name TEXT, definition TEXT)
+RETURNS VOID LANGUAGE plpgsql AS $fn$
+DECLARE
+    wanted TEXT;
+BEGIN
+    SELECT format('%I ', trigger_name) || format(definition, format('%I.%I', n.nspname, c.relname))
+    INTO wanted
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.oid = target;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgrelid = target AND tgname = trigger_name AND tgenabled = 'O'
+          AND pg_get_triggerdef(oid) = 'CREATE TRIGGER ' || wanted
+    ) THEN
+        EXECUTE 'CREATE OR REPLACE TRIGGER ' || wanted;
+    END IF;
+END;
+$fn$;
+
 
 DO $$ BEGIN CREATE TYPE im_provider_enum AS ENUM ('feishu', 'dingtalk', 'wecom', 'microsoft_teams', 'google_chat', 'web_only'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE user_role_enum AS ENUM ('platform_admin', 'org_admin', 'agent_admin', 'member'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -34,9 +74,9 @@ CREATE TABLE IF NOT EXISTS identities (
 	PRIMARY KEY (id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ix_identities_email ON identities (email);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ix_identities_email ON identities (email)$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ix_identities_phone ON identities (phone);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ix_identities_phone ON identities (phone)$ddl$);
 
 CREATE TABLE IF NOT EXISTS identity_providers (
 	id UUID NOT NULL, 
@@ -75,12 +115,12 @@ CREATE TABLE IF NOT EXISTS llm_models (
 	PRIMARY KEY (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_llm_models_tenant_id ON llm_models (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_llm_models_tenant_id ON llm_models (tenant_id)$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_grok_subscription
-	ON llm_models (tenant_id) WHERE auth_kind = 'grok_subscription';
-CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_chatgpt_subscription
-	ON llm_models (tenant_id) WHERE auth_kind = 'chatgpt_subscription';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_grok_subscription
+	ON llm_models (tenant_id) WHERE auth_kind = 'grok_subscription'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_models_tenant_chatgpt_subscription
+	ON llm_models (tenant_id) WHERE auth_kind = 'chatgpt_subscription'$ddl$);
 
 CREATE TABLE IF NOT EXISTS okr_alignments (
 	id UUID NOT NULL, 
@@ -104,7 +144,7 @@ CREATE TABLE IF NOT EXISTS participants (
 	CONSTRAINT uq_participants_type_ref UNIQUE (type, ref_id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_participants_ref_id ON participants (ref_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_participants_ref_id ON participants (ref_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS clawbook_posts (
 	id UUID NOT NULL, 
@@ -119,13 +159,13 @@ CREATE TABLE IF NOT EXISTS clawbook_posts (
 	PRIMARY KEY (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_clawbook_posts_created_at ON clawbook_posts (created_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_clawbook_posts_created_at ON clawbook_posts (created_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_clawbook_posts_tenant_feed ON clawbook_posts (tenant_id, created_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_clawbook_posts_tenant_feed ON clawbook_posts (tenant_id, created_at DESC, id DESC)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_clawbook_posts_feed ON clawbook_posts (created_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_clawbook_posts_feed ON clawbook_posts (created_at DESC, id DESC)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_clawbook_posts_author_id ON clawbook_posts (author_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_clawbook_posts_author_id ON clawbook_posts (author_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS sso_scan_sessions (
 	id UUID NOT NULL, 
@@ -183,14 +223,14 @@ CREATE TABLE IF NOT EXISTS tenants (
 	FOREIGN KEY(default_fallback_model_id) REFERENCES llm_models (id) ON DELETE SET NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants (slug)$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_sso_domain ON tenants (sso_domain);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_sso_domain ON tenants (sso_domain)$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
-	ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_tenants_default_end_user_org
+	ON tenants (is_default_end_user_org) WHERE is_default_end_user_org IS TRUE$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_tenants_name_tsv ON tenants USING GIN (name_tsv);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tenants_name_tsv ON tenants USING GIN (name_tsv)$ddl$);
 
 CREATE TABLE IF NOT EXISTS tenant_email_domains (
 	id UUID NOT NULL,
@@ -202,17 +242,19 @@ CREATE TABLE IF NOT EXISTS tenant_email_domains (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_email_domains_domain ON tenant_email_domains (domain);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_email_domains_domain ON tenant_email_domains (domain)$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_email_domains_default
-	ON tenant_email_domains (tenant_id) WHERE is_default IS TRUE;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_email_domains_default
+	ON tenant_email_domains (tenant_id) WHERE is_default IS TRUE$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_tenant_email_domains_tenant_id ON tenant_email_domains (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tenant_email_domains_tenant_id ON tenant_email_domains (tenant_id)$ddl$);
 
+-- Look the constraint up first: ADD CONSTRAINT locks both tables before it finds the duplicate.
 DO $$ BEGIN
-	ALTER TABLE llm_models ADD CONSTRAINT llm_models_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES tenants (id);
-EXCEPTION
-	WHEN duplicate_object THEN NULL;
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint
+	               WHERE conrelid = 'llm_models'::regclass AND conname = 'llm_models_tenant_id_fkey') THEN
+		ALTER TABLE llm_models ADD CONSTRAINT llm_models_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES tenants (id);
+	END IF;
 END $$;
 
 CREATE TABLE IF NOT EXISTS tools (
@@ -239,7 +281,7 @@ CREATE TABLE IF NOT EXISTS tools (
 	UNIQUE (name)
 );
 
-CREATE INDEX IF NOT EXISTS ix_tools_tenant_source ON tools (tenant_id, source, enabled);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tools_tenant_source ON tools (tenant_id, source, enabled)$ddl$);
 
 CREATE TABLE IF NOT EXISTS company_reports (
 	id UUID NOT NULL, 
@@ -259,9 +301,9 @@ CREATE TABLE IF NOT EXISTS company_reports (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_company_reports_tenant_id ON company_reports (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_company_reports_tenant_id ON company_reports (tenant_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_company_reports_period_start ON company_reports (period_start);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_company_reports_period_start ON company_reports (period_start)$ddl$);
 
 CREATE TABLE IF NOT EXISTS member_daily_reports (
 	id UUID NOT NULL, 
@@ -279,11 +321,11 @@ CREATE TABLE IF NOT EXISTS member_daily_reports (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_member_daily_reports_report_date ON member_daily_reports (report_date);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_member_daily_reports_report_date ON member_daily_reports (report_date)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_member_daily_reports_member_id ON member_daily_reports (member_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_member_daily_reports_member_id ON member_daily_reports (member_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_member_daily_reports_tenant_id ON member_daily_reports (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_member_daily_reports_tenant_id ON member_daily_reports (tenant_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS okr_objectives (
 	id UUID NOT NULL, 
@@ -301,7 +343,7 @@ CREATE TABLE IF NOT EXISTS okr_objectives (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_okr_objectives_tenant_id ON okr_objectives (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_okr_objectives_tenant_id ON okr_objectives (tenant_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS okr_settings (
 	tenant_id UUID NOT NULL, 
@@ -331,9 +373,9 @@ CREATE TABLE IF NOT EXISTS clawbook_comments (
 	FOREIGN KEY(post_id) REFERENCES clawbook_posts (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_clawbook_comments_post_id ON clawbook_comments (post_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_clawbook_comments_post_id ON clawbook_comments (post_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_clawbook_comments_page ON clawbook_comments (post_id, created_at, id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_clawbook_comments_page ON clawbook_comments (post_id, created_at, id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS clawbook_likes (
 	id UUID NOT NULL, 
@@ -345,7 +387,7 @@ CREATE TABLE IF NOT EXISTS clawbook_likes (
 	FOREIGN KEY(post_id) REFERENCES clawbook_posts (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_clawbook_likes_post_id ON clawbook_likes (post_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_clawbook_likes_post_id ON clawbook_likes (post_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS skills (
 	id UUID NOT NULL, 
@@ -366,7 +408,7 @@ CREATE TABLE IF NOT EXISTS skills (
 	UNIQUE (folder_name)
 );
 
-CREATE INDEX IF NOT EXISTS ix_skills_tenant_id ON skills (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_skills_tenant_id ON skills (tenant_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS tenant_settings (
 	tenant_id UUID NOT NULL, 
@@ -417,18 +459,18 @@ DO $$ BEGIN
 	END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS ix_users_identity_id ON users (identity_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_users_identity_id ON users (identity_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_users_tenant_id ON users (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_users_tenant_id ON users (tenant_id)$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
-	ON users (role) WHERE is_genesis IS TRUE AND role = 'platform_admin';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_platform_admin
+	ON users (role) WHERE is_genesis IS TRUE AND role = 'platform_admin'$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
-	ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_users_genesis_org_admin
+	ON users (tenant_id) WHERE is_genesis IS TRUE AND role = 'org_admin'$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
-	ON users (identity_id) WHERE tenant_id IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_users_identity_single_tenant
+	ON users (identity_id) WHERE tenant_id IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS tenant_suspended_memberships (
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -451,7 +493,7 @@ CREATE TABLE IF NOT EXISTS work_reports (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_work_reports_tenant_id ON work_reports (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_work_reports_tenant_id ON work_reports (tenant_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_templates (
 	id UUID NOT NULL, 
@@ -505,9 +547,9 @@ CREATE TABLE IF NOT EXISTS invitation_codes (
 	CHECK (invited_email = lower(btrim(invited_email)) AND invited_email <> '' AND max_uses = 1)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ix_invitation_codes_code ON invitation_codes (code);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ix_invitation_codes_code ON invitation_codes (code)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_invitation_codes_tenant_id ON invitation_codes (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_invitation_codes_tenant_id ON invitation_codes (tenant_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS company_admission_requests (
     id UUID PRIMARY KEY,
@@ -525,10 +567,10 @@ CREATE TABLE IF NOT EXISTS company_admission_requests (
         OR (status IN ('approved','rejected') AND decided_at IS NOT NULL)
         OR (status='withdrawn' AND decided_at IS NOT NULL AND decided_by_user_id IS NULL))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_company_admission_pending_applicant
-    ON company_admission_requests(applicant_user_id) WHERE status='pending';
-CREATE INDEX IF NOT EXISTS ix_company_admission_review
-    ON company_admission_requests(target_tenant_id,status,created_at DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_company_admission_pending_applicant
+    ON company_admission_requests(applicant_user_id) WHERE status='pending'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_company_admission_review
+    ON company_admission_requests(target_tenant_id,status,created_at DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS organization_admission_requests (
     id UUID PRIMARY KEY,
@@ -590,10 +632,10 @@ DO $$ BEGIN
 	END IF;
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_organization_admission_pending_email
-    ON organization_admission_requests(email) WHERE status='pending';
-CREATE INDEX IF NOT EXISTS ix_organization_admission_status
-    ON organization_admission_requests(status,created_at DESC,id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_organization_admission_pending_email
+    ON organization_admission_requests(email) WHERE status='pending'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_organization_admission_status
+    ON organization_admission_requests(status,created_at DESC,id DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
     request_id UUID PRIMARY KEY REFERENCES organization_admission_requests(id) ON DELETE CASCADE,
@@ -616,8 +658,8 @@ CREATE TABLE IF NOT EXISTS organization_admission_credential_emails (
     CHECK (status <> 'pending' OR payload IS NOT NULL),
     CHECK (status <> 'sent' OR payload IS NULL)
 );
-CREATE INDEX IF NOT EXISTS ix_organization_admission_emails_due
-    ON organization_admission_credential_emails (available_at, request_id) WHERE status = 'pending';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_organization_admission_emails_due
+    ON organization_admission_credential_emails (available_at, request_id) WHERE status = 'pending'$ddl$);
 
 -- Paid extra accounts and agents: one row per purchase or monthly renewal of a tiered company (the ledger behind
 -- capacity_ledger.effective_extras). Prices, the VND rate and the bank recipient are snapshotted at creation.
@@ -678,20 +720,20 @@ CREATE TABLE IF NOT EXISTS capacity_orders (
     CONSTRAINT ck_capacity_orders_rejection_note CHECK (status <> 'rejected' OR review_note IS NOT NULL),
     CONSTRAINT ck_capacity_orders_cancelled_purchase CHECK (status <> 'cancelled' OR kind = 'purchase')
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_reference ON capacity_orders(reference);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_source
-    ON capacity_orders(source_order_id) WHERE source_order_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_primary_renewal
-    ON capacity_orders(tenant_id, billing_month) WHERE kind = 'renewal' AND source_order_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_open_purchase
-    ON capacity_orders(tenant_id) WHERE kind = 'purchase' AND status = 'awaiting_payment';
-CREATE INDEX IF NOT EXISTS ix_capacity_orders_tenant_month ON capacity_orders(tenant_id, billing_month, status);
-CREATE INDEX IF NOT EXISTS ix_capacity_orders_tenant_created ON capacity_orders(tenant_id, created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS ix_capacity_orders_status_created ON capacity_orders(status, created_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_reference ON capacity_orders(reference)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_source
+    ON capacity_orders(source_order_id) WHERE source_order_id IS NOT NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_primary_renewal
+    ON capacity_orders(tenant_id, billing_month) WHERE kind = 'renewal' AND source_order_id IS NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_capacity_orders_open_purchase
+    ON capacity_orders(tenant_id) WHERE kind = 'purchase' AND status = 'awaiting_payment'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_capacity_orders_tenant_month ON capacity_orders(tenant_id, billing_month, status)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_capacity_orders_tenant_created ON capacity_orders(tenant_id, created_at DESC, id DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_capacity_orders_status_created ON capacity_orders(status, created_at DESC, id DESC)$ddl$);
 -- The renewal worker scans approved orders of the previous month and expires awaiting orders of earlier months.
-CREATE INDEX IF NOT EXISTS ix_capacity_orders_month_approved
-    ON capacity_orders(billing_month, tenant_id) WHERE status = 'approved';
-CREATE INDEX IF NOT EXISTS ix_capacity_orders_expiry ON capacity_orders(billing_month) WHERE status = 'awaiting_payment';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_capacity_orders_month_approved
+    ON capacity_orders(billing_month, tenant_id) WHERE status = 'approved'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_capacity_orders_expiry ON capacity_orders(billing_month) WHERE status = 'awaiting_payment'$ddl$);
 
 CREATE TABLE IF NOT EXISTS company_transfer_requests (
     id UUID PRIMARY KEY,
@@ -718,10 +760,10 @@ CREATE TABLE IF NOT EXISTS company_transfer_requests (
     CHECK (status <> 'admission_created' OR admission_request_id IS NOT NULL),
     CHECK (admission_request_id IS NULL OR choice='free' OR payment_confirmed_at IS NOT NULL)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_company_transfer_payment_applicant
-    ON company_transfer_requests(applicant_user_id) WHERE status='payment_review';
-CREATE INDEX IF NOT EXISTS ix_company_transfer_review
-    ON company_transfer_requests(status,created_at DESC,id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_company_transfer_payment_applicant
+    ON company_transfer_requests(applicant_user_id) WHERE status='payment_review'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_company_transfer_review
+    ON company_transfer_requests(status,created_at DESC,id DESC)$ddl$);
 
 CREATE OR REPLACE FUNCTION protect_company_transfer_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -735,8 +777,8 @@ RAISE EXCEPTION 'Transfer policy snapshot and consent are immutable' USING ERRCO
     RETURN NEW;
 END;
 $$;
-CREATE OR REPLACE TRIGGER company_transfer_snapshot_immutable BEFORE UPDATE ON company_transfer_requests
-    FOR EACH ROW EXECUTE FUNCTION protect_company_transfer_snapshot();
+SELECT pg_temp.baseline_ensure_trigger('company_transfer_requests', 'company_transfer_snapshot_immutable',
+    $ddl$BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION protect_company_transfer_snapshot()$ddl$);
 
 CREATE TABLE IF NOT EXISTS okr_key_results (
 	id UUID NOT NULL, 
@@ -753,7 +795,7 @@ CREATE TABLE IF NOT EXISTS okr_key_results (
 	FOREIGN KEY(objective_id) REFERENCES okr_objectives (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_okr_key_results_objective_id ON okr_key_results (objective_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_okr_key_results_objective_id ON okr_key_results (objective_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS org_members (
 	id UUID NOT NULL, 
@@ -775,17 +817,17 @@ CREATE TABLE IF NOT EXISTS org_members (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_org_members_external_id ON org_members (external_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_org_members_external_id ON org_members (external_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_org_members_open_id ON org_members (open_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_org_members_open_id ON org_members (open_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_org_members_name_translit_full ON org_members (name_translit_full);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_org_members_name_translit_full ON org_members (name_translit_full)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_org_members_tenant_id ON org_members (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_org_members_tenant_id ON org_members (tenant_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_org_members_unionid ON org_members (unionid);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_org_members_unionid ON org_members (unionid)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_org_members_name_translit_initial ON org_members (name_translit_initial);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_org_members_name_translit_initial ON org_members (name_translit_initial)$ddl$);
 
 CREATE TABLE IF NOT EXISTS skill_files (
 	id UUID NOT NULL, 
@@ -860,13 +902,13 @@ CREATE TABLE IF NOT EXISTS agents (
 	FOREIGN KEY(template_id) REFERENCES agent_templates (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_agents_tenant_id ON agents (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agents_tenant_id ON agents (tenant_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agents_creator_id ON agents (creator_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agents_creator_id ON agents (creator_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE api_key_hash IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agents_api_key_hash ON agents (api_key_hash) WHERE api_key_hash IS NOT NULL$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agents_heartbeat ON agents (heartbeat_enabled, status) WHERE heartbeat_enabled IS TRUE$ddl$);
 
 -- Human messages accepted per agent on one local calendar day (agents of organizations only); a row holding an
 -- earlier usage_date counts as zero, so there is no reset job.
@@ -941,21 +983,21 @@ CREATE TABLE IF NOT EXISTS agent_resource_pressure_episodes (
     CHECK (kind <> 'oom_kill' OR (resource = 'memory' AND ended_at IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_resource_pressure_open
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_resource_pressure_open
 ON agent_resource_pressure_episodes (tenant_id, (COALESCE(agent_id, '00000000-0000-0000-0000-000000000000'::uuid)), resource)
-WHERE ended_at IS NULL AND kind = 'threshold';
+WHERE ended_at IS NULL AND kind = 'threshold'$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_resource_pressure_oom_event
-ON agent_resource_pressure_episodes (agent_id, event_key) WHERE kind = 'oom_kill';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_resource_pressure_oom_event
+ON agent_resource_pressure_episodes (agent_id, event_key) WHERE kind = 'oom_kill'$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_open_agent
-ON agent_resource_pressure_episodes (agent_id) WHERE ended_at IS NULL AND kind = 'threshold';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_open_agent
+ON agent_resource_pressure_episodes (agent_id) WHERE ended_at IS NULL AND kind = 'threshold'$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_started
-ON agent_resource_pressure_episodes (started_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_started
+ON agent_resource_pressure_episodes (started_at DESC, id DESC)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_tenant_started
-ON agent_resource_pressure_episodes (tenant_id, started_at DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_resource_pressure_tenant_started
+ON agent_resource_pressure_episodes (tenant_id, started_at DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS tavily_proxy_tokens (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -982,8 +1024,8 @@ CREATE TABLE IF NOT EXISTS company_transfer_runtime_cleanup (
     completed_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS ix_company_transfer_cleanup_pending
-ON company_transfer_runtime_cleanup(created_at,agent_id) WHERE state='pending';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_company_transfer_cleanup_pending
+ON company_transfer_runtime_cleanup(created_at,agent_id) WHERE state='pending'$ddl$);
 
 -- No foreign keys: cleanup must survive agent, user and tenant deletion.
 CREATE TABLE IF NOT EXISTS agent_deletion_cleanup (
@@ -1003,8 +1045,8 @@ CREATE TABLE IF NOT EXISTS agent_deletion_cleanup (
     CHECK ((phase = 'completed') = (completed_at IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_deletion_cleanup_pending
-ON agent_deletion_cleanup(attempts,created_at,agent_id) WHERE phase <> 'completed';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_deletion_cleanup_pending
+ON agent_deletion_cleanup(attempts,created_at,agent_id) WHERE phase <> 'completed'$ddl$);
 
 -- Managed S3 byte accounting (storage_runtime/AGENTS.md). No foreign keys: object accounting must survive agent,
 -- user and tenant deletion until the objects themselves are removed. The usage row is the per-agent serialization
@@ -1033,8 +1075,8 @@ CREATE TABLE IF NOT EXISTS agent_storage_objects (
     CHECK (operation_id IS NOT NULL OR (reserved_bytes = 0 AND NOT outcome_unknown AND expected_etag IS NULL)),
     CHECK (operation_kind IS DISTINCT FROM 'delete' OR reserved_bytes = 0)
 );
-CREATE INDEX IF NOT EXISTS ix_agent_storage_objects_pending
-    ON agent_storage_objects(updated_at) WHERE operation_id IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_storage_objects_pending
+    ON agent_storage_objects(updated_at) WHERE operation_id IS NOT NULL$ddl$);
 
 -- No foreign keys: cancelled start cleanup must survive agent, user and tenant deletion.
 CREATE TABLE IF NOT EXISTS agent_start_operations (
@@ -1049,8 +1091,8 @@ CREATE TABLE IF NOT EXISTS agent_start_operations (
     cleanup_complete boolean NOT NULL DEFAULT false,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS agent_start_operations_pending_idx
-    ON agent_start_operations(updated_at) WHERE state = 'pending';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS agent_start_operations_pending_idx
+    ON agent_start_operations(updated_at) WHERE state = 'pending'$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_start_retry_metadata (
     operation_id uuid PRIMARY KEY,
@@ -1063,8 +1105,8 @@ CREATE TABLE IF NOT EXISTS agent_start_retry_metadata (
     )),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS agent_start_retry_due_idx
-    ON agent_start_retry_metadata(next_retry_at) WHERE next_retry_at IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS agent_start_retry_due_idx
+    ON agent_start_retry_metadata(next_retry_at) WHERE next_retry_at IS NOT NULL$ddl$);
 CREATE OR REPLACE FUNCTION sync_agent_start_retry_metadata() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
@@ -1078,9 +1120,8 @@ BEGIN
     RETURN NULL;
 END;
 $$;
-CREATE OR REPLACE TRIGGER agent_start_retry_state_changed
-    AFTER UPDATE OR DELETE ON agent_start_operations
-    FOR EACH ROW EXECUTE FUNCTION sync_agent_start_retry_metadata();
+SELECT pg_temp.baseline_ensure_trigger('agent_start_operations', 'agent_start_retry_state_changed',
+    $ddl$AFTER DELETE OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION sync_agent_start_retry_metadata()$ddl$);
 
 -- One recorded guest loss per agent, cleared when a start publishes a new guest. No foreign key:
 -- agent and tenant deletion remove it explicitly, like agent_start_operations.
@@ -1105,8 +1146,8 @@ CREATE TABLE IF NOT EXISTS agent_setups (
     CHECK ((state = 'failed') = (failure_code IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_setups_claim ON agent_setups (created_at, agent_id)
-WHERE state IN ('pending', 'running');
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_setups_claim ON agent_setups (created_at, agent_id)
+WHERE state IN ('pending', 'running')$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_setup_mcp_work (
     agent_id uuid NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -1127,8 +1168,8 @@ CREATE TABLE IF NOT EXISTS agent_setup_mcp_work (
     CHECK ((state = 'running') = (claim_token IS NOT NULL AND lease_until IS NOT NULL)),
     CHECK ((state = 'warning') = (warning_code IS NOT NULL))
 );
-CREATE INDEX IF NOT EXISTS agent_setup_mcp_work_queue_idx
-    ON agent_setup_mcp_work(updated_at,agent_id,server_id) WHERE state IN ('pending','running');
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS agent_setup_mcp_work_queue_idx
+    ON agent_setup_mcp_work(updated_at,agent_id,server_id) WHERE state IN ('pending','running')$ddl$);
 
 CREATE TABLE IF NOT EXISTS okr_progress_logs (
 	id UUID NOT NULL, 
@@ -1142,7 +1183,7 @@ CREATE TABLE IF NOT EXISTS okr_progress_logs (
 	FOREIGN KEY(kr_id) REFERENCES okr_key_results (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_okr_progress_logs_kr_id ON okr_progress_logs (kr_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_okr_progress_logs_kr_id ON okr_progress_logs (kr_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_activity_logs (
 	id UUID NOT NULL, 
@@ -1156,9 +1197,9 @@ CREATE TABLE IF NOT EXISTS agent_activity_logs (
 	FOREIGN KEY(agent_id) REFERENCES agents (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_agent_id ON agent_activity_logs (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_agent_id ON agent_activity_logs (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_created_at ON agent_activity_logs (created_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_created_at ON agent_activity_logs (created_at)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_agent_relationships (
 	id UUID NOT NULL, 
@@ -1195,7 +1236,7 @@ CREATE TABLE IF NOT EXISTS agent_credentials (
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_credentials_agent_id ON agent_credentials (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_credentials_agent_id ON agent_credentials (agent_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_focus_items (
 	id UUID NOT NULL, 
@@ -1216,17 +1257,17 @@ CREATE TABLE IF NOT EXISTS agent_focus_items (
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_focus_items_agent_id ON agent_focus_items (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_focus_items_agent_id ON agent_focus_items (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_focus_items_created_at ON agent_focus_items (created_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_focus_items_created_at ON agent_focus_items (created_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_focus_items_kind ON agent_focus_items (kind);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_focus_items_kind ON agent_focus_items (kind)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_focus_items_source ON agent_focus_items (source);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_focus_items_source ON agent_focus_items (source)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_focus_items_status ON agent_focus_items (status);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_focus_items_status ON agent_focus_items (status)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_focus_items_key ON agent_focus_items (key);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_focus_items_key ON agent_focus_items (key)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_permissions (
 	id UUID NOT NULL, 
@@ -1240,9 +1281,9 @@ CREATE TABLE IF NOT EXISTS agent_permissions (
 	FOREIGN KEY(agent_id) REFERENCES agents (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_permissions_agent_id ON agent_permissions (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_permissions_agent_id ON agent_permissions (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_permissions_user_scope ON agent_permissions (scope_type, scope_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_permissions_user_scope ON agent_permissions (scope_type, scope_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_relationships (
 	id UUID NOT NULL, 
@@ -1294,12 +1335,12 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
 	)
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_schedules_agent_id ON agent_schedules (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_schedules_agent_id ON agent_schedules (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_schedules_next_run_at ON agent_schedules (next_run_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_schedules_next_run_at ON agent_schedules (next_run_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_schedules_lease_expires_at ON agent_schedules (lease_expires_at)
-WHERE is_enabled IS TRUE AND pending_due_at IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_schedules_lease_expires_at ON agent_schedules (lease_expires_at)
+WHERE is_enabled IS TRUE AND pending_due_at IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_tools (
 	id UUID NOT NULL, 
@@ -1315,9 +1356,9 @@ CREATE TABLE IF NOT EXISTS agent_tools (
 	FOREIGN KEY(tool_id) REFERENCES tools (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_tools_agent_id ON agent_tools (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_tools_agent_id ON agent_tools (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_agent_tools_agent_tool ON agent_tools (agent_id, tool_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_tools_agent_tool ON agent_tools (agent_id, tool_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_triggers (
 	id UUID NOT NULL, 
@@ -1341,12 +1382,12 @@ CREATE TABLE IF NOT EXISTS agent_triggers (
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_agent_triggers_agent_id ON agent_triggers (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_triggers_agent_id ON agent_triggers (agent_id)$ddl$);
 
 -- Serves agent_trigger_dao.find_webhook_by_token on the public webhook endpoint; the predicate must stay identical to
 -- that query's WHERE so the planner can use it. Deliberately not UNIQUE: tokens are not unique by constraint, and a
 -- unique build would abort this single-transaction baseline on a database that already holds duplicates.
-CREATE INDEX IF NOT EXISTS ix_agent_triggers_webhook_token ON agent_triggers ((config->>'token')) WHERE type = 'webhook' AND is_enabled IS TRUE;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_triggers_webhook_token ON agent_triggers ((config->>'token')) WHERE type = 'webhook' AND is_enabled IS TRUE$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_user_onboardings (
 	agent_id UUID NOT NULL, 
@@ -1399,7 +1440,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 	FOREIGN KEY(agent_id) REFERENCES agents (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at)$ddl$);
 
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
 	id UUID NOT NULL,
@@ -1419,12 +1460,12 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_created_at ON admin_audit_logs (created_at DESC);
-CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id);
-CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id);
-CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id);
-CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_page ON admin_audit_logs (created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_page ON admin_audit_logs (tenant_id, created_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_created_at ON admin_audit_logs (created_at DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_actor_id ON admin_audit_logs (actor_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_id ON admin_audit_logs (tenant_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_target ON admin_audit_logs (target_type, target_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_page ON admin_audit_logs (created_at DESC, id DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_tenant_page ON admin_audit_logs (tenant_id, created_at DESC, id DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS channel_configs (
 	id UUID NOT NULL, 
@@ -1445,7 +1486,7 @@ CREATE TABLE IF NOT EXISTS channel_configs (
 	FOREIGN KEY(agent_id) REFERENCES agents (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_channel_configs_agent_id ON channel_configs (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_channel_configs_agent_id ON channel_configs (agent_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS whatsapp_personal_connections (
     config_id UUID PRIMARY KEY,
@@ -1475,13 +1516,13 @@ CREATE TABLE IF NOT EXISTS whatsapp_personal_connections (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK ((claim_token IS NULL) = (lease_until IS NULL))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_account
-    ON whatsapp_personal_connections(account_id) WHERE account_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_pn
-    ON whatsapp_personal_connections(pn_jid) WHERE pn_jid IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_lid
-    ON whatsapp_personal_connections(lid_jid) WHERE lid_jid IS NOT NULL;
-CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_agent ON whatsapp_personal_connections(agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_account
+    ON whatsapp_personal_connections(account_id) WHERE account_id IS NOT NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_pn
+    ON whatsapp_personal_connections(pn_jid) WHERE pn_jid IS NOT NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_lid
+    ON whatsapp_personal_connections(lid_jid) WHERE lid_jid IS NOT NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_agent ON whatsapp_personal_connections(agent_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS whatsapp_personal_auth (
     config_id UUID NOT NULL REFERENCES whatsapp_personal_connections(config_id) ON DELETE CASCADE,
@@ -1509,8 +1550,8 @@ CREATE TABLE IF NOT EXISTS whatsapp_personal_sends (
     finished_at TIMESTAMPTZ,
     UNIQUE(account_id,message_id)
 );
-CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_pending ON whatsapp_personal_sends(config_id, created_at)
-    WHERE state='pending';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_pending ON whatsapp_personal_sends(config_id, created_at)
+    WHERE state='pending'$ddl$);
 
 -- Personal Zalo reservations intentionally survive agent/config deletion until physical child reap.
 CREATE TABLE IF NOT EXISTS zalo_personal_connections (
@@ -1540,8 +1581,8 @@ CREATE TABLE IF NOT EXISTS zalo_personal_connections (
     CHECK ((claim_token IS NULL) = (lease_until IS NULL)),
     CHECK ((qr_value IS NULL) = (qr_expires_at IS NULL))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_zalo_personal_account ON zalo_personal_connections(account_id)
-    WHERE account_id IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_zalo_personal_account ON zalo_personal_connections(account_id)
+    WHERE account_id IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS zalo_personal_auth (
     config_id UUID NOT NULL REFERENCES zalo_personal_connections(config_id) ON DELETE CASCADE,
@@ -1568,10 +1609,10 @@ CREATE TABLE IF NOT EXISTS zalo_personal_sends (
     dispatched_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS ix_zalo_personal_pending ON zalo_personal_sends(config_id,created_at,command_id)
-    WHERE state='pending';
-CREATE UNIQUE INDEX IF NOT EXISTS uq_zalo_personal_sent_message ON zalo_personal_sends(account_id,message_id)
-    WHERE message_id IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_zalo_personal_pending ON zalo_personal_sends(config_id,created_at,command_id)
+    WHERE state='pending'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_zalo_personal_sent_message ON zalo_personal_sends(account_id,message_id)
+    WHERE message_id IS NOT NULL$ddl$);
 
 -- Explicit member sender linking (Telegram and Zalo). Fresh schema only.
 CREATE TABLE IF NOT EXISTS channel_sender_bindings (
@@ -1597,8 +1638,8 @@ CREATE TABLE IF NOT EXISTS channel_link_codes (
     consumed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_link_codes_open_member
-    ON channel_link_codes(config_id, provider_account_id, user_id) WHERE consumed_at IS NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_link_codes_open_member
+    ON channel_link_codes(config_id, provider_account_id, user_id) WHERE consumed_at IS NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS channel_event_receipts (
     config_id UUID NOT NULL REFERENCES channel_configs (id) ON DELETE CASCADE,
@@ -1614,10 +1655,10 @@ CREATE TABLE IF NOT EXISTS channel_event_receipts (
     PRIMARY KEY (config_id, provider, event_key)
 );
 
-CREATE INDEX IF NOT EXISTS ix_channel_event_receipts_reply_window
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_channel_event_receipts_reply_window
     ON channel_event_receipts (config_id, provider, provider_account_id, agent_id, tenant_id,
                                conversation_id, provider_timestamp DESC)
-    WHERE provider_timestamp IS NOT NULL AND provider_timestamp <= created_at;
+    WHERE provider_timestamp IS NOT NULL AND provider_timestamp <= created_at$ddl$);
 
 CREATE OR REPLACE FUNCTION protect_channel_event_receipt() RETURNS trigger AS $$
 BEGIN
@@ -1628,8 +1669,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER channel_event_receipt_immutable
-BEFORE UPDATE ON channel_event_receipts FOR EACH ROW EXECUTE FUNCTION protect_channel_event_receipt();
+SELECT pg_temp.baseline_ensure_trigger('channel_event_receipts', 'channel_event_receipt_immutable',
+    $ddl$BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION protect_channel_event_receipt()$ddl$);
 
 CREATE TABLE IF NOT EXISTS chat_messages (
 	id UUID NOT NULL, 
@@ -1658,24 +1699,24 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 	FOREIGN KEY(participant_id) REFERENCES participants (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_chat_messages_conversation_id ON chat_messages (conversation_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_conversation_id ON chat_messages (conversation_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_messages_created_at ON chat_messages (created_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_created_at ON chat_messages (created_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_id ON chat_messages (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_id ON chat_messages (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created_id ON chat_messages (conversation_id, created_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created_id ON chat_messages (conversation_id, created_at DESC, id DESC)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_messages_participant_id ON chat_messages (participant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_participant_id ON chat_messages (participant_id)$ddl$);
 
 -- Serves agent-scoped conversation reads (list_recent, list_for_agent_conversation) in created_at order.
 -- Add no dependency statistics on (agent_id, conversation_id): the planner costs a BitmapAnd of the single-column
 -- indexes as if they were independent, so an accurate estimate makes it sort the whole conversation instead.
-CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_conv_created ON chat_messages (agent_id, conversation_id, created_at DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_agent_conv_created ON chat_messages (agent_id, conversation_id, created_at DESC)$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_messages_submission
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_messages_submission
 ON chat_messages (user_id, agent_id, conversation_id, client_submission_id)
-WHERE client_submission_id IS NOT NULL;
+WHERE client_submission_id IS NOT NULL$ddl$);
 
 CREATE OR REPLACE FUNCTION protect_chat_submission_receipt() RETURNS trigger AS $$
 BEGIN
@@ -1690,8 +1731,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER chat_submission_receipt_immutable
-BEFORE UPDATE ON chat_messages FOR EACH ROW EXECUTE FUNCTION protect_chat_submission_receipt();
+SELECT pg_temp.baseline_ensure_trigger('chat_messages', 'chat_submission_receipt_immutable',
+    $ddl$BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION protect_chat_submission_receipt()$ddl$);
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
 	id UUID NOT NULL, 
@@ -1717,17 +1758,17 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 	FOREIGN KEY(peer_agent_id) REFERENCES agents (id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_sessions_primary_platform ON chat_sessions (agent_id, user_id) WHERE is_primary = true AND source_channel = 'web' AND is_group = false;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_sessions_primary_platform ON chat_sessions (agent_id, user_id) WHERE is_primary = true AND source_channel = 'web' AND is_group = false$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_sessions_agent_id ON chat_sessions (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_agent_id ON chat_sessions (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_sessions_user_id ON chat_sessions (user_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_user_id ON chat_sessions (user_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_sessions_is_primary ON chat_sessions (is_primary);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_is_primary ON chat_sessions (is_primary)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_sessions_created_at ON chat_sessions (created_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_created_at ON chat_sessions (created_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_chat_sessions_last_message ON chat_sessions (agent_id, last_message_at DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_last_message ON chat_sessions (agent_id, last_message_at DESC)$ddl$);
 
 -- Durable cache fingerprints cover all writers, including raw cascade SQL,
 -- row edits/deletes and conversation reassignment, in the writer's transaction.
@@ -1753,7 +1794,7 @@ DO $$ BEGIN
 END $$;
 
 -- Retention purge order. On a large journal, build it first with CREATE INDEX CONCURRENTLY IF NOT EXISTS.
-CREATE INDEX IF NOT EXISTS ix_chat_history_changes_recorded_at ON chat_history_changes (recorded_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_history_changes_recorded_at ON chat_history_changes (recorded_at)$ddl$);
 
 CREATE OR REPLACE FUNCTION refresh_chat_history_revision() RETURNS trigger AS $$
 DECLARE
@@ -1791,9 +1832,8 @@ BEGIN
           AND attname = 'history_revision'
           AND NOT attisdropped
     ) THEN
-        CREATE OR REPLACE TRIGGER chat_history_revision_changed
-        AFTER INSERT OR UPDATE OR DELETE ON chat_messages
-        FOR EACH ROW EXECUTE FUNCTION refresh_chat_history_revision();
+        PERFORM pg_temp.baseline_ensure_trigger('chat_messages', 'chat_history_revision_changed',
+            $ddl$AFTER INSERT OR DELETE OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION refresh_chat_history_revision()$ddl$);
     ELSE
         DROP TRIGGER IF EXISTS chat_history_revision_changed ON chat_messages;
     END IF;
@@ -1819,11 +1859,11 @@ CREATE TABLE IF NOT EXISTS daily_token_usage (
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_daily_token_usage_tenant_id ON daily_token_usage (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_daily_token_usage_tenant_id ON daily_token_usage (tenant_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_daily_token_usage_date ON daily_token_usage (date);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_daily_token_usage_date ON daily_token_usage (date)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_daily_token_usage_agent_id ON daily_token_usage (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_daily_token_usage_agent_id ON daily_token_usage (agent_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS openclaw_reply_bindings (
     id UUID PRIMARY KEY,
@@ -1835,7 +1875,7 @@ CREATE TABLE IF NOT EXISTS openclaw_reply_bindings (
     cursor JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE INDEX IF NOT EXISTS ix_openclaw_reply_bindings_agent_id_id ON openclaw_reply_bindings (agent_id, id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_openclaw_reply_bindings_agent_id_id ON openclaw_reply_bindings (agent_id, id)$ddl$);
 
 CREATE OR REPLACE FUNCTION revoke_openclaw_reply_bindings() RETURNS trigger AS $$
 BEGIN
@@ -1855,19 +1895,15 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS revoke_openclaw_replies_on_transfer ON agents;
-CREATE TRIGGER revoke_openclaw_replies_on_transfer AFTER UPDATE OF creator_id, tenant_id ON agents
-FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings();
+-- The two revocation triggers. A DROP TRIGGER here would need ACCESS EXCLUSIVE, which queues behind any open
+-- reader of agents or chat_messages and then stalls every later query on them.
+SELECT pg_temp.baseline_ensure_trigger('agents', 'revoke_openclaw_replies_on_transfer',
+    $ddl$AFTER UPDATE OF creator_id, tenant_id ON %s FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings()$ddl$);
+SELECT pg_temp.baseline_ensure_trigger('chat_messages', 'revoke_openclaw_replies_on_clear',
+    $ddl$AFTER DELETE ON %s FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings()$ddl$);
 
-DROP TRIGGER IF EXISTS revoke_openclaw_replies_on_clear ON chat_messages;
-CREATE TRIGGER revoke_openclaw_replies_on_clear AFTER DELETE ON chat_messages
-FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings();
-
-CREATE OR REPLACE TRIGGER revoke_openclaw_replies_on_session_change
-AFTER UPDATE OF agent_id, user_id, source_channel ON chat_sessions FOR EACH ROW
-WHEN (OLD.agent_id IS DISTINCT FROM NEW.agent_id OR OLD.user_id IS DISTINCT FROM NEW.user_id
-      OR OLD.source_channel IS DISTINCT FROM NEW.source_channel)
-EXECUTE FUNCTION revoke_openclaw_reply_bindings();
+SELECT pg_temp.baseline_ensure_trigger('chat_sessions', 'revoke_openclaw_replies_on_session_change',
+    $ddl$AFTER UPDATE OF agent_id, user_id, source_channel ON %s FOR EACH ROW WHEN (((old.agent_id IS DISTINCT FROM new.agent_id) OR (old.user_id IS DISTINCT FROM new.user_id) OR ((old.source_channel)::text IS DISTINCT FROM (new.source_channel)::text))) EXECUTE FUNCTION revoke_openclaw_reply_bindings()$ddl$);
 
 CREATE TABLE IF NOT EXISTS openclaw_reply_receipts (
     binding_id UUID NOT NULL REFERENCES openclaw_reply_bindings(id) ON DELETE CASCADE,
@@ -1879,8 +1915,8 @@ CREATE TABLE IF NOT EXISTS openclaw_reply_receipts (
     PRIMARY KEY (binding_id, event_id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_openclaw_reply_receipts_pending ON openclaw_reply_receipts (binding_id)
-    WHERE publish_pending OR pending_text IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_openclaw_reply_receipts_pending ON openclaw_reply_receipts (binding_id)
+    WHERE publish_pending OR pending_text IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS gateway_messages (
 	id UUID NOT NULL, 
@@ -2002,22 +2038,22 @@ BEGIN
     END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_due
-    ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_tenant
-    ON gateway_report_deliveries (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_due
+    ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_tenant
+    ON gateway_report_deliveries (tenant_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_queue
-    ON gateway_messages (agent_id, conversation_id, created_at, id) WHERE status = 'pending';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_queue
+    ON gateway_messages (agent_id, conversation_id, created_at, id) WHERE status = 'pending'$ddl$);
 -- Serves the NOT EXISTS delivered-row probes of claim_head, claim_ordinary_head and pending_dispatch_page.
-CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_lane
-    ON gateway_messages (agent_id, conversation_id) WHERE status = 'delivered';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_lane
+    ON gateway_messages (agent_id, conversation_id) WHERE status = 'delivered'$ddl$);
 -- Serves the pending_dispatch_page keyset walk, which stops after one page of lane heads.
-CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_order
-    ON gateway_messages (created_at, id) WHERE status = 'pending';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_order
+    ON gateway_messages (created_at, id) WHERE status = 'pending'$ddl$);
 -- Serves the newest-first agent listing of every status (gateway_message_dao.list_recent).
-CREATE INDEX IF NOT EXISTS ix_gateway_messages_agent_created
-    ON gateway_messages (agent_id, created_at DESC NULLS LAST);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_agent_created
+    ON gateway_messages (agent_id, created_at DESC NULLS LAST)$ddl$);
 
 -- Personal WhatsApp burst batching. A header is keyed by its gateway anchor and is removed ONLY with that gateway
 -- (or its agent): its other ownership columns are retained logical references, never cascades, so a session,
@@ -2054,10 +2090,10 @@ CREATE TABLE IF NOT EXISTS personal_burst_batches (
     CHECK (state NOT IN ('claimed','completed') OR claimed_at IS NOT NULL),
     CHECK (state NOT IN ('completed','cancelled') OR finished_at IS NOT NULL)
 );
-CREATE INDEX IF NOT EXISTS ix_personal_burst_batches_open
-    ON personal_burst_batches (agent_id, shared_session_id) WHERE state IN ('pending','sealed');
-CREATE INDEX IF NOT EXISTS ix_personal_burst_batches_due
-    ON personal_burst_batches (ready_at, gateway_id) WHERE state IN ('pending','sealed');
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_personal_burst_batches_open
+    ON personal_burst_batches (agent_id, shared_session_id) WHERE state IN ('pending','sealed')$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_personal_burst_batches_due
+    ON personal_burst_batches (ready_at, gateway_id) WHERE state IN ('pending','sealed')$ddl$);
 
 CREATE OR REPLACE FUNCTION protect_personal_burst_batch() RETURNS trigger AS $$
 BEGIN
@@ -2085,8 +2121,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER personal_burst_batch_protected
-BEFORE UPDATE ON personal_burst_batches FOR EACH ROW EXECUTE FUNCTION protect_personal_burst_batch();
+SELECT pg_temp.baseline_ensure_trigger('personal_burst_batches', 'personal_burst_batch_protected',
+    $ddl$BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION protect_personal_burst_batch()$ddl$);
 
 -- Static busy/rejection notice sources: completed gateway rows without a conversation, senders or content.
 CREATE TABLE IF NOT EXISTS personal_busy_notices (
@@ -2106,8 +2142,8 @@ CREATE TABLE IF NOT EXISTS personal_busy_notices (
     reason TEXT NOT NULL CHECK (reason IN ('capacity','quota','oversize')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
-CREATE INDEX IF NOT EXISTS ix_personal_busy_notices_cooldown
-    ON personal_busy_notices (shared_session_id, config_id, created_at DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_personal_busy_notices_cooldown
+    ON personal_busy_notices (shared_session_id, config_id, created_at DESC)$ddl$);
 
 -- One row per native receipt outcome. The identity is the EXISTING composite receipt key (no second dedupe
 -- authority). Accepted members keep their original text and transcript link; rejections retain no body.
@@ -2149,8 +2185,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER personal_burst_input_protected
-BEFORE UPDATE ON personal_burst_inputs FOR EACH ROW EXECUTE FUNCTION protect_personal_burst_input();
+SELECT pg_temp.baseline_ensure_trigger('personal_burst_inputs', 'personal_burst_input_protected',
+    $ddl$BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION protect_personal_burst_input()$ddl$);
 
 -- NULL ciphertext is a deletion tombstone: stale guest/storage copies must not resurrect it.
 CREATE TABLE IF NOT EXISTS agent_mcp_servers (
@@ -2179,7 +2215,7 @@ CREATE TABLE IF NOT EXISTS gogcli_credential_states (
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_gogcli_credential_states_agent_id ON gogcli_credential_states (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_gogcli_credential_states_agent_id ON gogcli_credential_states (agent_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS notifications (
 	id UUID NOT NULL, 
@@ -2199,17 +2235,17 @@ CREATE TABLE IF NOT EXISTS notifications (
 	FOREIGN KEY(agent_id) REFERENCES agents (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_notifications_agent_id ON notifications (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_notifications_agent_id ON notifications (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_notifications_created_at ON notifications (created_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications (user_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_notifications_user_active ON notifications (user_id, created_at DESC, id DESC)
-    WHERE archived_at IS NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_notifications_user_active ON notifications (user_id, created_at DESC, id DESC)
+    WHERE archived_at IS NULL$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_notifications_user_archived ON notifications (user_id, created_at DESC, id DESC)
-    WHERE archived_at IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_notifications_user_archived ON notifications (user_id, created_at DESC, id DESC)
+    WHERE archived_at IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS broadcast_emails (
     id UUID PRIMARY KEY,
@@ -2233,12 +2269,12 @@ CREATE TABLE IF NOT EXISTS broadcast_emails (
     CHECK ((status = 'pending') = (settled_at IS NULL)),
     UNIQUE (broadcast_id, user_id)
 );
-CREATE INDEX IF NOT EXISTS ix_broadcast_emails_due
-    ON broadcast_emails (available_at, id) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS ix_broadcast_emails_settled
-    ON broadcast_emails (settled_at, id) WHERE status IN ('sent', 'failed', 'cancelled');
-CREATE INDEX IF NOT EXISTS ix_broadcast_emails_tenant ON broadcast_emails (tenant_id);
-CREATE INDEX IF NOT EXISTS ix_broadcast_emails_scope ON broadcast_emails (tenant_id, broadcast_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_emails_due
+    ON broadcast_emails (available_at, id) WHERE status = 'pending'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_emails_settled
+    ON broadcast_emails (settled_at, id) WHERE status IN ('sent', 'failed', 'cancelled')$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_emails_tenant ON broadcast_emails (tenant_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_emails_scope ON broadcast_emails (tenant_id, broadcast_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS broadcast_submissions (
     id UUID PRIMARY KEY,
@@ -2253,7 +2289,7 @@ CREATE TABLE IF NOT EXISTS broadcast_submissions (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, sender_id, idempotency_key)
 );
-CREATE INDEX IF NOT EXISTS ix_broadcast_submissions_sender ON broadcast_submissions (sender_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_submissions_sender ON broadcast_submissions (sender_id)$ddl$);
 
 -- One row per committed broadcast, keyed or not, written in the fan-out transaction. The sender name is a
 -- snapshot, so the row stays attributable after the sender is removed. clock_timestamp() stamps the insert
@@ -2271,9 +2307,9 @@ CREATE TABLE IF NOT EXISTS broadcast_history (
     emails_sent INTEGER NOT NULL CHECK (emails_sent >= 0),
     published_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT clock_timestamp()
 );
-CREATE INDEX IF NOT EXISTS ix_broadcast_history_tenant_published
-    ON broadcast_history (tenant_id, published_at DESC, broadcast_id DESC);
-CREATE INDEX IF NOT EXISTS ix_broadcast_history_sender ON broadcast_history (sender_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_history_tenant_published
+    ON broadcast_history (tenant_id, published_at DESC, broadcast_id DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_history_sender ON broadcast_history (sender_id)$ddl$);
 
 -- Accepted drafts and fixed recipient ordinals. Target IDs intentionally have no FK: deletion is a skipped slot.
 CREATE TABLE IF NOT EXISTS broadcast_jobs (
@@ -2301,9 +2337,9 @@ CREATE TABLE IF NOT EXISTS broadcast_jobs (
     CHECK (cursor <= users_total + agents_total),
     CHECK ((status = 'completed') = (completed_at IS NOT NULL))
 );
-CREATE INDEX IF NOT EXISTS ix_broadcast_jobs_pending
-    ON broadcast_jobs (accepted_at, broadcast_id) WHERE status <> 'completed';
-CREATE INDEX IF NOT EXISTS ix_broadcast_jobs_sender ON broadcast_jobs (sender_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_jobs_pending
+    ON broadcast_jobs (accepted_at, broadcast_id) WHERE status <> 'completed'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_broadcast_jobs_sender ON broadcast_jobs (sender_id)$ddl$);
 CREATE TABLE IF NOT EXISTS broadcast_job_recipients (
     broadcast_id UUID NOT NULL REFERENCES broadcast_jobs(broadcast_id) ON DELETE CASCADE,
     ordinal BIGINT NOT NULL CHECK (ordinal > 0),
@@ -2328,7 +2364,7 @@ CREATE TABLE IF NOT EXISTS openclaw_update_notices (
 	CONSTRAINT ux_openclaw_update_notices_request_id UNIQUE (request_id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_openclaw_update_notices_created_at ON openclaw_update_notices (created_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_openclaw_update_notices_created_at ON openclaw_update_notices (created_at DESC, id DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS openclaw_update_runs (
 	id UUID NOT NULL,
@@ -2347,11 +2383,11 @@ CREATE TABLE IF NOT EXISTS openclaw_update_runs (
 	CONSTRAINT ck_openclaw_update_runs_failure CHECK ((state = 'failed') = (failure_code IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_openclaw_update_runs_active_agent ON openclaw_update_runs (agent_id) WHERE state IN ('pending', 'cutover');
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_openclaw_update_runs_active_agent ON openclaw_update_runs (agent_id) WHERE state IN ('pending', 'cutover')$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_openclaw_update_runs_succeeded ON openclaw_update_runs (agent_id, notice_id) WHERE state = 'succeeded';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_openclaw_update_runs_succeeded ON openclaw_update_runs (agent_id, notice_id) WHERE state = 'succeeded'$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_openclaw_update_runs_agent_created ON openclaw_update_runs (agent_id, created_at DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_openclaw_update_runs_agent_created ON openclaw_update_runs (agent_id, created_at DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS published_pages (
 	id UUID NOT NULL, 
@@ -2369,9 +2405,9 @@ CREATE TABLE IF NOT EXISTS published_pages (
 	FOREIGN KEY(tenant_id) REFERENCES tenants (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_published_pages_agent_id ON published_pages (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_published_pages_agent_id ON published_pages (agent_id)$ddl$);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ix_published_pages_short_id ON published_pages (short_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ix_published_pages_short_id ON published_pages (short_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS tasks (
 	id UUID NOT NULL, 
@@ -2414,9 +2450,9 @@ DO $$ BEGIN
 	END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS ix_tasks_lease_expires_at ON tasks (lease_expires_at) WHERE claim_token IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tasks_lease_expires_at ON tasks (lease_expires_at) WHERE claim_token IS NOT NULL$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_tasks_agent_created_id ON tasks (agent_id, created_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tasks_agent_created_id ON tasks (agent_id, created_at DESC, id DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS user_tenant_onboardings (
 	id UUID NOT NULL, 
@@ -2436,9 +2472,9 @@ CREATE TABLE IF NOT EXISTS user_tenant_onboardings (
 	FOREIGN KEY(personal_assistant_agent_id) REFERENCES agents (id) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS ix_user_tenant_onboardings_user_id ON user_tenant_onboardings (user_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_user_tenant_onboardings_user_id ON user_tenant_onboardings (user_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_user_tenant_onboardings_tenant_id ON user_tenant_onboardings (tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_user_tenant_onboardings_tenant_id ON user_tenant_onboardings (tenant_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS workspace_edit_locks (
 	id UUID NOT NULL, 
@@ -2456,13 +2492,13 @@ CREATE TABLE IF NOT EXISTS workspace_edit_locks (
 	FOREIGN KEY(user_id) REFERENCES users (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_workspace_edit_locks_agent_id ON workspace_edit_locks (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_edit_locks_agent_id ON workspace_edit_locks (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_workspace_edit_locks_user_id ON workspace_edit_locks (user_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_edit_locks_user_id ON workspace_edit_locks (user_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_workspace_edit_locks_expires_at ON workspace_edit_locks (expires_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_edit_locks_expires_at ON workspace_edit_locks (expires_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_workspace_edit_locks_path ON workspace_edit_locks (path);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_edit_locks_path ON workspace_edit_locks (path)$ddl$);
 
 CREATE TABLE IF NOT EXISTS workspace_file_revisions (
 	id UUID NOT NULL, 
@@ -2482,13 +2518,13 @@ CREATE TABLE IF NOT EXISTS workspace_file_revisions (
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_agent_id ON workspace_file_revisions (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_agent_id ON workspace_file_revisions (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_path ON workspace_file_revisions (path);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_path ON workspace_file_revisions (path)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_created_at ON workspace_file_revisions (created_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_created_at ON workspace_file_revisions (created_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_group_key ON workspace_file_revisions (group_key);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_group_key ON workspace_file_revisions (group_key)$ddl$);
 
 CREATE TABLE IF NOT EXISTS task_logs (
 	id UUID NOT NULL, 
@@ -2499,7 +2535,7 @@ CREATE TABLE IF NOT EXISTS task_logs (
 	FOREIGN KEY(task_id) REFERENCES tasks (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_task_logs_task_created_id ON task_logs (task_id, created_at, id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_task_logs_task_created_id ON task_logs (task_id, created_at, id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS trigger_executions (
 	id UUID NOT NULL, 
@@ -2523,13 +2559,13 @@ CREATE TABLE IF NOT EXISTS trigger_executions (
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS ix_trigger_executions_status_scheduled ON trigger_executions (status, scheduled_at);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_trigger_executions_status_scheduled ON trigger_executions (status, scheduled_at)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_trigger_executions_agent_id ON trigger_executions (agent_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_trigger_executions_agent_id ON trigger_executions (agent_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_trigger_executions_trigger_id ON trigger_executions (trigger_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_trigger_executions_trigger_id ON trigger_executions (trigger_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_trigger_executions_finished_at ON trigger_executions (finished_at) WHERE status IN ('completed', 'failed');
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_trigger_executions_finished_at ON trigger_executions (finished_at) WHERE status IN ('completed', 'failed')$ddl$);
 
 CREATE TABLE IF NOT EXISTS tavily_api_keys (
 	id UUID NOT NULL,
@@ -2548,7 +2584,7 @@ CREATE TABLE IF NOT EXISTS tavily_api_keys (
 	CONSTRAINT uq_tavily_api_keys_fingerprint UNIQUE (key_fingerprint)
 );
 
-CREATE INDEX IF NOT EXISTS ix_tavily_api_keys_position ON tavily_api_keys (position);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tavily_api_keys_position ON tavily_api_keys (position)$ddl$);
 
 CREATE TABLE IF NOT EXISTS tavily_key_ring_state (
 	id SMALLINT NOT NULL DEFAULT 1,
@@ -2589,18 +2625,18 @@ CREATE TABLE IF NOT EXISTS web_search_events (
 	PRIMARY KEY (id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_web_search_events_occurred_tenant
-	ON web_search_events (occurred_at DESC, tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_web_search_events_occurred_tenant
+	ON web_search_events (occurred_at DESC, tenant_id)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_web_search_events_tenant_occurred
-	ON web_search_events (tenant_id, occurred_at DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_web_search_events_tenant_occurred
+	ON web_search_events (tenant_id, occurred_at DESC)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_web_search_events_hash_occurred
-	ON web_search_events (query_hash, occurred_at DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_web_search_events_hash_occurred
+	ON web_search_events (query_hash, occurred_at DESC)$ddl$);
 
-CREATE INDEX IF NOT EXISTS ix_web_search_events_export_pending
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_web_search_events_export_pending
 	ON web_search_events (export_state, occurred_at)
-	WHERE export_state IN ('pending', 'exporting');
+	WHERE export_state IN ('pending', 'exporting')$ddl$);
 
 CREATE TABLE IF NOT EXISTS web_search_export_payloads (
 	event_id UUID NOT NULL,
@@ -2609,7 +2645,7 @@ CREATE TABLE IF NOT EXISTS web_search_export_payloads (
 	PRIMARY KEY (event_id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_users_id_tenant ON users (id, tenant_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_users_id_tenant ON users (id, tenant_id)$ddl$);
 CREATE TABLE IF NOT EXISTS local_departments (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -2618,8 +2654,8 @@ CREATE TABLE IF NOT EXISTS local_departments (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (id, tenant_id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_local_departments_tenant_name
-    ON local_departments (tenant_id, lower(name));
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_local_departments_tenant_name
+    ON local_departments (tenant_id, lower(name))$ddl$);
 CREATE TABLE IF NOT EXISTS local_department_memberships (
     user_id UUID NOT NULL,
     tenant_id UUID NOT NULL,
@@ -2629,10 +2665,10 @@ CREATE TABLE IF NOT EXISTS local_department_memberships (
     FOREIGN KEY (user_id, tenant_id) REFERENCES users(id, tenant_id) ON DELETE CASCADE,
     FOREIGN KEY (department_id, tenant_id) REFERENCES local_departments(id, tenant_id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS ix_local_department_memberships_department
-    ON local_department_memberships (tenant_id, department_id);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_permissions_department
-    ON agent_permissions (agent_id, scope_id) WHERE scope_type = 'department';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_local_department_memberships_department
+    ON local_department_memberships (tenant_id, department_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_permissions_department
+    ON agent_permissions (agent_id, scope_id) WHERE scope_type = 'department'$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_schedule_manual_runs (
     id UUID PRIMARY KEY,
@@ -2653,10 +2689,10 @@ CREATE TABLE IF NOT EXISTS agent_schedule_manual_runs (
     CHECK ((finished_at IS NULL) = (outcome IS NULL)),
     CHECK (finished_at IS NULL OR lease_token IS NULL)
 );
-CREATE INDEX IF NOT EXISTS ix_agent_schedule_manual_runs_pending
-    ON agent_schedule_manual_runs (lease_expires_at, created_at, id) WHERE finished_at IS NULL;
-CREATE INDEX IF NOT EXISTS ix_agent_schedule_manual_runs_schedule
-    ON agent_schedule_manual_runs (schedule_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_schedule_manual_runs_pending
+    ON agent_schedule_manual_runs (lease_expires_at, created_at, id) WHERE finished_at IS NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_schedule_manual_runs_schedule
+    ON agent_schedule_manual_runs (schedule_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_deletion_requests (
     id UUID PRIMARY KEY,
@@ -2675,12 +2711,12 @@ CREATE TABLE IF NOT EXISTS agent_deletion_requests (
         OR (status = 'executed' AND resolved_at IS NOT NULL AND cancel_reason IS NULL)
         OR (status = 'cancelled' AND resolved_at IS NOT NULL AND cancel_reason IS NOT NULL))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_deletion_pending_agent
-    ON agent_deletion_requests(agent_id) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS ix_agent_deletion_requests_tenant
-    ON agent_deletion_requests(tenant_id, status, created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS ix_agent_deletion_requests_requester
-    ON agent_deletion_requests(requester_id, created_at DESC, id DESC);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_deletion_pending_agent
+    ON agent_deletion_requests(agent_id) WHERE status = 'pending'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_deletion_requests_tenant
+    ON agent_deletion_requests(tenant_id, status, created_at DESC, id DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_deletion_requests_requester
+    ON agent_deletion_requests(requester_id, created_at DESC, id DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_deletion_request_views (
     request_id UUID NOT NULL REFERENCES agent_deletion_requests(id) ON DELETE CASCADE,
@@ -2688,8 +2724,8 @@ CREATE TABLE IF NOT EXISTS agent_deletion_request_views (
     viewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (request_id, reviewer_id)
 );
-CREATE INDEX IF NOT EXISTS ix_agent_deletion_request_views_reviewer
-    ON agent_deletion_request_views(reviewer_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_deletion_request_views_reviewer
+    ON agent_deletion_request_views(reviewer_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_deletion_request_approvals (
     request_id UUID NOT NULL REFERENCES agent_deletion_requests(id) ON DELETE CASCADE,
@@ -2697,8 +2733,8 @@ CREATE TABLE IF NOT EXISTS agent_deletion_request_approvals (
     approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (request_id, reviewer_id)
 );
-CREATE INDEX IF NOT EXISTS ix_agent_deletion_request_approvals_reviewer
-    ON agent_deletion_request_approvals(reviewer_id);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_deletion_request_approvals_reviewer
+    ON agent_deletion_request_approvals(reviewer_id)$ddl$);
 
 -- Cache invalidation replay: transaction-captured, coalesced intent (cache-only section).
 CREATE TABLE IF NOT EXISTS cache_invalidations (
@@ -2712,8 +2748,8 @@ CREATE TABLE IF NOT EXISTS cache_invalidations (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     CHECK ((lease_token IS NULL) = (lease_expires_at IS NULL))
 );
-CREATE INDEX IF NOT EXISTS ix_cache_invalidations_available
-    ON cache_invalidations (available_at, cache_key);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_cache_invalidations_available
+    ON cache_invalidations (available_at, cache_key)$ddl$);
 
 -- Authentication email durable delivery (auth-email-only).
 CREATE TABLE IF NOT EXISTS auth_email_jobs (
@@ -2734,8 +2770,8 @@ CREATE TABLE IF NOT EXISTS auth_email_jobs (
     CHECK ((status='pending' AND payload IS NOT NULL AND settled_at IS NULL)
         OR (status<>'pending' AND payload IS NULL AND settled_at IS NOT NULL AND claim_token IS NULL))
 );
-CREATE INDEX IF NOT EXISTS ix_auth_email_jobs_due
-    ON auth_email_jobs(available_at,id) WHERE status='pending';
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_auth_email_jobs_due
+    ON auth_email_jobs(available_at,id) WHERE status='pending'$ddl$);
 
 -- Winning, immutable media descriptors share the native event acceptance transaction.
 CREATE TABLE IF NOT EXISTS channel_event_media (
@@ -2749,8 +2785,8 @@ CREATE TABLE IF NOT EXISTS channel_event_media (
     FOREIGN KEY (config_id, provider, event_key)
         REFERENCES channel_event_receipts(config_id, provider, event_key) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS ix_channel_event_media_message ON channel_event_media(gateway_message_id);
-CREATE INDEX IF NOT EXISTS ix_channel_event_media_storage_key ON channel_event_media((stored_file->>'storage_key'));
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_channel_event_media_message ON channel_event_media(gateway_message_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_channel_event_media_storage_key ON channel_event_media((stored_file->>'storage_key'))$ddl$);
 
 -- Private outbound media commands retain uncertainty across connector restarts.
 CREATE TABLE IF NOT EXISTS zalo_personal_media_sends (
@@ -2769,9 +2805,9 @@ CREATE TABLE IF NOT EXISTS zalo_personal_media_sends (
     dispatched_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS ix_zalo_personal_media_sends_pending
-    ON zalo_personal_media_sends(config_id,created_at,command_id) WHERE state='pending';
-CREATE UNIQUE INDEX IF NOT EXISTS ux_zalo_personal_media_sends_message
-    ON zalo_personal_media_sends(account_id,message_id) WHERE message_id IS NOT NULL;
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_zalo_personal_media_sends_pending
+    ON zalo_personal_media_sends(config_id,created_at,command_id) WHERE state='pending'$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_zalo_personal_media_sends_message
+    ON zalo_personal_media_sends(account_id,message_id) WHERE message_id IS NOT NULL$ddl$);
 
 COMMIT;

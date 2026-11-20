@@ -1,14 +1,23 @@
 import hashlib
-from collections.abc import Callable
+import os
+from collections.abc import AsyncIterator, Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, override
 from uuid import UUID, uuid4
 
 import pytest
+from anyio import fail_after, wait_readable
+from psycopg import AsyncConnection
+from psycopg.conninfo import make_conninfo
+from psycopg.rows import DictRow, dict_row
 
+from app.config import get_settings
 from app.core.json_types import JsonObject, JsonValue
+from app.db.connection import DbConnection
+from app.db.pool import close_pool, init_pool
 from app.records.skill import SkillFileRecord, SkillRecord
+from app.scripts import bootstrap_db
 from app.services import skill_seeder, storage
 from app.services.agent_manager import agent_manager
 from app.services.skill_provider import parse_skill_md_frontmatter
@@ -608,3 +617,103 @@ async def test_seed_registers_template_skills_as_defaults_with_their_skill_file(
         assert upserts[folder]["is_default"] is True
         assert [path for path, _ in files] == ["SKILL.md"]
         assert parse_skill_md_frontmatter(files[0][1]).get("name") == folder
+
+
+IDLE_TRANSACTION_LIMIT_MS = 1000
+
+
+@dataclass
+class IdleLimitProbeStorage(MemoryStorage):
+    """Storage whose first read outlasts the server's idle-in-transaction limit, without sleeping.
+
+    It opens a probe session under the same limit, leaves it idle in a transaction, and returns once the server has
+    ended it. Anything the caller left idle in a transaction before this call has by then outlived the limit too.
+    """
+
+    conninfo: str = ""
+    outlasted: bool = False
+
+    @override
+    async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
+        if not self.outlasted:
+            self.outlasted = True
+            probe = await AsyncConnection.connect(
+                self.conninfo, options=f"-cidle_in_transaction_session_timeout={IDLE_TRANSACTION_LIMIT_MS}"
+            )
+            try:
+                _ = await probe.execute("SELECT 1")
+                with fail_after(10):
+                    await wait_readable(probe.fileno())
+            finally:
+                await probe.close()
+        return await super().read_snapshot_bounded(key, max_bytes)
+
+
+@dataclass(frozen=True, slots=True)
+class LiveDefaults:
+    db: DbConnection
+    conninfo: str
+    agent_id: UUID
+
+
+@pytest.fixture
+async def live_defaults(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[LiveDefaults]:
+    """A real schema with one default skill and one agent, behind a pool whose sessions end idle transactions at 1 s."""
+    conninfo = os.environ.get("BOOTSTRAP_TEST_DATABASE_URL", "")
+    if not conninfo:
+        pytest.skip("BOOTSTRAP_TEST_DATABASE_URL is required for the idle-in-transaction check")
+    schema = f"skill_sync_qa_{uuid4().hex}"
+    monkeypatch.setenv("DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS", str(IDLE_TRANSACTION_LIMIT_MS))
+    get_settings.cache_clear()
+    user_id, agent_id, skill_id = uuid4(), uuid4(), uuid4()
+    async with await AsyncConnection[DictRow].connect(conninfo, autocommit=True, row_factory=dict_row) as raw:
+        db = DbConnection(raw)
+        await db.execute(f'CREATE SCHEMA "{schema}"')
+        try:
+            await db.execute(f'SET search_path TO "{schema}"')
+            await db.execute(bootstrap_db.SCHEMA_BASELINE.read_text())
+            await db.execute(
+                "INSERT INTO users (id, display_name, quota_message_limit) VALUES (%(id)s, 'Skill QA', 1)",
+                {"id": user_id},
+            )
+            await db.execute(
+                "INSERT INTO agents (id, name, creator_id, role_description, max_triggers, min_poll_interval_min, "
+                "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+                "VALUES (%(id)s, 'Skill QA', %(user)s, '', 20, 5, 5, 'private', 'use', 240)",
+                {"id": agent_id, "user": user_id},
+            )
+            await db.execute(
+                "INSERT INTO skills (id, name, description, category, icon, folder_name, is_builtin, is_default) "
+                "VALUES (%(id)s, 'Current default', '', 'general', 'x', 'current-default', true, true)",
+                {"id": skill_id},
+            )
+            for path, content in CURRENT.items():
+                await db.execute(
+                    "INSERT INTO skill_files (id, skill_id, path, content) VALUES (gen_random_uuid(), %(skill)s, %(path)s, %(content)s)",
+                    {"skill": skill_id, "path": path.removeprefix("current-default/"), "content": content},
+                )
+            isolated = make_conninfo(conninfo, options=f"-csearch_path={schema}")
+            _ = await init_pool(conninfo=isolated, min_size=1, max_size=2)
+            yield LiveDefaults(db, isolated, agent_id)
+        finally:
+            await close_pool()
+            await db.execute(f'DROP SCHEMA "{schema}" CASCADE')
+    get_settings.cache_clear()
+
+
+async def test_a_sweep_slower_than_the_idle_transaction_limit_still_records_the_sync_hash(
+    live_defaults: LiveDefaults, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a real database that ends a session idle in a transaction after 1 s, and storage that outlasts that limit.
+    slow = IdleLimitProbeStorage(conninfo=live_defaults.conninfo)
+    monkeypatch.setattr(storage, "get_storage_backend", lambda: slow)
+    # When the startup sweep pushes the default skill to the agent.
+    await skill_seeder.push_default_skills_to_existing_agents()
+    # Then the files were written, and the record was saved: no transaction sat idle through the storage I/O.
+    assert slow.outlasted
+    assert sorted(slow.written) == sorted(skill_key(live_defaults.agent_id, path) for path in CURRENT)
+    recorded_value = await live_defaults.db.fetchval(
+        "SELECT value FROM system_settings WHERE key = %(key)s", {"key": SETTING_KEY}
+    )
+    assert isinstance(recorded_value, dict)
+    assert recorded_value["files"] == {path: sha256_hex(content) for path, content in CURRENT.items()}

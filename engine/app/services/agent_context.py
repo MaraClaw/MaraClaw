@@ -153,7 +153,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
 
 async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
     """Query relationships directly from the database and format as a markdown list."""
-    from app.core.permissions import evaluate_agent_relationship_status, evaluate_human_relationship_status
+    from app.core.permissions import evaluate_agent_relationship_statuses, evaluate_human_relationship_statuses
     from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
     from app.dao.agent_relationship_dao import agent_relationship_dao
 
@@ -167,17 +167,21 @@ async def _load_relationships_from_db(agent_id: uuid.UUID) -> str:
     from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
     from app.records.agent_relationship import AgentRelationshipRecord
 
-    human_rows: list[tuple[AgentRelationshipRecord, str | None]] = []
-    for rel in await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id):
-        status_info = await evaluate_human_relationship_status(rel)
-        if status_info["access_status"] == "active":
-            human_rows.append((rel, _display_provider_name(rel.provider_name, rel.provider_type)))
+    human_candidates = await agent_relationship_dao.list_for_agent_with_members_and_providers(agent_id)
+    human_statuses = await evaluate_human_relationship_statuses(human_candidates)
+    human_rows: list[tuple[AgentRelationshipRecord, str | None]] = [
+        (rel, _display_provider_name(rel.provider_name, rel.provider_type))
+        for rel, status_info in zip(human_candidates, human_statuses, strict=True)
+        if status_info["access_status"] == "active"
+    ]
 
-    agent_rels: list[AgentAgentRelationshipRecord] = []
-    for rel in await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id):
-        status_info = await evaluate_agent_relationship_status(rel)
-        if status_info["access_status"] == "active":
-            agent_rels.append(rel)
+    agent_candidates = await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id)
+    agent_statuses = await evaluate_agent_relationship_statuses(agent_candidates)
+    agent_rels: list[AgentAgentRelationshipRecord] = [
+        rel
+        for rel, status_info in zip(agent_candidates, agent_statuses, strict=True)
+        if status_info["access_status"] == "active"
+    ]
 
     if not human_rows and not agent_rels:
         return ""

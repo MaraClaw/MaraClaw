@@ -74,6 +74,26 @@ Replies are produced by OpenClaw and returned through `/gateway/report`, not by 
 second synchronous engine LLM turn. See [gateway report delivery](gateway-report-delivery.md)
 for durable chunk checkpoints, provider backoff, and delivery ambiguity limits.
 
+## Personal QR WhatsApp connection recovery
+
+The connector role runs one personal QR bridge (`connectors/whatsapp`) per linked
+agent. Transient failures keep the encrypted credentials of a paired account and its
+reply routes: a bridge `transport_failed` close after its own reconnects, a non-zero
+bridge exit, a broken pipe, or a malformed bridge frame. Malformed frames count as
+transient because they point at a bridge defect or version skew, not a revoked
+account. The connection shows `reconnecting` and restarts only after 5, 15, 30, 60 and
+120 seconds for successive failures; claims check that retry time under the row lock.
+The retry budget, kept credential-free in the channel's `extra_config.whatsapp_runtime`,
+refills only after a restarted bridge keeps its link up for 120 seconds; opening a
+socket alone does not. An exhausted budget pauses the connection with its credentials
+kept, and the creator's start or relink clears the budget.
+
+Pending replies survive a retry and are sent after the reconnect; pausing or
+disconnecting cancels them. A reply that reaches the bridge while it is between
+sockets is recorded as rejected and is never sent later. Unpaired attempts, logout,
+a replaced or forbidden session, account conflicts, ambiguous identity, credential
+store failures and lost owner authorization end the connection as before.
+
 ## Personal QR WhatsApp bursts
 
 Personal QR self-chat text uses durable burst collection. Cloud API WhatsApp and

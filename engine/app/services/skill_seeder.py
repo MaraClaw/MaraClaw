@@ -847,6 +847,7 @@ async def seed_skills():
 # Larger than any default skill file, so a copy beyond it cannot be what was pushed and counts as edited.
 _SKILL_FILE_READ_LIMIT_BYTES = 1024 * 1024
 _SKILL_FILE_CONTENT_TYPE = "text/plain; charset=utf-8"
+_SYNC_SETTING_KEY = "default_skills_sync_hash"
 
 type _FileSync = Literal["created", "updated", "current", "edited", "conflict"]
 
@@ -909,6 +910,10 @@ async def push_default_skills_to_existing_agents():
     earlier push is recorded, and is kept. Files dropped from a default skill are never deleted. One agent's failure (a
     storage quota or storage error) is logged and skipped; the setting is recorded only when every agent succeeded, so
     the next startup retries the others against the same previous record.
+
+    No database transaction is open while the storage is read or written: the plan is read in one short transaction,
+    the sweep runs on storage alone, and the record is written in another, so ``idle_in_transaction_session_timeout``
+    cannot end a slow sweep before its record is saved.
     """
     from app.services.agent_manager import agent_manager
     from app.services.storage import get_storage_backend
@@ -921,7 +926,7 @@ async def push_default_skills_to_existing_agents():
         checksums = _default_skill_checksums(default_skills)
         current_hash = _checksums_hash(checksums)
 
-        setting = await system_setting_dao.get_by_key("default_skills_sync_hash")
+        setting = await system_setting_dao.get_by_key(_SYNC_SETTING_KEY)
         previous_value = object_attr(setting, "value") if setting else None
         if object_mapping_from(previous_value).get("hash") == current_hash:
             logger.info(
@@ -929,46 +934,49 @@ async def push_default_skills_to_existing_agents():
             )
             return
 
-        previous_checksums = _recorded_checksums(previous_value)
         agent_ids = await agent_dao.list_all_ids()
-        pushed = 0
-        kept = 0
-        failed = 0
-        storage = get_storage_backend()
-        for agent_id in agent_ids:
-            agent_prefix = agent_manager._agent_storage_prefix(agent_id)
-            try:
-                for skill in default_skills:
-                    for skill_file in skill.files:
-                        path = f"{skill.folder_name}/{skill_file.path}"
-                        outcome = await _sync_default_skill_file(
-                            storage, f"{agent_prefix}/skills/{path}", skill_file.content, previous_checksums.get(path)
-                        )
-                        if outcome in ("created", "updated"):
-                            pushed += 1
-                        elif outcome in ("edited", "conflict"):
-                            kept += 1
-                            logger.info(f"[SkillSeeder] Kept {path} for agent {agent_id} ({outcome})")
-            except Exception as exc:
-                failed += 1
-                logger.warning(
-                    f"[SkillSeeder] Could not push default skills to agent {agent_id}: {type(exc).__name__}: {exc}"
-                )
 
-        if failed:
+    previous_checksums = _recorded_checksums(previous_value)
+    pushed = 0
+    kept = 0
+    failed = 0
+    storage = get_storage_backend()
+    for agent_id in agent_ids:
+        agent_prefix = agent_manager._agent_storage_prefix(agent_id)
+        try:
+            for skill in default_skills:
+                for skill_file in skill.files:
+                    path = f"{skill.folder_name}/{skill_file.path}"
+                    outcome = await _sync_default_skill_file(
+                        storage, f"{agent_prefix}/skills/{path}", skill_file.content, previous_checksums.get(path)
+                    )
+                    if outcome in ("created", "updated"):
+                        pushed += 1
+                    elif outcome in ("edited", "conflict"):
+                        kept += 1
+                        logger.info(f"[SkillSeeder] Kept {path} for agent {agent_id} ({outcome})")
+        except Exception as exc:
+            failed += 1
             logger.warning(
-                f"[SkillSeeder] Default skills not pushed to {failed} of {len(agent_ids)} agents "
-                f"({pushed} files pushed); sync hash not recorded, so the next startup retries them"
+                f"[SkillSeeder] Could not push default skills to agent {agent_id}: {type(exc).__name__}: {exc}"
             )
-            return
 
-        sync_value: JsonObject = {
-            "hash": current_hash,
-            "files": dict[str, JsonValue](checksums),
-        }
+    if failed:
+        logger.warning(
+            f"[SkillSeeder] Default skills not pushed to {failed} of {len(agent_ids)} agents "
+            f"({pushed} files pushed); sync hash not recorded, so the next startup retries them"
+        )
+        return
+
+    sync_value: JsonObject = {
+        "hash": current_hash,
+        "files": dict[str, JsonValue](checksums),
+    }
+    async with connection_ctx():
+        setting = await system_setting_dao.get_by_key(_SYNC_SETTING_KEY)
         if setting:
             _ = await system_setting_dao.update(db_obj=setting, obj_in={"value": sync_value})
         else:
-            _ = await system_setting_dao.create(obj_in={"key": "default_skills_sync_hash", "value": sync_value})
+            _ = await system_setting_dao.create(obj_in={"key": _SYNC_SETTING_KEY, "value": sync_value})
 
-        logger.info(f"[SkillSeeder] Default skills reconciled: {pushed} files written, {kept} edited copies kept")
+    logger.info(f"[SkillSeeder] Default skills reconciled: {pushed} files written, {kept} edited copies kept")

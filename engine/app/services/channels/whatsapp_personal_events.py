@@ -10,8 +10,10 @@ from pydantic import JsonValue, TypeAdapter
 
 from app.config import get_settings
 from app.core.logging import logger
+from app.core.permissions import is_agent_expired
 from app.dao.whatsapp_personal_auth_dao import AuthMutation, read_auth, write_auth, write_auth_batch
 from app.dao.whatsapp_personal_dao import get_personal, renew, revoke
+from app.dao.whatsapp_personal_runtime_dao import has_auth, schedule_retry
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
 from app.services.channels.whatsapp_personal_access import personal_owner
@@ -95,6 +97,8 @@ async def handle_frame(connection: PersonalConnection, frame: ChildFrame) -> Jso
                     },
                 )
         case Closed():
+            if frame.reason == "transport_failed" and await interrupted(connection):
+                return None
             if frame.reason in {"logged_out", "replaced", "forbidden", "auth_store_failed", "transport_failed"}:
                 await revoke_current_claim(connection, frame.reason)
         case Ready():
@@ -116,6 +120,55 @@ async def handle_message(
         and (connection.account_id is None or connection.account_id == current.account_id)
     ):
         await accept_message(current, message, download=download)
+
+
+async def interrupted(connection: PersonalConnection) -> bool:
+    """Keep a paired connection through a transient bridge failure; ``False`` leaves today's terminal handling.
+
+    Lost owner authorization is told apart here: ``personal_owner`` raises, so it is never retried even though it
+    also ends as ``transport_failed``. The claim may still be held (bridge close) or already reaped (child death).
+    """
+    async with connection_ctx() as db:
+        try:
+            agent, owner = await personal_owner(connection.agent_id)
+        except HTTPException:
+            return False
+        current = await get_personal(connection.agent_id, lock=True)
+        if (
+            is_agent_expired(agent)
+            or agent.status == "stopped"
+            or current is None
+            or current.config_id != connection.config_id
+            or current.generation != connection.generation
+            or current.auth_epoch != connection.auth_epoch
+            or current.claim_token not in {None, connection.claim_token}
+            or not current.desired
+            or current.purge_requested
+            or current.owner_id != owner.id
+            or current.tenant_id != agent.tenant_id
+            or current.account_id is None
+            or not await has_auth(current)
+        ):
+            return False
+        retry_at = await schedule_retry(current.config_id)
+        if retry_at is None:
+            # Budget spent: pause like a bridge-reported transport failure, keeping the paired credentials.
+            await revoke(current.agent_id, purge=False)
+            await db.execute(
+                "UPDATE whatsapp_personal_connections SET error_code='transport_failed' WHERE config_id=%(id)s",
+                {"id": current.config_id},
+            )
+        else:
+            await db.execute(
+                "UPDATE whatsapp_personal_connections SET state='reconnecting',qr_value=NULL,qr_expires_at=NULL,"
+                "revision=revision+1 WHERE config_id=%(id)s",
+                {"id": current.config_id},
+            )
+            await db.execute("UPDATE channel_configs SET is_connected=FALSE WHERE id=%(id)s", {"id": current.config_id})
+        logger.bind(config_id=str(current.config_id), retry=retry_at is not None).warning(
+            "[WhatsAppPersonal] interrupted"
+        )
+        return True
 
 
 async def revoke_current_claim(connection: PersonalConnection, reason: str) -> None:

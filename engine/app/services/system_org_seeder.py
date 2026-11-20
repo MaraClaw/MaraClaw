@@ -27,6 +27,8 @@ SYSTEM_ORG_TIERS: dict[str, OrganizationPlanId] = {
 _EMAIL = TypeAdapter(EmailStr)
 _PASSWORD_MIN_LENGTH = 6
 _PASSWORD_MAX_LENGTH = 128
+_SEED_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(%(key)s, 0))"
+_SEED_LOCK_KEY = "maraclaw:seed:system-orgs"
 
 
 class SystemOrgSeedError(RuntimeError):
@@ -37,15 +39,21 @@ async def ensure_system_orgs() -> tuple[TenantRecord, TenantRecord]:
     """Idempotently create the two system organizations and reconcile their tiers in one transaction.
 
     Returns ``(maraclaw, kabers)``. Any failure, including a missing or invalid default organization admin,
-    rolls back every write.
+    rolls back every write. Replicas booting together queue on a transaction-level advisory lock taken first, so
+    each reads the organizations only after the one ahead of it committed them.
     """
     async with connection_ctx() as db:
+        await _lock_seed(db)
         kabers = await _ensure_kabers()
         maraclaw = await _ensure_maraclaw()
         maraclaw = await _ensure_tier(db, maraclaw)
         kabers = await _ensure_tier(db, kabers)
         await _ensure_default_org_admin(kabers)
     return maraclaw, kabers
+
+
+async def _lock_seed(db: DbConnection) -> None:
+    await db.execute(_SEED_LOCK_SQL, {"key": _SEED_LOCK_KEY})
 
 
 def _require_system_org(tenant: TenantRecord) -> None:

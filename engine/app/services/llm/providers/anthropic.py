@@ -28,6 +28,7 @@ from app.services.llm.base import (
     ToolCallbackData,
     ToolDefinition,
 )
+from app.services.llm.retry_policy import StreamDelivery, call_with_retry, raise_for_status, stream_http_error
 from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, LLMUsage
 
 
@@ -182,11 +183,13 @@ class AnthropicClient(LLMClient):
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=False, **kwargs)
 
         client = await self._get_client()
-        response = await client.post(url, json=payload, headers=self._get_headers())
 
-        if response.status_code >= 400:
-            error_text = response.text[:500]
-            raise LLMError(f"HTTP {response.status_code}: {error_text}")
+        async def send() -> httpx.Response:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            await raise_for_status(response)
+            return response
+
+        response = await call_with_retry(send, provider="anthropic")
 
         data = json_object_from_response(response)
         if data.get("type") == "error":
@@ -253,10 +256,26 @@ class AnthropicClient(LLMClient):
         on_thinking: ThinkingCallback | None = None,
         **kwargs: object,
     ) -> LLMResponse:
-        """Streaming completion."""
+        """Streaming completion. A failed attempt is retried until the first callback fires."""
         url = f"{self._normalize_base_url()}/v1/messages"
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=True, **kwargs)
 
+        delivery = StreamDelivery(on_chunk, on_tool_delta, on_thinking)
+        return await call_with_retry(
+            lambda: self._stream_once(url, payload, delivery.on_chunk, delivery.on_tool_delta, delivery.on_thinking),
+            provider="anthropic",
+            delivery=delivery,
+        )
+
+    async def _stream_once(
+        self,
+        url: str,
+        payload: dict[str, object],
+        on_chunk: ChunkCallback | None,
+        on_tool_delta: ToolCallback | None,
+        on_thinking: ThinkingCallback | None,
+    ) -> LLMResponse:
+        """One streaming attempt. Its accumulators are local, so a retry starts clean."""
         full_content = ""
         full_reasoning = ""
         full_signature: str | None = None
@@ -268,131 +287,120 @@ class AnthropicClient(LLMClient):
 
         client = await self._get_client()
 
-        try:
-            async with client.stream("POST", url, json=payload, headers=self._get_headers()) as resp:
-                if resp.status_code >= 400:
-                    error_body = ""
-                    async for chunk in resp.aiter_bytes():
-                        error_body += chunk.decode(errors="replace")
-                    raise LLMError(f"HTTP {resp.status_code}: {error_body[:500]}")
+        async with client.stream("POST", url, json=payload, headers=self._get_headers()) as resp:
+            if resp.status_code >= 400:
+                raise await stream_http_error(resp)
 
-                current_event = None
+            current_event = None
 
-                async for line in resp.aiter_lines():
-                    if not line.strip():
-                        continue
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
 
-                    if line.startswith("event:"):
-                        current_event = line[len("event:") :].strip()
-                        continue
+                if line.startswith("event:"):
+                    current_event = line[len("event:") :].strip()
+                    continue
 
-                    if not line.startswith("data:"):
-                        continue
+                if not line.startswith("data:"):
+                    continue
 
-                    data_str = line[len("data:") :].strip()
-                    if data_str == "[DONE]":
-                        break
+                data_str = line[len("data:") :].strip()
+                if data_str == "[DONE]":
+                    break
 
-                    try:
-                        data = json_loads_object(data_str)
-                    except json.JSONDecodeError:
-                        continue
+                try:
+                    data = json_loads_object(data_str)
+                except json.JSONDecodeError:
+                    continue
 
-                    # Handle events
-                    if current_event == "message_start":
-                        msg = json_object_from(data.get("message"))
-                        model_name = json_as_str(msg.get("model"))
-                        if model_name not in (None, ""):
-                            final_model = model_name
-                        usage_raw = msg.get("usage")
-                        if is_json_object(usage_raw):
-                            final_usage = _usage_from_json(usage_raw)
+                # Handle events
+                if current_event == "message_start":
+                    msg = json_object_from(data.get("message"))
+                    model_name = json_as_str(msg.get("model"))
+                    if model_name not in (None, ""):
+                        final_model = model_name
+                    usage_raw = msg.get("usage")
+                    if is_json_object(usage_raw):
+                        final_usage = _usage_from_json(usage_raw)
 
-                    elif current_event == "content_block_start":
-                        block = json_object_from(data.get("content_block"))
-                        idx = json_as_int(data.get("index"))
-                        if block.get("type") == "tool_use":
-                            tool_call_index_map[idx] = len(tool_calls_data)
-                            tool_calls_data.append(
-                                {
-                                    "id": json_as_str_or(block.get("id")),
-                                    "type": "function",
-                                    "function": {"name": json_as_str_or(block.get("name")), "arguments": ""},
-                                }
-                            )
-                            if on_tool_delta:
-                                callback_data: ToolCallbackData = {
-                                    "id": json_as_str_or(block.get("id"), f"draft-{idx}"),
-                                    "index": idx,
-                                    "name": json_as_str_or(block.get("name")),
-                                    "arguments": "",
-                                }
-                                await on_tool_delta(callback_data)
-
-                    elif current_event == "content_block_delta":
-                        idx = json_as_int(data.get("index"))
-                        delta = json_object_from(data.get("delta"))
-                        delta_type = delta.get("type")
-
-                        if delta_type == "text_delta":
-                            text = json_as_str_or(delta.get("text"))
-                            full_content += text
-                            if on_chunk:
-                                await on_chunk(text)
-
-                        elif delta_type == "thinking_delta":
-                            thought = json_as_str_or(delta.get("thinking"))
-                            full_reasoning += thought
-                            if on_thinking:
-                                await on_thinking(thought)
-
-                        elif delta_type == "signature_delta":
-                            signature = json_as_str(delta.get("signature"))
-                            if signature is not None:
-                                full_signature = signature
-
-                        elif delta_type == "input_json_delta" and idx in tool_call_index_map:
-                            tc_idx = tool_call_index_map[idx]
-                            tool_call = tool_calls_data[tc_idx]
-                            function = tool_call.get("function") or {}
-                            tool_name = function.get("name") or ""
-                            arguments = function.get("arguments")
-                            current_arguments = arguments if isinstance(arguments, str) else ""
-                            partial_json = delta.get("partial_json", "")
-                            updated_arguments = current_arguments + (
-                                partial_json if isinstance(partial_json, str) else ""
-                            )
-                            tool_call["function"] = {"name": tool_name, "arguments": updated_arguments}
-                            if on_tool_delta:
-                                delta_callback_data: ToolCallbackData = {
-                                    "id": tool_call.get("id") or f"draft-{idx}",
-                                    "index": idx,
-                                    "name": tool_name,
-                                    "arguments": updated_arguments,
-                                }
-                                await on_tool_delta(delta_callback_data)
-
-                    elif current_event == "message_delta":
-                        delta = json_object_from(data.get("delta"))
-                        stop_reason = json_as_str(delta.get("stop_reason"))
-                        if stop_reason not in (None, ""):
-                            last_finish_reason = stop_reason
-                        usage_raw = data.get("usage")
-                        if is_json_object(usage_raw):
-                            # message_delta usage is cumulative
-                            final_usage = _usage_from_json(usage_raw)
-
-                    elif current_event == "error":
-                        error_info = json_object_from(data.get("error"))
-                        raise LLMError(
-                            f"Anthropic stream error ({error_info.get('type')}): {error_info.get('message')}"
+                elif current_event == "content_block_start":
+                    block = json_object_from(data.get("content_block"))
+                    idx = json_as_int(data.get("index"))
+                    if block.get("type") == "tool_use":
+                        tool_call_index_map[idx] = len(tool_calls_data)
+                        tool_calls_data.append(
+                            {
+                                "id": json_as_str_or(block.get("id")),
+                                "type": "function",
+                                "function": {"name": json_as_str_or(block.get("name")), "arguments": ""},
+                            }
                         )
+                        if on_tool_delta:
+                            callback_data: ToolCallbackData = {
+                                "id": json_as_str_or(block.get("id"), f"draft-{idx}"),
+                                "index": idx,
+                                "name": json_as_str_or(block.get("name")),
+                                "arguments": "",
+                            }
+                            await on_tool_delta(callback_data)
 
-                    elif current_event == "message_stop":
-                        break
+                elif current_event == "content_block_delta":
+                    idx = json_as_int(data.get("index"))
+                    delta = json_object_from(data.get("delta"))
+                    delta_type = delta.get("type")
 
-        except (httpx.ConnectError, httpx.ReadError, httpx.ConnectTimeout) as e:
-            raise LLMError(f"Connection failed: {e}") from e
+                    if delta_type == "text_delta":
+                        text = json_as_str_or(delta.get("text"))
+                        full_content += text
+                        if on_chunk:
+                            await on_chunk(text)
+
+                    elif delta_type == "thinking_delta":
+                        thought = json_as_str_or(delta.get("thinking"))
+                        full_reasoning += thought
+                        if on_thinking:
+                            await on_thinking(thought)
+
+                    elif delta_type == "signature_delta":
+                        signature = json_as_str(delta.get("signature"))
+                        if signature is not None:
+                            full_signature = signature
+
+                    elif delta_type == "input_json_delta" and idx in tool_call_index_map:
+                        tc_idx = tool_call_index_map[idx]
+                        tool_call = tool_calls_data[tc_idx]
+                        function = tool_call.get("function") or {}
+                        tool_name = function.get("name") or ""
+                        arguments = function.get("arguments")
+                        current_arguments = arguments if isinstance(arguments, str) else ""
+                        partial_json = delta.get("partial_json", "")
+                        updated_arguments = current_arguments + (partial_json if isinstance(partial_json, str) else "")
+                        tool_call["function"] = {"name": tool_name, "arguments": updated_arguments}
+                        if on_tool_delta:
+                            delta_callback_data: ToolCallbackData = {
+                                "id": tool_call.get("id") or f"draft-{idx}",
+                                "index": idx,
+                                "name": tool_name,
+                                "arguments": updated_arguments,
+                            }
+                            await on_tool_delta(delta_callback_data)
+
+                elif current_event == "message_delta":
+                    delta = json_object_from(data.get("delta"))
+                    stop_reason = json_as_str(delta.get("stop_reason"))
+                    if stop_reason not in (None, ""):
+                        last_finish_reason = stop_reason
+                    usage_raw = data.get("usage")
+                    if is_json_object(usage_raw):
+                        # message_delta usage is cumulative
+                        final_usage = _usage_from_json(usage_raw)
+
+                elif current_event == "error":
+                    error_info = json_object_from(data.get("error"))
+                    raise LLMError(f"Anthropic stream error ({error_info.get('type')}): {error_info.get('message')}")
+
+                elif current_event == "message_stop":
+                    break
 
         # Normalize stop reason to OpenAI style (optional but helpful for consistency)
         if last_finish_reason == "end_turn":

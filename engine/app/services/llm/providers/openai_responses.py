@@ -19,6 +19,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
+from app.services.llm.retry_policy import call_with_retry, raise_for_status
 from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, LLMUsage
 
 
@@ -413,11 +414,13 @@ class OpenAIResponsesClient(LLMClient):
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=False, **kwargs)
 
         client = await self._get_client()
-        response = await client.post(url, json=payload, headers=self._get_headers())
 
-        if response.status_code >= 400:
-            error_text = response.text[:500]
-            raise LLMError(f"HTTP {response.status_code}: {error_text}")
+        async def send() -> httpx.Response:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            await raise_for_status(response)
+            return response
+
+        response = await call_with_retry(send, provider="openai-responses")
 
         data = json_object_from_response(response)
         api_error = self._extract_api_error(data)
@@ -446,7 +449,8 @@ class OpenAIResponsesClient(LLMClient):
     ) -> LLMResponse:
         """Streaming completion.
 
-        Minimal implementation: fallback to non-streaming and forward final text.
+        Minimal implementation: fallback to non-streaming and forward final text. ``complete`` owns the retries,
+        and no callback has fired until it returns, so a failed attempt is always safe to retry.
         """
         response = await self.complete(
             messages=messages,

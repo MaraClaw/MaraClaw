@@ -113,6 +113,6 @@ async def test_execution_purge_predicate_is_the_partial_index_predicate(raw: Pur
     predicate = "status IN ('completed', 'failed')"
     assert (
         f"CREATE INDEX IF NOT EXISTS ix_trigger_executions_finished_at ON trigger_executions (finished_at) "
-        f"WHERE {predicate};"
+        f"WHERE {predicate}$ddl$);"
     ) in baseline
     assert predicate in squashed(query)

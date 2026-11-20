@@ -24,6 +24,7 @@ from app.services.channels.whatsapp_personal_protocol import (
     AuthSet,
     Closed,
     CredsSet,
+    Identity,
     MediaChunk,
     MediaEnd,
     MediaError,
@@ -44,6 +45,8 @@ class ParentPeer(Protocol):
 
     async def write(self, value: dict[str, JsonValue]) -> None: ...
 
+    def observe_link(self, *, up: bool) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class IntakeQueues:
@@ -52,7 +55,8 @@ class IntakeQueues:
     text_drained: anyio.Event
 
 
-async def read_frames(peer: ParentPeer, messages: IntakeQueues) -> None:
+async def read_frames(peer: ParentPeer, messages: IntakeQueues) -> Closed | None:
+    """Consume child frames until EOF or the handled ``closed`` frame, which is returned."""
     process = peer.process
     if process is None or process.stdout is None:
         raise BrokenPipeError
@@ -64,7 +68,7 @@ async def read_frames(peer: ParentPeer, messages: IntakeQueues) -> None:
             lifecycle(peer.connection, peer.run_id, "parent_eof", "finished")
             messages.text.close()
             await messages.text_drained.wait()
-            return
+            return None
         while b"\n" in pending:
             raw, pending = pending.split(b"\n", 1)
             if len(raw) > 1048576:
@@ -74,6 +78,8 @@ async def read_frames(peer: ParentPeer, messages: IntakeQueues) -> None:
                 raise MediaTransferError("forbidden")
             if isinstance(frame, Diagnostic):
                 log_diagnostic(peer.connection, peer.run_id, frame)
+                if frame.stage == "connection" and frame.connection_state == "close":
+                    peer.observe_link(up=False)
                 continue
             if isinstance(frame, (MediaChunk, MediaEnd, MediaError)):
                 await peer.media.handle(frame)
@@ -122,7 +128,9 @@ async def read_frames(peer: ParentPeer, messages: IntakeQueues) -> None:
                             "error": None,
                         }
                     )
+                elif isinstance(frame, Identity):
+                    peer.observe_link(up=True)
             if isinstance(frame, Closed):
-                return
+                return frame
         if len(pending) > 1048576:
             raise MediaTransferError("too_large")

@@ -240,18 +240,27 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
 
     async def accessible_agent_ids(self, user_id: UUID, agent_ids: Sequence[UUID]) -> set[UUID]:
         """Batched ``has_agent_access``: the subset of ``agent_ids`` the user reaches through a department."""
+        return {agent_id for _, agent_id in await self.accessible_agent_pairs([user_id], agent_ids)}
+
+    async def accessible_agent_pairs(
+        self, user_ids: Sequence[UUID], agent_ids: Sequence[UUID]
+    ) -> set[tuple[UUID, UUID]]:
+        """Batched ``has_agent_access`` over users and agents: every (user, agent) reached through a department.
+
+        The cross product of the two lists is searched, so callers look up only the pairs they asked about.
+        """
         async with self.session() as db:
             rows = await db.fetchall(
-                "SELECT DISTINCT a.id FROM users u JOIN local_department_memberships m "
+                "SELECT DISTINCT u.id AS user_id, a.id AS agent_id FROM users u JOIN local_department_memberships m "
                 "ON m.user_id = u.id AND m.tenant_id = u.tenant_id "
                 "JOIN local_departments d ON d.id = m.department_id AND d.tenant_id = m.tenant_id "
                 "JOIN agent_permissions p ON p.scope_type = 'department' AND p.scope_id = d.id "
                 "AND p.access_level = 'use' JOIN agents a ON a.id = p.agent_id AND a.tenant_id = u.tenant_id "
-                "WHERE u.id = %(user)s AND u.is_active IS TRUE AND a.id = ANY(%(ids)s) "
+                "WHERE u.id = ANY(%(users)s) AND u.is_active IS TRUE AND a.id = ANY(%(ids)s) "
                 "AND a.access_mode = 'custom'",
-                {"user": user_id, "ids": list(agent_ids)},
+                {"users": list(user_ids), "ids": list(agent_ids)},
             )
-            return {uuid_from_row(row["id"]) for row in rows}
+            return {(uuid_from_row(row["user_id"]), uuid_from_row(row["agent_id"])) for row in rows}
 
     async def accessible_user_ids(self, agent_id: UUID) -> set[UUID]:
         async with self.session() as db:

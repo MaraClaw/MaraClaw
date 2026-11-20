@@ -1,10 +1,13 @@
 import os
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from anyio import create_task_group, fail_after
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from psycopg import AsyncConnection, sql
@@ -12,6 +15,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.errors import QueryCanceled
 from psycopg.rows import DictRow, dict_row
 
+from advisory_lock_fixtures import held_advisory_lock, wait_for_advisory_waiters
 from app.config import get_settings
 from app.core.domain.users import UserRole
 from app.core.json_types import int_from_row
@@ -20,7 +24,13 @@ from app.core.security import check_membership_generation, create_access_token, 
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection
-from app.db.errors import CheckViolationError, DbError, ForeignKeyViolationError, UniqueViolationError
+from app.db.errors import (
+    CheckViolationError,
+    DbError,
+    ForeignKeyViolationError,
+    LockNotAvailableError,
+    UniqueViolationError,
+)
 from app.db.pool import EnginePool, close_pool, durable_pool, get_pool, init_pool
 from app.db.session import connection_ctx
 from app.main import app
@@ -1133,3 +1143,195 @@ async def test_cancelled_statement_is_a_retryable_503_through_the_real_app(
         async with connection_ctx() as db:
             await db.execute("SELECT pg_sleep(%s)", (_SLOW_SECONDS,))
     assert isinstance(raised.value.orig, QueryCanceled)
+
+
+# A rerun on every start must not queue for ACCESS EXCLUSIVE behind readers, and concurrent starts must not race.
+_SCHEMA_OF = "SELECT current_schema()"
+_REVOCATION_TRIGGERS = (
+    ("agents", "revoke_openclaw_replies_on_transfer", "AFTER UPDATE OF creator_id, tenant_id"),
+    ("chat_messages", "revoke_openclaw_replies_on_clear", "AFTER DELETE"),
+)
+_TRIGGER_ROWS = (
+    "SELECT tgname, tgenabled, xmin::text AS version, pg_get_triggerdef(oid) AS definition FROM pg_trigger "
+    "WHERE tgrelid IN ('agents'::regclass, 'chat_messages'::regclass) AND tgname LIKE 'revoke_openclaw_replies_on_%%' "
+    "ORDER BY tgname"
+)
+_SCHEMA_TABLES = (
+    "SELECT count(*) AS total, string_agg(quote_ident(relname), ', ') AS names FROM pg_class "
+    "WHERE relnamespace = current_schema()::regnamespace AND relkind IN ('r', 'p')"
+)
+_HELD_BY_OTHERS = (
+    "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE l.pid <> pg_backend_pid() "
+    "AND l.mode = 'RowExclusiveLock' AND c.relnamespace = current_schema()::regnamespace AND c.relkind IN ('r', 'p')"
+)
+
+
+@asynccontextmanager
+async def _peer(db: DbConnection) -> AsyncGenerator[DbConnection]:
+    """A second real connection into the schema of ``db``, in a transaction that stays open until the block ends."""
+    schema = await db.fetchval(_SCHEMA_OF)
+    conninfo = make_conninfo(os.environ["BOOTSTRAP_TEST_DATABASE_URL"], options=f"-csearch_path={schema}")
+    async with await AsyncConnection[DictRow].connect(conninfo, row_factory=dict_row) as raw:
+        yield DbConnection(raw)
+
+
+def _bounded_lock_waits(monkeypatch: pytest.MonkeyPatch, milliseconds: int) -> None:
+    """One short attempt, so a lock wait the baseline should not have fails the run at once instead of retrying."""
+    monkeypatch.setattr(bootstrap_db, "_LOCK_TIMEOUT_MS", milliseconds)
+    monkeypatch.setattr(bootstrap_db, "_MAX_ATTEMPTS", 1)
+
+
+async def test_a_rerun_completes_while_writers_hold_every_table(
+    schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a bootstrapped schema and another session holding ROW EXCLUSIVE, the lock every write takes, on all its tables.
+    await bootstrap_db.main()
+    _bounded_lock_waits(monkeypatch, 200)
+    tables = await schema_db.fetchone(_SCHEMA_TABLES)
+    assert tables is not None
+    async with _peer(schema_db) as writer:
+        await writer.execute(f"LOCK TABLE {tables['names']} IN ROW EXCLUSIVE MODE")
+        assert await schema_db.fetchval(_HELD_BY_OTHERS) == tables["total"]
+        # When the runner reruns, Then it completes: re-declaring an index, trigger or constraint that already exists
+        # would have locked its table against writes, waited out the 200 ms bound and failed.
+        with fail_after(10):
+            await bootstrap_db.main()
+
+
+async def test_a_rerun_completes_while_open_reads_hold_agents_and_chat_messages(
+    schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a bootstrapped schema and one open read on each table, held by other sessions.
+    await bootstrap_db.main()
+    _bounded_lock_waits(monkeypatch, 200)
+    async with _peer(schema_db) as agents_reader, _peer(schema_db) as messages_reader:
+        await agents_reader.fetchval("SELECT count(*) FROM agents")
+        await messages_reader.fetchval("SELECT count(*) FROM chat_messages")
+        readers = await schema_db.fetchval(
+            "SELECT count(*) FROM pg_locks WHERE mode = 'AccessShareLock' AND pid <> pg_backend_pid() "
+            "AND relation IN ('agents'::regclass, 'chat_messages'::regclass)"
+        )
+        assert readers == 2
+        # When the runner reruns, Then it completes: a DROP TRIGGER would have waited out the 200 ms bound and failed.
+        await bootstrap_db.main()
+
+
+async def test_trigger_definitions_are_unchanged_and_a_rerun_does_not_rewrite_them(schema_db: DbConnection) -> None:
+    # Given the bootstrapped schema.
+    schema = await schema_db.fetchval(_SCHEMA_OF)
+    await bootstrap_db.main()
+    first = await schema_db.fetchall(_TRIGGER_ROWS)
+    # Then both triggers carry the definition the baseline always gave them.
+    assert [(row["tgname"], row["tgenabled"], row["definition"]) for row in first] == [
+        (
+            "revoke_openclaw_replies_on_clear",
+            "O",
+            (
+                f"CREATE TRIGGER revoke_openclaw_replies_on_clear AFTER DELETE ON {schema}.chat_messages "
+                "FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings()"
+            ),
+        ),
+        (
+            "revoke_openclaw_replies_on_transfer",
+            "O",
+            (
+                "CREATE TRIGGER revoke_openclaw_replies_on_transfer AFTER UPDATE OF creator_id, tenant_id "
+                f"ON {schema}.agents FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings()"
+            ),
+        ),
+    ]
+    # When the baseline reruns, Then it left the catalog rows alone: same versions, not dropped and recreated.
+    await bootstrap_db.main()
+    assert await schema_db.fetchall(_TRIGGER_ROWS) == first
+
+
+_DAMAGE = {
+    "dropped": ["DROP TRIGGER {name} ON {table}"],
+    "disabled": ["ALTER TABLE {table} DISABLE TRIGGER {name}"],
+    "redefined": [
+        "DROP TRIGGER {name} ON {table}",
+        "CREATE TRIGGER {name} {event} ON {table} FOR EACH STATEMENT EXECUTE FUNCTION revoke_openclaw_reply_bindings()",
+    ],
+}
+
+
+@pytest.mark.parametrize("damage", _DAMAGE)
+async def test_a_rerun_restores_a_trigger_that_is_missing_disabled_or_defined_differently(
+    schema_db: DbConnection, damage: str
+) -> None:
+    # Given a bootstrapped schema whose two revocation triggers were then damaged.
+    await bootstrap_db.main()
+    intact = [(row["tgname"], row["tgenabled"], row["definition"]) for row in await schema_db.fetchall(_TRIGGER_ROWS)]
+    for table, name, event in _REVOCATION_TRIGGERS:
+        for statement in _DAMAGE[damage]:
+            await schema_db.execute(statement.format(table=table, name=name, event=event))
+    # When the baseline reruns.
+    await bootstrap_db.main()
+    # Then each trigger is back, enabled, with its original definition.
+    restored = [(row["tgname"], row["tgenabled"], row["definition"]) for row in await schema_db.fetchall(_TRIGGER_ROWS)]
+    assert restored == intact
+
+
+async def test_two_concurrent_runs_on_an_empty_schema_both_succeed_one_after_the_other(
+    schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an empty schema, a pool for two runners, and a lock bound of 1 ms: a runner that set it before the advisory
+    # lock would fail while queued, and one that took no advisory lock would never queue.
+    schema = await schema_db.fetchval(_SCHEMA_OF)
+    _ = await init_pool(
+        conninfo=make_conninfo(os.environ["BOOTSTRAP_TEST_DATABASE_URL"], options=f"-csearch_path={schema}"),
+        min_size=1,
+        max_size=3,
+    )
+    _bounded_lock_waits(monkeypatch, 1)
+    finished: list[str] = []
+
+    async def run(name: str) -> None:
+        await bootstrap_db._apply_sql_script(bootstrap_db.SCHEMA_BASELINE)
+        finished.append(name)
+
+    # When both start while a third session holds the bootstrap lock, and both are queued behind it.
+    async with create_task_group() as runners, held_advisory_lock(schema_db, bootstrap_db._ADVISORY_LOCK_KEY):
+        runners.start_soon(run, "first")
+        runners.start_soon(run, "second")
+        await wait_for_advisory_waiters(schema_db, 2)
+        # And the lock is released, Then both finish.
+    assert sorted(finished) == ["first", "second"]
+    built = await schema_db.fetchall(_TRIGGER_ROWS)
+    assert [row["tgname"] for row in built] == [name for _, name, _ in sorted(_REVOCATION_TRIGGERS, key=lambda t: t[1])]
+
+
+async def test_a_foreign_lock_fails_the_run_within_the_bound_and_leaves_nothing_half_applied(
+    schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a bootstrapped schema missing system_settings, which the baseline creates long before it reaches agents.
+    await bootstrap_db.main()
+    await schema_db.execute("DROP TABLE system_settings")
+    _bounded_lock_waits(monkeypatch, 200)
+    absent = "SELECT count(*) FROM pg_tables WHERE schemaname = current_schema() AND tablename = 'system_settings'"
+    # When another session holds ACCESS EXCLUSIVE on agents and the runner reaches it.
+    async with _peer(schema_db) as foreign:
+        await foreign.execute("LOCK TABLE agents IN ACCESS EXCLUSIVE MODE")
+        with fail_after(10), pytest.raises(LockNotAvailableError) as failed:
+            await bootstrap_db.main()
+    # Then it gave up on the lock timeout, and the table it had already recreated was rolled back with the rest.
+    assert getattr(failed.value.orig, "sqlstate", None) == "55P03"
+    assert await schema_db.fetchval(absent) == 0
+    # And once the foreign lock is gone, the same run applies cleanly.
+    await bootstrap_db.main()
+    assert await schema_db.fetchval(absent) == 1
+
+
+async def test_the_lock_bound_lasts_only_as_long_as_the_runs_transaction(
+    schema_db: DbConnection, tmp_path: Path
+) -> None:
+    # Given a baseline that records the lock bound it runs under, and a one-connection pool the run shares afterwards.
+    probe = tmp_path / "bound.sql"
+    _ = probe.write_text("CREATE TABLE bound_seen AS SELECT current_setting('lock_timeout') AS bound;\n")
+    _ = await bootstrap_db.init_pool()
+    # When the runner applies it.
+    await bootstrap_db._apply_sql_script(probe)
+    # Then the statements ran under the bound, and the next checkout of that same connection has none.
+    assert await schema_db.fetchval("SELECT bound FROM bound_seen") == f"{bootstrap_db._LOCK_TIMEOUT_MS // 1000}s"
+    async with connection_ctx() as db:
+        assert await db.fetchval("SHOW lock_timeout") == "0"

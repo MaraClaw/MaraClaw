@@ -20,6 +20,7 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 - `vision_content.py` builds vision/screenshot parts when the selected model supports vision.
 - `finish.py` defines the required `finish(content=...)` control tool.
 - `failover.py` classifies retryable provider failures.
+- `retry_policy.py` is the one retry policy for provider HTTP, called from inside each provider module for `complete` and `stream`: 3 attempts, jittered exponential backoff (1 s base, 8 s cap), `Retry-After` seconds or HTTP-date capped at 30 s, an injectable sleep (`RETRY_POLICY`). It retries `httpx.ConnectError`/`ReadError`/`ConnectTimeout` and HTTP 429/500/502/503/504/529; other 4xx raise on the first attempt. A stream retries only until its first `on_chunk`/`on_tool_delta`/`on_thinking` fires (`StreamDelivery`). An exhausted budget keeps the `HTTP <status>: ...` / `Connection failed ...` text `failover.py` classifies, so `call_llm_with_failover` still falls back once. Never add a retry loop to `caller.py`, `failover.py` or `http_pool.py`: the fallback model stays reserved for a provider that is actually down.
 
 ## Provider Rules
 
@@ -43,5 +44,5 @@ This package owns provider protocol handling and agent-facing LLM orchestration.
 ## Tests
 
 - Existing focused coverage includes `tests/test_finish_protocol.py`, `tests/test_llm_client_contract.py`, `tests/test_llm_registered_provider_contract.py`, and `tests/test_llm_streaming_normalization.py`.
-- Add fake HTTP/stream parser tests for provider client changes.
+- Add fake HTTP/stream parser tests for provider client changes. Retry behavior is tested against every provider for both call styles with `tests/llm_retry_fakes.py` (scripted responses, `install_retry_policy` records waits instead of sleeping); never sleep for real or call a live provider.
 - Add pair-integrity tests when changing `convert_chat_messages_to_llm_format` or `truncate_messages_with_pair_integrity`.

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from typing import Any, ClassVar, override
@@ -33,6 +32,7 @@ from app.services.llm.base import (
     ToolCallbackData,
     ToolDefinition,
 )
+from app.services.llm.retry_policy import StreamDelivery, call_with_retry, raise_for_status, stream_http_error
 from app.services.llm.types import LLMMessage, LLMResponse, LLMStreamChunk, LLMToolCall, LLMUsage
 
 
@@ -373,11 +373,13 @@ class OpenAICompatibleClient(LLMClient):
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=False, **kwargs)
 
         client = await self._get_client()
-        response = await client.post(url, json=payload, headers=self._get_headers())
 
-        if response.status_code >= 400:
-            error_text = response.text[:500]
-            raise LLMError(f"HTTP {response.status_code}: {error_text}")
+        async def send() -> httpx.Response:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            await raise_for_status(response)
+            return response
+
+        response = await call_with_retry(send, provider="openai-compatible")
 
         data = json_object_from_response(response)
 
@@ -431,9 +433,25 @@ class OpenAICompatibleClient(LLMClient):
         on_thinking: ThinkingCallback | None = None,
         **kwargs: object,
     ) -> LLMResponse:
-        """Streaming completion."""
+        """Streaming completion. A failed attempt is retried until the first callback fires."""
         url = f"{self._normalize_base_url()}/chat/completions"
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=True, **kwargs)
+        delivery = StreamDelivery(on_chunk, on_tool_delta, on_thinking)
+        return await call_with_retry(
+            lambda: self._stream_once(url, payload, delivery.on_chunk, delivery.on_tool_delta, delivery.on_thinking),
+            provider="openai-compatible",
+            delivery=delivery,
+        )
+
+    async def _stream_once(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        on_chunk: ChunkCallback | None,
+        on_tool_delta: ToolCallback | None,
+        on_thinking: ThinkingCallback | None,
+    ) -> LLMResponse:
+        """One streaming attempt. Its accumulators are local, so a retry starts clean."""
         full_content = ""
         full_reasoning = ""
         tool_calls_data: list[LLMToolCall] = []
@@ -444,89 +462,66 @@ class OpenAICompatibleClient(LLMClient):
         tag_buffer = ""
         json_buffer = ""  # Buffer for non-standard APIs with split JSON (inspired by PR #120)
 
-        max_retries = 3
         client = await self._get_client()
+        async with client.stream("POST", url, json=payload, headers=self._get_headers()) as resp:
+            if resp.status_code >= 400:
+                raise await stream_http_error(resp)
 
-        for attempt in range(max_retries):
-            try:
-                async with client.stream("POST", url, json=payload, headers=self._get_headers()) as resp:
-                    if resp.status_code >= 400:
-                        error_body = ""
-                        async for chunk in resp.aiter_bytes():
-                            error_body += chunk.decode(errors="replace")
-                        raise LLMError(f"HTTP {resp.status_code}: {error_body[:500]}")
+            async for line in resp.aiter_lines():
+                chunk, in_think, tag_buffer, json_buffer = self._parse_stream_line(
+                    line, in_think, tag_buffer, json_buffer
+                )
 
-                    async for line in resp.aiter_lines():
-                        chunk, in_think, tag_buffer, json_buffer = self._parse_stream_line(
-                            line, in_think, tag_buffer, json_buffer
-                        )
+                if chunk.is_finished:
+                    break
 
-                        if chunk.is_finished:
-                            break
+                if chunk.content:
+                    full_content += chunk.content
+                    if on_chunk:
+                        await on_chunk(chunk.content)
 
-                        if chunk.content:
-                            full_content += chunk.content
-                            if on_chunk:
-                                await on_chunk(chunk.content)
+                if chunk.reasoning_content:
+                    full_reasoning += chunk.reasoning_content
+                    if on_thinking:
+                        await on_thinking(chunk.reasoning_content)
 
-                        if chunk.reasoning_content:
-                            full_reasoning += chunk.reasoning_content
-                            if on_thinking:
-                                await on_thinking(chunk.reasoning_content)
+                if chunk.tool_call is not None and chunk.tool_call:
+                    idx = chunk.tool_call.get("index", 0)
+                    while len(tool_calls_data) <= idx:
+                        tool_calls_data.append({"id": "", "function": {"name": "", "arguments": ""}})
+                    tc = tool_calls_data[idx]
+                    delta_id = chunk.tool_call.get("id")
+                    if delta_id not in (None, ""):
+                        tc["id"] = delta_id
+                    fn_delta = chunk.tool_call.get("function") or {}
+                    function = tc.get("function") or {}
+                    tool_name = function.get("name") or ""
+                    current_arguments = function.get("arguments")
+                    arguments = current_arguments if isinstance(current_arguments, str) else ""
+                    name_delta = fn_delta.get("name")
+                    if name_delta not in (None, ""):
+                        tool_name += name_delta
+                    arg_chunk = fn_delta.get("arguments")
+                    if arg_chunk is not None:
+                        if isinstance(arg_chunk, dict):
+                            arguments = json.dumps(arg_chunk, ensure_ascii=False)
+                        else:
+                            arguments += str(arg_chunk)
+                    tc["function"] = {"name": tool_name, "arguments": arguments}
+                    if on_tool_delta and (tool_name or arguments):
+                        callback_data: ToolCallbackData = {
+                            "id": tc.get("id") or f"draft-{idx}",
+                            "index": idx,
+                            "name": tool_name,
+                            "arguments": arguments,
+                        }
+                        await on_tool_delta(callback_data)
 
-                        if chunk.tool_call is not None and chunk.tool_call:
-                            idx = chunk.tool_call.get("index", 0)
-                            while len(tool_calls_data) <= idx:
-                                tool_calls_data.append({"id": "", "function": {"name": "", "arguments": ""}})
-                            tc = tool_calls_data[idx]
-                            delta_id = chunk.tool_call.get("id")
-                            if delta_id not in (None, ""):
-                                tc["id"] = delta_id
-                            fn_delta = chunk.tool_call.get("function") or {}
-                            function = tc.get("function") or {}
-                            tool_name = function.get("name") or ""
-                            current_arguments = function.get("arguments")
-                            arguments = current_arguments if isinstance(current_arguments, str) else ""
-                            name_delta = fn_delta.get("name")
-                            if name_delta not in (None, ""):
-                                tool_name += name_delta
-                            arg_chunk = fn_delta.get("arguments")
-                            if arg_chunk is not None:
-                                if isinstance(arg_chunk, dict):
-                                    arguments = json.dumps(arg_chunk, ensure_ascii=False)
-                                else:
-                                    arguments += str(arg_chunk)
-                            tc["function"] = {"name": tool_name, "arguments": arguments}
-                            if on_tool_delta and (tool_name or arguments):
-                                callback_data: ToolCallbackData = {
-                                    "id": tc.get("id") or f"draft-{idx}",
-                                    "index": idx,
-                                    "name": tool_name,
-                                    "arguments": arguments,
-                                }
-                                await on_tool_delta(callback_data)
+                if chunk.usage is not None and chunk.usage:
+                    final_usage = chunk.usage
 
-                        if chunk.usage is not None and chunk.usage:
-                            final_usage = chunk.usage
-
-                        if chunk.finish_reason not in (None, ""):
-                            last_finish_reason = chunk.finish_reason
-
-                break  # Success
-
-            except (httpx.ConnectError, httpx.ReadError, httpx.ConnectTimeout) as e:
-                if attempt < max_retries - 1:
-                    wait = (attempt + 1) * 1
-                    logger.warning(f"Stream attempt {attempt + 1} failed ({type(e).__name__}), retrying in {wait}s...")
-                    await asyncio.sleep(wait)
-                    full_content = ""
-                    full_reasoning = ""
-                    tool_calls_data = []
-                    in_think = False
-                    tag_buffer = ""
-                    json_buffer = ""
-                else:
-                    raise LLMError(f"Connection failed after {max_retries} attempts: {e}") from e
+                if chunk.finish_reason not in (None, ""):
+                    last_finish_reason = chunk.finish_reason
 
         # Clean up any remaining think tags
         full_content = re.sub(r"<think>[\s\S]*?</think>\s*", "", full_content).strip()

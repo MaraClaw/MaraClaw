@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import ClassVar, Protocol, TypedDict
 
@@ -24,6 +25,8 @@ from app.dao.org_department_dao import org_department_dao
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.agent_relationship import AgentRelationshipRecord
+from app.records.org import OrgMemberRecord
+from app.records.user import UserRecord
 from app.schemas.agent_directory import AgentDirectoryPosition
 
 
@@ -55,6 +58,9 @@ class _AgentLike(Protocol):
     status: AgentStatus
     is_expired: bool
     expires_at: datetime | None
+
+
+type _UserAgentPair = tuple[uuid.UUID, uuid.UUID]
 
 
 async def list_visible_agents(
@@ -261,6 +267,88 @@ def _agent_available(agent: AgentRecord | None) -> tuple[bool, str | None]:
     return True, None
 
 
+def _status(access_allowed: bool, access_status: str, reason: str | None = None) -> RelationshipStatus:
+    return {"access_allowed": access_allowed, "access_status": access_status, "access_status_reason": reason}
+
+
+def _active_status() -> RelationshipStatus:
+    return _status(True, "active")
+
+
+def _restricted_status(reason: str) -> RelationshipStatus:
+    return _status(False, "restricted", reason)
+
+
+@dataclass(frozen=True, slots=True)
+class _ManagerGate:
+    """An Agent -> Agent verdict that waits on whether one candidate user manages both agents."""
+
+    source: AgentRecord
+    target: AgentRecord
+    candidate_user_ids: tuple[uuid.UUID, ...]
+    denied_reason: str
+
+    def status(self, *, managed: bool) -> RelationshipStatus:
+        return _active_status() if managed else _restricted_status(self.denied_reason)
+
+
+@dataclass(frozen=True, slots=True)
+class _PlatformUserGate:
+    """An Agent -> Human verdict that waits on the linked platform user's access level to the agent."""
+
+    user_id: uuid.UUID
+    agent: AgentRecord
+
+
+def _decide_agent_relationship(
+    source: AgentRecord | None,
+    target: AgentRecord | None,
+    *,
+    created_by_user_id: uuid.UUID | None,
+    current_user_id: uuid.UUID | None,
+) -> RelationshipStatus | _ManagerGate:
+    """Agent -> Agent precedence shared by the per-row and batch evaluators; loads nothing.
+
+    Order: missing agent, different tenant, target availability, then the relationship creator (which never falls
+    through to company mode), a company target, and finally the current user and the source agent's creator.
+    A gate leaves only the access-level question, which each evaluator answers from its own loads.
+    """
+    if not source or not target:
+        return _status(False, "missing_target", "source_or_target_not_found")
+    if source.tenant_id != target.tenant_id:
+        return _restricted_status("different_tenant")
+    available, reason = _agent_available(target)
+    if not available:
+        return _restricted_status(reason or "target_unavailable")
+    if created_by_user_id:
+        return _ManagerGate(source, target, (created_by_user_id,), "relationship_creator_no_longer_manages_both_agents")
+    if (target.access_mode or "company") == "company":
+        return _active_status()
+    candidates = tuple(dict.fromkeys(user_id for user_id in (current_user_id, source.creator_id) if user_id))
+    return _ManagerGate(source, target, candidates, "manager_no_longer_has_access_to_both_agents")
+
+
+def _decide_human_relationship(
+    source_agent: AgentRecord | None, member: OrgMemberRecord | None
+) -> RelationshipStatus | _PlatformUserGate:
+    """Agent -> Human precedence shared by the per-row and batch evaluators; loads nothing."""
+    if not source_agent or not member:
+        return _status(False, "missing_target", "agent_or_member_not_found")
+    if member.status != "active":
+        return _restricted_status("member_inactive")
+    if member.tenant_id and source_agent.tenant_id and member.tenant_id != source_agent.tenant_id:
+        return _restricted_status("different_tenant")
+    if member.user_id:
+        return _PlatformUserGate(member.user_id, source_agent)
+    return _active_status()
+
+
+def _human_status_for_level(access_level: PermissionAccessLevel | None) -> RelationshipStatus:
+    if access_level in (None, ""):
+        return _restricted_status("platform_user_no_agent_access")
+    return _active_status()
+
+
 async def evaluate_agent_relationship_status(
     rel: AgentAgentRelationshipRecord,
     *,
@@ -272,72 +360,17 @@ async def evaluate_agent_relationship_status(
     if target is None:
         target = await agent_dao.get(rel.target_agent_id)
 
-    if not source or not target:
-        return {
-            "access_allowed": False,
-            "access_status": "missing_target",
-            "access_status_reason": "source_or_target_not_found",
-        }
-    if source.tenant_id != target.tenant_id:
-        return {
-            "access_allowed": False,
-            "access_status": "restricted",
-            "access_status_reason": "different_tenant",
-        }
-
-    available, reason = _agent_available(target)
-    if not available:
-        return {
-            "access_allowed": False,
-            "access_status": "restricted",
-            "access_status_reason": reason or "target_unavailable",
-        }
-
-    created_by_user_id = rel.created_by_user_id
-    if created_by_user_id:
-        if await user_can_manage_agent_id(created_by_user_id, source) and await user_can_manage_agent_id(
-            created_by_user_id, target
+    verdict = _decide_agent_relationship(
+        source, target, created_by_user_id=rel.created_by_user_id, current_user_id=current_user_id
+    )
+    if not isinstance(verdict, _ManagerGate):
+        return verdict
+    for user_id in verdict.candidate_user_ids:
+        if await user_can_manage_agent_id(user_id, verdict.source) and await user_can_manage_agent_id(
+            user_id, verdict.target
         ):
-            return {
-                "access_allowed": True,
-                "access_status": "active",
-                "access_status_reason": None,
-            }
-        return {
-            "access_allowed": False,
-            "access_status": "restricted",
-            "access_status_reason": "relationship_creator_no_longer_manages_both_agents",
-        }
-
-    target_mode = target.access_mode or "company"
-    if target_mode == "company":
-        return {
-            "access_allowed": True,
-            "access_status": "active",
-            "access_status_reason": None,
-        }
-
-    candidate_user_ids: list[uuid.UUID | None] = [
-        current_user_id,
-        source.creator_id,
-    ]
-    seen: set[uuid.UUID] = set()
-    for user_id in candidate_user_ids:
-        if not user_id or user_id in seen:
-            continue
-        seen.add(user_id)
-        if await user_can_manage_agent_id(user_id, source) and await user_can_manage_agent_id(user_id, target):
-            return {
-                "access_allowed": True,
-                "access_status": "active",
-                "access_status_reason": None,
-            }
-
-    return {
-        "access_allowed": False,
-        "access_status": "restricted",
-        "access_status_reason": "manager_no_longer_has_access_to_both_agents",
-    }
+            return verdict.status(managed=True)
+    return verdict.status(managed=False)
 
 
 async def evaluate_human_relationship_status(
@@ -352,38 +385,141 @@ async def evaluate_human_relationship_status(
     if member is None:
         member = await org_member_dao.get(rel.member_id)
 
-    if not source_agent or not member:
-        return {
-            "access_allowed": False,
-            "access_status": "missing_target",
-            "access_status_reason": "agent_or_member_not_found",
-        }
-    if member.status != "active":
-        return {
-            "access_allowed": False,
-            "access_status": "restricted",
-            "access_status_reason": "member_inactive",
-        }
-    if member.tenant_id and source_agent.tenant_id and member.tenant_id != source_agent.tenant_id:
-        return {
-            "access_allowed": False,
-            "access_status": "restricted",
-            "access_status_reason": "different_tenant",
-        }
-    if member.user_id:
-        access_level = await get_agent_access_level_for_user_id(member.user_id, source_agent)
-        if access_level in (None, ""):
-            return {
-                "access_allowed": False,
-                "access_status": "restricted",
-                "access_status_reason": "platform_user_no_agent_access",
-            }
+    verdict = _decide_human_relationship(source_agent, member)
+    if not isinstance(verdict, _PlatformUserGate):
+        return verdict
+    return _human_status_for_level(await get_agent_access_level_for_user_id(verdict.user_id, verdict.agent))
 
-    return {
-        "access_allowed": True,
-        "access_status": "active",
-        "access_status_reason": None,
+
+async def _fresh_agents(agent_ids: Collection[uuid.UUID]) -> dict[uuid.UUID, AgentRecord]:
+    """Read agent rows straight from SQL; ``agent_dao.get`` may serve the request memo."""
+    return {agent.id: agent for agent in await agent_dao.get_many(list(agent_ids))}
+
+
+async def _access_levels_for_pairs(
+    pairs: Collection[_UserAgentPair], agents: Mapping[uuid.UUID, AgentRecord]
+) -> dict[_UserAgentPair, PermissionAccessLevel | None]:
+    """Batch form of ``get_agent_access_level_for_user_id`` in at most three statements.
+
+    Users are read fresh by id, ``agents`` are the caller's fresh rows, and each decision runs through the same
+    ``_access_without_permissions`` / ``_access_from_permissions`` as the per-row path. It neither reads nor fills
+    the access cache, so no decision is served stale and no negative result is written.
+    """
+    if not pairs:
+        return {}
+    users = {user.id: user for user in await user_dao.get_many(list({user_id for user_id, _ in pairs}))}
+    levels: dict[_UserAgentPair, PermissionAccessLevel | None] = {}
+    undecided: list[tuple[_UserAgentPair, UserRecord, AgentRecord]] = []
+    for pair in pairs:
+        user, agent = users.get(pair[0]), agents.get(pair[1])
+        if user is None or not user.is_active or agent is None:
+            levels[pair] = None
+            continue
+        early = _access_without_permissions(user, agent)
+        if isinstance(early, _NeedPerms):
+            undecided.append((pair, user, agent))
+        else:
+            levels[pair] = early.level if early is not None else None
+    if not undecided:
+        return levels
+
+    permissions = await agent_permission_dao.list_decision_rows_for_users(
+        list({agent.id for _, _, agent in undecided}), list({user.id for _, user, _ in undecided})
+    )
+    departmental: list[_UserAgentPair] = []
+    for pair, user, agent in undecided:
+        direct = _access_from_permissions(user, agent, permissions.get(agent.id, ()))
+        levels[pair] = direct.level if direct is not None else None
+        if direct is None and agent.access_mode == "custom":
+            departmental.append(pair)
+    if departmental:
+        granted = await org_department_dao.accessible_agent_pairs(
+            list({user_id for user_id, _ in departmental}), list({agent_id for _, agent_id in departmental})
+        )
+        for pair in departmental:
+            if pair in granted:
+                levels[pair] = PermissionAccessLevel.USE
+    return levels
+
+
+async def evaluate_agent_relationship_statuses(
+    rels: Sequence[AgentAgentRelationshipRecord],
+    *,
+    current_user_id: uuid.UUID | None = None,
+) -> list[RelationshipStatus]:
+    """Batch form of ``evaluate_agent_relationship_status``, aligned with ``rels``.
+
+    Statements issued, whatever the number of relationships: one agent read, then (only when a verdict waits on a
+    user) one user read, one permission read and one department read. Agents and users are read fresh; nothing is
+    taken from the preloaded relationship rows or the access cache, and no row is locked.
+    """
+    if not rels:
+        return []
+    agents = await _fresh_agents({agent_id for rel in rels for agent_id in (rel.agent_id, rel.target_agent_id)})
+    verdicts = [
+        _decide_agent_relationship(
+            agents.get(rel.agent_id),
+            agents.get(rel.target_agent_id),
+            created_by_user_id=rel.created_by_user_id,
+            current_user_id=current_user_id,
+        )
+        for rel in rels
+    ]
+    levels = await _access_levels_for_pairs(
+        {
+            (user_id, agent.id)
+            for verdict in verdicts
+            if isinstance(verdict, _ManagerGate)
+            for user_id in verdict.candidate_user_ids
+            for agent in (verdict.source, verdict.target)
+        },
+        agents,
+    )
+    return [
+        verdict.status(
+            managed=any(
+                levels[(user_id, verdict.source.id)] == "manage" and levels[(user_id, verdict.target.id)] == "manage"
+                for user_id in verdict.candidate_user_ids
+            )
+        )
+        if isinstance(verdict, _ManagerGate)
+        else verdict
+        for verdict in verdicts
+    ]
+
+
+async def evaluate_human_relationship_statuses(
+    rels: Sequence[AgentRelationshipRecord],
+) -> list[RelationshipStatus]:
+    """Batch form of ``evaluate_human_relationship_status``, aligned with ``rels``.
+
+    Statements issued, whatever the number of relationships: one agent read, one member read only for rows that
+    arrived without their member, then (only when a verdict waits on a platform user) one user read, one permission
+    read and one department read. Agents and users are read fresh, never from the request memo, the preloaded rows'
+    agents or the access cache, and no row is locked.
+    """
+    if not rels:
+        return []
+    agents = await _fresh_agents({rel.agent_id for rel in rels})
+    loaded_members = {
+        member.id: member
+        for member in await org_member_dao.get_many([rel.member_id for rel in rels if rel.member is None])
     }
+    verdicts = [
+        _decide_human_relationship(
+            agents.get(rel.agent_id), rel.member if rel.member is not None else loaded_members.get(rel.member_id)
+        )
+        for rel in rels
+    ]
+    levels = await _access_levels_for_pairs(
+        {(verdict.user_id, verdict.agent.id) for verdict in verdicts if isinstance(verdict, _PlatformUserGate)}, agents
+    )
+    return [
+        _human_status_for_level(levels[(verdict.user_id, verdict.agent.id)])
+        if isinstance(verdict, _PlatformUserGate)
+        else verdict
+        for verdict in verdicts
+    ]
 
 
 async def check_agent_access(

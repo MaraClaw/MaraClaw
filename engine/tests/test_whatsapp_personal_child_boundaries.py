@@ -6,13 +6,17 @@ from uuid import uuid4
 
 import anyio
 import pytest
+from fastapi import HTTPException
 from tests.channel_submission_fixtures import channel_db, receipt_db
 from tests.test_whatsapp_personal_integration import connected
 
-from app.dao.whatsapp_personal_dao import claim, get_personal, reaped
+from app.dao.user_dao import user_dao
+from app.dao.whatsapp_personal_auth_dao import AuthMutation, write_auth
+from app.dao.whatsapp_personal_dao import candidates, claim, get_personal, reaped
+from app.dao.whatsapp_personal_runtime_dao import runtime_for
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
-from app.records.whatsapp_personal import PersonalConnection
+from app.records.whatsapp_personal import PersonalConnection, PersonalRuntime
 from app.services.channels import whatsapp_personal_child as child_module
 from app.services.channels.whatsapp_personal_child import run_child, spawn_child
 from app.services.channels.whatsapp_personal_control import start
@@ -135,10 +139,125 @@ async def test_current_child_closed_logged_out_revokes_and_purges(channel_db):
         assert row.state == "disconnecting"
 
 
-@pytest.mark.parametrize(
-    ("error", "classified"), [(RuntimeError("unclassified"), False), (ValueError("classified"), True)]
+_CRASH = "import sys\nsys.stdin.readline()\nsys.exit(3)\n"
+_MALFORMED = (
+    "import sys\n"
+    "sys.stdin.readline()\n"
+    "print('{not json', flush=True)\n"
+    "for line in sys.stdin:\n"
+    "    if '\"shutdown\"' in line:\n"
+    "        break\n"
 )
-async def test_only_classified_child_errors_fail_the_connection(monkeypatch, error, classified):
+
+
+@pytest.mark.parametrize("script", [_CRASH, _MALFORMED], ids=["nonzero_exit", "malformed_frame"])
+async def test_transient_child_failure_keeps_paired_credentials_and_waits_for_retry(channel_db, script):
+    # Given a paired, claimed connection with stored credentials.
+    f = channel_db
+    async with transaction(f.db.first):
+        owner = await connected(f)
+        await write_auth(owner, AuthMutation("creds", {"main": "secret"}))
+    # When the real bridge process dies with a non-zero exit or writes a malformed frame.
+    await init_pool(conninfo=f.db.conninfo, min_size=1, max_size=4)
+    try:
+        with anyio.fail_after(10):
+            await run_child(owner, (sys.executable, "-u", "-c", script))
+    finally:
+        await close_pool()
+    # Then credentials and desire survive, the connection waits in reconnecting, and no claim beats retry_at.
+    async with transaction(f.db.second):
+        row = await get_personal(owner.agent_id)
+        runtime = await runtime_for(owner.config_id)
+        stored = await f.db.second.fetchval("SELECT count(*) FROM whatsapp_personal_auth")
+        waiting = {candidate.config_id for candidate in await candidates()}
+        reclaimed = await claim(owner.config_id)
+    assert row is not None
+    assert row.state == "reconnecting"
+    assert row.desired
+    assert row.claim_token is None
+    assert row.generation == owner.generation
+    assert row.account_id == owner.account_id
+    assert row.error_code is None
+    assert stored == 1
+    assert runtime.reconnect_attempts == 1
+    assert runtime.retry_at is not None
+    assert runtime.retry_at > datetime.now(UTC)
+    assert owner.config_id not in waiting
+    assert reclaimed is None
+
+
+async def test_bridge_transport_close_keeps_credentials_and_claim_until_reap(channel_db):
+    # Given a paired, claimed connection with stored credentials.
+    f = channel_db
+    async with transaction(f.db.first):
+        owner = await connected(f)
+        await write_auth(owner, AuthMutation("creds", {"main": "secret"}))
+    # When the bridge spends its in-process reconnects and reports a transport close.
+    async with transaction(f.db.first):
+        await handle_frame(owner, Closed(type="closed", id="closed", token="test", reason="transport_failed"))
+    # Then the generation, desire and credentials survive and the exact reap leaves a gated reconnect.
+    async with transaction(f.db.second):
+        row = await get_personal(owner.agent_id)
+        stored = await f.db.second.fetchval("SELECT count(*) FROM whatsapp_personal_auth")
+        assert await reaped(owner)
+        reaped_row = await get_personal(owner.agent_id)
+        reclaimed = await claim(owner.config_id)
+        runtime = await runtime_for(owner.config_id)
+    assert row is not None
+    assert row.state == "reconnecting"
+    assert row.claim_token == owner.claim_token
+    assert row.generation == owner.generation
+    assert row.desired
+    assert not row.purge_requested
+    assert row.error_code is None
+    assert stored == 1
+    assert reaped_row is not None
+    assert reaped_row.state == "reconnecting"
+    assert reaped_row.claim_token is None
+    assert reclaimed is None
+    assert runtime.reconnect_attempts == 1
+
+
+async def test_lost_owner_authorization_transport_close_is_never_retried(channel_db):
+    # Given a paired, claimed connection whose owner is then deactivated.
+    f = channel_db
+    async with transaction(f.db.first):
+        owner = await connected(f)
+        await write_auth(owner, AuthMutation("creds", {"main": "secret"}))
+    async with transaction(f.db.second):
+        user = await user_dao.get_with_identity(owner.owner_id, fresh=True)
+        assert user is not None
+        await user_dao.update(db_obj=user, obj_in={"is_active": False})
+    # When the bridge reports a transport close for that owner.
+    async with transaction(f.db.first):
+        await handle_frame(owner, Closed(type="closed", id="closed", token="test", reason="transport_failed"))
+    # Then the shared code still takes today's terminal path: revoked, paused on reap, no retry budget charged.
+    async with transaction(f.db.second):
+        row = await get_personal(owner.agent_id)
+        runtime = await runtime_for(owner.config_id)
+    assert row is not None
+    assert not row.desired
+    assert row.generation != owner.generation
+    assert row.state == "disconnecting"
+    assert row.error_code == "transport_failed"
+    assert runtime == PersonalRuntime()
+
+
+@pytest.mark.parametrize(
+    ("error", "paired", "consulted", "purged"),
+    [
+        (RuntimeError("unclassified"), True, False, False),
+        # Malformed frames are a bridge defect or version skew, never proof the account is gone: retried.
+        (ValueError("malformed frame"), True, True, False),
+        (BrokenPipeError("broken pipe"), True, True, False),
+        # An unpaired attempt has nothing to keep, so a transient cause still fails it.
+        (ValueError("malformed frame"), False, True, True),
+        # Lost owner authorization shares transport_failed but is classified by its cause and never retried.
+        (HTTPException(401), True, False, True),
+    ],
+    ids=["unclassified", "malformed_paired", "broken_pipe_paired", "malformed_unpaired", "owner_lost"],
+)
+async def test_child_errors_are_classified_by_cause(monkeypatch, error, paired, consulted, purged):
     # Given a claimed connection whose initial credential read raises.
     connection = PersonalConnection(
         config_id=uuid4(),
@@ -154,17 +273,23 @@ async def test_only_classified_child_errors_fail_the_connection(monkeypatch, err
         created_at=datetime.now(UTC),
     )
     fail_connection = AsyncMock()
+    interrupted = AsyncMock(return_value=paired)
     monkeypatch.setattr(child_module, "fail_connection", fail_connection)
+    monkeypatch.setattr(child_module, "interrupted", interrupted)
     monkeypatch.setattr(child_module, "reaped", AsyncMock(return_value=True))
     monkeypatch.setattr(child_module, "read_auth", AsyncMock(side_effect=error))
     # When run_child handles it.
-    if classified:
-        await run_child(connection, ("unused",))
-    else:
+    if isinstance(error, RuntimeError):
         with pytest.raises(RuntimeError, match="unclassified"):
             await run_child(connection, ("unused",))
-    # Then credentials are purged (fail_connection) only for classified errors.
-    if classified:
+    else:
+        await run_child(connection, ("unused",))
+    # Then transient causes consult the durable retry budget, and only terminal outcomes purge credentials.
+    if consulted:
+        interrupted.assert_awaited_once_with(connection)
+    else:
+        interrupted.assert_not_awaited()
+    if purged:
         fail_connection.assert_awaited_once_with(connection, "transport_failed")
     else:
         fail_connection.assert_not_awaited()
