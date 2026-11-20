@@ -62,7 +62,7 @@ dependencies = [
     "pytest>=9.2.0",
     "orjson>=3.13.0",
     "tenacity>=9.2.1",
-    "phonenumbers>=9.0.43",
+    "phonenumbers>=9.0.44",
 ]
 
 [project.optional-dependencies]
