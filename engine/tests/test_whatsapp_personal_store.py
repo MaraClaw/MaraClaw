@@ -5,12 +5,24 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
 from tests.channel_submission_fixtures import channel_db, receipt_db
+from tests.test_whatsapp_personal_integration import connected, target_for
 
 from app.dao.whatsapp_personal_auth_dao import AuthMutation, read_auth, write_auth
 from app.dao.whatsapp_personal_dao import claim, get_personal, reaped, renew
+from app.dao.whatsapp_personal_runtime_dao import RETRY_DELAYS, runtime_for
 from app.db.session import transaction
+from app.records.outbound_plan import OutboundChunk
+from app.records.whatsapp_personal import PersonalRoute
 from app.services.channels.whatsapp_personal_control import disconnect, start
 from app.services.channels.whatsapp_personal_crypto import AuthCipher, AuthKey
+from app.services.channels.whatsapp_personal_events import handle_frame, interrupted
+from app.services.channels.whatsapp_personal_journal import (
+    PersonalSendPendingError,
+    authorize_dispatch,
+    enqueue,
+    route_matches,
+)
+from app.services.channels.whatsapp_personal_protocol import Identity
 
 __all__ = ["channel_db", "receipt_db"]
 
@@ -106,3 +118,114 @@ async def test_start_rejects_stale_generation_and_noncreator(channel_db):
     # Then the pairing deadline is fixed and no replacement occurred.
     assert row.expires_at is not None
     assert row.expires_at - row.created_at <= timedelta(seconds=121)
+
+
+async def paired(f):
+    owner = await connected(f)
+    await write_auth(owner, AuthMutation("creds", {"main": "secret"}))
+    return owner
+
+
+async def test_exhausted_retry_budget_pauses_with_credentials_kept(channel_db):
+    # Given a paired connection with one pending reply.
+    f = channel_db
+    async with transaction(f.db.first):
+        owner = await paired(f)
+        chunk = OutboundChunk(text="synthetic", key=uuid4())
+        with pytest.raises(PersonalSendPendingError):
+            await enqueue(target_for(owner), chunk)
+    # When transient failures spend the whole retry budget.
+    for _ in RETRY_DELAYS:
+        async with transaction(f.db.first):
+            assert await interrupted(owner)
+    async with transaction(f.db.second):
+        retrying = await get_personal(owner.agent_id)
+        spent = await runtime_for(owner.config_id)
+    assert retrying is not None
+    assert retrying.state == "reconnecting"
+    assert retrying.desired
+    assert spent.reconnect_attempts == len(RETRY_DELAYS)
+    async with transaction(f.db.first):
+        assert await interrupted(owner)
+        assert await reaped(owner)
+    # Then the connection pauses with its credentials, and the reply is cancelled rather than left hanging.
+    async with transaction(f.db.second):
+        row = await get_personal(owner.agent_id)
+        stored = await f.db.second.fetchval("SELECT count(*) FROM whatsapp_personal_auth")
+        send = await f.db.second.fetchval(
+            "SELECT state FROM whatsapp_personal_sends WHERE command_id=%(id)s", {"id": chunk.key}
+        )
+    assert row is not None
+    assert row.state == "paused"
+    assert not row.desired
+    assert not row.purge_requested
+    assert row.error_code == "transport_failed"
+    assert row.account_id == owner.account_id
+    assert stored == 1
+    assert send == "cancelled"
+
+
+async def test_pending_send_survives_a_transient_retry_and_dispatches_after_reconnect(channel_db):
+    # Given a paired connection with one pending reply.
+    f = channel_db
+    async with transaction(f.db.first):
+        owner = await paired(f)
+        chunk = OutboundChunk(text="synthetic", key=uuid4())
+        with pytest.raises(PersonalSendPendingError):
+            await enqueue(target_for(owner), chunk)
+    # When the child dies transiently and is reaped.
+    async with transaction(f.db.first):
+        assert await interrupted(owner)
+        assert await reaped(owner)
+    # Then the route still matches, so the relay keeps the reply pending instead of failing it.
+    async with transaction(f.db.second):
+        retrying = await get_personal(owner.agent_id)
+        assert retrying is not None
+        assert route_matches(retrying, PersonalRoute.from_external_id(target_for(owner).destination))
+        with pytest.raises(PersonalSendPendingError):
+            await enqueue(target_for(owner), chunk)
+    # When the retry time passes and the bridge reconnects to the same account.
+    async with transaction(f.db.first):
+        await f.db.first.execute(
+            "UPDATE channel_configs SET extra_config=jsonb_set(extra_config::jsonb,'{whatsapp_runtime,retry_at}',"
+            "to_jsonb(now()-interval '1 second'))::json WHERE id=%(id)s",
+            {"id": owner.config_id},
+        )
+        resumed = await claim(owner.config_id)
+        assert resumed is not None
+        assert owner.account_id is not None
+        await handle_frame(
+            resumed,
+            Identity(
+                type="identity",
+                id="id",
+                token="test",
+                account_id=owner.account_id,
+                pn_jid=owner.pn_jid,
+                lid_jid=owner.lid_jid,
+            ),
+        )
+        command = await authorize_dispatch(resumed)
+    # Then the same reply is dispatched on the resumed claim.
+    assert command is not None
+    assert command.command_id == chunk.key
+
+
+@pytest.mark.parametrize("relink", [False, True], ids=["start", "relink_while_claimed"])
+async def test_owner_start_clears_the_retry_budget(channel_db, relink):
+    # Given a paired connection waiting on a charged retry.
+    f = channel_db
+    async with transaction(f.db.first):
+        owner = await paired(f)
+        assert await interrupted(owner)
+        if not relink:
+            assert await reaped(owner)
+    # When the owner starts it again or relinks it.
+    async with transaction(f.db.second):
+        await start(owner.agent_id, f.db.user.id, owner.generation, relink=relink)
+        runtime = await runtime_for(owner.config_id)
+        restarted = None if relink else await claim(owner.config_id)
+    # Then the budget and retry gate are cleared, so a started connection is claimable at once.
+    assert runtime.reconnect_attempts == 0
+    assert runtime.retry_at is None
+    assert relink or restarted is not None

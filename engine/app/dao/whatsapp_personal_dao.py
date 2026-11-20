@@ -1,6 +1,8 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from app.dao.personal_burst_lifecycle import cancel_open_for_agent
+from app.dao.whatsapp_personal_runtime_dao import runtime_for
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
 
@@ -17,11 +19,27 @@ async def get_personal(agent_id: UUID, *, lock: bool = False) -> PersonalConnect
 async def candidates() -> list[PersonalConnection]:
     async with connection_ctx() as db:
         rows = await db.fetchall("SELECT * FROM whatsapp_personal_connections WHERE desired AND claim_token IS NULL")
-        return [PersonalConnection.from_row(row) for row in rows]
+        now = datetime.now(UTC)
+        due: list[PersonalConnection] = []
+        for row in rows:
+            candidate = PersonalConnection.from_row(row)
+            runtime = await runtime_for(candidate.config_id)
+            if runtime.retry_at is None or runtime.retry_at <= now:
+                due.append(candidate)
+        return due
 
 
 async def claim(config_id: UUID) -> PersonalConnection | None:
     async with connection_ctx() as db:
+        # Lock the connection, then re-check the durable retry gate, so a concurrent interruption is never bypassed.
+        locked = await db.fetchval(
+            "SELECT TRUE FROM whatsapp_personal_connections WHERE config_id=%(id)s FOR UPDATE", {"id": config_id}
+        )
+        if not locked:
+            return None
+        runtime = await runtime_for(config_id, lock=True)
+        if runtime.retry_at is not None and runtime.retry_at > datetime.now(UTC):
+            return None
         row = await db.fetchone(
             "UPDATE whatsapp_personal_connections SET claim_token=%(token)s,lease_until=now()+interval '30 seconds' "
             "WHERE config_id=%(id)s AND desired AND claim_token IS NULL "

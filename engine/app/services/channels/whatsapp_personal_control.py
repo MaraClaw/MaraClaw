@@ -9,6 +9,7 @@ from app.core.domain.channels import ChannelType
 from app.core.permissions import is_agent_expired
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.whatsapp_personal_dao import get_personal, revoke
+from app.dao.whatsapp_personal_runtime_dao import reset_runtime
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
 from app.schemas.whatsapp_personal import PersonalQR, PersonalStatus
@@ -89,6 +90,7 @@ async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink
                 await db.execute(
                     "UPDATE whatsapp_personal_connections SET desired=TRUE WHERE agent_id=%(id)s", {"id": agent_id}
                 )
+                await reset_runtime(connection.config_id)
                 return public_status(await get_personal(agent_id))
             raise HTTPException(409, "Connector teardown pending")
         config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WHATSAPP)
@@ -106,6 +108,7 @@ async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink
                 "is_connected": False,
             },
         )
+        await reset_runtime(config.id)
         resumable = connection is not None and not relink and not connection.purge_requested
         epoch = connection.auth_epoch if connection and resumable else uuid4()
         if not resumable:

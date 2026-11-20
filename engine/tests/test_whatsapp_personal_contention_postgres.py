@@ -13,7 +13,9 @@ from tests.test_whatsapp_personal_surfaces import use_pool
 
 from app.dao.agent_dao import agent_dao
 from app.dao.user_dao import user_dao
-from app.dao.whatsapp_personal_dao import claim as claim_personal, get_personal
+from app.dao.whatsapp_personal_auth_dao import AuthMutation, write_auth
+from app.dao.whatsapp_personal_dao import candidates, claim as claim_personal, get_personal, reaped
+from app.dao.whatsapp_personal_runtime_dao import SUSTAINED_SECONDS, runtime_for, schedule_retry
 from app.db import session as db_session
 from app.db.errors import LockNotAvailableError
 from app.db.session import get_connection, transaction
@@ -26,7 +28,9 @@ from app.services.channels import (
     whatsapp_personal_intake as intake,
     whatsapp_personal_journal as journal,
 )
+from app.services.channels.whatsapp_personal_events import handle_frame, interrupted
 from app.services.channels.whatsapp_personal_journal import PersonalSendPendingError
+from app.services.channels.whatsapp_personal_protocol import Identity
 
 __all__ = ["channel_db", "receipt_db"]
 
@@ -277,3 +281,106 @@ async def test_stale_child_cannot_expire_current_generation(channel_db, monkeypa
     assert current.generation == owner.generation
     assert current.desired
     assert not current.purge_requested
+
+
+async def test_retry_gate_is_rechecked_under_the_row_lock_during_a_concurrent_claim(channel_db):
+    # Given a paired connection whose dead child was reaped before its retry was charged.
+    f = channel_db
+    async with transaction(f.db.first):
+        owner = await connected(f)
+        await write_auth(owner, AuthMutation("creds", {"main": "secret"}))
+        assert await reaped(owner)
+    held, release = anyio.Event(), anyio.Event()
+    results = []
+
+    async def interrupt():
+        async with transaction(f.db.first):
+            results.append(await interrupted(owner))
+            held.set()
+            await release.wait()
+
+    async def contend():
+        async with transaction(f.db.second):
+            results.append(owner.config_id in {row.config_id for row in await candidates()})
+            results.append(await claim_personal(owner.config_id))
+
+    # When another connector lists it before the retry commits and then claims behind the row lock.
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(interrupt)
+            await held.wait()
+            tasks.start_soon(contend)
+            while not await f.db.first.fetchval(
+                "SELECT cardinality(pg_blocking_pids(%(pid)s))", {"pid": f.db.second.raw.info.backend_pid}
+            ):
+                await anyio.lowlevel.checkpoint()
+            release.set()
+    # Then the stale candidate cannot claim before retry_at, and fresh listings skip it.
+    assert results == [True, True, None]
+    async with transaction(f.db.second):
+        assert owner.config_id not in {row.config_id for row in await candidates()}
+        row = await get_personal(owner.agent_id)
+    assert row is not None
+    assert row.state == "reconnecting"
+    assert row.claim_token is None
+
+
+async def test_only_sustained_uptime_refills_the_retry_budget(channel_db, monkeypatch):
+    # Given a reconnected child that already spent one transient retry, on an injected clock.
+    f = channel_db
+    use_pool(f, monkeypatch)
+    async with transaction(f.db.first):
+        owner = await connected(f)
+        assert await schedule_retry(owner.config_id) is not None
+    now = 1000.0
+    running = child.PersonalChild(owner, clock=lambda: now)
+
+    async def lease(_self, _value):
+        assert get_connection() is None
+        raise LeaseObservedError
+
+    async def attempts():
+        async with transaction(f.db.second):
+            return (await runtime_for(owner.config_id)).reconnect_attempts
+
+    async def tick():
+        with pytest.raises(LeaseObservedError):
+            await running.tick()
+
+    monkeypatch.setattr(child.PersonalChild, "write", lease)
+    # When the socket opens and confirms the account again.
+    assert owner.account_id is not None
+    async with transaction(f.db.first):
+        await handle_frame(
+            owner,
+            Identity(
+                type="identity",
+                id="id",
+                token="test",
+                account_id=owner.account_id,
+                pn_jid=owner.pn_jid,
+                lid_jid=owner.lid_jid,
+            ),
+        )
+    running.observe_link(up=True)
+    # Then the open alone keeps the charge, and so does an uptime just short of the sustained window.
+    with anyio.fail_after(10):
+        await tick()
+        assert await attempts() == 1
+        now += SUSTAINED_SECONDS - 1
+        await tick()
+        assert await attempts() == 1
+        # When the link flaps, the window restarts from the new open.
+        running.observe_link(up=False)
+        running.observe_link(up=True)
+        now += SUSTAINED_SECONDS - 1
+        await tick()
+        assert await attempts() == 1
+        # When the link then stays up for the full sustained window.
+        now += 1
+        await tick()
+    # Then the budget and retry gate are refilled.
+    async with transaction(f.db.second):
+        runtime = await runtime_for(owner.config_id)
+    assert runtime.reconnect_attempts == 0
+    assert runtime.retry_at is None

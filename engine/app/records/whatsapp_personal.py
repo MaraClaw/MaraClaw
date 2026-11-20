@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import ClassVar, Final, Literal, override
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 PERSONAL_ROUTE_PREFIX: Final = "whatsapp_personal:"
 PERSONAL_ROUTE_MAX_LENGTH: Final = 200
@@ -46,6 +46,16 @@ class PersonalConnection:
     @classmethod
     def from_row(cls, row: object) -> PersonalConnection:
         return TypeAdapter(cls).validate_python(row)
+
+
+class PersonalRuntime(BaseModel):
+    """Credential-free transient-retry budget persisted in ``channel_configs.extra_config['whatsapp_runtime']``."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="ignore")
+    reconnect_attempts: int = Field(default=0, ge=0, le=1000, strict=True)
+    retry_at: AwareDatetime | None = None
+    last_error: PersonalError | None = None
+    last_error_at: AwareDatetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

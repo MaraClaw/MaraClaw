@@ -2,9 +2,10 @@ import json
 import os
 import secrets
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
+from time import monotonic
 from typing import final
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from app.core.logging import logger
 from app.core.permissions import is_agent_expired
 from app.dao.whatsapp_personal_auth_dao import read_auth
 from app.dao.whatsapp_personal_dao import get_personal, reaped, renew, revoke
+from app.dao.whatsapp_personal_runtime_dao import SUSTAINED_SECONDS, settle_runtime
 from app.db.errors import DbError, UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
@@ -27,11 +29,11 @@ from app.services.channels.whatsapp_personal_diagnostics import (
     failed,
     lifecycle,
 )
-from app.services.channels.whatsapp_personal_events import IdentityAmbiguousError, handle_message
+from app.services.channels.whatsapp_personal_events import IdentityAmbiguousError, handle_message, interrupted
 from app.services.channels.whatsapp_personal_journal import authorize_dispatch
 from app.services.channels.whatsapp_personal_media_reader import AuthStoreFailedError, IntakeQueues, read_frames
 from app.services.channels.whatsapp_personal_media_transport import MediaTransferError, MediaTransport
-from app.services.channels.whatsapp_personal_protocol import Message
+from app.services.channels.whatsapp_personal_protocol import Closed, Message
 
 
 async def spawn_child(command: Sequence[str]) -> Process:
@@ -41,13 +43,23 @@ async def spawn_child(command: Sequence[str]) -> Process:
 
 @final
 class PersonalChild:
-    def __init__(self, connection: PersonalConnection) -> None:
+    def __init__(self, connection: PersonalConnection, clock: Callable[[], float] = monotonic) -> None:
         self.connection = connection
         self.token = secrets.token_urlsafe(32)
         self.run_id = uuid4()
         self.process: Process | None = None
         self.write_lock = anyio.Lock()
         self.media: MediaTransport = MediaTransport(self.write, self.token)
+        self.clock = clock
+        self.healthy_since: float | None = None
+        self.closed: Closed | None = None
+
+    def observe_link(self, *, up: bool) -> None:
+        """Only a link that stays up refills the durable retry budget; a socket open alone never does."""
+        if not up:
+            self.healthy_since = None
+        elif self.healthy_since is None:
+            self.healthy_since = self.clock()
 
     async def write(self, value: dict[str, JsonValue]) -> None:
         process = self.process
@@ -80,7 +92,7 @@ class PersonalChild:
             tasks.start_soon(messages, text_receive)
             tasks.start_soon(messages, media_receive)
             try:
-                await read_frames(self, IntakeQueues(text_send, media_send, text_drained))
+                self.closed = await read_frames(self, IntakeQueues(text_send, media_send, text_drained))
             finally:
                 self.media.close()
                 tasks.cancel_scope.cancel()
@@ -104,6 +116,13 @@ class PersonalChild:
                             "AND dispatched_at<now()-interval '25 seconds'",
                             {"id": current.config_id, "claim": current.claim_token},
                         )
+                        if (
+                            current.state == "connected"
+                            and self.healthy_since is not None
+                            and self.clock() - self.healthy_since >= SUSTAINED_SECONDS
+                        ):
+                            self.healthy_since = None
+                            await settle_runtime(current.config_id)
             if stopping or expiring:
                 # Never upgrade shared owner locks: revalidate after a fresh exclusive acquisition.
                 async with connection_ctx():
@@ -195,11 +214,11 @@ class PersonalChild:
 
 
 async def run_child(connection: PersonalConnection, command: Sequence[str]) -> None:
+    child = PersonalChild(connection)
+    transient = False
     try:
-        child = PersonalChild(connection)
         await child.run(command)
-        if child.process is not None and child.process.returncode != 0:
-            await fail_connection(connection, "transport_failed")
+        transient = child.process is not None and child.process.returncode != 0
     except* UniqueViolationError:
         await fail_connection(connection, "account_in_use")
     except* IdentityAmbiguousError:
@@ -207,9 +226,15 @@ async def run_child(connection: PersonalConnection, command: Sequence[str]) -> N
     except* DbError, InvalidTag, AuthStoreFailedError:
         await fail_connection(connection, "auth_store_failed")
     except* HTTPException:
+        # Lost owner authorization: classified by its cause, never retried, although it shares the code.
         await fail_connection(connection, "transport_failed")
     except* OSError, ValueError, ValidationError, anyio.BrokenResourceError:
+        # Child death, broken pipes and malformed frames keep the credentials; the durable budget decides.
         logger.warning("[WhatsAppPersonal] child_failed")
+        transient = True
+    # A bridge-reported transport close was already settled while the claim was held; never charge it twice.
+    settled = child.closed is not None and child.closed.reason == "transport_failed"
+    if transient and not settled and not await interrupted(connection):
         await fail_connection(connection, "transport_failed")
 
 
