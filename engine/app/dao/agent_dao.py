@@ -1215,11 +1215,20 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
         self, agent_ids: Sequence[UUID], user_id: UUID
     ) -> dict[UUID, list[AgentPermissionRecord]]:
         """Company rows and the viewer's own user rows, grouped by agent (all a decision reads)."""
+        return await self.list_decision_rows_for_users(agent_ids, [user_id])
+
+    async def list_decision_rows_for_users(
+        self, agent_ids: Sequence[UUID], user_ids: Sequence[UUID]
+    ) -> dict[UUID, list[AgentPermissionRecord]]:
+        """Company rows and the given users' own user rows, grouped by agent.
+
+        A superset of what each (user, agent) decision reads; `_access_from_permissions` keeps only that user's rows.
+        """
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agent_permissions WHERE agent_id = ANY(%(ids)s) "
-                "AND (scope_type = 'company' OR (scope_type = 'user' AND scope_id = %(user_id)s))",
-                {"ids": list(agent_ids), "user_id": user_id},
+                "AND (scope_type = 'company' OR (scope_type = 'user' AND scope_id = ANY(%(user_ids)s)))",
+                {"ids": list(agent_ids), "user_ids": list(user_ids)},
             )
         grouped: dict[UUID, list[AgentPermissionRecord]] = {}
         for record in map(AgentPermissionRecord.from_row, rows):

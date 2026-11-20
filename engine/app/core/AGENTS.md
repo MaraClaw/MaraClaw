@@ -38,7 +38,7 @@
 - New fail-open caches go through `redis_cache.py` + `get_cache_redis()` (short socket timeout). Tokens, locks, pubsub, and webhooks keep `get_redis()`.
 - Agent tool config mutations that change sandbox egress (`allow_network`, proxy fields) are authorized in `app/api/tools.py` (admin roles), not here; keep permission policy for agent visibility separate from sandbox egress policy.
 - Use non-HTTP helpers such as `get_agent_access_level_for_user_id(...)` and `user_can_manage_agent_id(...)` in services/background jobs.
-- Keep relationship checks in `evaluate_agent_relationship_status(...)` and `evaluate_human_relationship_status(...)`.
+- Keep relationship checks in `permissions.py`. Precedence lives once, in the pure `_decide_agent_relationship` / `_decide_human_relationship`; the single-row `evaluate_agent_relationship_status(...)` / `evaluate_human_relationship_status(...)` (`agent_tool_exec`) and the list forms `evaluate_agent_relationship_statuses(...)` / `evaluate_human_relationship_statuses(...)` (relationship endpoints, gateway send, `_load_relationships_from_db`; results aligned with the input) differ only in how they load. The batch runs a fixed number of statements however many rows it gets (agents, members only for rows without one, users, permission rows, department grants), reads agents and users fresh (never the row memo, preloaded rows or the access cache), neither reads nor fills the access cache, and takes no row locks, so it is safe under the gateway's agent lock. List callers use the batch; never loop the single-row forms or add a memo.
 
 ## Events
 

@@ -239,7 +239,7 @@ async def test_relationship_transport_keeps_nullable_members_and_provider_summar
     monkeypatch.setattr(
         relationships.agent_relationship_dao, "list_for_agent_with_members_and_providers", AsyncMock(return_value=rows)
     )
-    monkeypatch.setattr(relationships, "evaluate_human_relationship_status", AsyncMock(return_value=status))
+    monkeypatch.setattr(relationships, "evaluate_human_relationship_statuses", AsyncMock(return_value=[status, status]))
     monkeypatch.setattr(
         relationships.agent_relationship_dao, "list_page_ids", AsyncMock(return_value=[r.id for r in rows])
     )
@@ -279,13 +279,12 @@ async def test_agent_relationships_keep_nullable_target_and_empty_summary_fields
     )
     monkeypatch.setattr(
         relationships,
-        "evaluate_agent_relationship_status",
+        "evaluate_agent_relationship_statuses",
         AsyncMock(
-            return_value={
-                "access_allowed": True,
-                "access_status": "active",
-                "access_status_reason": None,
-            }
+            return_value=[
+                {"access_allowed": True, "access_status": "active", "access_status_reason": None},
+                {"access_allowed": True, "access_status": "active", "access_status_reason": None},
+            ]
         ),
     )
 

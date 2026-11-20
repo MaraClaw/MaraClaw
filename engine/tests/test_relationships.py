@@ -192,8 +192,8 @@ async def test_relationship_response_keeps_ids_and_empty_department_without_sync
         "list_for_agent_with_members_and_providers",
         AsyncMock(return_value=[relation]),
     )
-    monkeypatch.setattr(relationships.user_dao, "get", AsyncMock(return_value=user))
-    monkeypatch.setattr(permissions, "get_agent_access_level_for_user_id", AsyncMock(return_value="use"))
+    monkeypatch.setattr(relationships.user_dao, "get_many", AsyncMock(return_value=[user]))
+    monkeypatch.setattr(permissions.agent_dao, "get_many", AsyncMock(return_value=[agent]))
     # When
     result = await relationships.get_relationships(agent_id, current_user=user)
     # Then

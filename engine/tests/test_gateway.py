@@ -190,13 +190,8 @@ async def test_send_message_rejects_cross_tenant_feishu_fallback_when_no_tenant_
     async def get_source_agent(_api_key: str) -> AgentRecord:
         return source_agent
 
-    async def active_human_relationship(
-        _relationship,
-        *,
-        source_agent: AgentRecord | None = None,
-    ) -> dict[str, str]:
-        _ = source_agent
-        return {"access_status": "active"}
+    async def active_human_relationships(batch: list[Any]) -> list[dict[str, str]]:
+        return [{"access_status": "active"} for _ in batch]
 
     async def no_agent_rels(_agent_id: uuid.UUID):
         return []
@@ -224,7 +219,7 @@ async def test_send_message_rejects_cross_tenant_feishu_fallback_when_no_tenant_
     monkeypatch.setattr(gateway, "connection_ctx", send_context)
     monkeypatch.setattr(gateway.agent_dao, "lock_openclaw", admit)
     monkeypatch.setattr(gateway, "_get_agent_by_key", get_source_agent)
-    monkeypatch.setattr(gateway, "evaluate_human_relationship_status", active_human_relationship)
+    monkeypatch.setattr(gateway, "evaluate_human_relationship_statuses", active_human_relationships)
     monkeypatch.setattr(gateway.agent_agent_relationship_dao, "list_for_agent_with_targets", no_agent_rels)
     monkeypatch.setattr(gateway.agent_relationship_dao, "list_for_agent_with_members", human_rels)
     monkeypatch.setattr(gateway.channel_config_dao, "get_for_agent", no_agent_feishu)
@@ -241,6 +236,126 @@ async def test_send_message_rejects_cross_tenant_feishu_fallback_when_no_tenant_
     assert error.value.detail == "No Feishu channel configured"
     assert agent_lookup_calls == [source_agent.id]
     assert tenant_lookup_calls == [(tenant_id, "feishu")]
+
+
+@pytest.fixture
+def send_env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """``send_message`` with storage faked; each relationship kind records the batches it was asked to evaluate."""
+    source = AgentRecord(id=uuid.uuid4(), creator_id=uuid.uuid4(), name="Sender", tenant_id=uuid.uuid4())
+    env = SimpleNamespace(
+        agent=source,
+        agent_rels=[],
+        human_rels=[],
+        restricted=set[uuid.UUID](),
+        agent_batches=[],
+        human_batches=[],
+        enqueued=[],
+    )
+
+    def statuses(batch: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "access_allowed": rel.id not in env.restricted,
+                "access_status": "restricted" if rel.id in env.restricted else "active",
+                "access_status_reason": None,
+            }
+            for rel in batch
+        ]
+
+    async def evaluate_agents(batch: list[Any]) -> list[dict[str, Any]]:
+        env.agent_batches.append(list(batch))
+        return statuses(batch)
+
+    async def evaluate_humans(batch: list[Any]) -> list[dict[str, Any]]:
+        env.human_batches.append(list(batch))
+        return statuses(batch)
+
+    async def agent_rels(_agent_id: uuid.UUID) -> list[Any]:
+        return env.agent_rels
+
+    async def human_rels(_agent_id: uuid.UUID) -> list[Any]:
+        return env.human_rels
+
+    async def enqueue(**kwargs: Any) -> None:
+        env.enqueued.append(kwargs)
+
+    async def get_source_agent(_api_key: str) -> AgentRecord:
+        return source
+
+    async def admit(record: AgentRecord) -> AgentRecord:
+        return record
+
+    async def touch_last_seen(*, db_obj: AgentRecord, obj_in: Any) -> AgentRecord:
+        return db_obj
+
+    @asynccontextmanager
+    async def send_context() -> AsyncGenerator[None]:
+        yield None
+
+    monkeypatch.setattr(gateway, "connection_ctx", send_context)
+    monkeypatch.setattr(gateway.agent_dao, "lock_openclaw", admit)
+    monkeypatch.setattr(gateway.agent_dao, "update", touch_last_seen)
+    monkeypatch.setattr(gateway, "_get_agent_by_key", get_source_agent)
+    monkeypatch.setattr(gateway, "evaluate_agent_relationship_statuses", evaluate_agents)
+    monkeypatch.setattr(gateway, "evaluate_human_relationship_statuses", evaluate_humans)
+    monkeypatch.setattr(gateway.agent_agent_relationship_dao, "list_for_agent_with_targets", agent_rels)
+    monkeypatch.setattr(gateway.agent_relationship_dao, "list_for_agent_with_members", human_rels)
+    monkeypatch.setattr(gateway, "enqueue_openclaw_message", enqueue)
+    return env
+
+
+@pytest.mark.asyncio
+async def test_send_message_picks_the_active_agent_target_from_one_batched_evaluation(
+    send_env: SimpleNamespace,
+) -> None:
+    def peer(name: str) -> AgentRecord:
+        return AgentRecord(id=uuid.uuid4(), creator_id=uuid.uuid4(), name=name, tenant_id=send_env.agent.tenant_id)
+
+    restricted = SimpleNamespace(id=uuid.uuid4(), target_agent=peer("Alpha Bot"))
+    without_target = SimpleNamespace(id=uuid.uuid4(), target_agent=None)
+    reachable = SimpleNamespace(id=uuid.uuid4(), target_agent=peer("Alpha Beta"))
+    send_env.agent_rels = [restricted, without_target, reachable]
+    send_env.restricted = {restricted.id}
+
+    response = await gateway.send_message(GatewaySendMessageRequest(target="alpha", content="Hello"), "api-key")
+
+    assert response["target"] == "Alpha Beta"
+    assert [call["agent"].name for call in send_env.enqueued] == ["Alpha Beta"]
+    assert send_env.agent_batches == [[restricted, reachable]]
+    assert send_env.human_batches == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "members", "expected"),
+    [
+        ("Ann", [("Anna Kim", True), ("Ann", True)], "Ann"),
+        ("ann", [("Ann", False), ("Anna", True)], "Anna"),
+        ("Bob", [("Ann", True)], None),
+    ],
+)
+async def test_send_message_resolves_the_human_target_from_one_batched_evaluation(
+    send_env: SimpleNamespace, target: str, members: list[tuple[str, bool]], expected: str | None
+) -> None:
+    rels = [
+        SimpleNamespace(
+            id=uuid.uuid4(), member=OrgMemberRecord(id=uuid.uuid4(), name=name, status="active", tenant_id=None)
+        )
+        for name, _ in members
+    ]
+    send_env.human_rels = rels
+    send_env.restricted = {rel.id for rel, (_, reachable) in zip(rels, members, strict=True) if not reachable}
+
+    with pytest.raises(HTTPException) as error:
+        await gateway.send_message(GatewaySendMessageRequest(target=target, content="Hello"), "api-key")
+
+    if expected is None:
+        assert error.value.status_code == 404
+    else:
+        assert error.value.status_code == 400
+        assert f"reach {expected}." in str(error.value.detail)
+    assert send_env.human_batches == [rels]
+    assert send_env.enqueued == []
 
 
 class _DeliveryStore:

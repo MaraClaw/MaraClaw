@@ -48,12 +48,11 @@ async def test_relationship_page_hydrates_only_retained_rows(
     rows = [AgentRelationshipRecord(key, agent.id, uuid4()) for key in ids[:2]]
     keys = AsyncMock(return_value=ids)
     hydrate = AsyncMock(return_value=rows)
-    status = AsyncMock(
-        return_value={"access_allowed": False, "access_status": "missing_target", "access_status_reason": None}
-    )
+    missing = {"access_allowed": False, "access_status": "missing_target", "access_status_reason": None}
+    statuses = AsyncMock(side_effect=lambda batch: [missing for _ in batch])
     monkeypatch.setattr(relationships.agent_relationship_dao, "list_page_ids", keys)
     monkeypatch.setattr(relationships.agent_relationship_dao, "list_for_agent_with_members_and_providers", hydrate)
-    monkeypatch.setattr(relationships, "evaluate_human_relationship_status", status)
+    monkeypatch.setattr(relationships, "evaluate_human_relationship_statuses", statuses)
 
     page = await relationships.get_relationship_page(agent.id, actor, limit=2)
 
@@ -61,7 +60,7 @@ async def test_relationship_page_hydrates_only_retained_rows(
     assert page["has_more"] is (size > 2)
     assert (page["next_cursor"] is not None) is (size > 2)
     hydrate.assert_awaited_once_with(agent.id, relationship_ids=ids[:2])
-    assert status.await_count == min(size, 2)
+    statuses.assert_awaited_once_with(rows)
     if page["next_cursor"] is not None:
         encoded = page["next_cursor"]
         cursor = HumanRelationshipCursor.model_validate_json(

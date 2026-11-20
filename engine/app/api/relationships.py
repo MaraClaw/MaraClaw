@@ -10,8 +10,8 @@ from pydantic import BaseModel
 
 from app.core.permissions import (
     check_agent_access,
-    evaluate_agent_relationship_status,
-    evaluate_human_relationship_status,
+    evaluate_agent_relationship_statuses,
+    evaluate_human_relationship_statuses,
     get_agent_access_level_for_user_id,
     get_agent_accessible_user_ids,
     list_visible_agents,
@@ -75,17 +75,10 @@ async def _can_manage_agent(user_id: uuid.UUID, agent: AgentRecord) -> bool:
     return (await get_agent_access_level_for_user_id(user_id, agent)) == "manage"
 
 
-async def _get_valid_member_user_id(
-    member: OrgMemberRecord,
-    tenant_id: uuid.UUID | None,
-) -> uuid.UUID | None:
-    """Return the linked platform user only when it belongs to the same tenant."""
-    if member.user_id is None:
-        return None
-    user = await user_dao.get(member.user_id)
-    if not user or not user.is_active or user.tenant_id != tenant_id:
-        return None
-    return user.id
+async def _valid_member_user_ids(members: Sequence[OrgMemberRecord], tenant_id: uuid.UUID | None) -> set[uuid.UUID]:
+    """Return the linked platform users that are active and belong to the same tenant, in one statement."""
+    users = await user_dao.get_many([member.user_id for member in members if member.user_id is not None])
+    return {user.id for user in users if user.is_active and user.tenant_id == tenant_id}
 
 
 # ─── Schemas ───────────────────────────────────────────
@@ -146,9 +139,11 @@ async def get_relationships(
 async def _human_relationship_responses(
     rows: Sequence[AgentRelationshipRecord], source_agent: AgentRecord
 ) -> list[HumanRelationshipResponse]:
+    statuses = await evaluate_human_relationship_statuses(rows)
+    linked_user_ids = await _valid_member_user_ids([r.member for r in rows if r.member], source_agent.tenant_id)
     out: list[HumanRelationshipResponse] = []
-    for r in rows:
-        linked_user_id = await _get_valid_member_user_id(r.member, source_agent.tenant_id) if r.member else None
+    for r, status_info in zip(rows, statuses, strict=True):
+        linked_user_id = r.member.user_id if r.member and r.member.user_id in linked_user_ids else None
         out.append(
             {
                 "id": str(r.id),
@@ -156,7 +151,7 @@ async def _human_relationship_responses(
                 "relation": r.relation,
                 "relation_label": RELATION_LABELS.get(r.relation, r.relation),
                 "description": r.description,
-                **(await evaluate_human_relationship_status(r, source_agent=source_agent)),
+                **status_info,
                 "member": {
                     "name": r.member.name,
                     "title": r.member.title,
@@ -385,9 +380,9 @@ async def get_agent_relationships(
     """Get all agent-to-agent relationships."""
     _ = await check_agent_access(current_user, agent_id)
     rels = await agent_agent_relationship_dao.list_for_agent_with_targets(agent_id)
+    statuses = await evaluate_agent_relationship_statuses(rels, current_user_id=current_user.id)
     out: list[AgentRelationshipResponse] = []
-    for r in rels:
-        status_info = await evaluate_agent_relationship_status(r, current_user_id=current_user.id)
+    for r, status_info in zip(rels, statuses, strict=True):
         out.append(
             {
                 "id": str(r.id),

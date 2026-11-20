@@ -13,7 +13,7 @@ from fastapi import APIRouter, Header, HTTPException
 from app.core.acl_locks import lock_agent, lock_tenants, lock_user
 from app.core.domain.channels import ChannelType
 from app.core.logging import logger
-from app.core.permissions import evaluate_agent_relationship_status, evaluate_human_relationship_status
+from app.core.permissions import evaluate_agent_relationship_statuses, evaluate_human_relationship_statuses
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
@@ -130,12 +130,13 @@ async def send_message(
 
         # 1. Try to find target as another Agent, limited to active relationships.
         target_agent = None
-        for rel in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id):
+        agent_rels = [
+            rel for rel in await agent_agent_relationship_dao.list_for_agent_with_targets(agent.id) if rel.target_agent
+        ]
+        agent_statuses = await evaluate_agent_relationship_statuses(agent_rels)
+        for rel, status_info in zip(agent_rels, agent_statuses, strict=True):
             candidate = rel.target_agent
-            if not candidate:
-                continue
-            status_info = await evaluate_agent_relationship_status(rel)
-            if status_info["access_status"] != "active":
+            if not candidate or status_info["access_status"] != "active":
                 continue
             if candidate.name.lower() == target_name.lower() or target_name.lower() in candidate.name.lower():
                 target_agent = candidate
@@ -164,23 +165,16 @@ async def send_message(
         # 2. Try to find target as a human (via relationships)
         rels = await agent_relationship_dao.list_for_agent_with_members(agent.id)
 
-        target_member = None
-        for r in rels:
-            status_info = await evaluate_human_relationship_status(r, source_agent=agent)
-            if r.member and status_info["access_status"] == "active" and r.member.name == target_name:
-                target_member = r.member
-                break
+        human_statuses = await evaluate_human_relationship_statuses(rels)
+        reachable = [
+            r.member
+            for r, status_info in zip(rels, human_statuses, strict=True)
+            if r.member and status_info["access_status"] == "active"
+        ]
+        target_member = next((member for member in reachable if member.name == target_name), None)
         # Fuzzy match if exact match fails
         if not target_member:
-            for r in rels:
-                status_info = await evaluate_human_relationship_status(r, source_agent=agent)
-                if (
-                    r.member
-                    and status_info["access_status"] == "active"
-                    and target_name.lower() in r.member.name.lower()
-                ):
-                    target_member = r.member
-                    break
+            target_member = next((member for member in reachable if target_name.lower() in member.name.lower()), None)
 
     if not target_member:
         raise HTTPException(status_code=404, detail=f"Target '{target_name}' not found. Check your relationships list.")
