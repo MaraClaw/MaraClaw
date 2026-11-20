@@ -27,6 +27,7 @@ export class Runtime {
   private auth: ParentAuth | undefined;
   private socket: Transport | undefined;
   private identity: Identity | null = null;
+  private known: Identity | null = null;
   private connected = false;
   private stopped = false;
   private readonly closing = new WeakSet<Transport>();
@@ -45,6 +46,7 @@ export class Runtime {
     this.sends = new Sends({ emit: payload => { if (payload.type === 'send_result') diagnostic(this.peer, { type: 'diagnostic', stage: 'send', event: 'finished', outcome: payload.outcome }); this.emit(payload); },
       barrier: async () => { await this.auth?.barrier(); },
       current: () => this.connected && this.socket && this.identity ? { socket: this.socket, identity: this.identity } : null,
+      known: () => this.known,
       failed: () => { void this.stop('transport_failed'); },
     });
   }
@@ -135,6 +137,7 @@ export class Runtime {
         diagnostic(this.peer, { type: 'diagnostic', stage: 'identity', event: 'finished', identity_accepted: Boolean(identity) });
         if (!identity) { await this.stop('transport_failed'); return; }
         this.identity = identity;
+        this.known = identity;
         this.connected = true;
         clearTimeout(this.pairTimer);
         // Only a connection that stays open resets the reconnect budget, so a flapping socket still ends.

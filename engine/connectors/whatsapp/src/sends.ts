@@ -5,12 +5,13 @@ import type { Identity } from './input.js';
 import type { ChildPayload, SendOutcome, SendCommand } from './protocol.js';
 import type { Ack, Transport } from './transport.js';
 
-type Entry = { readonly command: SendCommand; readonly socket: Transport;
+type Entry = { readonly command: SendCommand; readonly socket: Transport | undefined;
   timer: ReturnType<typeof setTimeout> | undefined; active: boolean; outcome: SendOutcome | undefined };
 export type SendContext = {
   readonly emit: (payload: ChildPayload) => void;
   readonly barrier: () => Promise<void>;
   readonly current: () => { readonly socket: Transport; readonly identity: Identity } | null;
+  readonly known: () => Identity | null;
   readonly failed: () => void;
 };
 export class Sends {
@@ -30,28 +31,30 @@ export class Sends {
     }
     if (this.commands.size >= 10_000 || this.ids.has(command.message_id)) { this.context.failed(); return; }
     const current = this.context.current();
-    if (!current || !selfJid(normalizeJid(command.self_jid), current.identity) || command.self_jid !== normalizeJid(command.self_jid)) {
+    if (command.self_jid !== normalizeJid(command.self_jid) || !selfJid(command.self_jid, current?.identity ?? this.context.known())) {
       // Stop on a rejected target so its replay can never later become authorized.
       this.context.emit({ type: 'send_result', command_id: command.command_id, message_id: command.message_id, outcome: 'rejected' });
       this.context.failed(); return;
     }
-    const entry: Entry = { command, socket: current.socket, active: false, outcome: undefined, timer: undefined };
+    const entry: Entry = { command, socket: current?.socket, active: false, outcome: undefined, timer: undefined };
     this.commands.set(command.command_id, entry);
     this.ids.set(command.message_id, entry);
+    // Between sockets: reject before the wire and keep the entry, so a replay re-reports it instead of dispatching.
+    if (!current) { this.finish(entry, 'rejected'); return; }
     entry.timer = setTimeout(() => this.finish(entry, 'uncertain'), command.timeout_ms);
-    void this.dispatch(entry);
+    void this.dispatch(entry, current.socket);
   }
 
-  private async dispatch(entry: Entry): Promise<void> {
+  private async dispatch(entry: Entry, socket: Transport): Promise<void> {
     try {
       await this.context.barrier();
       const current = this.context.current();
       if (entry.outcome !== undefined) return;
-      if (!current || current.socket !== entry.socket || !selfJid(entry.command.self_jid, current.identity)) {
+      if (!current || current.socket !== socket || !selfJid(entry.command.self_jid, current.identity)) {
         this.finish(entry, 'rejected'); return;
       }
       entry.active = true;
-      await entry.socket.send(entry.command.self_jid, entry.command.text, entry.command.message_id);
+      await socket.send(entry.command.self_jid, entry.command.text, entry.command.message_id);
     } catch { // Once dispatched, transport exceptions cannot prove nonacceptance.
       this.finish(entry, entry.active ? 'uncertain' : 'rejected');
     }
