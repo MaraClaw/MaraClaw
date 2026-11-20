@@ -1855,13 +1855,33 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS revoke_openclaw_replies_on_transfer ON agents;
-CREATE TRIGGER revoke_openclaw_replies_on_transfer AFTER UPDATE OF creator_id, tenant_id ON agents
-FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings();
-
-DROP TRIGGER IF EXISTS revoke_openclaw_replies_on_clear ON chat_messages;
-CREATE TRIGGER revoke_openclaw_replies_on_clear AFTER DELETE ON chat_messages
-FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings();
+-- Create the two revocation triggers only when one is missing, disabled or defined differently. A rerun on every start
+-- must not DROP them: that needs ACCESS EXCLUSIVE, which queues behind any open reader of agents or chat_messages and
+-- then stalls every later query on them. CREATE OR REPLACE TRIGGER takes only SHARE ROW EXCLUSIVE, and a rerun that
+-- finds both triggers as defined here writes nothing to pg_trigger.
+DO $$
+DECLARE
+    revoker RECORD;
+    definition TEXT;
+BEGIN
+    FOR revoker IN SELECT * FROM (VALUES
+        ('agents'::regclass, 'revoke_openclaw_replies_on_transfer', 'AFTER UPDATE OF creator_id, tenant_id'),
+        ('chat_messages'::regclass, 'revoke_openclaw_replies_on_clear', 'AFTER DELETE')
+    ) AS t(table_oid, trigger_name, timing_and_event) LOOP
+        SELECT format('%I %s ON %I.%I FOR EACH ROW EXECUTE FUNCTION revoke_openclaw_reply_bindings()',
+                      revoker.trigger_name, revoker.timing_and_event, n.nspname, c.relname)
+        INTO definition
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.oid = revoker.table_oid;
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgrelid = revoker.table_oid AND tgname = revoker.trigger_name AND tgenabled = 'O'
+              AND pg_get_triggerdef(oid) = 'CREATE TRIGGER ' || definition
+        ) THEN
+            EXECUTE 'CREATE OR REPLACE TRIGGER ' || definition;
+        END IF;
+    END LOOP;
+END $$;
 
 CREATE OR REPLACE TRIGGER revoke_openclaw_replies_on_session_change
 AFTER UPDATE OF agent_id, user_id, source_channel ON chat_sessions FOR EACH ROW

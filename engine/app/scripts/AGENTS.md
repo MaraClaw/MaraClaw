@@ -10,7 +10,9 @@ One-off modules. Run from `engine/`: `uv run python -m app.scripts.bootstrap_db`
 ## Schema
 
 - `bootstrap_db.py` applies only `scripts/schema_baseline.sql`: fresh databases, plus the eight explicit legacy upgrades below.
-- Re-runs rely on idempotent `IF NOT EXISTS` SQL. Missing baseline and SQL errors are fatal; the pool is closed in `finally`.
+- Re-runs rely on idempotent `IF NOT EXISTS` SQL and guarded `DO` blocks. A missing baseline is fatal; the pool is closed in `finally`.
+- One run is one transaction (`_apply_once`): `statement_timeout` is lifted, then `pg_advisory_xact_lock` is taken **first** (replicas queue here with no bound), then the transaction-local `lock_timeout` (`set_config(..., true)`, 5 s) bounds every wait on the schema itself. Do not use plain `SET`, a session-level advisory lock, or set the bound before the lock is held: a queued replica would fail while its peer is still building the schema.
+- `55P03` (lock timeout) and `40P01` (deadlock) roll the whole transaction back and retry it, up to 5 attempts with a growing pause, then the error propagates and the process exits non-zero. Every other SQL error (unique violation on dirty data, syntax, privileges, `57014`) is fatal on the first attempt. `tests/test_bootstrap_runner.py` pins the order and the classification; `tests/test_bootstrap_postgres.py` proves a foreign lock fails within the bound with nothing applied.
 - This **is** the schema runner. There is no Alembic.
 - All current definitions, including force-change and org departments, live only in the baseline.
 - Dirty databases are unsupported; duplicate identity memberships must fail unique-index creation, not skip it.
