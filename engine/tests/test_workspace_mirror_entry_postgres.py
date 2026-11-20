@@ -28,6 +28,7 @@ def _entry(agent_id: UUID, path: str = "workspace/notes.md") -> WorkspaceMirrorE
         local_size=5,
         local_mtime_ns=MTIME_NS,
         local_ctime_ns=MTIME_NS + 1,
+        local_mode=0o755,
         content_sha256="a" * 64,
         remote_etag='"etag-1"',
         remote_size=5,
@@ -61,6 +62,7 @@ async def test_a_row_without_hash_or_stored_object_round_trips_its_nulls(deletio
     agent_id = await scenario.agent("owner")
     entry = replace(
         _entry(agent_id),
+        local_mode=None,
         content_sha256=None,
         remote_etag=None,
         remote_size=None,
@@ -95,6 +97,7 @@ async def test_upserting_an_existing_path_replaces_every_column_and_advances_syn
         local_size=9,
         local_mtime_ns=MTIME_NS + 10,
         local_ctime_ns=MTIME_NS + 11,
+        local_mode=0o600,
         content_sha256="b" * 64,
         remote_etag=None,
         remote_size=None,

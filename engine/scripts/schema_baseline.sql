@@ -903,6 +903,7 @@ CREATE TABLE IF NOT EXISTS agent_workspace_mirror_entries (
     local_size BIGINT NOT NULL,
     local_mtime_ns BIGINT NOT NULL,
     local_ctime_ns BIGINT NOT NULL,
+    local_mode INTEGER,
     content_sha256 TEXT,
     remote_etag TEXT,
     remote_size BIGINT,

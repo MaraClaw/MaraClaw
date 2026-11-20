@@ -68,7 +68,10 @@ class Done:
 
 @dataclass(frozen=True, slots=True)
 class PathWork:
-    """One path of one agent pass: its base entry (current generation only) and what each side holds."""
+    """One path of one agent pass: its base entry (current generation only) and what each side holds.
+
+    `prior` is the path's manifest row of any generation: after a wiped guest disk it is the only record of the file.
+    """
 
     agent_id: UUID
     agent_dir: Path
@@ -78,6 +81,7 @@ class PathWork:
     entry: WorkspaceMirrorEntryRecord | None
     local: LocalFile | None
     remote: Remote | None
+    prior: WorkspaceMirrorEntryRecord | None
 
     @property
     def key(self) -> str:
@@ -94,6 +98,7 @@ class PathWork:
             local_size=local.size,
             local_mtime_ns=local.mtime_ns,
             local_ctime_ns=local.ctime_ns,
+            local_mode=stat.S_IMODE(local.mode),
             content_sha256=sha256,
             remote_etag=None if version is None else version.etag,
             remote_size=None if version is None else version.size,
@@ -185,6 +190,7 @@ async def push(work: PathWork, local: LocalFile, *, create: bool) -> Done:
                 local_size=stamp.size,
                 local_mtime_ns=stamp.mtime_ns,
                 local_ctime_ns=stamp.ctime_ns,
+                local_mode=stat.S_IMODE(stamp.mode),
             ),
             size_bytes=stamp.size,
         )
@@ -202,6 +208,17 @@ async def push(work: PathWork, local: LocalFile, *, create: bool) -> Done:
         return Done(Outcome.RACED)
     version = result.current_version or await work.store.get_version(work.key)
     return Done(Outcome.PUSHED, entry=work.record(stamp, sha256, version), changed=(work.rel,), size_bytes=len(data))
+
+
+def _restored_mode(prior: WorkspaceMirrorEntryRecord | None, snapshot: StorageSnapshot) -> int | None:
+    """The mode a pull gives a file it creates: the one recorded for these same stored bytes, else None for the default.
+
+    Setuid and setgid never come back, and the owner can always read and write what the mirror restores.
+    """
+    etag = snapshot.version.etag
+    if prior is None or prior.local_mode is None or not etag or prior.remote_etag != etag:
+        return None
+    return (prior.local_mode & 0o777) | 0o600
 
 
 async def pull(work: PathWork) -> Done:
@@ -225,6 +242,7 @@ async def pull(work: PathWork) -> Done:
         snapshot.data,
         expected=None if local is None else _stamp(local),
         require_absent=local is None,
+        mode=_restored_mode(work.prior, snapshot) if local is None else None,
     )
     stamp = await _guest(write)
     entry = work.record(stamp, snapshot.sha256, snapshot.version)

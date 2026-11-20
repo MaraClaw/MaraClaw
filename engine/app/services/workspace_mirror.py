@@ -25,6 +25,7 @@ from app.core.row_memo import memo_drop
 from app.dao.agent_dao import agent_dao
 from app.dao.workspace_mirror_entry_dao import workspace_mirror_entry_dao
 from app.records.agent import AgentRecord
+from app.records.workspace_mirror_entry import WorkspaceMirrorEntryRecord
 from app.services.agent_context_cache import invalidate_for_workspace_paths
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, wait_for_flock
 from app.services.openclaw_update_exclusion import guest_write_section
@@ -220,6 +221,8 @@ async def _reconcile(
     for rel, reason in frozen.items():
         logger.debug(f"Workspace mirror froze {rel} of agent {agent_id}: {reason}")
     base_count = sum(1 for entry in sides.manifest.values() if entry.generation == generation)
+    # Rows dropped by the hold still tell a restore which mode the stored bytes had.
+    released: dict[str, WorkspaceMirrorEntryRecord] = {}
     for delete, restore in MASS_DELETE_RESTORES.items():
         if not mass_delete(actions, base_count, delete):
             continue
@@ -232,13 +235,13 @@ async def _reconcile(
         # Without a base a path is only ever copied across, so the hold outlasts a restore that spans passes.
         _ = await workspace_mirror_entry_dao.delete_paths(agent_id, held)
         for rel in held:
-            del sides.manifest[rel]
+            released[rel] = sides.manifest.pop(rel)
         actions |= dict.fromkeys(held, restore)
     if mode is MirrorMode.PULL_ONLY:
         actions = {rel: action for rel, action in actions.items() if action not in STORE_WRITES}
     ledger = _Ledger(agent_id, report)
     try:
-        await _execute(agent_id, agent_dir, store, sides, actions, deadline, ledger)
+        await _execute(agent_id, agent_dir, store, sides, actions, released, deadline, ledger)
         await ledger.forget(stale)
     finally:
         await ledger.invalidate()
@@ -252,6 +255,7 @@ async def _execute(
     store: StorageBackend,
     sides: Sides,
     actions: dict[str, Action],
+    released: dict[str, WorkspaceMirrorEntryRecord],
     deadline: float,
     ledger: _Ledger,
 ) -> None:
@@ -272,6 +276,7 @@ async def _execute(
             sides.base(rel),
             sides.local.get(rel),
             sides.remote.get(rel),
+            sides.manifest.get(rel) or released.get(rel),
         )
         try:
             done = await run(action, work, now)
@@ -367,7 +372,9 @@ async def _local_file(agent_dir: Path, rel: str) -> LocalFile:
         raise
     if not stat.S_ISREG(info.st_mode):
         raise FileNotFoundError(f"No guest file at {rel}")
-    return LocalFile(rel, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+    return LocalFile(
+        rel, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink, stat.S_IMODE(info.st_mode)
+    )
 
 
 async def _sync_one(agent_id: UUID, agent_dir: Path, store: StorageBackend, rel: str) -> SyncedFile:
@@ -389,7 +396,7 @@ async def _sync_one(agent_id: UUID, agent_dir: Path, store: StorageBackend, rel:
     if action is Action.DELETE_LOCAL:
         # Guest deletes are left to a pass, where the mass-delete guard can hold them back.
         raise FileNotFoundError(f"{rel} was deleted from storage")
-    work = PathWork(agent_id, agent_dir, store, generation, rel, base, local, remote)
+    work = PathWork(agent_id, agent_dir, store, generation, rel, base, local, remote, entry)
     try:
         done = await run(action, work, moment(now_ns))
     except FrozenPathError as exc:

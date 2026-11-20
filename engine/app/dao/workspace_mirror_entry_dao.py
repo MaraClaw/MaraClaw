@@ -20,6 +20,7 @@ class WorkspaceMirrorEntryDAO(BaseDAO[WorkspaceMirrorEntryRecord]):
         "local_size",
         "local_mtime_ns",
         "local_ctime_ns",
+        "local_mode",
         "content_sha256",
         "remote_etag",
         "remote_size",
@@ -45,12 +46,12 @@ class WorkspaceMirrorEntryDAO(BaseDAO[WorkspaceMirrorEntryRecord]):
             await db.execute(
                 f"""
                 INSERT INTO {self.table}
-                    (agent_id, path, generation, local_ino, local_size, local_mtime_ns, local_ctime_ns,
+                    (agent_id, path, generation, local_ino, local_size, local_mtime_ns, local_ctime_ns, local_mode,
                      content_sha256, remote_etag, remote_size, remote_token, skip_reason)
                 VALUES (
                     %(agent_id)s, %(path)s, %(generation)s, %(local_ino)s, %(local_size)s, %(local_mtime_ns)s,
-                    %(local_ctime_ns)s, %(content_sha256)s, %(remote_etag)s, %(remote_size)s, %(remote_token)s,
-                    %(skip_reason)s
+                    %(local_ctime_ns)s, %(local_mode)s, %(content_sha256)s, %(remote_etag)s, %(remote_size)s,
+                    %(remote_token)s, %(skip_reason)s
                 )
                 ON CONFLICT (agent_id, path) DO UPDATE
                 SET generation = EXCLUDED.generation,
@@ -58,6 +59,7 @@ class WorkspaceMirrorEntryDAO(BaseDAO[WorkspaceMirrorEntryRecord]):
                     local_size = EXCLUDED.local_size,
                     local_mtime_ns = EXCLUDED.local_mtime_ns,
                     local_ctime_ns = EXCLUDED.local_ctime_ns,
+                    local_mode = EXCLUDED.local_mode,
                     content_sha256 = EXCLUDED.content_sha256,
                     remote_etag = EXCLUDED.remote_etag,
                     remote_size = EXCLUDED.remote_size,
@@ -73,6 +75,7 @@ class WorkspaceMirrorEntryDAO(BaseDAO[WorkspaceMirrorEntryRecord]):
                     "local_size": record.local_size,
                     "local_mtime_ns": record.local_mtime_ns,
                     "local_ctime_ns": record.local_ctime_ns,
+                    "local_mode": record.local_mode,
                     "content_sha256": record.content_sha256,
                     "remote_etag": record.remote_etag,
                     "remote_size": record.remote_size,

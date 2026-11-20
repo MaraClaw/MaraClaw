@@ -1,6 +1,9 @@
 """Offline parts of the workspace mirror: the per-path decision table, freezes, conflict names, marker and lock."""
 
 import hashlib
+import os
+import stat
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,10 +14,10 @@ import pytest
 
 from app.records.workspace_mirror_entry import WorkspaceMirrorEntryRecord
 from app.services.storage_runtime.agent_files import agent_storage_key
-from app.services.storage_runtime.base import StorageBackend, StorageVersion
+from app.services.storage_runtime.base import StorageBackend, StorageSnapshot, StorageVersion, content_hash_bytes
 from app.services.workspace_mirror import MirrorBusyError, mirror_lock
 from app.services.workspace_mirror_local import MARKER, complete_generation, read_or_create_generation
-from app.services.workspace_mirror_ops import Outcome, PathWork, run
+from app.services.workspace_mirror_ops import Done, Outcome, PathWork, run
 from app.services.workspace_mirror_plan import (
     SETTLE_NS,
     Action,
@@ -30,7 +33,9 @@ from app.services.workspace_mirror_scope import MAX_FILE_BYTES, LocalFile
 NOW = datetime(2026, 11, 19, 12, 30, 45, tzinfo=UTC)
 NOW_NS = int(NOW.timestamp()) * 1_000_000_000
 REL = "workspace/notes/plan.md"
-LOCAL = LocalFile(REL, ino=7, size=3, mtime_ns=NOW_NS - 60_000_000_000, ctime_ns=NOW_NS - 60_000_000_000, nlink=1)
+LOCAL = LocalFile(
+    REL, ino=7, size=3, mtime_ns=NOW_NS - 60_000_000_000, ctime_ns=NOW_NS - 60_000_000_000, nlink=1, mode=0o644
+)
 EDITED = replace(LOCAL, size=4, mtime_ns=LOCAL.mtime_ns + 1)
 REMOTE = Remote("etag-1", 3, "")
 REMOTE_EDITED = Remote("etag-2", 4, "")
@@ -212,6 +217,11 @@ class _VersionedStore(StorageBackend):
         return StorageVersion(key, exists=True, is_dir=False, size=len(data), etag=etag, version_id=version_id)
 
     @override
+    async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
+        data = self.objects[key][0]
+        return StorageSnapshot(data, await self.get_version(key), content_hash_bytes(data))
+
+    @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
         self.writes += 1
         self.objects[key] = (data, f"v{self.writes}")
@@ -219,6 +229,44 @@ class _VersionedStore(StorageBackend):
     @override
     async def delete(self, key: str) -> None:
         del self.objects[key]
+
+
+STORED_ETAG = hashlib.md5(b"stored", usedforsecurity=False).hexdigest()
+
+
+@pytest.fixture
+def umask_022() -> Iterator[None]:
+    previous = os.umask(0o022)
+    try:
+        yield
+    finally:
+        _ = os.umask(previous)
+
+
+def _guest_file(root: Path, data: bytes, mode: int) -> Path:
+    path = root / REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ = path.write_bytes(data)
+    path.chmod(mode)
+    return path
+
+
+def _mode(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def _local_file(path: Path) -> LocalFile:
+    info = path.stat()
+    return LocalFile(
+        REL, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink, stat.S_IMODE(info.st_mode)
+    )
+
+
+async def _store_holding(data: bytes) -> tuple[_VersionedStore, StorageVersion]:
+    store = _VersionedStore()
+    key = agent_storage_key(BASE.agent_id, REL)
+    await store.write_bytes(key, data)
+    return store, await store.get_version(key)
 
 
 @pytest.mark.parametrize(
@@ -241,17 +289,160 @@ async def test_a_same_bytes_rewrite_under_a_new_version_is_retried_once_but_a_re
     entry = replace(BASE, remote_etag=recorded.etag, remote_size=recorded.size, remote_token=recorded.token)
     local: LocalFile | None = None
     if action is Action.PUSH_UPDATE:
-        (tmp_path / REL).parent.mkdir(parents=True)
-        _ = (tmp_path / REL).write_bytes(b"guest edit")
-        info = (tmp_path / REL).stat()
-        local = LocalFile(REL, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+        local = _local_file(_guest_file(tmp_path, b"guest edit", 0o644))
     current = await store.get_version(key)
     remote = Remote(current.etag, current.size, "")
-    work = PathWork(BASE.agent_id, tmp_path, store, BASE.generation, REL, entry, local, remote)
+    work = PathWork(BASE.agent_id, tmp_path, store, BASE.generation, REL, entry, local, remote, entry)
 
     done = await run(action, work, NOW)
 
     assert (done.outcome, store.held(key)) == (outcome, stored)
+
+
+async def _pull_into(root: Path, prior: WorkspaceMirrorEntryRecord | None) -> Done:
+    """Pull the stored bytes into a directory that lacks the file, as a restore after a wiped guest disk does."""
+    store, stored = await _store_holding(b"stored")
+    remote = Remote(stored.etag, stored.size, "")
+    work = PathWork(BASE.agent_id, root, store, UUID(int=9), REL, None, None, remote, prior)
+    return await run(Action.PULL, work, NOW)
+
+
+@pytest.mark.usefixtures("umask_022")
+@pytest.mark.parametrize(
+    ("recorded", "etag", "expected"),
+    [
+        pytest.param(0o755, STORED_ETAG, 0o755, id="exec-bit-comes-back"),
+        pytest.param(0o4700, STORED_ETAG, 0o700, id="setuid-is-dropped"),
+        pytest.param(0o2755, STORED_ETAG, 0o755, id="setgid-is-dropped"),
+        pytest.param(0o400, STORED_ETAG, 0o600, id="the-owner-can-always-read-and-write"),
+        pytest.param(0o755, "etag-of-other-bytes", 0o644, id="other-stored-bytes-get-the-default"),
+        pytest.param(None, STORED_ETAG, 0o644, id="no-recorded-mode-gets-the-default"),
+    ],
+)
+async def test_a_pull_that_creates_a_file_restores_the_mode_recorded_for_the_same_stored_bytes(
+    tmp_path: Path, recorded: int | None, etag: str, expected: int
+):
+    prior = replace(BASE, remote_etag=etag, local_mode=recorded)
+
+    done = await _pull_into(tmp_path, prior)
+
+    assert done.entry is not None
+    assert (done.outcome, _mode(tmp_path / REL), done.entry.local_mode) == (Outcome.PULLED, expected, expected)
+
+
+@pytest.mark.usefixtures("umask_022")
+async def test_a_pull_that_creates_a_file_with_no_manifest_row_uses_the_default_mode(tmp_path: Path):
+    done = await _pull_into(tmp_path, None)
+
+    assert done.entry is not None
+    assert (done.outcome, _mode(tmp_path / REL), done.entry.local_mode) == (Outcome.PULLED, 0o644, 0o644)
+
+
+@pytest.mark.usefixtures("umask_022")
+async def test_a_pull_over_an_existing_file_keeps_that_files_mode(tmp_path: Path):
+    store, stored = await _store_holding(b"stored")
+    path = _guest_file(tmp_path, b"guest", 0o640)
+    prior = replace(BASE, remote_etag=STORED_ETAG, local_mode=0o755)
+    work = PathWork(
+        BASE.agent_id,
+        tmp_path,
+        store,
+        UUID(int=9),
+        REL,
+        None,
+        _local_file(path),
+        Remote(stored.etag, stored.size, ""),
+        prior,
+    )
+
+    done = await run(Action.PULL, work, NOW)
+
+    assert done.entry is not None
+    assert (done.outcome, _mode(path), done.entry.local_mode) == (Outcome.PULLED, 0o640, 0o640)
+
+
+@pytest.mark.usefixtures("umask_022")
+async def test_a_conflict_copy_gets_the_default_mode_and_the_replaced_file_keeps_its_own(tmp_path: Path):
+    store, stored = await _store_holding(b"stored")
+    path = _guest_file(tmp_path, b"guest", 0o755)
+    work = PathWork(
+        BASE.agent_id,
+        tmp_path,
+        store,
+        BASE.generation,
+        REL,
+        None,
+        _local_file(path),
+        Remote(stored.etag, stored.size, ""),
+        None,
+    )
+
+    done = await run(Action.COMPARE, work, NOW)
+
+    assert done.entry is not None
+    assert done.conflict_path is not None
+    copy = tmp_path / done.conflict_path
+    assert (done.outcome, copy.read_bytes(), _mode(copy)) == (Outcome.CONFLICT, b"guest", 0o644)
+    assert (path.read_bytes(), _mode(path), done.entry.local_mode) == (b"stored", 0o755, 0o755)
+
+
+@pytest.mark.usefixtures("umask_022")
+async def test_a_push_records_the_mode_of_the_guest_file(tmp_path: Path):
+    store, stored = await _store_holding(b"abc")
+    path = _guest_file(tmp_path, b"guest edit", 0o755)
+    entry = replace(BASE, remote_etag=stored.etag, remote_size=stored.size, remote_token=stored.token, local_mode=0o644)
+    work = PathWork(
+        BASE.agent_id,
+        tmp_path,
+        store,
+        BASE.generation,
+        REL,
+        entry,
+        _local_file(path),
+        Remote(stored.etag, stored.size, ""),
+        entry,
+    )
+
+    done = await run(Action.PUSH_UPDATE, work, NOW)
+
+    assert done.entry is not None
+    assert (done.outcome, done.entry.local_mode) == (Outcome.PUSHED, 0o755)
+
+
+@pytest.mark.usefixtures("umask_022")
+async def test_a_chmod_alone_is_recorded_with_its_new_mode_and_uploads_nothing(tmp_path: Path):
+    store, stored = await _store_holding(b"abc")
+    path = _guest_file(tmp_path, b"abc", 0o644)
+    before = _local_file(path)
+    entry = replace(
+        BASE,
+        local_ino=before.ino,
+        local_size=before.size,
+        local_mtime_ns=before.mtime_ns,
+        local_ctime_ns=before.ctime_ns,
+        local_mode=0o644,
+        content_sha256=content_hash_bytes(b"abc"),
+        remote_etag=stored.etag,
+        remote_size=stored.size,
+        remote_token=stored.token,
+    )
+    path.chmod(0o755)
+    work = PathWork(
+        BASE.agent_id,
+        tmp_path,
+        store,
+        BASE.generation,
+        REL,
+        entry,
+        _local_file(path),
+        Remote(stored.etag, stored.size, ""),
+        entry,
+    )
+
+    done = await run(Action.PUSH_UPDATE, work, NOW)
+
+    assert done.entry is not None
+    assert (done.outcome, done.entry.local_mode, store.writes) == (Outcome.RECORDED, 0o755, 1)
 
 
 async def test_a_held_mirror_lock_makes_another_pass_busy(tmp_path: Path):

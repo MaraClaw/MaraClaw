@@ -1,5 +1,6 @@
 import os
 import stat
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NoReturn
 
@@ -35,6 +36,15 @@ def _leftovers(directory: Path) -> list[str]:
     return sorted(entry.name for entry in directory.iterdir() if entry.name.startswith(".mirror-"))
 
 
+@pytest.fixture
+def umask_022() -> Iterator[None]:
+    previous = os.umask(0o022)
+    try:
+        yield
+    finally:
+        _ = os.umask(previous)
+
+
 def test_write_replaces_atomically_and_keeps_the_mode(tmp_path: Path):
     root = _agent(tmp_path)
     target = root / "workspace" / "a.txt"
@@ -65,6 +75,39 @@ def test_write_creates_missing_parent_directories(tmp_path: Path):
     assert not (root / "workspace" / "deep").is_symlink()
     assert stat.S_ISREG(stamp.mode)
     assert _leftovers(root / "workspace" / "deep" / "er") == []
+
+
+@pytest.mark.usefixtures("umask_022")
+@pytest.mark.parametrize("mode", [0o755, 0o666])
+def test_write_gives_a_new_file_exactly_the_requested_mode_whatever_the_umask(tmp_path: Path, mode: int):
+    root = _agent(tmp_path)
+
+    stamp = write_guest_file(root, "workspace/run.sh", b"echo hi", mode=mode)
+
+    assert stat.S_IMODE((root / "workspace" / "run.sh").stat().st_mode) == mode
+    assert stat.S_IMODE(stamp.mode) == mode
+
+
+@pytest.mark.usefixtures("umask_022")
+def test_write_replacing_a_file_keeps_its_mode_even_when_one_is_given(tmp_path: Path):
+    root = _agent(tmp_path)
+    target = root / "workspace" / "a.txt"
+    _ = target.write_text("old")
+    target.chmod(0o640)
+    before = stat_guest_file(root, "workspace/a.txt")
+
+    _ = write_guest_file(root, "workspace/a.txt", b"new", expected=before, mode=0o755)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+
+@pytest.mark.usefixtures("umask_022")
+def test_write_creates_a_new_file_as_0o644_when_no_mode_is_given(tmp_path: Path):
+    root = _agent(tmp_path)
+
+    _ = write_guest_file(root, "workspace/a.txt", b"x")
+
+    assert stat.S_IMODE((root / "workspace" / "a.txt").stat().st_mode) == 0o644
 
 
 @pytest.mark.parametrize("link", ["workspace", "workspace/sub"])

@@ -26,6 +26,7 @@ class WorkspaceMirrorEntryRecord:
     local_size: int
     local_mtime_ns: int
     local_ctime_ns: int
+    local_mode: int | None = None
     content_sha256: str | None = None
     remote_etag: str | None = None
     remote_size: int | None = None
@@ -35,6 +36,7 @@ class WorkspaceMirrorEntryRecord:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> WorkspaceMirrorEntryRecord:
+        local_mode = row.get("local_mode")
         remote_size = row.get("remote_size")
         return cls(
             agent_id=uuid_from_row(row["agent_id"]),
@@ -44,6 +46,7 @@ class WorkspaceMirrorEntryRecord:
             local_size=int_from_row(row["local_size"]),
             local_mtime_ns=int_from_row(row["local_mtime_ns"]),
             local_ctime_ns=int_from_row(row["local_ctime_ns"]),
+            local_mode=None if local_mode is None else int_from_row(local_mode),
             content_sha256=str_from_row_opt(row.get("content_sha256")),
             remote_etag=str_from_row_opt(row.get("remote_etag")),
             remote_size=None if remote_size is None else int_from_row(remote_size),

@@ -137,12 +137,20 @@ def publish_guest_file(root: Path, file: StoredFile, data: bytes) -> None:
 
 
 def write_guest_file(
-    root: Path, relative: str, data: bytes, *, expected: GuestStamp | None = None, require_absent: bool = False
+    root: Path,
+    relative: str,
+    data: bytes,
+    *,
+    expected: GuestStamp | None = None,
+    require_absent: bool = False,
+    mode: int | None = None,
 ) -> GuestStamp:
     """Atomically create or replace a guest file and return the stamp of what was written.
 
     Missing parent directories are created. A symlink or directory on the path is refused without being touched.
-    An existing destination keeps its permission bits. With `expected`, the destination must still be that file;
+    An existing destination keeps its permission bits; a new file gets exactly `mode` when one is given (set on the
+    descriptor, so the umask does not mask it), else 0o644 less the umask. With `expected`, the destination must
+    still be that file;
     with `require_absent`, nothing may sit there yet. Either check runs once the data is on disk, immediately
     before the replace, and raises `GuestFileChangedError` without replacing anything.
     """
@@ -168,6 +176,8 @@ def write_guest_file(
                     raise GuestFileChangedError(f"Guest file appeared before it was created: {relative}")
                 if current is not None:
                     os.fchmod(stream.fileno(), stat.S_IMODE(current.st_mode))
+                elif mode is not None:
+                    os.fchmod(stream.fileno(), mode)
                 os.replace(temporary, path.name, src_dir_fd=directory, dst_dir_fd=directory)
                 os.fsync(directory)
                 return GuestStamp.of(os.fstat(stream.fileno()))

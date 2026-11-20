@@ -61,6 +61,7 @@ class LocalFile:
     mtime_ns: int
     ctime_ns: int
     nlink: int
+    mode: int
 
 
 def _clean(rel: str) -> bool:
@@ -186,7 +187,15 @@ def walk_local(root: Path, *, deadline_seconds: float, max_entries: int = MAX_EN
                         continue
                     if stat.S_ISREG(info.st_mode):
                         files.append(
-                            LocalFile(rel, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+                            LocalFile(
+                                rel,
+                                info.st_ino,
+                                info.st_size,
+                                info.st_mtime_ns,
+                                info.st_ctime_ns,
+                                info.st_nlink,
+                                stat.S_IMODE(info.st_mode),
+                            )
                         )
         return subdirectories
 
