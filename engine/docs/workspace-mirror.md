@@ -4,7 +4,7 @@ In S3 storage mode a guest's files live in two places: the host directory bind-m
 
 With local storage the agent directory is the storage root, so there is nothing to copy and the mirror is idle. It is also idle in S3 mode when `WORKSPACE_MIRROR_ENABLED=false`: `durable_store()` returns `None`, the worker loop only sleeps, and share links are served from the guest file.
 
-Code: `app/services/workspace_mirror.py` (the pass, the locks, the worker and share-link entry points), `workspace_mirror_plan.py` (pure decisions), `workspace_mirror_ops.py` (one operation per path), `workspace_mirror_local.py` (generation marker, contained probes), `workspace_mirror_scope.py` (scope and the contained walk), `workspace_mirror_worker.py` (the loop) and `agent_materialize.py` (the pull before a start). The manifest is table `agent_workspace_mirror_entries`, read and written through `dao/workspace_mirror_entry_dao.py`.
+Code: `app/services/workspace_mirror.py` (the pass, the locks, the worker and share-link entry points), `workspace_mirror_plan.py` (pure decisions), `workspace_mirror_ops.py` (one operation per path), `workspace_mirror_local.py` (generation marker, contained probes), `workspace_mirror_scope.py` (scope and the contained walk), `workspace_mirror_worker.py` (the loop) and `agent_materialize.py` (the pull before a start). The manifest is table `agent_workspace_mirror_entries`, read and written through `dao/workspace_mirror_entry_dao.py`. The table is part of the fresh baseline, `local_mode` included; no existing-database upgrade is supplied.
 
 ## When it runs
 
@@ -36,7 +36,7 @@ The walk lists only regular files and skips symlinks, FIFOs, sockets and devices
 
 ## Decision rules
 
-The manifest has one row per agent and path: the guest file's inode, size, mtime and ctime as last seen, the SHA-256 of its bytes, the stored object's etag, size and version token, `skip_reason` (only `too_large`) and `synced_at`. A row is the base for a path only when its generation equals the directory's current generation (see [Marker and generation](#marker-and-generation)). Without a base, nothing counts as deleted.
+The manifest has one row per agent and path: the guest file's inode, size, mtime, ctime and permission bits (`local_mode`) as last seen, the SHA-256 of its bytes, the stored object's etag, size and version token, `skip_reason` (only `too_large`) and `synced_at`. A row is the base for a path only when its generation equals the directory's current generation (see [Marker and generation](#marker-and-generation)). Without a base, nothing counts as deleted.
 
 A guest file counts as changed when it is gone, when its inode, size, mtime or ctime differ from the row, or when the row carries a `skip_reason`. The stored object counts as changed when its etag or size differ from the row, or when it appeared or vanished.
 
@@ -57,6 +57,8 @@ An edit beats a delete on either side. A push is conditional on the version toke
 **The conflict rule.** Compare is the one place two sides disagree. When the bytes are equal the row is recorded and nothing moves. Otherwise storage's version wins: the guest's bytes are first saved as a conflict copy, then storage's bytes replace the guest file. The copy goes to `workspace/conflicts/` and keeps the original relative path, with `" (conflict YYYY-MM-DD HHMMSS)"` (UTC time of the pass) inserted between stem and suffix, so `workspace/report.docx` becomes `workspace/conflicts/workspace/report (conflict 2026-11-19 101500).docx`. A second copy in the same second gets a number after the stamp, up to 20 attempts. The copy is an ordinary workspace file, so a later pass uploads it.
 
 In pull-only mode (the start path) every action that writes to storage is dropped. Compare still runs, because it only writes to the guest directory.
+
+**File modes.** S3 objects carry no mode, so each row also records the guest file's permission bits (`local_mode`) on every push and every recorded pass. A pull that creates a missing guest file looks at the path's row, from any generation. When that row recorded the same stored etag, the file gets `(local_mode & 0o777) | 0o600`: setuid and setgid never come back, and the owner can always read and write it. Otherwise it gets 0644 less the process umask. A pull that replaces an existing guest file keeps that file's mode, and a conflict copy is 0644. Files the mass-delete guard brings back keep their recorded mode.
 
 ## Freezes
 
@@ -80,11 +82,11 @@ If a pass would delete at least 20 files on one side, and those deletes are at l
 
 The pass also drops the manifest rows of the held paths. A path without a row has no base, so later passes only copy it across and never delete it, even when the restore takes several passes (a budget cut, a full storage limit, a provider error).
 
-The hold applies to deliberate deletes too. If a member deletes, in the web app, 20 or more files that are also at least half the agent's mirrored files, the guest uploads them again. To remove that many files, delete them in smaller batches, or on the guest side. A share link to one of those files that has not expired serves the restored file again.
+A member's delete in the web app never reaches the guard. In S3 mode `DELETE /api/agents/{id}/files/content` (a file or a whole folder; `_delete_workspace_file` in `app/api/files.py`) deletes each stored object through the storage facade, and the facade's local fallback (`STORAGE_LOCAL_FALLBACK_ENABLED`, on by default) deletes the guest copy in the same request. The next pass sees both sides gone and drops the rows, so a member's bulk delete is not undone. Empty folders can stay on the guest disk. With the fallback off only storage loses the files, and a delete of 20 or more files that are at least half the agent's mirrored files is restored by the guard: delete in smaller batches, or on the guest side.
 
 ## Empty-storage guard
 
-If storage lists nothing in scope for an agent (no listed object and no root file) while the manifest holds rows of the current generation that reached storage, the mirror reads it as a wrong or wiped bucket, not as deletes. The pass takes no action for that agent, in full and in pull-only mode, and logs a warning. A share-link sync for the agent answers 503 `file_sync_busy`. A side effect: deleting the agent's last stored in-scope file in the web app leaves the guest copy in place. As soon as storage lists anything in scope again (a member uploads a file, or the default-skill push writes `skills/`), this guard ends and the mass-delete guard above holds the guest deletes back.
+If storage lists nothing in scope for an agent (no listed object and no root file) while the manifest holds rows of the current generation that reached storage, the mirror reads it as a wrong or wiped bucket, not as deletes. The pass takes no action for that agent, in full and in pull-only mode, and logs a warning. A share-link sync for the agent answers 503 `file_sync_busy`. A side effect when the local fallback is off (see the mass-delete guard above): deleting the agent's last stored in-scope file in the web app leaves the guest copy in place. As soon as storage lists anything in scope again (a member uploads a file, or the default-skill push writes `skills/`), this guard ends and the mass-delete guard above holds the guest deletes back.
 
 ## Marker and generation
 
@@ -127,9 +129,8 @@ With S3 storage and `STORAGE_LOCAL_FALLBACK_ENABLED`, the facade builds the fall
 - A stored object larger than 100 MiB is never pulled, and a guest file larger than 100 MiB is never pushed.
 - Files settle for about 5 seconds before they move. A share link requested less than 5 seconds after someone else changed the stored object (for example a web app edit) answers 503 `file_sync_busy`; retrying works.
 - The first pass of a large agent spans several passes, because a pass stops at 20 seconds.
-- The executable bit does not survive S3. A file created from storage is written with mode 0644 (before the process umask), and a file that already exists locally keeps its own mode when storage replaces its bytes.
-- The engine never deletes noncurrent S3 versions and the quota ledger does not count them. With bucket versioning on, overwrites and mirrored deletes leave noncurrent versions behind, so the operator needs a bucket lifecycle rule for them.
-- A content edit of a seeded skill does not reach existing agents (see [The seeded skill](#the-seeded-skill)).
+- S3 objects carry no mode. A file whose stored bytes changed elsewhere (a web app edit, for example) no longer matches the etag its row recorded, so it comes back 0644 after a wiped disk (see File modes under [Decision rules](#decision-rules)).
+- The quota ledger counts only current objects, so on a versioned bucket every mirror overwrite or delete leaves a noncurrent version that costs money and is never metered. `python -m scripts.s3_lifecycle` checks for the lifecycle rule that expires them and adds it ([managed-storage-quota.md](managed-storage-quota.md#scope)).
 - Guest root files are never deleted from storage; a missing one is restored.
 - A pull or a conflict replaces the guest file by rename. A process that keeps the old file open (for example a shell appending to `workspace/out.log`) keeps writing to the replaced file, and those writes are lost. Two short races remain: a guest write between the engine's last check and its rename, and a guest save between the engine's check and its delete of a file that was removed in storage.
 - Files and directories the engine creates on the guest disk belong to the engine's user. That works only because the engine image's `maraclaw` user and the guest's `node` user are both uid 1000.
@@ -185,8 +186,10 @@ Public: no login, the unguessable token in the URL is the credential. The router
 
 Anyone who holds the URL can download the file until it expires. `PUBLIC_BASE_URL` must be an address the remote tool can reach, which means an internet-reachable one: `localhost` or a Docker network name does not work for a tool running elsewhere. For local testing use a tunnel as in [https-tunnel-testing.md](https-tunnel-testing.md).
 
+Tokens stay out of the stack's own logs. The engine's request log line records the route template `/f/{token}/{filename}`, not the token, `uvicorn.access` is set to WARNING, and the bundled Caddy (`web-e/docker/Caddyfile`) deletes `request>uri` from its access and error logs. `file_share_links.py` logs the agent, path, size and TTL only. A TLS terminator, load balancer or CDN in front of the stack (ALB or CloudFront access logs, for example) records the full URL, token included. The token is a bearer secret until it expires (`FILE_SHARE_LINK_TTL_SECONDS`, 900 seconds by default), so restrict who can read those logs, strip the path there, or keep the TTL short.
+
 ### The seeded skill
 
 `file-share-links` is a default skill (`skill_seeder.BUILTIN_SKILLS`, `is_default`, category `development`). Its content is `agent_template/skills/file-share-links/SKILL.md`, read at seed time through `TEMPLATE_SKILL_FOLDERS`, so editing that file edits the seeded skill. It tells the agent to call the endpoint with `$MARACLAW_API_BASE` and `$MARACLAW_GATEWAY_API_KEY` right before the tool call, to put the returned `url` in the tool's file or URL field, to share only what the user asked for, never to echo the key, and never to fall back to sending the local path.
 
-New agents get the file through the workspace scaffold. Existing agents get it from `push_default_skills_to_existing_agents` at startup, which copies a default skill into an agent that lacks its first file and leaves the others alone. One agent's failure is logged and skipped, and the sync hash is recorded only after every agent succeeded, so the next startup retries. The hash covers the default skills' folder names only, so a later change to a skill's content never reaches an agent that already has the skill.
+New agents get the file through the workspace scaffold. Existing agents get it from `push_default_skills_to_existing_agents` at startup. The system setting `default_skills_sync_hash` stores `{"hash", "files": {"<folder>/<path>": sha256}}`. The hash covers the folder, path and content of every default skill file, so editing a default skill's content triggers a sync at the next start. Per agent file: a missing file is created; one already equal to the new content is left alone; one still equal to what the previous complete sync pushed is replaced with a version-conditional write; any other (the owner edited it, or no earlier record exists) is kept and logged. Files dropped from a default skill are never deleted. One agent's failure is logged and skipped, and the setting is recorded only after every agent succeeded, so the next startup retries.
