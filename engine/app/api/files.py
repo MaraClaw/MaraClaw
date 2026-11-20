@@ -7,7 +7,7 @@ import io
 import mimetypes
 import shutil
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import aiofiles
@@ -66,6 +66,11 @@ from app.services.document_parser.errors import DocumentParseError, DocumentTooL
 from app.services.file_storage_paths import (
     agent_storage_key as _agent_storage_key,
     enterprise_storage_key as _enterprise_storage_key,
+    is_enterprise_visible_path,
+    is_member_reachable,
+    is_member_visible_path,
+    member_path,
+    require_member_visible_path,
     visible_storage_key as _visible_storage_key,
 )
 from app.services.focus_service import is_focus_file_path
@@ -413,7 +418,14 @@ def _enterprise_info_row() -> FileInfo:
 def _is_listed(entry: StorageEntry, *, at_root: bool) -> bool:
     if entry.name == ".gitkeep":
         return False
-    return not (at_root and (entry.name.lower() in {"focus.md", "agenda.md"} or entry.name == "enterprise_info"))
+    return not (
+        at_root
+        and (
+            entry.name.lower() in {"focus.md", "agenda.md"}
+            or entry.name == "enterprise_info"
+            or not is_member_visible_path(entry.name)
+        )
+    )
 
 
 def _file_info(entry: StorageEntry, agent_id: uuid.UUID, enterprise_root: str | None) -> FileInfo:
@@ -451,8 +463,9 @@ async def list_files(
         items.append(_enterprise_info_row())
     entries = await storage.list_dir(storage_key) if listable else []
     enterprise_root = f"enterprise_info_{current_user.tenant_id}" if is_enterprise else None
+    at_agent_root = storage_key == _agent_storage_key(agent_id)
     items.extend(
-        _file_info(entry, agent_id, enterprise_root) for entry in entries if _is_listed(entry, at_root=not path)
+        _file_info(entry, agent_id, enterprise_root) for entry in entries if _is_listed(entry, at_root=at_agent_root)
     )
     return items
 
@@ -504,6 +517,7 @@ async def read_file(
 ) -> FileContent:
     """Read the content of a file."""
     _ = await check_agent_access(current_user, agent_id)
+    path = member_path(path)
     if is_focus_file_path(path):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -650,7 +664,7 @@ async def _extract_office_markdown(content: bytes, filename: str) -> str | None:
 
 async def _persist_office_sidecar(
     storage: StorageBackend,
-    make_key: Callable[[str], str],
+    make_key: Callable[[str], str | None],
     office_rel: str,
     filename: str,
     content: bytes,
@@ -665,7 +679,7 @@ async def _persist_office_sidecar(
         return None
     for rel in _sidecar_rel_options(office_rel, filename):
         key = make_key(rel)
-        if await storage.is_file(key):
+        if key is None or await storage.is_file(key):
             continue
         await storage.write_bytes(key, text.encode("utf-8"), content_type="text/plain; charset=utf-8")
         return rel
@@ -956,15 +970,17 @@ async def write_file(
 ) -> FileWriteAcknowledgement:
     """Write content to a file (create or overwrite)."""
     agent, _ = await check_agent_access(current_user, agent_id)
+    path = member_path(path)
     if is_focus_file_path(path):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Focus is stored in the system database. Use the Focus API.",
         )
-    if path.startswith("enterprise_info"):
+    require_member_visible_path(agent_id, path)
+    if is_enterprise_visible_path(path):
         if current_user.role not in ("platform_admin", "org_admin"):
             raise HTTPException(status_code=403, detail="Only admins can edit enterprise knowledge base")
-        if path.strip("/") == "enterprise_info":
+        if path == "enterprise_info":
             raise HTTPException(status_code=400, detail="Cannot overwrite enterprise_info root")
         target, _, _ = _visible_path(agent_id, path, current_user.tenant_id)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -992,12 +1008,14 @@ async def lock_file(
 ) -> FileLockAcknowledgement:
     """Acquire or refresh a short-lived human editing lock for a file."""
     _ = await check_agent_access(current_user, agent_id)
-    if is_focus_file_path(data.path):
+    path = member_path(data.path)
+    if is_focus_file_path(path):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Focus is stored in the system database.")
+    require_member_visible_path(agent_id, path)
     async with optional_connection_ctx():
         lock = await acquire_edit_lock(
             agent_id=agent_id,
-            path=data.path,
+            path=path,
             user_id=current_user.id,
             session_id=data.session_id,
         )
@@ -1010,6 +1028,8 @@ async def unlock_file(
 ) -> FilePathAcknowledgement:
     """Release the current user's edit lock for a file."""
     _ = await check_agent_access(current_user, agent_id)
+    path = member_path(path)
+    require_member_visible_path(agent_id, path)
     await release_edit_lock(agent_id=agent_id, path=path, user_id=current_user.id)
     return {"status": "ok", "path": path}
 
@@ -1020,9 +1040,11 @@ async def get_file_revisions(
 ) -> list[FileRevisionResponse]:
     """List version history for the currently opened Workspace file."""
     _ = await check_agent_access(current_user, agent_id)
+    path = member_path(path)
     if is_focus_file_path(path):
         return []
-    if path.startswith("enterprise_info"):
+    require_member_visible_path(agent_id, path)
+    if is_enterprise_visible_path(path):
         return []
     revisions = await list_revisions(agent_id=agent_id, path=path)
     return [
@@ -1053,6 +1075,7 @@ async def restore_file_revision(
     revision = await workspace_file_revision_dao.get_for_agent(data.revision_id, agent_id)
     if not revision:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found")
+    require_member_visible_path(agent_id, revision.path)
     if revision.after_content is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore an empty/deleted revision")
 
@@ -1078,14 +1101,16 @@ async def delete_file(
 ) -> FilePathAcknowledgement:
     """Delete a file."""
     agent = await _require_agent_file_delete_access(current_user, agent_id)
+    path = member_path(path)
     if is_focus_file_path(path):
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Focus is stored in the system database. Use the Focus API.",
         )
-    if path.startswith("enterprise_info") and current_user.role not in ("platform_admin", "org_admin"):
+    require_member_visible_path(agent_id, path)
+    if is_enterprise_visible_path(path) and current_user.role not in ("platform_admin", "org_admin"):
         raise HTTPException(status_code=403, detail="Only admins can delete enterprise knowledge base files")
-    if path.strip("/") == "enterprise_info":
+    if path == "enterprise_info":
         raise HTTPException(status_code=400, detail="Cannot delete enterprise_info root")
     result = await _delete_workspace_file(
         current_user,
@@ -1099,6 +1124,11 @@ async def delete_file(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.message)
     await refresh_workspace_usage_after_delete(agent)
     return {"status": "ok", "path": path}
+
+
+def _require_visible_skill_files(agent_id: uuid.UUID, folder_name: str, paths: Iterable[str]) -> None:
+    for rel in paths:
+        require_member_visible_path(agent_id, f"skills/{folder_name}/{rel}")
 
 
 class ImportSkillBody(BaseModel):
@@ -1136,6 +1166,7 @@ async def import_skill_to_agent(
             raise HTTPException(403, "Skill changed during import")
         skill_files = await skill_dao.list_files(skill_id)
 
+    _require_visible_skill_files(agent_id, skill.folder_name, (f.path for f in skill_files))
     storage = get_storage_backend()
     written = []
     for f in skill_files:
@@ -1171,6 +1202,7 @@ async def upload_file_to_workspace(
     normalized_path = (path or "").strip().strip("/")
     if not normalized_path or normalized_path == ".":
         normalized_path = DEFAULT_UPLOAD_DIR
+    require_member_visible_path(agent_id, normalized_path)
 
     # Validate path prefix
     if normalized_path not in {"workspace", "skills"} and not normalized_path.startswith(("workspace/", "skills/")):
@@ -1188,6 +1220,7 @@ async def upload_file_to_workspace(
             status_code=400,
             detail="Upload path must stay under workspace/ or skills/.",
         )
+    require_member_visible_path(agent_id, rel)
     storage = get_storage_backend()
     file_key = _agent_storage_key(agent_id, rel)
 
@@ -1204,7 +1237,9 @@ async def upload_file_to_workspace(
     if needs_extraction(filename):
         extracted_path = await _persist_office_sidecar(
             storage,
-            lambda sidecar_rel: _agent_storage_key(agent_id, sidecar_rel),
+            lambda sidecar_rel: (
+                _agent_storage_key(agent_id, sidecar_rel) if is_member_reachable(agent_id, sidecar_rel) else None
+            ),
             rel,
             filename,
             content,
@@ -1432,6 +1467,7 @@ async def agent_import_from_clawhub(
     # 3. Write to agent workspace: skills/<slug>/
     base = _agent_base_dir(agent_id)
     folder_name = slug
+    _require_visible_skill_files(agent_id, folder_name, (f["path"] for f in files))
     skill_dir = base / "skills" / folder_name
     skill_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1478,6 +1514,7 @@ async def agent_import_from_url(
 
     # Derive folder name
     folder_name = path.rstrip("/").split("/")[-1] if path else repo
+    _require_visible_skill_files(agent_id, folder_name, (f["path"] for f in files))
 
     # Write to agent workspace
     base = _agent_base_dir(agent_id)

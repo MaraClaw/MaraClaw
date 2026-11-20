@@ -42,7 +42,7 @@ async def preview_context(tmp_path, monkeypatch):
     stale = replace(user, identity=replace(identity))
     agent_id = uuid.uuid4()
     storage = LocalStorageBackend(str(tmp_path))
-    await storage.write_bytes(f"{agent_id}/report.pdf", b"%PDF-preview")
+    await storage.write_bytes(f"{agent_id}/workspace/report.pdf", b"%PDF-preview")
 
     async def load_principal(uid, *, fresh=False):
         assert uid == user.id

@@ -669,7 +669,7 @@ These are **not** dedicated admin routers; admins receive wider access:
 | Area | Router / path prefix | Behavior |
 |------|----------------------|----------|
 | Agents | `/api/agents/*` | Admins get `manage` on non-private company agents; may set `tenant_id` on create; elevated delete/start/stop/approvals |
-| Agent files | `/api/agents/{id}/files/*` | Manage writes; `enterprise_info` paths restricted to admins |
+| Agent files | `/api/agents/{id}/files/*` | Manage writes; `enterprise_info` paths restricted to admins. Admins see the same member-visible root entries as members (`MEMBER_VISIBLE_ROOT_ENTRIES` in `app/services/file_storage_paths.py`); guest runtime files answer 404 |
 | Agent credentials | `/api/agents/{id}/credentials` (credentials router) | platform/org can manage without creator-only access |
 | Relationships | `/api/agents/{id}/relationships/*` | manage if admin or `manage` access |
 | Chat sessions | `/api/agents/{id}/sessions` (self-prefixed) | platform / org / agent_admin / creator |

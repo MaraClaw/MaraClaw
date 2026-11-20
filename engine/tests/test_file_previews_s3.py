@@ -68,7 +68,7 @@ class PreviewS3:
 def preview_s3(preview_context, monkeypatch):
     ctx = preview_context
     storage = S3StorageBackend(bucket="attachments", prefix="tenant")
-    client = PreviewS3(f"tenant/{ctx.agent_id}/report.docx")
+    client = PreviewS3(f"tenant/{ctx.agent_id}/workspace/report.docx")
     monkeypatch.setattr(storage, "_client_or_raise", lambda: client)
     monkeypatch.setattr(file_previews, "get_storage_backend", lambda: storage)
     return client
@@ -82,11 +82,13 @@ async def test_s3_metadata_uses_head_identity_without_reading_or_redirecting(
     ctx, client = preview_context, preview_s3
     client.version_id = version_id
     # When
-    response = await ctx.client.get(f"{ctx.url}/preview-metadata", params={"path": "report.docx"}, headers=ctx.headers)
+    response = await ctx.client.get(
+        f"{ctx.url}/preview-metadata", params={"path": "workspace/report.docx"}, headers=ctx.headers
+    )
     # Then
     assert response.status_code == 200
     assert response.json() == {
-        "path": "report.docx",
+        "path": "workspace/report.docx",
         "name": "report.docx",
         "size": len(client.data),
         "version_token": expected,
@@ -103,7 +105,7 @@ async def test_s3_bytes_return_binary_and_close_body_without_redirecting(preview
     response = await ctx.client.get(
         f"{ctx.url}/preview-bytes",
         headers=ctx.headers,
-        params={"path": "report.docx", "version_token": "s3-version-one"},
+        params={"path": "workspace/report.docx", "version_token": "s3-version-one"},
     )
     # Then
     assert response.status_code == 200
@@ -131,7 +133,7 @@ async def test_s3_bytes_conflict_when_identity_changes_during_get(preview_contex
     response = await ctx.client.get(
         f"{ctx.url}/preview-bytes",
         headers=ctx.headers,
-        params={"path": "report.docx", "version_token": token},
+        params={"path": "workspace/report.docx", "version_token": token},
     )
     # Then
     assert response.status_code == 409
@@ -146,7 +148,7 @@ async def test_s3_bytes_conflict_when_file_is_deleted_during_get(preview_context
     response = await ctx.client.get(
         f"{ctx.url}/preview-bytes",
         headers=ctx.headers,
-        params={"path": "report.docx", "version_token": "s3-version-one"},
+        params={"path": "workspace/report.docx", "version_token": "s3-version-one"},
     )
     # Then
     assert response.status_code == 409
@@ -162,7 +164,7 @@ async def test_s3_preview_rejects_oversize_head_before_get(preview_context, prev
     response = await ctx.client.get(
         f"{ctx.url}/{endpoint}",
         headers=ctx.headers,
-        params={"path": "report.docx", "version_token": "s3-version-one"},
+        params={"path": "workspace/report.docx", "version_token": "s3-version-one"},
     )
     # Then
     assert response.status_code == 413
@@ -178,7 +180,7 @@ async def test_s3_bytes_measure_actual_size_when_head_underreports(preview_conte
     response = await ctx.client.get(
         f"{ctx.url}/preview-bytes",
         headers=ctx.headers,
-        params={"path": "report.docx", "version_token": "s3-version-one"},
+        params={"path": "workspace/report.docx", "version_token": "s3-version-one"},
     )
     # Then
     assert response.status_code == 413
@@ -194,7 +196,7 @@ async def test_s3_bytes_conflict_when_get_length_disagrees_with_head(preview_con
     response = await ctx.client.get(
         f"{ctx.url}/preview-bytes",
         headers=ctx.headers,
-        params={"path": "report.docx", "version_token": "s3-version-one"},
+        params={"path": "workspace/report.docx", "version_token": "s3-version-one"},
     )
     # Then
     assert response.status_code == 409
@@ -206,7 +208,9 @@ async def test_s3_metadata_returns_not_found_when_head_has_no_object(preview_con
     ctx, client = preview_context, preview_s3
     client.exists = False
     # When
-    response = await ctx.client.get(f"{ctx.url}/preview-metadata", params={"path": "report.docx"}, headers=ctx.headers)
+    response = await ctx.client.get(
+        f"{ctx.url}/preview-metadata", params={"path": "workspace/report.docx"}, headers=ctx.headers
+    )
     # Then
     assert response.status_code == 404
     assert not client.bodies

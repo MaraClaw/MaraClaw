@@ -14,14 +14,16 @@ async def test_metadata_returns_exact_local_version_when_file_exists(preview_con
     # Given
     ctx = preview_context
     content = b"%PDF-preview"
-    stat = (ctx.root / str(ctx.agent_id) / "report.pdf").stat()
+    stat = (ctx.root / str(ctx.agent_id) / "workspace" / "report.pdf").stat()
     digest = hashlib.sha256(content).hexdigest()
     # When
-    response = await ctx.client.get(f"{ctx.url}/preview-metadata", params={"path": "./report.pdf"}, headers=ctx.headers)
+    response = await ctx.client.get(
+        f"{ctx.url}/preview-metadata", params={"path": "./workspace/report.pdf"}, headers=ctx.headers
+    )
     # Then
     assert response.status_code == 200
     assert response.json() == {
-        "path": "report.pdf",
+        "path": "workspace/report.pdf",
         "name": "report.pdf",
         "size": len(content),
         "version_token": f"{stat.st_mtime_ns}:{len(content)}:{digest}",
@@ -35,11 +37,11 @@ async def test_metadata_returns_exact_local_version_when_file_exists(preview_con
 async def test_bytes_return_same_origin_content_when_version_matches(preview_context):
     # Given
     ctx = preview_context
-    version = await ctx.storage.get_version(f"{ctx.agent_id}/report.pdf")
+    version = await ctx.storage.get_version(f"{ctx.agent_id}/workspace/report.pdf")
     # When
     response = await ctx.client.get(
         f"{ctx.url}/preview-bytes",
-        params={"path": "report.pdf", "version_token": version.token},
+        params={"path": "workspace/report.pdf", "version_token": version.token},
         headers=ctx.headers,
     )
     # Then
@@ -155,11 +157,11 @@ async def test_preview_rejects_unsafe_paths_when_authenticated(preview_context, 
 
 
 @pytest.mark.parametrize("endpoint", ["preview-metadata", "preview-bytes"])
-@pytest.mark.parametrize("path", ["missing.pdf", "folder", "."])
+@pytest.mark.parametrize("path", ["workspace/missing.pdf", "workspace/folder", "."])
 async def test_preview_returns_not_found_when_target_is_absent_or_directory(preview_context, endpoint, path):
     # Given
     ctx = preview_context
-    (ctx.root / str(ctx.agent_id) / "folder").mkdir()
+    (ctx.root / str(ctx.agent_id) / "workspace" / "folder").mkdir()
     # When
     response = await ctx.client.get(
         f"{ctx.url}/{endpoint}", params={"path": path, "version_token": "stale"}, headers=ctx.headers
@@ -173,12 +175,13 @@ async def test_preview_returns_not_found_when_target_is_absent_or_directory(prev
 async def test_preview_rejects_symlink_even_when_target_is_in_same_agent(preview_context, endpoint, same_agent):
     # Given
     ctx = preview_context
-    secret = ctx.root / str(ctx.agent_id) / "same-agent.txt" if same_agent else ctx.root / "other-agent.txt"
+    workspace = ctx.root / str(ctx.agent_id) / "workspace"
+    secret = workspace / "same-agent.txt" if same_agent else ctx.root / "other-agent.txt"
     secret.write_bytes(b"private")
-    (ctx.root / str(ctx.agent_id) / "alias.txt").symlink_to(secret)
+    (workspace / "alias.txt").symlink_to(secret)
     # When
     response = await ctx.client.get(
-        f"{ctx.url}/{endpoint}", params={"path": "alias.txt", "version_token": "stale"}, headers=ctx.headers
+        f"{ctx.url}/{endpoint}", params={"path": "workspace/alias.txt", "version_token": "stale"}, headers=ctx.headers
     )
     # Then
     assert response.status_code == 403
