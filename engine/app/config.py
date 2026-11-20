@@ -259,6 +259,13 @@ class Settings(BaseSettings):
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
     # Seconds between passes of the worker that measures each tier-governed agent's workspace disk usage.
     AGENT_WORKSPACE_QUOTA_INTERVAL_SECONDS: float = Field(default=600.0, ge=30, le=86400, allow_inf_nan=False)
+    # With S3 storage, a worker mirrors each guest's user files (workspace/, memory/, skills/ ...) with the agent's
+    # managed storage both ways. Local storage is the guest directory itself, so the mirror is idle there.
+    WORKSPACE_MIRROR_ENABLED: bool = True
+    # Seconds between passes of the workspace mirror worker.
+    WORKSPACE_MIRROR_INTERVAL_SECONDS: float = Field(default=60.0, ge=10, le=3600, allow_inf_nan=False)
+    # Lifetime of a guest-minted share link for one workspace file (POST /api/gateway/file-links).
+    FILE_SHARE_LINK_TTL_SECONDS: int = Field(default=900, ge=60, le=86400)
     # Seconds between passes of the worker that samples each tier-governed agent's guest memory, CPU and managed
     # storage against its limits and records episodes at or above the threshold ratio (tier-upsell evidence).
     AGENT_RESOURCE_PRESSURE_INTERVAL_SECONDS: float = Field(default=300.0, ge=30, le=86400, allow_inf_nan=False)
