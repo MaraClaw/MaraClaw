@@ -18,6 +18,23 @@ test('Notifications follows Overview in shared navigation without a role restric
   assert.equal(entries.filter((entry) => entry[1] === '/notifications').length, 1)
 })
 
+test('Clawbook directly follows Users and is gated to Clawbook viewers', () => {
+  // Given
+  const shell = readFileSync(new URL('../src/components/layout/admin-shell.tsx', import.meta.url), 'utf8')
+  // When
+  const configuration = shell.match(/const navItems:[\s\S]*?=\s*\[([\s\S]*?)\n\]/)?.[1]
+  const entries = [...(configuration ?? '').matchAll(/\{\s*to:\s*'([^']+)'([^{}]*)\}/g)]
+  const users = entries.findIndex((entry) => entry[1] === '/users')
+  const clawbook = entries[users + 1]
+  // Then
+  assert.notEqual(users, -1)
+  assert.equal(clawbook?.[1], '/clawbook')
+  assert.match(clawbook?.[2] ?? '', /label:\s*'Clawbook'/)
+  assert.match(clawbook?.[2] ?? '', /icon:\s*'clawbook'/)
+  assert.match(clawbook?.[2] ?? '', /clawbookOnly:\s*true/)
+  assert.match(shell, /if \(clawbookOnly && !canViewClawbook\(user\)\) return null/)
+})
+
 test('desktop and compact navigation share the unread count without standalone notification buttons', () => {
   // Given
   const shell = readFileSync(new URL('../src/components/layout/admin-shell.tsx', import.meta.url), 'utf8')

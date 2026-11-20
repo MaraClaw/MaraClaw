@@ -36,6 +36,8 @@ _GATEWAY_ACTIVE_SQL = (
     "WHERE tenants.id = agents.tenant_id AND tenants.is_active IS TRUE))"
 )
 
+_WORKSPACE_MIRROR_STATUSES = (AgentStatus.RUNNING, AgentStatus.IDLE, AgentStatus.STOPPED, AgentStatus.ERROR)
+
 _AGENT_COLUMNS = (
     "id",
     "name",
@@ -341,6 +343,15 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return AgentRecord.from_row(row) if row is not None else None
 
+    async def is_openclaw_active(self, agent_id: UUID) -> bool:
+        """Whether the agent still passes the gateway predicate, so a key of it would still authenticate."""
+        async with self.session() as db:
+            value = await db.fetchval(
+                "SELECT 1 FROM agents WHERE id = %(id)s AND " + _GATEWAY_ACTIVE_SQL,
+                {"id": agent_id},
+            )
+            return value is not None
+
     async def lock_openclaw(self, agent: AgentRecord) -> AgentRecord | None:
         from app.core.acl_locks import lock_agent, lock_tenants
 
@@ -534,6 +545,22 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "WHERE tenant_id IS NOT NULL AND is_system IS NOT TRUE "
                 "AND (%(after_id)s::uuid IS NULL OR id > %(after_id)s) ORDER BY id LIMIT %(limit)s",
                 {"after_id": after_id, "limit": limit},
+            )
+            return [AgentRecord.from_row(row) for row in rows]
+
+    async def list_workspace_mirror_page(self, after_id: UUID | None, limit: int) -> Sequence[AgentRecord]:
+        """Keyset page, by id, of the OpenClaw agents, system agents included, whose workspace the mirror covers."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agents "
+                "WHERE agent_type = %(agent_type)s AND status = ANY(%(statuses)s) "
+                "AND (%(after_id)s::uuid IS NULL OR id > %(after_id)s) ORDER BY id LIMIT %(limit)s",
+                {
+                    "agent_type": AgentType.OPENCLAW.value,
+                    "statuses": [status.value for status in _WORKSPACE_MIRROR_STATUSES],
+                    "after_id": after_id,
+                    "limit": limit,
+                },
             )
             return [AgentRecord.from_row(row) for row in rows]
 

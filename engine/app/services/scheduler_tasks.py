@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.core.incident_reporting import report_exception
 from app.core.logging import logger, new_trace_id
 from app.db.session import run_after_commit
+from app.runtime.shutdown_budget import join
 
 _tasks: set[asyncio.Task[None]] = set()
 _accepting = False
@@ -67,13 +68,12 @@ def schedule_execution(factory: Callable[[], Coroutine[object, object, None]]) -
 
 
 async def stop_schedule_tasks() -> None:
-    """Close admission before cancelling and awaiting every tracked execution."""
+    """Close admission, cancel every tracked execution and join it until the shutdown deadline."""
     global _accepting
     _accepting = False
     tasks = tuple(_tasks)
     for task in tasks:
         if not task.done():
             task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    await join(tasks, "Schedule execution tasks")
     _tasks.difference_update(tasks)

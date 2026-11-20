@@ -50,6 +50,7 @@ from app.services.quota_guard import (
 )
 from app.services.realtime import realtime_router
 from app.services.realtime_runtime.chat_authorization import (
+    DeliveryVerdict,
     authorize_chat_delivery,
     is_shared_target,
     read_shared_acl_version,
@@ -59,6 +60,7 @@ from app.services.realtime_runtime.fanout import encode_event_text, fan_out
 from app.services.realtime_runtime.router import (
     DEFAULT_SEND_TIMEOUT_SECONDS,
     PRESENCE_REFRESH_SECONDS,
+    resolve_authorization_wait,
     resolve_send_timeout,
 )
 from app.services.shared_chat import is_shared_session, require_writable_session
@@ -100,10 +102,10 @@ async def _send_chat_event(websocket: WebSocket, message: RealtimeMessage) -> No
 
 
 class ConnectionManager:
-    """Manage WebSocket connections per agent and evict the ones whose sends keep timing out.
+    """Manage WebSocket connections per agent, evict the ones whose sends keep timing out and close the revoked ones.
 
-    The manager is the ``SendObserver`` of both delivery paths: the router reports each bounded send back to it and
-    holds no socket state itself.
+    The manager is the ``SendObserver`` of both delivery paths: the router reports each bounded send and each revoked
+    socket back to it and holds no socket state itself.
     """
 
     def __init__(self):
@@ -111,8 +113,9 @@ class ConnectionManager:
         self.active_connections: dict[str, list[WebSocketConnection]] = {}
         # Consecutive send timeouts of listed sockets; a successful send, eviction or disconnect drops the entry.
         self._send_timeouts: dict[WebSocket, int] = {}
-        self._evicted: weakref.WeakSet[WebSocket] = weakref.WeakSet()
-        # Presence ids of evicted sockets until their Redis removal finished; this instance's presence reads skip them.
+        # Sockets withdrawn from delivery: evicted after stalling, or closed because their shared-session access ended.
+        self._withdrawn: weakref.WeakSet[WebSocket] = weakref.WeakSet()
+        # Presence ids of withdrawn sockets until their Redis removal finished; this instance's presence reads skip them.
         self._withdrawn_presence: set[str] = set()
         self._eviction_tasks: set[asyncio.Task[None]] = set()
 
@@ -147,7 +150,7 @@ class ConnectionManager:
             ]
 
     def is_live(self, websocket: WebSocket) -> bool:
-        return websocket not in self._evicted
+        return websocket not in self._withdrawn
 
     def sent(self, websocket: WebSocket) -> None:
         if self._send_timeouts:  # empty while every socket keeps up, so a healthy send costs no lookup
@@ -156,20 +159,43 @@ class ConnectionManager:
     def timed_out(self, agent_id: str, websocket: WebSocket) -> bool:
         """Count a send that hit its bound and evict on the ``STALLED_SEND_EVICTION_THRESHOLD``-th in a row.
 
-        A socket already evicted, or no longer listed because its handler disconnected, is not counted.
+        A socket already withdrawn, or no longer listed because its handler disconnected, is not counted.
         """
-        if websocket in self._evicted or all(ws is not websocket for ws, _, _ in self._local_connections(agent_id)):
+        if not self._listed(agent_id, websocket):
             return False
         timeouts = self._send_timeouts.get(websocket, 0) + 1
         if timeouts < STALLED_SEND_EVICTION_THRESHOLD:
             self._send_timeouts[websocket] = timeouts
             return False
-        self._evict(agent_id, websocket)
+        self._withdraw(agent_id, websocket, EVICTION_CLOSE_CODE, name="ws-eviction")
+        logger.warning(
+            "[WS] Evicted chat socket for agent {} after {} consecutive send timeouts",
+            agent_id,
+            STALLED_SEND_EVICTION_THRESHOLD,
+        )
         return True
 
-    def _evict(self, agent_id: str, websocket: WebSocket) -> None:
+    def refused(self, agent_id: str, websocket: WebSocket, close_code: int) -> None:
+        """Withdraw a socket whose shared-session access was revoked and close it with ``close_code`` (4001 or 4003).
+
+        Idempotent with eviction and ``disconnect`` in any order: a socket already withdrawn, or no longer listed
+        because its handler disconnected, is left alone, so it is closed at most once.
+        """
+        if not self._listed(agent_id, websocket):
+            return
+        self._withdraw(agent_id, websocket, close_code, name="ws-revocation")
+        logger.info(
+            "[WS] Closing chat socket for agent {} with {}: shared session access revoked", agent_id, close_code
+        )
+
+    def _listed(self, agent_id: str, websocket: WebSocket) -> bool:
+        return websocket not in self._withdrawn and any(
+            ws is websocket for ws, _, _ in self._local_connections(agent_id)
+        )
+
+    def _withdraw(self, agent_id: str, websocket: WebSocket, close_code: int, *, name: str) -> None:
         """Withdraw the socket from delivery and presence without awaiting, then close it in an owned, bounded task."""
-        self._evicted.add(websocket)
+        self._withdrawn.add(websocket)
         _ = self._send_timeouts.pop(websocket, None)
         self._remove_local(agent_id, websocket)
         connection_id_raw = getattr(websocket.state, "realtime_connection_id", None)
@@ -179,17 +205,14 @@ class ConnectionManager:
         websocket.state.realtime_presence = None
         if connection_id is not None:
             self._withdrawn_presence.add(connection_id)
-        task = asyncio.create_task(self._close_evicted(agent_id, websocket, connection_id), name="ws-eviction")
+        task = asyncio.create_task(self._close_withdrawn(agent_id, websocket, connection_id, close_code), name=name)
         self._eviction_tasks.add(task)
         task.add_done_callback(self._eviction_tasks.discard)
-        logger.warning(
-            "[WS] Evicted chat socket for agent {} after {} consecutive send timeouts",
-            agent_id,
-            STALLED_SEND_EVICTION_THRESHOLD,
-        )
 
-    async def _close_evicted(self, agent_id: str, websocket: WebSocket, connection_id: str | None) -> None:
-        """Remove the evicted socket's Redis presence, then close it with ``EVICTION_CLOSE_CODE``; each step is bounded."""
+    async def _close_withdrawn(
+        self, agent_id: str, websocket: WebSocket, connection_id: str | None, close_code: int
+    ) -> None:
+        """Remove the withdrawn socket's Redis presence, then close it with ``close_code``; each step is bounded."""
         if connection_id is not None:
             try:
                 async with asyncio.timeout(EVICTION_CLOSE_TIMEOUT_SECONDS):
@@ -206,12 +229,13 @@ class ConnectionManager:
             return
         try:
             async with asyncio.timeout(EVICTION_CLOSE_TIMEOUT_SECONDS):
-                await websocket.close(code=EVICTION_CLOSE_CODE)
+                await websocket.close(code=close_code)
         except Exception as error:
-            logger.warning("[WS] Failed to close evicted socket for agent {}: {}", agent_id, type(error).__name__)
+            logger.warning("[WS] Failed to close withdrawn socket for agent {}: {}", agent_id, type(error).__name__)
 
     async def drain_evictions(self) -> None:
-        """Wait for the eviction closes in flight; every step of one is bounded, so this returns within those bounds."""
+        """Wait for the eviction and revocation closes in flight; every step of one is bounded, so this returns within
+        those bounds."""
         while self._eviction_tasks:
             _ = await asyncio.gather(*self._eviction_tasks, return_exceptions=True)
 
@@ -238,7 +262,9 @@ class ConnectionManager:
         Sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``. Every send is bounded: chunks get the
         same bound the publisher uses and other events the default or terminal bound, so a stalled receiver delays
         the subscriber loop by at most that bound, and only until ``STALLED_SEND_EVICTION_THRESHOLD`` timeouts in a
-        row evict it. Authorization stays outside the bound.
+        row evict it. A shared-session socket waits for its authorization decision only until
+        ``resolve_authorization_wait`` after that decision started: a late or transiently failed decision skips the
+        socket for this event only, and a revoked one is withdrawn and closed by ``refused``.
         """
         targets = [
             (ws, sid)
@@ -257,15 +283,21 @@ class ConnectionManager:
         send_timeout = (
             CHUNK_SEND_TIMEOUT_SECONDS if payload.get("type") == ChatEventType.CHUNK else resolve_send_timeout(payload)
         )
+        authorization_wait = resolve_authorization_wait(payload)
 
         async def deliver(target: tuple[WebSocket, str | None]) -> bool:
             ws, sid = target
             try:
-                if not await authorize_chat_delivery(ws, agent_id, sid, acl_version=acl_version):
-                    return False
+                verdict = await authorize_chat_delivery(
+                    ws, agent_id, sid, acl_version=acl_version, wait_seconds=authorization_wait
+                )
             except Exception as error:
                 report_exception(error, source="websocket", operation="pubsub-delivery")
-                logger.warning(f"[WS] Failed to send message to connected client: {error}")
+                logger.warning(f"[WS] Failed to authorize message for connected client: {error}")
+                return False
+            if verdict is not DeliveryVerdict.ALLOWED:
+                if verdict.close_code is not None:
+                    self.refused(agent_id, ws, verdict.close_code)
                 return False
             # Authorization may have awaited while the publisher path evicted this socket.
             if not self.is_live(ws):
@@ -477,7 +509,7 @@ class WebSocketChatHandler:
                     report_exception(error, source="websocket", operation="chat-lifecycle")
                     logger.exception("[WS] Unexpected chat error")
                 else:
-                    logger.info("[WS] Evicted chat socket ended: {}", type(error).__name__)
+                    logger.info("[WS] Withdrawn chat socket ended: {}", type(error).__name__)
                 await self._close(1011)
         except WebSocketDisconnect:
             pass
@@ -488,7 +520,7 @@ class WebSocketChatHandler:
                 await manager.disconnect(str(self.agent_id), self.websocket)
 
     def _ended(self) -> bool:
-        """Eviction or either side already closed the socket, so another send or close could only raise."""
+        """Eviction, a revocation or either side already closed the socket, so another send or close could only raise."""
         return not manager.is_live(self.websocket) or WebSocketState.DISCONNECTED in (
             self.websocket.application_state,
             self.websocket.client_state,

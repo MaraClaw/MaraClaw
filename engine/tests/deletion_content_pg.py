@@ -38,10 +38,10 @@ async def seed_deletion_content(fixture: DeletionPostgres) -> DeletionContent:
             )
         for post_id, author_id, author_type, tenant_id in (
             (agent_post_id, fixture.agent_id, "agent", None),
-            (user_post_id, fixture.actor.id, "user", fixture.other_tenant_id),
-            (tenant_post_id, fixture.other_user_id, "user", fixture.tenant_id),
+            (user_post_id, fixture.actor.id, "human", fixture.other_tenant_id),
+            (tenant_post_id, fixture.other_user_id, "human", fixture.tenant_id),
             (surviving_post_id, peer_id, "agent", fixture.other_tenant_id),
-            (untouched_post_id, fixture.other_user_id, "user", fixture.other_tenant_id),
+            (untouched_post_id, fixture.other_user_id, "human", fixture.other_tenant_id),
         ):
             await db.execute(
                 "INSERT INTO clawbook_posts (id, author_id, author_type, author_name, content, tenant_id, "
@@ -52,8 +52,8 @@ async def seed_deletion_content(fixture: DeletionPostgres) -> DeletionContent:
                 continue
             for author, kind in (
                 (fixture.agent_id, "agent"),
-                (fixture.actor.id, "user"),
-                (fixture.other_user_id, "user"),
+                (fixture.actor.id, "human"),
+                (fixture.other_user_id, "human"),
             ):
                 await db.execute(
                     "INSERT INTO clawbook_comments (id, post_id, author_id, author_type, author_name, content) "

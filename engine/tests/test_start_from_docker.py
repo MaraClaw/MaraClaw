@@ -4,9 +4,16 @@ from pathlib import Path
 
 import pytest
 
+from app.config import SHUTDOWN_KILL_MARGIN_SECONDS, Settings
+
 SCRIPT = Path(__file__).resolve().parents[1] / "start-from-docker.sh"
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "entrypoint.sh"
 DOCKERFILE = Path(__file__).resolve().parents[1] / "Dockerfile"
+DEFAULT_STOP_TIMEOUT = str(
+    Settings.model_fields["SHUTDOWN_HTTP_GRACE_SECONDS"].default
+    + Settings.model_fields["SHUTDOWN_CLEANUP_BUDGET_SECONDS"].default
+    + SHUTDOWN_KILL_MARGIN_SECONDS
+)
 
 
 def _launcher_with(tmp_path: Path, fake_docker: str) -> Path:
@@ -70,6 +77,13 @@ def _launch(launcher: Path, *args: str, **env: str) -> subprocess.CompletedProce
 
 def _build(launcher: Path, env_file: str) -> subprocess.CompletedProcess[str]:
     return _launch(launcher, "--build-only", ENV_FILE=env_file)
+
+
+def _calls(launcher: Path) -> list[list[str]]:
+    log = launcher.parent / "calls"
+    if not log.exists():
+        return []
+    return [line.split("\x1f")[:-1] for line in log.read_text(encoding="utf-8").splitlines()]
 
 
 @pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
@@ -199,3 +213,42 @@ def test_entrypoint_grants_app_user_docker_socket_group() -> None:
     assert "gosu maraclaw" in source
     assert "chmod 666" not in source
     assert "do not chmod the host socket" in source
+
+
+@pytest.mark.parametrize(
+    ("contents", "stop_timeout"),
+    [
+        ("", DEFAULT_STOP_TIMEOUT),
+        ("SHUTDOWN_HTTP_GRACE_SECONDS=20\nSHUTDOWN_CLEANUP_BUDGET_SECONDS=60\n", "90"),
+        ("SHUTDOWN_HTTP_GRACE_SECONDS=20\nUVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=25\n", "110"),
+    ],
+    ids=["defaults", "settings", "uvicorn override"],
+)
+def test_run_stop_timeout_covers_uvicorn_window_cleanup_budget_and_margin(
+    run_launcher: Path, contents: str, stop_timeout: str
+) -> None:
+    # Given an env file that may set the uvicorn window and the cleanup budget.
+    _ = (run_launcher.parent / "engine.env").write_text(contents, encoding="utf-8")
+
+    # When the launcher starts the container.
+    result = _launch(run_launcher, "--no-build", ENV_FILE="engine.env")
+
+    # Then docker run allows the window, the budget and the margin between SIGTERM and SIGKILL.
+    assert result.returncode == 0, result.stdout + result.stderr
+    runs = [call for call in _calls(run_launcher) if call[0] == "run"]
+    assert len(runs) == 1
+    assert runs[0][runs[0].index("--stop-timeout") + 1] == stop_timeout
+    assert DEFAULT_STOP_TIMEOUT == "115"
+
+
+def test_run_refuses_a_shutdown_setting_that_is_not_whole_seconds(run_launcher: Path) -> None:
+    # Given an env file whose cleanup budget is not a number of seconds.
+    _ = (run_launcher.parent / "engine.env").write_text("SHUTDOWN_CLEANUP_BUDGET_SECONDS=soon\n", encoding="utf-8")
+
+    # When the launcher starts.
+    result = _launch(run_launcher, "--no-build", ENV_FILE="engine.env")
+
+    # Then it fails before touching any container.
+    assert result.returncode != 0
+    assert "SHUTDOWN_CLEANUP_BUDGET_SECONDS" in result.stderr
+    assert _calls(run_launcher) == []

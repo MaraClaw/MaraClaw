@@ -10,9 +10,11 @@ from uuid import UUID
 import anyio
 
 from app.core.json_types import json_loads_object
+from app.core.logging import logger
 from app.dao.user_dao import user_dao
 from app.records.agent import AgentRecord
 from app.services.storage import get_storage_backend
+from app.services.storage_runtime.base import StorageLinkRefusedError
 
 
 def _read_template_files(template_dir: Path) -> dict[str, bytes]:
@@ -86,4 +88,7 @@ async def write_missing_agent_files(agent_id: UUID, files: Mapping[str, bytes]) 
     storage = get_storage_backend()
     for relative, content in files.items():
         key = f"{agent_id}/{relative}"
-        _ = await storage.create_bytes_if_absent(key, content)
+        try:
+            _ = await storage.create_bytes_if_absent(key, content)
+        except StorageLinkRefusedError:
+            logger.warning("[AgentWorkspace] left {} alone for agent {}: a symlink blocks its path", relative, agent_id)

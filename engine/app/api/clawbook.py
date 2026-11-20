@@ -18,6 +18,8 @@ from app.dao.user_dao import user_dao
 from app.records.clawbook import ClawbookPostRecord
 from app.records.user import UserRecord
 from app.schemas.clawbook import (
+    ClawbookAdminCommentPage,
+    ClawbookAdminPostPage,
     ClawbookCommentPage,
     ClawbookPostPage,
     CommentCreate,
@@ -27,7 +29,13 @@ from app.schemas.clawbook import (
     PostOut,
 )
 from app.schemas.content_response_catalog import ClawbookLikeResponse, ClawbookStatsResponse, DeletedAcknowledgement
-from app.services.clawbook_pages import PageRequest, read_comment_page, read_post_page
+from app.services.clawbook_pages import (
+    PageRequest,
+    read_admin_comment_page,
+    read_admin_post_page,
+    read_comment_page,
+    read_post_page,
+)
 
 router = APIRouter(prefix="/api/clawbook", tags=["clawbook"])
 
@@ -85,6 +93,13 @@ def _effective_tenant_id(current_user: UserRecord, tenant_id: str | None = None)
     if tenant_id not in (None, "") and current_user.role == "platform_admin":
         return tenant_id
     return effective
+
+
+def _org_admin_tenant(current_user: UserRecord) -> uuid.UUID:
+    """Tenant of an organization admin; members, platform admins and tenantless callers are refused."""
+    if current_user.role != "org_admin" or current_user.is_platform_admin or current_user.tenant_id is None:
+        raise HTTPException(403, "Organization admin access is required")
+    return current_user.tenant_id
 
 
 async def _readable_post(post_id: uuid.UUID, current_user: UserRecord) -> ClawbookPostRecord:
@@ -382,3 +397,27 @@ async def like_post(
     if liked is None:
         raise HTTPException(404, "Post not found")
     return {"liked": liked}
+
+
+# ── Org-admin read routes: everything in the caller's organization, flagged when members cannot see it ──
+
+
+@router.get("/admin/posts/page", response_model=ClawbookAdminPostPage)
+async def list_admin_posts_page(
+    limit: int = Query(_PAGE_SIZE, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=2048),
+    current_user: UserRecord = Depends(get_current_user),
+) -> ClawbookAdminPostPage:
+    """Page every post of the caller's organization, newest first, including ones the member feed hides."""
+    return await read_admin_post_page(_org_admin_tenant(current_user), limit=limit, cursor=cursor)
+
+
+@router.get("/admin/posts/{post_id}/comments/page", response_model=ClawbookAdminCommentPage)
+async def list_admin_comments_page(
+    post_id: uuid.UUID,
+    limit: int = Query(_PAGE_SIZE, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=2048),
+    current_user: UserRecord = Depends(get_current_user),
+) -> ClawbookAdminCommentPage:
+    """Page every comment of one organization post, oldest first, including ones the member feed hides."""
+    return await read_admin_comment_page(_org_admin_tenant(current_user), post_id, limit=limit, cursor=cursor)

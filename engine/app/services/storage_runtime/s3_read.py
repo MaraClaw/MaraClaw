@@ -1,15 +1,10 @@
 """Blocking S3 response ownership, including cancellation of the awaiter."""
 
-import os
 import re
 from collections.abc import Callable, Mapping
 from contextlib import closing
-from pathlib import Path
-from tempfile import mkstemp
-from threading import Lock
 from typing import Protocol, TypeIs
 
-import anyio
 from botocore.exceptions import ClientError
 
 from app.core.json_types import json_as_int
@@ -21,8 +16,8 @@ from app.services.storage_runtime.base import (
     content_hash_bytes,
 )
 from app.services.storage_runtime.bounded import read_bounded
-
-_COPY_CHUNK_BYTES = 64 * 1024
+from app.services.storage_runtime.owned_copy import materialize_copy
+from app.services.storage_runtime.s3_connection import response_version_id
 
 
 class _ResponseBody(Protocol):
@@ -109,59 +104,13 @@ def read_object_snapshot(get_object: Callable[[], Mapping[str, object]], key: st
                 size=len(data),
                 modified_at=str(response.get("LastModified") or ""),
                 etag=etag,
-                version_id=str(response.get("VersionId") or ""),
+                version_id=response_version_id(response),
                 content_hash=etag,
             ),
             sha256=content_hash_bytes(data),
         )
 
 
-class _TempHandoff:
-    """Gives a worker-made temp file exactly one remover: the worker once abandoned, else whoever received it."""
-
-    def __init__(self) -> None:
-        self._lock: Lock = Lock()
-        self._published: Path | None = None
-        self._abandoned: bool = False
-
-    def publish(self, path: Path) -> bool:
-        with self._lock:
-            if self._abandoned:
-                return False
-            self._published = path
-            return True
-
-    def abandon(self) -> Path | None:
-        with self._lock:
-            self._abandoned = True
-            return self._published
-
-
-def _copy_object(get_object: Callable[[], Mapping[str, object]], suffix: str, handoff: _TempHandoff) -> Path:
-    """Own GET, the temp file, every chunk and close in one worker; remove the file unless the awaiter took it."""
-    with closing(_open_body(get_object)) as body:
-        descriptor, name = mkstemp(suffix=suffix)
-        path = Path(name)
-        try:
-            with os.fdopen(descriptor, "wb") as target:
-                while chunk := body.read(_COPY_CHUNK_BYTES):
-                    _ = target.write(chunk)
-            if not handoff.publish(path):
-                path.unlink(missing_ok=True)
-        except BaseException:
-            path.unlink(missing_ok=True)
-            raise
-    return path
-
-
 async def materialize_object(get_object: Callable[[], Mapping[str, object]], suffix: str) -> MaterializedFile:
     """Stream the object into a temp file made by the worker; the returned handle owns it."""
-    handoff = _TempHandoff()
-    try:
-        path = await anyio.to_thread.run_sync(_copy_object, get_object, suffix, handoff, abandon_on_cancel=True)
-    except BaseException:
-        delivered = handoff.abandon()
-        if delivered is not None:
-            delivered.unlink(missing_ok=True)
-        raise
-    return MaterializedFile(path, owned=True)
+    return await materialize_copy(lambda: closing(_open_body(get_object)), suffix)

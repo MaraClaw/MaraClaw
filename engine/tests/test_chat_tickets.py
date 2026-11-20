@@ -128,6 +128,17 @@ async def test_fresh_policy_is_checked(context, change, code):
     assert error.value.status_code == code
 
 
+async def test_identity_authorization_leaves_the_deadline_to_each_socket(context):
+    _, binding, user, agent = context
+    binding.auth_deadline = int(time.time()) - 1
+
+    assert tickets.is_expired(binding)
+    assert await tickets.authorize_identity(binding) == (user, agent, "use")
+    with pytest.raises(HTTPException) as error:
+        await tickets.authorize(binding)
+    assert error.value.status_code == 401
+
+
 async def test_issue_rejects_a_binding_minted_before_a_deactivation(context, monkeypatch):
     # Given a binding minted under the membership generation that a deactivation has since replaced.
     redis, binding, _, _ = context

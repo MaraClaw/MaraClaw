@@ -44,6 +44,7 @@ const known: ReadonlyArray<readonly [string, number, unknown, StartNewContainerF
   ['a container that still exists', 409, { code: 'guest_container_present', message: engineText }, 'container_present'],
   ['an unavailable runtime image', 409, { code: 'guest_image_unavailable', message: engineText }, 'image_unavailable'],
   ['an ineligible agent', 409, { code: 'guest_start_ineligible', message: engineText }, 'start_ineligible'],
+  ['a start stopped before it finished', 409, { code: 'guest_start_cancelled', message: engineText }, 'start_cancelled'],
   ['exhausted memory capacity', 409, { code: 'guest_memory_capacity_exceeded', message: engineText }, 'capacity_exceeded'],
   ['an unbounded memory limit', 409, { code: 'guest_memory_unbounded', message: engineText }, 'runtime_attention'],
   ['a required recreation', 409, { code: 'guest_recreation_required', message: engineText }, 'runtime_attention'],
@@ -91,6 +92,19 @@ test('Given the engine detail text, When a failure is mapped, Then the message i
       assert.notEqual(message, detail)
     }
   }
+})
+
+test('Given a start that Stop ended, When each recovery maps the refusal, Then Start and a new container each say it was stopped', () => {
+  // Given
+  const stopped = new ApiError(409, { code: 'guest_start_cancelled', message: engineText })
+  // When
+  const plain = runtimeLossRecovery.container_stopped.errorMessage(stopped)
+  const replacement = runtimeLossRecovery.container_missing.errorMessage(stopped)
+  // Then
+  assert.equal(plain, 'This agent was stopped before it finished starting.')
+  assert.equal(replacement, 'The new container was stopped before it finished starting.')
+  assert.equal(startNewContainerErrorMessage(stopped), replacement)
+  for (const message of [plain, replacement]) assert.notEqual(vietnamese[message], message)
 })
 
 test('Given every failure kind, When the messages are compared, Then each is distinct and translated', () => {

@@ -53,7 +53,7 @@ async def test_publish_page_requires_manage() -> None:
 
 @pytest.mark.asyncio
 async def test_publish_page_rejects_tool_errors() -> None:
-    body = pages_api.PagePublish(agent_id=uuid.uuid4(), path="notes.txt")
+    body = pages_api.PagePublish(agent_id=uuid.uuid4(), path="workspace/notes.txt")
     with (
         patch.object(pages_api, "check_agent_access", AsyncMock(return_value=(None, "manage"))),
         patch(

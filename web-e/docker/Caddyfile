@@ -5,8 +5,8 @@
 # - Basic security headers + compression
 # - Access log without request targets, queries or headers
 #
-# Engine traffic: same-origin /api/, /ws/ (WebSocket) and /p/ proxy to maraclaw-engine:8000. The name is resolved per
-# connection, so the engine may start before or after this container; requests answer 502 until it is reachable.
+# Engine traffic: same-origin /api/, /ws/ (WebSocket), /p/ and /f/ proxy to maraclaw-engine:8000. The name is resolved
+# per connection, so the engine may start before or after this container; requests answer 502 until it is reachable.
 {
 	admin off
 	persist_config off
@@ -119,6 +119,10 @@ http://:8080 {
 
 	handle /p/* {
 		import engine_proxy page 60s
+	}
+
+	handle /f/* {
+		import engine_proxy file 60s
 	}
 
 	# WeCom domain verification: WeCom fetches https://<domain>/WW_verify_<token>.txt from the site root, and the engine

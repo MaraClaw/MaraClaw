@@ -4,7 +4,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 import { AdminShell } from '@/components/layout/admin-shell'
 import { useAuth } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
-import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewCapacityPayments, canReviewOrganizationAdmissions, canSendBroadcast, canViewCapacityOrders } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewCapacityPayments, canReviewOrganizationAdmissions, canSendBroadcast, canViewCapacityOrders, canViewClawbook } from '@/lib/types/auth'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
 import { TransferReviewRoute } from '@/routes/transfer-review'
@@ -35,6 +35,7 @@ const PaymentsPage = lazy(() => import('@/pages/payments').then((module) => ({ d
 const TransferPaymentDetailPage = lazy(() => import('@/pages/transfer-payment-detail').then((module) => ({ default: module.TransferPaymentDetailPage })))
 const AgentDeletionRequestsPage = lazy(() => import('@/pages/agent-deletion-requests').then((module) => ({ default: module.AgentDeletionRequestsPage })))
 const AgentDeletionRequestDetailPage = lazy(() => import('@/pages/agent-deletion-request-detail').then((module) => ({ default: module.AgentDeletionRequestDetailPage })))
+const ClawbookPage = lazy(() => import('@/pages/clawbook').then((module) => ({ default: module.ClawbookPage })))
 const CapacityOrderPage = lazy(() => import('@/pages/capacity-order').then((module) => ({ default: module.CapacityOrderPage })))
 const CapacityPaymentDetailPage = lazy(() => import('@/pages/capacity-payment-detail').then((module) => ({ default: module.CapacityPaymentDetailPage })))
 
@@ -61,6 +62,11 @@ function OrganizationAdmissionReviewRoute() {
 function AgentDeletionReviewRoute() {
   const { user } = useAuth()
   return canReviewAgentDeletions(user) ? <Outlet /> : <Navigate to="/" replace />
+}
+
+function ClawbookRoute() {
+  const { user } = useAuth()
+  return canViewClawbook(user) ? <Outlet /> : <Navigate to="/" replace />
 }
 
 function CapacityReviewRoute() {
@@ -129,6 +135,9 @@ export function AppRouter() {
               </Route>
               <Route path="users" element={<UsersPage />} />
               <Route path="users/:userId" element={<UserDetailPage />} />
+              <Route element={<ClawbookRoute />}>
+                <Route path="clawbook" element={<ClawbookPage />} />
+              </Route>
               <Route path="models" element={<LlmModelsPage />} />
               <Route path="tools" element={<ToolsPage />} />
               <Route path="settings" element={<SettingsPage />} />

@@ -113,7 +113,7 @@ function OrganizationAdmissionReview({ request, ready, onBack }: {
           <PaymentEvidencePreview loadKey={detail.id} load={(signal) => fetchOrganizationAdmissionEvidence(detail.id, signal)} evidence={detail.evidence} />
         </section>
         <DetailFields rows={fields.map(([label, value]) => [t(label), value] as const)} />
-        <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">{t('Storage allowances apply to managed S3 uploads/files only. Direct guest workspace/local writes are excluded. Some upload tools have stricter limits.')}</p>
+        <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">{t('Storage allowances count the agent\'s files in managed S3: uploads, and the workspace files the agent writes, which are mirrored there. The agent\'s runtime state and caches are not counted. Some upload tools have stricter limits.')}</p>
         {detail.review_note !== null ? <div><h3 className="font-medium">{t('Saved review note')}</h3><p className="mt-2 whitespace-pre-wrap text-sm">{detail.review_note || t('No note provided.')}</p></div> : null}
         <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">{t('Approval creates the named organization and its genesis administrator account, then queues an email with initial sign-in credentials to the applicant. The administrator must change the password at first sign-in. Approve only after you have checked that a transfer of the amount above, with its transfer note, arrived in the bank account.')}</p>
         {detail.status === 'approved' && detail.credential_email_status !== null ? <section aria-labelledby={`${noteId}-email`} className="flex flex-col items-start gap-3">

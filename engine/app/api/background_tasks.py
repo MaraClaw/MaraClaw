@@ -8,6 +8,7 @@ from typing import Any
 from app.core.incident_reporting import report_exception
 from app.core.logging import get_trace_id, logger, set_trace_id
 from app.db.session import run_after_commit
+from app.runtime.shutdown_budget import join
 
 _tasks: set[asyncio.Task[object]] = set()
 _accepting = True
@@ -22,7 +23,7 @@ def start_background_tasks() -> None:
 
 
 async def drain_background_tasks(grace_seconds: float = 20.0) -> None:
-    """Close admission, allow a bounded grace period, then cancel and join owned work."""
+    """Close admission, allow a bounded grace period, then cancel owned work and join it until the shutdown deadline."""
     global _accepting
     _accepting = False
     tasks = tuple(_tasks)
@@ -33,7 +34,7 @@ async def drain_background_tasks(grace_seconds: float = 20.0) -> None:
         logger.warning("Background task drain timed out; cancelling {} owned tasks", len(pending))
         for task in pending:
             task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+        await join(pending, "Background tasks")
     _tasks.difference_update(tasks)
 
 
@@ -69,7 +70,7 @@ def schedule_background_task(
         if not _accepting or generation != _generation:
             reject()
             return
-        task = asyncio.create_task(coroutine, context=ctx)
+        task = asyncio.create_task(coroutine, name=description[:120], context=ctx)
         _tasks.add(task)
         task.add_done_callback(observe_completion, context=ctx)
 

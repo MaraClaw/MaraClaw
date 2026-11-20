@@ -38,7 +38,7 @@ from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
 from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token as ensure_grok_token
-from app.services.guest_admission import GuestStartPreflightError, guest_admission
+from app.services.guest_admission import GuestStartPreflightError, assert_start_active, guest_admission
 from app.services.guest_identity import (
     GuestOwnershipError,
     guest_container_name,
@@ -63,8 +63,7 @@ from app.services.openclaw_memory_embeddings import (
     memory_embedding_fingerprint,
     memory_search_block,
 )
-from app.services.storage import LocalStorageBackend, get_storage_backend, normalize_storage_key
-from app.services.storage_runtime.base import StorageBackend
+from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.tavily_runtime import TAVILY_SEARCH_SKILL_FOLDER, tavily_default_skill_folder_names
 
 __all__ = [
@@ -87,7 +86,6 @@ __all__ = [
 
 settings = get_settings()
 
-_COPY_CHUNK_BYTES = 1024 * 1024
 _XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
 XAI_OAUTH_PROFILE_ID = "xai:default"
 OPENAI_OAUTH_PROFILE_ID = "openai:default"
@@ -219,21 +217,6 @@ class _GuestModels:
     fallback: LLMModelRecord | None
 
 
-def _is_storage_source(storage: StorageBackend, storage_key: str, local_path: Path) -> bool:
-    """True when ``local_path`` is the very file local storage serves for ``storage_key``."""
-    return (
-        isinstance(storage, LocalStorageBackend)
-        and local_path.exists()
-        and (storage.root / storage_key).samefile(local_path)
-    )
-
-
-def _copy_in_place(source: Path, target: Path) -> None:
-    """Stream ``source`` over ``target`` without replacing it, so the inode, owner and mode stay as they are."""
-    with source.open("rb") as reader, target.open("wb") as writer:
-        shutil.copyfileobj(reader, writer, length=_COPY_CHUNK_BYTES)
-
-
 def _clear_runtime(*records: AgentRecord) -> None:
     for record in records:
         record.status = AgentStatus.ERROR
@@ -284,38 +267,13 @@ class AgentManager:
 
     async def _materialize_agent_dir(self, agent_id: uuid.UUID) -> Path:
         """Create a local working tree from shared storage for container mounting."""
-        agent_dir = self._agent_dir(agent_id)
-        storage = get_storage_backend()
-        agent_prefix = self._agent_storage_prefix(agent_id)
-        agent_dir.mkdir(parents=True, exist_ok=True)
-        if not await storage.exists(agent_prefix) and not await storage.is_dir(agent_prefix):
-            return agent_dir
-        for entry in await storage.list_dir(agent_prefix):
-            await self._materialize_entry(storage, entry.key, agent_dir)
-        self._ensure_openclaw_workspace_layout(agent_dir)
-        return agent_dir
+        from app.services.agent_materialize import materialize_agent_files
 
-    async def _materialize_entry(self, storage: StorageBackend, storage_key: str, local_root: Path) -> None:
-        rel = Path(storage_key).relative_to(Path(storage_key).parts[0]).as_posix()
-        local_path = local_root / rel
-        if local_path.is_symlink():
-            return
-        if await storage.is_dir(storage_key):
-            local_path.mkdir(parents=True, exist_ok=True)
-            for child in await storage.list_dir(storage_key):
-                await self._materialize_entry(storage, child.key, local_root)
-            return
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        if _is_storage_source(storage, storage_key, local_path):
-            # Copying a file onto itself truncates it, which corrupts SQLite WAL/SHM files a guest holds open.
-            return
-        materialized = await storage.materialize(storage_key)
-        if materialized is None:
-            raise RuntimeError(f"Storage backend cannot materialize a local file for {storage_key}")
-        try:
-            await to_thread.run_sync(_copy_in_place, materialized.path, local_path)
-        finally:
-            materialized.close()
+        agent_dir = self._agent_dir(agent_id)
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        if await materialize_agent_files(get_storage_backend(), self._agent_storage_prefix(agent_id), agent_dir):
+            self._ensure_openclaw_workspace_layout(agent_dir)
+        return agent_dir
 
     def _ensure_openclaw_workspace_layout(self, agent_dir: Path) -> None:
         """Guarantee ``workspace/`` exists and ``.openclaw/workspace`` links to it."""
@@ -687,8 +645,16 @@ class AgentManager:
         except (OSError, ValueError, HTTPError, HTTPException) as exc:
             raise GuestStartPreflightError("Guest start preparation failed") from exc
 
+        # A stopped start does not begin a pull, which is not preemptible once it runs.
+        await assert_start_active(operation_id)
         await ensure_guest_image(client, guest_image)
-        async with guest_admission(client, agent, self._agent_dir(agent.id).parent, memory_limit=limits.memory_bytes):
+        async with guest_admission(
+            client,
+            agent,
+            self._agent_dir(agent.id).parent,
+            memory_limit=limits.memory_bytes,
+            operation_id=operation_id,
+        ):
             try:
                 guests = await to_thread.run_sync(owned_guest_containers, client, agent)
             except (ClientNotFoundError, DockerException) as exc:
@@ -706,6 +672,8 @@ class AgentManager:
                     agent_dir, container_envs, gogcli_volumes = await self._apply_guest_state(
                         agent, models, rehydrate=rehydrate
                     )
+                    # Last checkpoint before Docker creates a container: a stop seen here creates nothing.
+                    await assert_start_active(operation_id)
                 except (OSError, ValueError, HTTPError, HTTPException) as exc:
                     if not guests:
                         raise GuestStartPreflightError("Guest start preparation failed") from exc
@@ -786,6 +754,9 @@ class AgentManager:
     ) -> tuple[Path, dict[str, str], list[tuple[str, str, str]]]:
         """Write the guest's mounted state; every old owned writer must already be stopped."""
         if rehydrate:
+            from app.services.agent_materialize import pull_durable_state
+
+            await pull_durable_state(agent.id, self._agent_dir(agent.id))
             agent_dir = await self._materialize_agent_dir(agent.id)
             if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
                 _ = await restore_gogcli_state(agent.id, agent_dir)

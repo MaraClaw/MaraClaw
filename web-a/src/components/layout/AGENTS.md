@@ -23,6 +23,7 @@ Scope: console navigation, notification entry point and shared screen chrome.
 5. `admissionReviewOnly` (`/admission-approvals`) uses `canReviewAdmissions`: role `org_admin` and `is_genesis === true`.
    `agentDeletionReviewOnly` (`/agent-deletion-requests`) uses `canReviewAgentDeletions`:
    active `org_admin`, not a platform admin, with a `tenant_id`.
+   `clawbookOnly` (`/clawbook`, directly after Users) uses `canViewClawbook`, the same gate.
 6. `paymentReviewOnly` (`/payments`, label "Payments") uses `useTransferReviewAccess().canReview`, called by both `NavItems`.
    Only active platform admins pass, using the canonical platform flag or role, without a tenant lookup.
    It is the only payment nav entry: `/payments` has `transfers` (default), `capacity`, `admissions` and `settings` tabs.

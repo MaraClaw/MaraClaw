@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 import anyio
+from fastapi import HTTPException, status
 
 
 @dataclass
@@ -118,6 +121,13 @@ class StorageReadChangedError(OSError):
         super().__init__(f"Storage file changed while reading: {key}")
 
 
+class StorageLinkRefusedError(HTTPException):
+    """A local storage path reaches a symlink below the root, which is refused instead of followed (403)."""
+
+    def __init__(self) -> None:
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail="Path traversal not allowed")
+
+
 MAX_DIR_PAGE_LIMIT = 500
 
 
@@ -183,6 +193,15 @@ class StorageBackend:
         """
         return walk_tree(self.list_dir, key)
 
+    def list_files_flat(self, prefix: str) -> AsyncGenerator[StorageEntry]:
+        """Lazily yield every file under ``prefix`` in key order, from a listing with no delimiter.
+
+        Unlike ``walk`` this yields no directories and skips no names, hidden ones included, so a caller comparing
+        successive listings sees every object once with its size and etag. Backends that cannot list flat fail closed.
+        """
+        del prefix
+        raise NotImplementedError
+
     async def read_bytes(self, key: str) -> bytes:
         raise NotImplementedError
 
@@ -246,6 +265,10 @@ class StorageBackend:
 
     async def delete_tree(self, key: str) -> None:
         raise NotImplementedError
+
+    async def remove_empty_directory(self, key: str) -> None:
+        """Remove the directory at ``key`` only while it is empty; stores without real directories have none."""
+        del key
 
     async def stat(self, key: str) -> StorageEntry:
         raise NotImplementedError
@@ -312,22 +335,28 @@ class StorageBackend:
             await self.delete(key)
         return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
 
-    async def local_path_for(self, key: str) -> Path | None:
-        """The key's existing local file, or None. Never copies, so a caller can stream it without cleanup."""
+    async def open_local_file(self, key: str) -> tuple[BinaryIO, os.stat_result] | None:
+        """The key's regular file as an open read stream with the `fstat` of the same descriptor, or None.
+
+        The caller owns the stream and closes it. Never copies and never reopens a path by name, so what the caller
+        reads and the stat it holds describe one file. A backend that keeps nothing on a local disk returns None.
+        """
         del key
         return None
 
     async def materialize(self, key: str) -> MaterializedFile | None:
         """A local file for ``key``, or None when the backend cannot provide one.
 
-        The default reports an existing local file as not owned. Backends that copy the object override this and
-        report the copy as owned; the caller closes the handle exactly once.
+        The default cannot. Backends that copy the object override this and report the copy as owned; the caller
+        closes the handle exactly once.
         """
-        path = await self.local_path_for(key)
-        return None if path is None else MaterializedFile(path)
+        del key
+        return None
 
-    async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
-        del key, filename, inline
+    async def presign_download_url(
+        self, key: str, filename: str | None = None, inline: bool = False, expires_in_seconds: int | None = None
+    ) -> str | None:
+        del key, filename, inline, expires_in_seconds
         return None
 
 

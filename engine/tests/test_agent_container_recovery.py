@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -8,8 +9,13 @@ import pytest
 import test_agent_lifecycle_http as lifecycle_http
 from app.api import agents as api
 from app.config import get_settings
-from app.services import agent_container_recovery as recovery, agent_lifecycle as lifecycle
+from app.services import (
+    agent_container_recovery as recovery,
+    agent_lifecycle as lifecycle,
+    agent_start_reconciler as reconciler,
+)
 from app.services.agent_runtime_loss import recovery_snapshot_id
+from app.services.guest_admission import GuestStartStoppedError
 from app.services.openclaw_update_snapshot import snapshot_path
 
 surface = lifecycle_http.surface
@@ -146,6 +152,28 @@ async def test_failed_start_restores_snapshot_and_pin(recovering, monkeypatch):
     # Then the /start failure code is returned and the old state and pin are put back.
     assert response.status_code == 502
     assert response.json()["detail"]["code"] == "guest_start_failed"
+    assert state.removed == [True]
+    assert state.pins == [("unpin", PINNED), ("repin", PINNED)]
+    assert state.runtime.committed.openclaw_image_id == PINNED
+    assert (agent_dir / "state.txt").read_text() == "before"
+    assert not snapshot_path(agent_dir, recovery_snapshot_id(agent.id)).exists()
+
+
+async def test_stopped_start_passes_the_cancelled_code_through_and_restores_snapshot_and_pin(recovering, monkeypatch):
+    # Given Stop ends the new guest's start at a checkpoint after the start wrote state.
+    app, agent, agent_dir, state = recovering
+
+    async def start(_record):
+        (agent_dir / "state.txt").write_text("migrated")
+        raise GuestStartStoppedError("cancelled")
+
+    monkeypatch.setattr(lifecycle.agent_manager, "start_container", start)
+    monkeypatch.setattr(reconciler, "cleanup_cancelled_start", AsyncMock())
+    # When a new container is requested.
+    response = await post(app, agent)
+    # Then the cancelled code passes through unchanged and the old state and pin are put back.
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "guest_start_cancelled"
     assert state.removed == [True]
     assert state.pins == [("unpin", PINNED), ("repin", PINNED)]
     assert state.runtime.committed.openclaw_image_id == PINNED

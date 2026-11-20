@@ -4,6 +4,7 @@ from contextlib import aclosing
 from io import BytesIO
 from threading import Event, Lock, get_ident
 from typing import TypedDict, Unpack, override
+from urllib.parse import parse_qs, urlparse
 
 import anyio
 import botocore.loaders
@@ -22,7 +23,7 @@ from app.services.storage_runtime.base import (
 )
 from app.services.storage_runtime.s3 import S3StorageBackend
 from materialize_fixtures import GatedObject, temp_files, temp_root
-from storage_walk_fixtures import EXPECTED_WALK, FILE_SIZE, PagedS3Client, s3_backend, shape, tree_client
+from storage_walk_fixtures import EXPECTED_WALK, FILE_SIZE, TREE_KEYS, PagedS3Client, s3_backend, shape, tree_client
 
 __all__ = ["temp_root"]
 
@@ -827,3 +828,124 @@ async def test_s3_page_rejects_an_unbounded_limit_before_any_request(monkeypatch
     with pytest.raises(ValueError, match="page limit"):
         await backend.list_dir_page("w", limit=limit)
     assert client.list_calls == []
+
+
+def signing_backend(endpoint_url: str = "", presign_ttl_seconds: int = 3600) -> S3StorageBackend:
+    return S3StorageBackend(
+        bucket="bucket",
+        region="us-east-1",
+        endpoint_url=endpoint_url,
+        access_key_id="key",
+        secret_access_key="secret",
+        presign_ttl_seconds=presign_ttl_seconds,
+    )
+
+
+def query_of(url: str) -> dict[str, list[str]]:
+    return parse_qs(urlparse(url).query)
+
+
+@pytest.mark.parametrize(("requested", "expected"), [(900, "900"), (None, "3600")])
+async def test_s3_presign_expires_after_the_requested_lifetime_else_the_configured_one(requested, expected):
+    url = await signing_backend().presign_download_url("report.txt", expires_in_seconds=requested)
+
+    assert url is not None
+    assert query_of(url)["X-Amz-Expires"] == [expected]
+
+
+async def test_s3_presign_keeps_the_relative_minio_rewrite_for_a_short_lifetime():
+    url = await signing_backend(endpoint_url="http://minio:9000").presign_download_url(
+        "report.txt", expires_in_seconds=60
+    )
+
+    assert url is not None
+    assert url.startswith("/minio/bucket/report.txt?")
+    assert query_of(url)["X-Amz-Expires"] == ["60"]
+
+
+@pytest.mark.parametrize(("inline", "kind"), [(False, "attachment"), (True, "inline")])
+async def test_s3_presign_sends_an_rfc_6266_disposition_that_cannot_break_out_of_the_header(inline, kind):
+    url = await signing_backend().presign_download_url("report.txt", filename='qu"ote \u00e9.txt', inline=inline)
+
+    assert url is not None
+    assert query_of(url)["response-content-disposition"] == [
+        f"{kind}; filename=\"qu_ote _.txt\"; filename*=UTF-8''qu%22ote%20%C3%A9.txt"
+    ]
+
+
+async def test_s3_presign_without_a_filename_sets_no_disposition():
+    url = await signing_backend().presign_download_url("report.txt")
+
+    assert url is not None
+    assert "response-content-disposition" not in query_of(url)
+
+
+@pytest.mark.parametrize(("reported", "expected"), [("null", ""), ("v1", "v1"), (None, "")])
+async def test_s3_version_treats_the_null_version_of_an_unversioned_object_as_none(monkeypatch, reported, expected):
+    backend = S3StorageBackend(bucket="bucket")
+    response = {"ContentLength": 3, "ETag": '"abc"'} | ({} if reported is None else {"VersionId": reported})
+
+    class HeadClient:
+        def head_object(self, **kwargs):
+            return response
+
+    monkeypatch.setattr(backend, "_client_or_raise", HeadClient)
+
+    version = await backend.get_version("report.txt")
+
+    assert (version.version_id, version.token) == (expected, expected or "abc")
+
+
+async def test_s3_create_treats_the_null_version_as_none(conditional_s3):
+    backend, stubber = conditional_s3
+    stubber.add_response("put_object", {"ETag": '"created"', "VersionId": "null"}, conditional_params())
+
+    result = await backend.create_bytes_if_absent("report.txt", b"complete", "text/plain")
+
+    assert (result.current_version.version_id, result.current_version.token) == ("", "created")
+
+
+async def test_s3_snapshot_treats_the_null_version_as_none(monkeypatch):
+    backend = S3StorageBackend(bucket="bucket")
+
+    class Client:
+        def get_object(self, **kwargs):
+            return {"Body": CountedBody(b"abc"), "ContentLength": 3, "ETag": '"e"', "VersionId": "null"}
+
+    monkeypatch.setattr(backend, "_client_or_raise", Client)
+
+    snapshot = await backend.read_snapshot_bounded("report.bin", 8)
+
+    assert (snapshot.data, snapshot.version.version_id, snapshot.version.token) == (b"abc", "", "e")
+
+
+@pytest.mark.parametrize("prefix", ["", "tenant"])
+async def test_s3_flat_listing_returns_every_nested_and_hidden_file_from_one_delimiter_free_listing(
+    monkeypatch, prefix
+):
+    # Given: the walk fixture tree plus a sibling prefix that the listing must not reach
+    client = tree_client(prefix)
+    stored = f"{prefix}/" if prefix else ""
+    client.keys[f"{stored}other/x"] = 1
+    backend = s3_backend(client, monkeypatch, prefix)
+    # When
+    entries = [entry async for entry in backend.list_files_flat("w")]
+    # Then
+    assert [entry.key for entry in entries] == sorted(key for key in TREE_KEYS if not key.endswith("/"))
+    assert {".env", ".gitkeep", "secret.txt", "leaf.md"} <= {entry.name for entry in entries}
+    assert {(entry.is_dir, entry.size, entry.etag, entry.modified_at) for entry in entries} == {
+        (False, FILE_SIZE, "etag", "then")
+    }
+    assert [(call["Prefix"], "Delimiter" in call) for call in client.list_calls] == [(f"{stored}w/", False)]
+
+
+async def test_s3_flat_listing_follows_every_page(monkeypatch):
+    # Given
+    client = PagedS3Client({f"big/f{index:04d}": index for index in range(2500)} | {"big/sub/.hidden": 1})
+    backend = s3_backend(client, monkeypatch)
+    # When
+    entries = [entry async for entry in backend.list_files_flat("big")]
+    # Then
+    assert len(entries) == 2501
+    assert entries[-1].key == "big/sub/.hidden"
+    assert len(client.list_calls) == 3

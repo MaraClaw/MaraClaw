@@ -20,7 +20,7 @@ export function canManageAgent(
 
 export type StartNewContainerFailure =
   | 'forbidden' | 'setup_incomplete' | 'container_present' | 'image_unavailable' | 'start_ineligible'
-  | 'capacity_exceeded' | 'runtime_attention' | 'start_failed' | 'unknown'
+  | 'start_cancelled' | 'capacity_exceeded' | 'runtime_attention' | 'start_failed' | 'unknown'
 
 export const startNewContainerFailureMessage = {
   forbidden: 'Only this agent’s managers can start a new container.',
@@ -28,6 +28,7 @@ export const startNewContainerFailureMessage = {
   container_present: 'This agent already has a container. This page will update shortly.',
   image_unavailable: 'No runtime image is available right now. Contact your company admin.',
   start_ineligible: 'This agent can’t be started right now. Check its lifecycle status in Settings or contact your company admin.',
+  start_cancelled: 'The new container was stopped before it finished starting.',
   capacity_exceeded: 'There isn’t enough capacity to start a new container right now. Try again in a few minutes.',
   runtime_attention: 'This agent’s runtime needs attention before it can start. Contact your company admin.',
   start_failed: 'The new container couldn’t be started. Try again in a moment.',
@@ -41,6 +42,7 @@ const failureByStatusAndCode = new Map<string, StartNewContainerFailure>([
   ['409:guest_container_present', 'container_present'],
   ['409:guest_image_unavailable', 'image_unavailable'],
   ['409:guest_start_ineligible', 'start_ineligible'],
+  ['409:guest_start_cancelled', 'start_cancelled'],
   ['409:guest_memory_capacity_exceeded', 'capacity_exceeded'],
   ['409:guest_memory_unbounded', 'runtime_attention'],
   ['409:guest_recreation_required', 'runtime_attention'],
@@ -68,6 +70,7 @@ const startStoppedFailureMessage = {
   ...startNewContainerFailureMessage,
   forbidden: 'Only this agent’s managers can start it.',
   setup_incomplete: 'Finish this agent’s setup before starting it.',
+  start_cancelled: 'This agent was stopped before it finished starting.',
   capacity_exceeded: 'There isn’t enough capacity to start this agent right now. Try again in a few minutes.',
   start_failed: 'This agent couldn’t be started. Try again in a moment.',
   unknown: 'Unable to start this agent. Try again, or contact your company admin if it keeps happening.',

@@ -157,11 +157,12 @@ async def test_fallback_materialize_never_removes_real_local_files(tmp_path: Pat
     # When
     handle = await storage.materialize("report.txt")
     assert handle is not None
+    copied = handle.path.read_bytes()
     handle.close()
-    # Then
-    assert not handle.owned
-    assert handle.path == tmp_path / "primary" / "report.txt"
-    assert handle.path.read_bytes() == b"real"
+    # Then: the caller gets an owned copy, and closing it removes only the copy
+    assert handle.owned
+    assert copied == b"real"
+    assert (tmp_path / "primary" / "report.txt").read_bytes() == b"real"
     assert (tmp_path / "legacy" / "report.txt").exists() == unpromoted_legacy
     assert temp_files(temp_root) == []
 
@@ -194,7 +195,7 @@ async def test_fallback_materialize_passes_on_the_ownership_of_the_primary_winne
     assert await original_read("report.txt") == b"old"
 
 
-@pytest.mark.parametrize("surface", ["read_bytes", "stat", "get_version", "local_path_for", "presign_download_url"])
+@pytest.mark.parametrize("surface", ["read_bytes", "stat", "get_version", "open_local_file", "presign_download_url"])
 async def test_fallback_promotion_returns_primary_when_upload_wins(
     surface: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -210,7 +211,9 @@ async def test_fallback_promotion_returns_primary_when_upload_wins(
         await primary.write_bytes(key, b"winning upload")
         return await original_create(key, path, content_type)
 
-    async def presign(key: str, filename: str | None = None, inline: bool = False) -> str:
+    async def presign(
+        key: str, filename: str | None = None, inline: bool = False, expires_in_seconds: int | None = None
+    ) -> str:
         return (await primary.read_bytes(key)).decode()
 
     monkeypatch.setattr(primary, "create_file_if_absent", raced_create)
@@ -224,9 +227,11 @@ async def test_fallback_promotion_returns_primary_when_upload_wins(
         assert result == b"winning upload"
     elif surface in {"stat", "get_version"}:
         assert result.size == len(b"winning upload")
-    elif surface == "local_path_for":
-        assert result == tmp_path / "primary" / key
-        assert result.read_bytes() == b"winning upload"
+    elif surface == "open_local_file":
+        assert result is not None
+        stream, info = result
+        with stream:
+            assert (stream.read(), info.st_size) == (b"winning upload", len(b"winning upload"))
     else:
         assert result == "winning upload"
     assert await original_read(key) == b"old"
@@ -548,3 +553,245 @@ async def test_fallback_page_reports_more_when_only_one_side_continues(tmp_path,
 def test_managed_s3_backend_inherits_the_native_page_without_an_override():
     assert "list_dir_page" not in vars(ManagedS3StorageBackend)
     assert ManagedS3StorageBackend.list_dir_page is S3StorageBackend.list_dir_page
+
+
+KEY = "report.txt"
+SURFACES = [
+    "read_bytes",
+    "read_bytes_bounded",
+    "ranged_read",
+    "read_snapshot_bounded",
+    "stat",
+    "get_version",
+    "get_version_bounded",
+    "open_local_file",
+    "materialize",
+    "presign_download_url",
+]
+
+
+class SigningLocalBackend(LocalStorageBackend):
+    """A primary that presigns every key, the way S3 does, so a skipped presign shows."""
+
+    @override
+    async def presign_download_url(
+        self, key: str, filename: str | None = None, inline: bool = False, expires_in_seconds: int | None = None
+    ) -> str | None:
+        return f"https://signed.test/{key}?expires={expires_in_seconds}"
+
+
+async def legacy_only_storage(tmp_path: Path, promote: bool) -> FallbackStorageBackend:
+    primary = SigningLocalBackend(str(tmp_path / "primary"))
+    legacy = LocalStorageBackend(str(tmp_path / "legacy"))
+    await legacy.write_bytes(KEY, b"legacy")
+    return FallbackStorageBackend(primary, legacy, promote=promote)
+
+
+async def observe(storage: StorageBackend, surface: str, key: str = KEY) -> object:
+    match surface:
+        case "read_bytes":
+            return await storage.read_bytes(key)
+        case "read_bytes_bounded":
+            return await storage.read_bytes_bounded(key, 100)
+        case "ranged_read":
+            return await storage.read_bytes_bounded(key, 3, offset=1)
+        case "read_snapshot_bounded":
+            return (await storage.read_snapshot_bounded(key, 100)).data
+        case "stat":
+            return (await storage.stat(key)).size
+        case "get_version":
+            version = await storage.get_version(key)
+            return (version.exists, version.size)
+        case "get_version_bounded":
+            version = await storage.get_version_bounded(key, 100)
+            return (version.exists, version.size)
+        case "open_local_file":
+            opened = await storage.open_local_file(key)
+            assert opened is not None
+            stream, info = opened
+            with stream:
+                return stream.read(), info.st_size
+        case "materialize":
+            handle = await storage.materialize(key)
+            assert handle is not None
+            try:
+                return (handle.path.read_bytes(), handle.owned)
+            finally:
+                handle.close()
+        case "presign_download_url":
+            return await storage.presign_download_url(key)
+        case _:
+            raise AssertionError(surface)
+
+
+async def test_fallback_presign_forwards_the_requested_lifetime_to_the_primary(tmp_path: Path):
+    primary = SigningLocalBackend(str(tmp_path / "primary"))
+    await primary.write_bytes(KEY, b"x")
+    storage = FallbackStorageBackend(primary, LocalStorageBackend(str(tmp_path / "legacy")))
+
+    forwarded = await storage.presign_download_url(KEY, filename="r.txt", expires_in_seconds=60)
+    default = await storage.presign_download_url(KEY)
+
+    assert (forwarded, default) == (
+        "https://signed.test/report.txt?expires=60",
+        "https://signed.test/report.txt?expires=None",
+    )
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+async def test_unpromoted_fallback_serves_a_local_only_key_read_only(surface: str, tmp_path: Path):
+    storage = await legacy_only_storage(tmp_path, promote=False)
+    legacy_path = tmp_path / "legacy" / KEY
+    expected: dict[str, object] = {
+        "read_bytes": b"legacy",
+        "read_bytes_bounded": b"legacy",
+        "ranged_read": b"ega",
+        "read_snapshot_bounded": b"legacy",
+        "stat": 6,
+        "get_version": (True, 6),
+        "get_version_bounded": (True, 6),
+        "open_local_file": (b"legacy", 6),
+        "materialize": (b"legacy", True),
+        "presign_download_url": None,
+    }
+
+    assert await observe(storage, surface) == expected[surface]
+
+    assert not (tmp_path / "primary" / KEY).exists()
+    assert legacy_path.read_bytes() == b"legacy"
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+async def test_unpromoted_fallback_still_serves_a_primary_key_from_the_primary(surface: str, tmp_path: Path):
+    storage = await legacy_only_storage(tmp_path, promote=False)
+    await storage.primary.write_bytes(KEY, b"primary!")
+    expected: dict[str, object] = {
+        "read_bytes": b"primary!",
+        "read_bytes_bounded": b"primary!",
+        "ranged_read": b"rim",
+        "read_snapshot_bounded": b"primary!",
+        "stat": 8,
+        "get_version": (True, 8),
+        "get_version_bounded": (True, 8),
+        "open_local_file": (b"primary!", 8),
+        "materialize": (b"primary!", True),
+        "presign_download_url": "https://signed.test/report.txt?expires=None",
+    }
+
+    assert await observe(storage, surface) == expected[surface]
+
+
+@pytest.mark.parametrize("surface", [surface for surface in SURFACES if surface != "ranged_read"])
+async def test_promoting_fallback_still_copies_a_local_only_key_into_the_primary(surface: str, tmp_path: Path):
+    storage = await legacy_only_storage(tmp_path, promote=True)
+
+    _ = await observe(storage, surface)
+
+    assert (tmp_path / "primary" / KEY).read_bytes() == b"legacy"
+
+
+@pytest.mark.parametrize("surface", ["read_bytes", "read_bytes_bounded", "read_snapshot_bounded", "stat"])
+async def test_unpromoted_fallback_reports_a_key_missing_everywhere_as_not_found(surface: str, tmp_path: Path):
+    storage = await legacy_only_storage(tmp_path, promote=False)
+
+    with pytest.raises(FileNotFoundError):
+        _ = await observe(storage, surface, "missing.txt")
+
+
+async def test_unpromoted_conditional_write_creates_the_primary_object_when_the_legacy_token_matches(tmp_path: Path):
+    storage = await legacy_only_storage(tmp_path, promote=False)
+    seen = await storage.get_version(KEY)
+
+    result = await storage.write_bytes_if_match(KEY, b"edited", condition=WriteCondition(version_token=seen.token))
+
+    assert (result.ok, result.conflict) == (True, False)
+    assert (tmp_path / "primary" / KEY).read_bytes() == b"edited"
+    assert (tmp_path / "legacy" / KEY).read_bytes() == b"legacy"
+    assert await storage.read_bytes(KEY) == b"edited"
+
+
+async def test_unpromoted_conditional_write_conflicts_on_a_stale_legacy_token(tmp_path: Path):
+    storage = await legacy_only_storage(tmp_path, promote=False)
+
+    result = await storage.write_bytes_if_match(KEY, b"edited", condition=WriteCondition(version_token="stale"))
+
+    assert (result.ok, result.conflict) == (False, True)
+    assert result.current_version == await storage.get_version(KEY)
+    assert not (tmp_path / "primary" / KEY).exists()
+
+
+async def test_unpromoted_conditional_write_conflicts_when_the_primary_object_appears_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    storage = await legacy_only_storage(tmp_path, promote=False)
+    seen = await storage.get_version(KEY)
+    primary = storage.primary
+    original = primary.create_bytes_if_absent
+
+    async def raced(key: str, data: bytes, content_type: str | None = None) -> ConditionalWriteResult:
+        await primary.write_bytes(key, b"winner")
+        return await original(key, data, content_type)
+
+    monkeypatch.setattr(primary, "create_bytes_if_absent", raced)
+
+    result = await storage.write_bytes_if_match(KEY, b"edited", condition=WriteCondition(version_token=seen.token))
+
+    assert (result.ok, result.conflict) == (False, True)
+    assert (tmp_path / "primary" / KEY).read_bytes() == b"winner"
+
+
+async def test_unpromoted_conditional_delete_of_a_local_only_key_compares_the_legacy_version(tmp_path: Path):
+    storage = await legacy_only_storage(tmp_path, promote=False)
+    seen = await storage.get_version(KEY)
+
+    stale = await storage.delete_if_match(KEY, condition=WriteCondition(version_token="stale"))
+    assert (stale.ok, stale.conflict, (tmp_path / "legacy" / KEY).exists()) == (False, True, True)
+
+    deleted = await storage.delete_if_match(KEY, condition=WriteCondition(version_token=seen.token))
+
+    assert deleted.ok
+    assert deleted.current_version is not None
+    assert not deleted.current_version.exists
+    assert not (tmp_path / "legacy" / KEY).exists()
+    assert not (tmp_path / "primary" / KEY).exists()
+
+
+async def test_promoting_fallback_conditional_write_with_a_legacy_token_still_conflicts_without_copying(
+    tmp_path: Path,
+):
+    storage = await legacy_only_storage(tmp_path, promote=True)
+    seen = await storage.fallback.get_version(KEY)
+
+    result = await storage.write_bytes_if_match(KEY, b"edited", condition=WriteCondition(version_token=seen.token))
+
+    assert (result.ok, result.conflict) == (False, True)
+    assert not (tmp_path / "primary" / KEY).exists()
+
+
+async def test_fallback_flat_listing_is_the_primary_listing_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    legacy_root = tmp_path / "legacy"
+    (legacy_root / "w").mkdir(parents=True)
+    (legacy_root / "w" / "legacy.txt").write_bytes(b"x")
+    primary = s3_backend(PagedS3Client({"w/.env": 1, "w/a/b.txt": 2}), monkeypatch)
+    storage = FallbackStorageBackend(primary, LocalStorageBackend(str(legacy_root)))
+
+    assert [entry.key async for entry in storage.list_files_flat("w")] == ["w/.env", "w/a/b.txt"]
+
+
+def test_a_backend_without_a_flat_listing_fails_closed():
+    with pytest.raises(NotImplementedError):
+        _ = StorageBackend().list_files_flat("w")
+
+
+async def test_fallback_removes_empty_directories_only_from_the_primary(tmp_path: Path):
+    # Given
+    for side in ("primary", "legacy"):
+        (tmp_path / side / "A" / "skills" / "demo").mkdir(parents=True)
+    storage = FallbackStorageBackend(
+        LocalStorageBackend(str(tmp_path / "primary")), LocalStorageBackend(str(tmp_path / "legacy")), promote=False
+    )
+    # When
+    await storage.remove_empty_directory("A/skills/demo")
+    # Then
+    assert not (tmp_path / "primary" / "A" / "skills" / "demo").exists()
+    assert (tmp_path / "legacy" / "A" / "skills" / "demo").is_dir()

@@ -5,7 +5,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Literal, assert_never
 from unittest.mock import AsyncMock, Mock
@@ -20,13 +20,17 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from starlette.types import Message, Scope
 
 from app.api import websocket
+from app.core import access_cache
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.chat_submissions import AcceptedSubmission
-from app.services.realtime_runtime import router as realtime
+from app.services.realtime_runtime import chat_authorization, router as realtime
+from app.services.realtime_runtime.chat_authorization import DeliveryVerdict
 from app.services.realtime_runtime.router import PRESENCE_TTL_SECONDS
+from app.services.shared_chat import shared_session_id
+from test_chunk_live_delivery import TRANSIENT_FAILURES, Gate, HeldDecisionTime, decisions
 from test_realtime_presence_refresh import Clock, FakeRedis, closable_socket
 
 type Lifecycle = tuple[chat_tickets.ChatTicketBinding, websocket.ConnectionManager, AsyncMock]
@@ -742,3 +746,223 @@ async def test_disconnect_and_eviction_are_idempotent_in_either_order(
     assert redis.sets.get(f"realtime:ws:agent:{agent_id}", set()) == set()
     assert not redis.hashes
     assert not await manager.is_user_viewing_session(agent_id, session_id, user_id)
+
+
+@dataclass
+class Viewer:
+    """One registered shared-session socket on a receiving instance; its close parks until ``release_close`` is set."""
+
+    manager: websocket.ConnectionManager
+    socket: WebSocket
+    agent_id: str
+    session_id: str
+    user_id: str
+    redis: FakeRedis
+    decide: AsyncMock
+    events: list[dict[str, object]]
+    closes: list[int]
+    close_parked: asyncio.Event
+    release_close: asyncio.Event
+    version: str = "1"
+
+    async def receive(self, payload: dict[str, object]) -> None:
+        await asyncio.wait_for(
+            self.manager.deliver_pubsub_message(agent_id=self.agent_id, session_id=self.session_id, payload=payload), 5
+        )
+
+    def seqs(self) -> list[object]:
+        return [event.get("seq") for event in self.events]
+
+    def listed(self) -> bool:
+        return any(ws is self.socket for ws, _, _ in self.manager.active_connections.get(self.agent_id, []))
+
+
+TURN_ID = str(uuid.uuid4())
+GRANT = (object(), object(), "use")
+
+
+def chunk(seq: int) -> dict[str, object]:
+    return {"type": "chunk", "content": "x", "turn_id": TURN_ID, "seq": seq, "replace": False}
+
+
+@pytest.fixture
+async def viewer(monkeypatch: pytest.MonkeyPatch) -> Viewer:
+    agent = uuid.uuid4()
+    binding = chat_tickets.ChatTicketBinding(
+        user_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        agent_id=agent,
+        session_id=shared_session_id(agent),
+        auth_deadline=int(time.time()) + 3600,
+        auth_generation=0,
+    )
+    events: list[dict[str, object]] = []
+    closes: list[int] = []
+    close_parked, release_close = asyncio.Event(), asyncio.Event()
+
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Message) -> None:
+        if message["type"] == "websocket.send":
+            events.append(json.loads(message["text"]))
+        elif message["type"] == "websocket.close":
+            closes.append(message["code"])
+            close_parked.set()
+            await release_close.wait()
+
+    socket = WebSocket({"type": "websocket", "headers": []}, receive, send)
+    await socket.accept()
+    socket.state.chat_binding = binding
+    redis = FakeRedis(Clock())
+    decide = AsyncMock(return_value=GRANT)
+    monkeypatch.setattr(websocket, "realtime_router", realtime.RealtimeRouter())
+    monkeypatch.setattr(realtime, "get_redis", AsyncMock(return_value=redis))
+    monkeypatch.setattr(chat_authorization, "connection_ctx", nullcontext)
+    monkeypatch.setattr(chat_tickets, "authorize_identity", decide)
+    monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
+    manager = websocket.ConnectionManager()
+    found = Viewer(
+        manager=manager,
+        socket=socket,
+        agent_id=str(agent),
+        session_id=str(binding.session_id),
+        user_id=str(binding.user_id),
+        redis=redis,
+        decide=decide,
+        events=events,
+        closes=closes,
+        close_parked=close_parked,
+        release_close=release_close,
+    )
+    monkeypatch.setattr(access_cache, "read_acl_version", AsyncMock(side_effect=lambda _agent: found.version))
+    await manager.connect(found.agent_id, socket, found.session_id, found.user_id)
+    return found
+
+
+@pytest.mark.parametrize(("status", "code"), [(401, 4001), (403, 4003), (404, 4003)])
+async def test_receiver_withdraws_a_revoked_viewer_at_once_and_closes_it_once_from_an_owned_task(
+    viewer: Viewer, status: int, code: int
+) -> None:
+    # Given a viewer that received a chunk, then lost access in a change that bumped the ACL version.
+    await viewer.receive(chunk(0))
+    viewer.version = "2"
+    viewer.decide.side_effect = HTTPException(status, "revoked")
+
+    # When the next chunk arrives.
+    await viewer.receive(chunk(1))
+
+    # Then the delivery returned with the socket withdrawn while its close is still parked in the manager's task.
+    (task,) = viewer.manager._eviction_tasks
+    await asyncio.wait_for(viewer.close_parked.wait(), 5)
+    assert not task.done()
+    assert viewer.seqs() == [0]
+    assert not viewer.manager.is_live(viewer.socket)
+    assert not viewer.listed()
+    assert viewer.socket.state.realtime_connection_id is None
+    assert not await viewer.manager.is_user_viewing_session(viewer.agent_id, viewer.session_id, viewer.user_id)
+
+    # And another refusal, a send timeout and the handler's disconnect start nothing more.
+    viewer.manager.refused(viewer.agent_id, viewer.socket, 4003)
+    assert viewer.manager.timed_out(viewer.agent_id, viewer.socket) is False
+    await viewer.manager.disconnect(viewer.agent_id, viewer.socket)
+    assert viewer.manager._eviction_tasks == {task}
+    viewer.release_close.set()
+    await asyncio.wait_for(viewer.manager.drain_evictions(), 5)
+    assert viewer.closes == [code]
+    assert viewer.redis.sets.get(f"realtime:ws:agent:{viewer.agent_id}", set()) == set()
+    assert not viewer.redis.hashes
+
+    # And a later chunk reaches nobody and starts no decision.
+    await viewer.receive(chunk(2))
+    assert viewer.seqs() == [0]
+    assert viewer.decide.await_count == 2
+
+
+@pytest.mark.parametrize("first", ["evicted", "disconnected"])
+async def test_a_revocation_found_after_eviction_or_disconnect_closes_nothing_more(
+    viewer: Viewer, first: Literal["evicted", "disconnected"]
+) -> None:
+    # Given a delivery whose decision for the socket is held, and turns out revoked.
+    viewer.release_close.set()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def revoked(_binding: chat_tickets.ChatTicketBinding) -> tuple[object, object, str]:
+        entered.set()
+        await release.wait()
+        raise HTTPException(403, "revoked")
+
+    viewer.decide.side_effect = revoked
+    delivery = asyncio.create_task(viewer.receive(chunk(0)))
+    await asyncio.wait_for(entered.wait(), 5)
+
+    # When the socket is evicted or its handler disconnects before the decision returns.
+    match first:
+        case "evicted":
+            assert evict(viewer.manager, viewer.agent_id, viewer.socket)[-1]
+        case "disconnected":
+            await viewer.manager.disconnect(viewer.agent_id, viewer.socket)
+        case unreachable:
+            assert_never(unreachable)
+    release.set()
+    await asyncio.wait_for(delivery, 5)
+    await asyncio.wait_for(viewer.manager.drain_evictions(), 5)
+
+    # Then the revocation found the socket already released: no second close and no presence left.
+    assert viewer.closes == ([websocket.EVICTION_CLOSE_CODE] if first == "evicted" else [])
+    assert not viewer.listed()
+    assert not viewer.redis.hashes
+    assert viewer.events == []
+
+
+@pytest.mark.parametrize("failure", TRANSIENT_FAILURES)
+async def test_receiver_skips_one_chunk_on_a_transient_failure_and_keeps_the_viewer(
+    viewer: Viewer, failure: str
+) -> None:
+    # Given a viewer whose decision fails transiently once.
+    viewer.decide.side_effect = TRANSIENT_FAILURES[failure]()
+
+    # When two chunks arrive, the second after the failure cleared.
+    await viewer.receive(chunk(0))
+    viewer.decide.side_effect = None
+    await viewer.receive(chunk(1))
+    await asyncio.wait_for(viewer.manager.drain_evictions(), 5)
+
+    # Then only the first was skipped, nothing was cached from the failure, and the socket stayed open and listed.
+    assert viewer.seqs() == [1]
+    assert viewer.decide.await_count == 2
+    assert viewer.closes == []
+    assert viewer.manager.is_live(viewer.socket)
+    assert viewer.listed()
+
+
+async def test_receiver_waits_from_the_decision_start_and_a_late_allow_still_fills_the_cache(
+    viewer: Viewer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a cold viewer whose decision is held past every wait.
+    gate = Gate()
+    clock = HeldDecisionTime(monkeypatch, gate)
+
+    async def held(_binding: chat_tickets.ChatTicketBinding) -> tuple[object, object, str]:
+        await gate.pass_through()
+        return GRANT
+
+    viewer.decide.side_effect = held
+
+    # When two chunks and a done arrive while it is held.
+    await viewer.receive(chunk(0))
+    await viewer.receive(chunk(1))
+    await viewer.receive({"type": "done", "role": "assistant", "content": "x"})
+
+    # Then the first chunk waited its 2 s, the second nothing, the done what was left of its 15 s; nothing went out.
+    assert clock.waits == [2.0, 13.0]
+    assert viewer.events == []
+
+    # When the held decision allows, the next chunk goes out from the cache it filled, with no new decision.
+    gate.open.set()
+    (decision,) = decisions()
+    assert await asyncio.wait_for(decision, 5) is DeliveryVerdict.ALLOWED
+    await viewer.receive(chunk(2))
+    assert viewer.seqs() == [2]
+    viewer.decide.assert_awaited_once()
+    assert viewer.listed()

@@ -8,6 +8,8 @@ from agent_deletion_fixtures import deletion_scenario
 from app.services.storage_runtime import quota_s3
 from app.services.storage_runtime.base import StorageVersion, WriteCondition
 from app.services.storage_runtime.quota_errors import StorageAccountingUnavailableError, StorageKeyPendingError
+from app.services.storage_runtime.quota_ledger import Reservation
+from app.services.storage_runtime.quota_outcomes import Outcome
 from managed_storage_fixtures import StorageWorld, quota_world
 from s3_wire_server import Gate
 
@@ -170,3 +172,37 @@ async def test_fallback_conditional_delete_claims_the_key_before_checking_its_ve
         finally:
             release.set()
     assert (world.stored(key), await world.usage(agent)) == (None, 0)
+
+
+@pytest.mark.parametrize("deleting", [False, True])
+async def test_the_returned_version_is_read_before_another_writer_can_claim_the_key(
+    quota_world: StorageWorld, monkeypatch: pytest.MonkeyPatch, deleting: bool
+):
+    world = quota_world
+    agent = await world.agent()
+    key = world.key(agent)
+    await world.backend.write_bytes(key, b"old")
+    previous = await world.backend.get_version(key)
+    settle = world.backend._finish
+    rival_landed = False
+
+    async def settle_then_let_a_rival_land(reservation: Reservation, outcome: Outcome, adopted_bytes: int = 0) -> None:
+        nonlocal rival_landed
+        await settle(reservation, outcome, adopted_bytes)
+        if outcome is Outcome.LANDED and not rival_landed:
+            rival_landed = True
+            await world.backend.write_bytes(key, b"rival-bytes")
+
+    monkeypatch.setattr(world.backend, "_finish", settle_then_let_a_rival_land)
+    condition = WriteCondition(version_token=previous.token)
+
+    result = (
+        await world.backend.delete_if_match(key, condition=condition)
+        if deleting
+        else await world.backend.write_bytes_if_match(key, b"mine", condition=condition)
+    )
+
+    assert result.ok
+    assert result.current_version is not None
+    assert (result.current_version.exists, result.current_version.size) == (not deleting, 0 if deleting else 4)
+    assert world.stored(key) == b"rival-bytes"

@@ -3,18 +3,23 @@
 import asyncio
 import json
 import time
-from contextlib import suppress
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager, suppress
 from types import SimpleNamespace
-from typing import override
+from typing import cast, override
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException, WebSocket
+from psycopg_pool import PoolTimeout
+from redis.exceptions import RedisError
 from starlette.types import Message
 
 from app.api import websocket
 from app.core import access_cache
+from app.db import session as db_session
+from app.db.errors import DbOverloadError
 from app.records.gateway_message import GatewayMessageRecord
 from app.services import (
     chat_tickets,
@@ -22,7 +27,8 @@ from app.services import (
     openclaw_gateway_rpc as rpc,
     openclaw_gateway_stream as streaming,
 )
-from app.services.realtime_runtime import fanout, router as realtime
+from app.services.realtime_runtime import chat_authorization, fanout, router as realtime
+from app.services.realtime_runtime.chat_authorization import DeliveryVerdict
 from app.services.realtime_runtime.contracts import RoutingOutcome
 from app.services.shared_chat import shared_session_id
 from test_openclaw_gateway_coalescing import IngestProbe, delta_line
@@ -31,6 +37,15 @@ from test_websocket_session_query import MemoryPresence
 
 # Healthy but slower than the one-second publication deadline this suite guards against regressing to.
 SLOW = 1.3
+# Failures of what a shared-session decision reads through: each skips one event and never closes the socket.
+TRANSIENT_FAILURES: dict[str, Callable[[], Exception]] = {
+    "transfer-gate-423": lambda: HTTPException(423, {"code": "transfer_cleanup_pending", "retryable": True}),
+    "unavailable-503": lambda: HTTPException(503, "Chat authentication unavailable"),
+    "db-overload": DbOverloadError,
+    "pool-timeout": lambda: PoolTimeout("couldn't get a connection after 5.00 sec"),
+    "redis": lambda: RedisError("Connection reset by peer"),
+    "os": lambda: OSError("Network is unreachable"),
+}
 
 
 class Gate:
@@ -134,6 +149,26 @@ class GatedPresence(MemoryPresence):
         return await super().smembers(key)
 
 
+class HeldDecisionTime:
+    """The shared-session decision clock, where every wait runs out in full while the decision is held at its gate."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, gate: Gate) -> None:
+        self.now = 0.0
+        self.gate = gate
+        self.waits: list[float] = []
+        monkeypatch.setattr(chat_authorization, "_clock", lambda: self.now)
+        monkeypatch.setattr(chat_authorization, "_wait", self._wait)
+
+    async def _wait(self, _decision: asyncio.Task[DeliveryVerdict], seconds: float) -> None:
+        self.waits.append(seconds)
+        await self.gate.saturated.wait()
+        self.now += seconds
+
+
+def decisions() -> list[asyncio.Task[object]]:
+    return [task for task in asyncio.all_tasks() if task.get_name() == "shared-chat-authorization"]
+
+
 class Pipeline:
     """publish_chunk -> manager -> router -> authorize_chat_delivery, with fake sockets, Redis and ticket authorization."""
 
@@ -150,7 +185,10 @@ class Pipeline:
         self.hang = False
         self.auth_gate: Gate | None = None
         self.entered = asyncio.Event()
+        self.failure: Exception | None = None
         self.authorization_cancelled = False
+        self.checkouts = 0
+        self.inherited: list[object] = []
         self.store = MemoryPresence(str(self.agent_id), {})
         self.authorize = AsyncMock(side_effect=self._authorize)
         self.outcomes: list[RoutingOutcome] = []
@@ -163,11 +201,19 @@ class Pipeline:
         monkeypatch.setattr(realtime, "get_redis", self._redis)
         self.read_version = AsyncMock(side_effect=lambda _agent: self.version)
         monkeypatch.setattr(access_cache, "read_acl_version", self.read_version)
-        monkeypatch.setattr(chat_tickets, "authorize", self.authorize)
+        monkeypatch.setattr(chat_tickets, "authorize_identity", self.authorize)
         monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
+        monkeypatch.setattr(chat_authorization, "connection_ctx", self._checkout)
 
     async def _redis(self) -> MemoryPresence:
         return self.store
+
+    @asynccontextmanager
+    async def _checkout(self) -> AsyncGenerator[None]:
+        """One pool checkout per decision; records any connection the decision would have joined instead."""
+        self.checkouts += 1
+        self.inherited.append(db_session._conn_ctx.get())
+        yield
 
     async def _authorize(self, _binding: chat_tickets.ChatTicketBinding) -> tuple[object, object, str]:
         self.entered.set()
@@ -179,6 +225,8 @@ class Pipeline:
         except asyncio.CancelledError:
             self.authorization_cancelled = True
             raise
+        if self.failure is not None:
+            raise self.failure
         if revoked:
             raise HTTPException(403, "Permission revoked")
         return object(), object(), "use"
@@ -190,17 +238,20 @@ class Pipeline:
         gate: Gate | None = None,
         fail: bool = False,
         stalls: frozenset[int] = frozenset(),
+        tenant_id: UUID | None = None,
+        auth_deadline: int | None = None,
     ) -> Link:
+        """``tenant_id`` gives a shared socket the identity of an earlier one; by default each is its own viewer."""
         link = Link(stalled=stalled, gate=gate, fail=fail, stalls=stalls)
         await link.socket.accept()
         link.frames.clear()
         if self.shared:
             link.socket.state.chat_binding = chat_tickets.ChatTicketBinding(
                 user_id=self.user_id,
-                tenant_id=uuid4(),
+                tenant_id=tenant_id or uuid4(),
                 agent_id=self.agent_id,
                 session_id=self.session_id,
-                auth_deadline=int(time.time()) + 3600,
+                auth_deadline=int(time.time()) + 3600 if auth_deadline is None else auth_deadline,
                 auth_generation=0,
             )
         websocket.manager.active_connections[str(self.agent_id)].append(
@@ -374,10 +425,146 @@ async def test_revocation_applies_to_the_next_event_for_every_socket(monkeypatch
 
     pipe.version, pipe.revoked = "2", True
     await asyncio.wait_for(pipe.publish(1, 2), 5)
+    await asyncio.wait_for(pipe.manager.drain_evictions(), 5)
 
     assert [link.seqs() for link in links] == [[0], [0]]
-    # Negative decisions are never cached: both later events re-authorized both sockets.
-    assert pipe.authorize.await_count == 2 + 2 * 2
+    # The next event re-decided each socket once and closed both with 4003; a closed socket is never decided again.
+    assert [link.closes for link in links] == [[4003], [4003]]
+    assert pipe.authorize.await_count == 2 + 2
+    assert pipe.manager.active_connections[str(pipe.agent_id)] == []
+    # A revoked viewer is not a lost recipient.
+    assert [(outcome.local_targets, outcome.delivered, outcome.dropped) for outcome in pipe.outcomes] == [
+        (2, 2, False),
+        (2, 0, False),
+        (0, 0, False),
+    ]
+
+
+async def test_one_viewers_sockets_share_one_decision_on_one_fresh_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given three cold sockets of one viewer and one of another, published to from inside a held connection.
+    pipe = Pipeline(monkeypatch, shared=True)
+    pipe.auth_gate = Gate(saturate_at=2)
+    viewer = uuid4()
+    tabs = [await pipe.connect(tenant_id=viewer) for _ in range(3)]
+    other = await pipe.connect()
+    held = db_session._conn_ctx.set(cast("db_session.DbConnection", object()))
+    try:
+        # When a chunk goes out while the decisions are running, then another after they allowed.
+        first = asyncio.create_task(pipe.publish(0))
+        await asyncio.wait_for(pipe.auth_gate.saturated.wait(), 5)
+        pipe.auth_gate.open.set()
+        await asyncio.wait_for(first, 5)
+        await asyncio.wait_for(pipe.publish(1), 5)
+    finally:
+        db_session._conn_ctx.reset(held)
+
+    # Then each identity was decided once, on a checkout of its own rather than the publisher's connection, and every
+    # socket got both chunks in order, the second from its own cache.
+    assert pipe.authorize.await_count == pipe.checkouts == pipe.auth_gate.peak == 2
+    assert pipe.inherited == [None, None]
+    assert [link.seqs() for link in [*tabs, other]] == [[0, 1]] * 4
+
+
+async def test_a_decision_that_outlasts_the_chunk_wait_still_fills_the_cache_and_later_chunks_skip_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a cold socket whose decision is held past every wait.
+    pipe = Pipeline(monkeypatch, shared=True)
+    pipe.auth_gate = Gate()
+    clock = HeldDecisionTime(monkeypatch, pipe.auth_gate)
+    link = await pipe.connect()
+
+    # When two chunks are published while it is held.
+    await asyncio.wait_for(pipe.publish(0, 1), 5)
+
+    # Then the first waited out the whole chunk wait and the second, counted from the same start, did not wait at all;
+    # both skipped the socket and count as dropped, and the decision was neither cancelled nor started again.
+    assert clock.waits == [realtime.CHUNK_AUTHORIZATION_WAIT_SECONDS] == [2.0]
+    assert [(outcome.skipped, outcome.dropped) for outcome in pipe.outcomes] == [(1, True), (1, True)]
+    assert not link.frames
+    pipe.authorize.assert_awaited_once()
+    assert not pipe.authorization_cancelled
+
+    # When the decision allows after every waiter gave up.
+    (decision,) = decisions()
+    pipe.auth_gate.open.set()
+    assert await asyncio.wait_for(decision, 5) is DeliveryVerdict.ALLOWED
+
+    # Then it filled the socket's cache: the next chunk goes out with no new decision and no wait.
+    await asyncio.wait_for(pipe.publish(2), 5)
+    assert link.seqs() == [2]
+    pipe.authorize.assert_awaited_once()
+    assert clock.waits == [2.0]
+
+
+async def test_every_wait_counts_from_the_decision_start_whatever_the_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a cold socket whose decision is held past every wait.
+    pipe = Pipeline(monkeypatch, shared=True)
+    pipe.auth_gate = Gate()
+    clock = HeldDecisionTime(monkeypatch, pipe.auth_gate)
+    link = await pipe.connect()
+    agent_id, session_id = str(pipe.agent_id), str(pipe.session_id)
+    events: list[dict[str, object]] = [
+        {"type": "status", "content": "thinking"},
+        {"type": "done", "role": "assistant", "content": "x"},
+        {"type": "error", "content": "failed"},
+    ]
+
+    # When a chunk, a status, a done and an error arrive while it is held.
+    await asyncio.wait_for(pipe.publish(0), 5)
+    for event in events:
+        pipe.outcomes.append(await asyncio.wait_for(pipe.manager.send_to_session(agent_id, session_id, event), 5))
+
+    # Then each waited only what was left of its own bound (2 s, 5 s, 15 s) since the decision started.
+    assert clock.waits == [2.0, 3.0, 10.0]
+    assert [outcome.skipped for outcome in pipe.outcomes] == [1, 1, 1, 1]
+    assert not link.frames
+    pipe.authorize.assert_awaited_once()
+    pipe.auth_gate.open.set()
+    (decision,) = decisions()
+    assert await asyncio.wait_for(decision, 5) is DeliveryVerdict.ALLOWED
+
+
+async def test_an_expired_socket_closes_with_4001_while_the_same_viewers_live_one_still_receives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given two sockets of one viewer, one past its own deadline.
+    pipe = Pipeline(monkeypatch, shared=True)
+    viewer = uuid4()
+    live = await pipe.connect(tenant_id=viewer)
+    expired = await pipe.connect(tenant_id=viewer, auth_deadline=int(time.time()) - 1)
+
+    # When a chunk goes out, and another after the live socket's deadline passes too.
+    await asyncio.wait_for(pipe.publish(0), 5)
+    live.socket.state.chat_binding.auth_deadline = int(time.time()) - 1
+    await asyncio.wait_for(pipe.publish(1), 5)
+    await asyncio.wait_for(pipe.manager.drain_evictions(), 5)
+
+    # Then the deadline was checked per socket and before the cached decision: one decision, two 4001 closes.
+    assert (live.seqs(), expired.seqs()) == ([0], [])
+    assert (live.closes, expired.closes) == ([4001], [4001])
+    pipe.authorize.assert_awaited_once()
+
+
+@pytest.mark.parametrize("failure", TRANSIENT_FAILURES)
+async def test_a_transient_failure_skips_only_that_chunk_and_keeps_the_socket(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    pipe = Pipeline(monkeypatch, shared=True)
+    link = await pipe.connect()
+    pipe.failure = TRANSIENT_FAILURES[failure]()
+
+    await asyncio.wait_for(pipe.publish(0), 5)
+    pipe.failure = None
+    await asyncio.wait_for(pipe.publish(1), 5)
+    await asyncio.wait_for(pipe.manager.drain_evictions(), 5)
+
+    assert link.seqs() == [1]
+    assert not link.closes
+    assert pipe.manager.is_live(link.socket)
+    assert [(outcome.skipped, outcome.dropped) for outcome in pipe.outcomes] == [(1, True), (0, False)]
+    # The failure was never cached: the next chunk decided again.
+    assert pipe.authorize.await_count == 2
 
 
 async def test_each_event_serializes_once_for_all_local_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -710,9 +897,11 @@ async def test_receiver_skips_a_socket_evicted_while_its_delivery_was_authorizin
     gate = Gate(saturate_at=2)
     removal = asyncio.Event()
 
-    async def authorize(_ws: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None) -> bool:
+    async def authorize(
+        _ws: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None, *, wait_seconds: float
+    ) -> DeliveryVerdict:
         await gate.pass_through()
-        return True
+        return DeliveryVerdict.ALLOWED
 
     async def remove_presence(*, agent_id: str, connection_id: str) -> None:
         assert (agent_id, connection_id) == (str(pipe.agent_id), "stalled-connection")
@@ -738,22 +927,27 @@ async def test_receiver_skips_a_socket_evicted_while_its_delivery_was_authorizin
 
 async def test_revocation_during_slow_authorization_refuses_every_later_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
     pipe = Pipeline(monkeypatch, shared=True)
+    pipe.auth_gate = Gate()
     link = await pipe.connect()
-    pipe.delay = SLOW
+    first = asyncio.create_task(pipe.publish(0))
+    await asyncio.wait_for(pipe.auth_gate.saturated.wait(), 5)
 
-    async def revoke_midway() -> None:
-        await pipe.entered.wait()
-        pipe.version, pipe.revoked = "2", True
+    # The revocation lands while the decision works from the snapshot it read before it.
+    pipe.version, pipe.revoked = "2", True
+    pipe.auth_gate.open.set()
+    await asyncio.wait_for(first, 5)
+    await asyncio.wait_for(pipe.publish(1, 2), 5)
+    await asyncio.wait_for(pipe.manager.drain_evictions(), 5)
 
-    await asyncio.wait_for(asyncio.gather(pipe.publish(0), revoke_midway()), 10)
-    pipe.delay = 0.0
-    await asyncio.wait_for(pipe.publish(1, 2), 10)
-
+    # The bumped version re-decided the next chunk, which closed the socket, so the last chunk had nobody to decide.
     assert link.seqs() == [0]
-    assert pipe.authorize.await_count == 3
+    assert link.closes == [4003]
+    assert pipe.authorize.await_count == 2
 
 
-async def test_cancelling_publication_cancels_the_in_flight_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancelling_publication_leaves_the_decision_running_until_the_router_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pipe = Pipeline(monkeypatch, shared=True)
     link = await pipe.connect()
     pipe.hang = True
@@ -763,6 +957,13 @@ async def test_cancelling_publication_cancels_the_in_flight_authorization(monkey
     _ = task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 5)
+
+    # The waiter gave up; the decision it joined did not, so the next event joins it instead of starting another.
+    assert not pipe.authorization_cancelled
+    assert len(decisions()) == 1
+
+    # Stopping the router, which shutdown does before the pool closes, cancels and awaits it.
+    await asyncio.wait_for(pipe.router.stop(), 5)
 
     assert pipe.authorization_cancelled
     assert not link.frames

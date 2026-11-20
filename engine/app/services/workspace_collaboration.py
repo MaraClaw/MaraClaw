@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,7 +20,6 @@ from app.dao.workspace_dao import workspace_edit_lock_dao, workspace_file_revisi
 from app.records.workspace import WorkspaceEditLockRecord, WorkspaceFileRevisionRecord
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageBackend, WriteCondition
-from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.workspace_locking import workspace_locks
 
 USER_AUTOSAVE_MERGE_SECONDS = 60
@@ -68,11 +66,6 @@ class WorkspaceWriteResult:
     locked_by_user_id: str | None = None
 
 
-def _should_mirror_to_local_filesystem(storage: StorageBackend) -> bool:
-    """Only mirror writes into AGENT_DATA_DIR when the filesystem is the primary store."""
-    return isinstance(storage, LocalStorageBackend)
-
-
 def content_hash(content: str | None) -> str:
     """Return a stable hash for text content."""
     return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
@@ -91,15 +84,6 @@ def normalize_workspace_path(path: str) -> str:
             continue
         parts.append(part)
     return "/".join(parts)
-
-
-def safe_agent_path(base: Path, path: str) -> Path:
-    """Resolve a path under an agent directory and reject traversal."""
-    rel = normalize_workspace_path(path)
-    target = (base / rel).resolve()
-    if not target.is_relative_to(base.resolve()):
-        raise ValueError("Path traversal not allowed")
-    return target
 
 
 async def read_text_if_exists(path: Path) -> str | None:
@@ -233,7 +217,6 @@ async def record_revision(
 async def write_workspace_file(
     *,
     agent_id: uuid.UUID,
-    base_dir: Path,
     path: str,
     content: str,
     actor_type: str,
@@ -264,12 +247,6 @@ async def write_workspace_file(
 
     storage = get_storage_backend()
     storage_key = normalize_storage_key(f"{agent_id}/{normalized}")
-    local_base_available = _should_mirror_to_local_filesystem(storage)
-    try:
-        target = safe_agent_path(base_dir, normalized)
-    except Exception:
-        target = None
-        local_base_available = False
     before = (
         await storage.read_text(storage_key, encoding="utf-8", errors="replace")
         if await storage.exists(storage_key)
@@ -283,10 +260,6 @@ async def write_workspace_file(
     )
     if not write_result.ok:
         return WorkspaceWriteResult(False, normalized, f"Conflict detected while writing {normalized}")
-    if local_base_available and target is not None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        async with aiofiles.open(target, "w", encoding="utf-8") as f:
-            _ = await f.write(content)
 
     revision = await record_revision(
         agent_id=agent_id,
@@ -313,7 +286,6 @@ async def write_workspace_file(
 async def delete_workspace_file(
     *,
     agent_id: uuid.UUID,
-    base_dir: Path,
     path: str,
     actor_type: str,
     actor_id: uuid.UUID | None,
@@ -325,12 +297,6 @@ async def delete_workspace_file(
     normalized = normalize_workspace_path(path)
     storage = get_storage_backend()
     storage_key = normalize_storage_key(f"{agent_id}/{normalized}")
-    target = None
-    if _should_mirror_to_local_filesystem(storage):
-        try:
-            target = safe_agent_path(base_dir, normalized)
-        except Exception:
-            target = None
     if enforce_human_lock and actor_type != "user":
         lock = await get_active_lock(agent_id=agent_id, path=normalized)
         if lock:
@@ -368,11 +334,6 @@ async def delete_workspace_file(
             )
             if not delete_result.ok:
                 return WorkspaceWriteResult(False, normalized, f"Conflict detected while deleting {normalized}")
-    if target is not None and target.exists():
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
     revision = await record_revision(
         agent_id=agent_id,
         path=normalized,
@@ -397,7 +358,6 @@ async def delete_workspace_file(
 async def move_workspace_path(
     *,
     agent_id: uuid.UUID,
-    base_dir: Path,
     source_path: str,
     destination_path: str,
     actor_type: str,
@@ -476,10 +436,6 @@ async def move_workspace_path(
                         False, destination_normalized, f"Conflict detected while replacing {destination_normalized}"
                     )
 
-        source = destination = None
-        if _should_mirror_to_local_filesystem(storage):
-            source = safe_agent_path(base_dir, source_normalized)
-            destination = safe_agent_path(base_dir, destination_normalized)
         source_before = (
             await storage.read_text(source_key, encoding="utf-8", errors="replace") if source_exists else None
         )
@@ -528,15 +484,6 @@ async def move_workspace_path(
             if await storage.is_file(destination_key)
             else None
         )
-
-        if source is not None and source.exists():
-            if source.is_dir():
-                shutil.rmtree(source)
-            else:
-                source.unlink()
-        if destination is not None and await storage.is_file(destination_key):
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            _ = destination.write_bytes(await storage.read_bytes(destination_key))
 
     source_revision = await record_revision(
         agent_id=agent_id,

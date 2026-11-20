@@ -23,7 +23,13 @@ from app.services.storage_runtime.base import (
     checked_page_limit,
     walk_order,
 )
-from app.services.storage_runtime.s3_connection import S3GetArguments, S3ListArguments, S3ObjectIdentity
+from app.services.storage_runtime.disposition import content_disposition
+from app.services.storage_runtime.s3_connection import (
+    S3GetArguments,
+    S3ListArguments,
+    S3ObjectIdentity,
+    response_version_id,
+)
 from app.services.storage_runtime.s3_create import S3CreateBackend
 from app.services.storage_runtime.s3_read import materialize_object, read_object, read_object_snapshot
 from app.services.storage_runtime.utils import normalize_storage_key
@@ -162,6 +168,16 @@ class S3StorageBackend(S3CreateBackend):
                 arguments = {**first, "StartAfter": skip_through}
             else:
                 arguments = {**first, "ContinuationToken": token}
+
+    @override
+    async def list_files_flat(self, prefix: str) -> AsyncGenerator[StorageEntry]:
+        """Every object under ``prefix`` from one delimiter-free listing; directory markers are not files."""
+        object_prefix = self._listing_prefix(prefix)
+        async for page in self._list_pages({"Bucket": self.bucket, "Prefix": object_prefix}):
+            for item in _mapping_items(page.get("Contents")):
+                raw = str(item.get("Key", ""))
+                if raw and raw != object_prefix and not raw.endswith("/"):
+                    yield self._file_entry(item, _strip_prefix(raw, self.prefix))
 
     async def _list_page(self, arguments: S3ListArguments) -> Mapping[str, object]:
         client = self._client_or_raise()
@@ -302,7 +318,7 @@ class S3StorageBackend(S3CreateBackend):
             size=json_as_int(response.get("ContentLength")),
             modified_at=str(response.get("LastModified") or ""),
             etag=_clean_etag(response.get("ETag")),
-            version_id=str(response.get("VersionId") or ""),
+            version_id=response_version_id(response),
             content_hash=_clean_etag(response.get("ETag")),
         )
 
@@ -320,17 +336,18 @@ class S3StorageBackend(S3CreateBackend):
         return await materialize_object(get_object, Path(normalize_storage_key(key)).suffix)
 
     @override
-    async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
+    async def presign_download_url(
+        self, key: str, filename: str | None = None, inline: bool = False, expires_in_seconds: int | None = None
+    ) -> str | None:
         client = self._client_or_raise()
         params: dict[str, str] = {"Bucket": self.bucket, "Key": self._object_key(key)}
-        if filename not in (None, ""):
-            disposition = "inline" if inline else "attachment"
-            params["ResponseContentDisposition"] = f'{disposition}; filename="{filename}"'
+        if filename is not None and filename != "":
+            params["ResponseContentDisposition"] = content_disposition(filename, "inline" if inline else "attachment")
         url = await asyncio.to_thread(
             client.generate_presigned_url,
             ClientMethod="get_object",
             Params=params,
-            ExpiresIn=self.presign_ttl_seconds,
+            ExpiresIn=self.presign_ttl_seconds if expires_in_seconds is None else expires_in_seconds,
         )
         if url and self.endpoint_url not in (None, ""):
             from urllib.parse import urlparse, urlunparse

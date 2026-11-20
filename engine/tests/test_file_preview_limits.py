@@ -18,12 +18,14 @@ async def test_bytes_conflict_when_requested_version_is_stale(preview_context, m
     ctx = preview_context
     reader = AsyncMock(side_effect=AssertionError("Stale requests must not read payload bytes"))
     original = ctx.storage.get_version_bounded
-    version = await original(f"{ctx.agent_id}/report.pdf", file_previews.MAX_PREVIEW_BYTES)
+    version = await original(f"{ctx.agent_id}/workspace/report.pdf", file_previews.MAX_PREVIEW_BYTES)
     monkeypatch.setattr(ctx.storage, "get_version_bounded", AsyncMock(return_value=version))
     monkeypatch.setattr(ctx.storage, "read_bytes_bounded", reader)
     # When
     response = await ctx.client.get(
-        f"{ctx.url}/preview-bytes", params={"path": "report.pdf", "version_token": "stale"}, headers=ctx.headers
+        f"{ctx.url}/preview-bytes",
+        params={"path": "workspace/report.pdf", "version_token": "stale"},
+        headers=ctx.headers,
     )
     # Then
     assert response.status_code == 409
@@ -34,7 +36,7 @@ async def test_bytes_conflict_when_requested_version_is_stale(preview_context, m
 async def test_bytes_conflict_when_file_changes_during_read(preview_context, monkeypatch, mutation):
     # Given
     ctx = preview_context
-    key = f"{ctx.agent_id}/report.pdf"
+    key = f"{ctx.agent_id}/workspace/report.pdf"
     path = ctx.root / key
     version = await ctx.storage.get_version(key)
     original = ctx.storage.read_bytes_bounded
@@ -44,7 +46,7 @@ async def test_bytes_conflict_when_file_changes_during_read(preview_context, mon
         nonlocal reads
         data = await original(key, maximum)
         reads += 1
-        if reads == 2:
+        if reads == 1:
             match mutation:
                 case "replace":
                     path.write_bytes(b"%PDF-mutated")
@@ -58,7 +60,9 @@ async def test_bytes_conflict_when_file_changes_during_read(preview_context, mon
     monkeypatch.setattr(ctx.storage, "read_bytes_bounded", raced_read)
     # When
     response = await ctx.client.get(
-        f"{ctx.url}/preview-bytes", params={"path": "report.pdf", "version_token": version.token}, headers=ctx.headers
+        f"{ctx.url}/preview-bytes",
+        params={"path": "workspace/report.pdf", "version_token": version.token},
+        headers=ctx.headers,
     )
     # Then
     assert response.status_code == 409
@@ -69,7 +73,7 @@ async def test_bytes_conflict_when_file_changes_during_read(preview_context, mon
 async def test_preview_rejects_over_20_mib_before_hashing_or_reading(preview_context, monkeypatch, endpoint):
     # Given
     ctx = preview_context
-    path = ctx.root / str(ctx.agent_id) / "report.pdf"
+    path = ctx.root / str(ctx.agent_id) / "workspace" / "report.pdf"
     with path.open("wb") as stream:
         stream.truncate(20 * 1024 * 1024 + 1)
     reader = AsyncMock(side_effect=AssertionError("Oversized local files must not be hashed or read"))
@@ -77,7 +81,7 @@ async def test_preview_rejects_over_20_mib_before_hashing_or_reading(preview_con
     monkeypatch.setattr(ctx.storage, "read_bytes", reader)
     # When
     response = await ctx.client.get(
-        f"{ctx.url}/{endpoint}", params={"path": "report.pdf", "version_token": "stale"}, headers=ctx.headers
+        f"{ctx.url}/{endpoint}", params={"path": "workspace/report.pdf", "version_token": "stale"}, headers=ctx.headers
     )
     # Then
     assert response.status_code == 413
@@ -88,7 +92,7 @@ async def test_preview_rejects_over_20_mib_before_hashing_or_reading(preview_con
 async def test_bytes_reject_growth_during_read_at_actual_byte_limit(preview_context, monkeypatch):
     # Given
     ctx = preview_context
-    key = f"{ctx.agent_id}/report.pdf"
+    key = f"{ctx.agent_id}/workspace/report.pdf"
     path = ctx.root / key
     path.write_bytes(b"12345678")
     version = await ctx.storage.get_version(key)
@@ -100,7 +104,7 @@ async def test_bytes_reject_growth_during_read_at_actual_byte_limit(preview_cont
     def growing_read(stream, maximum):
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 1:
             with path.open("ab") as writer:
                 writer.write(b"overflow")
         observed.append(stream)
@@ -109,7 +113,9 @@ async def test_bytes_reject_growth_during_read_at_actual_byte_limit(preview_cont
     monkeypatch.setattr(local, "read_bounded", growing_read)
     # When
     response = await ctx.client.get(
-        f"{ctx.url}/preview-bytes", params={"path": "report.pdf", "version_token": version.token}, headers=ctx.headers
+        f"{ctx.url}/preview-bytes",
+        params={"path": "workspace/report.pdf", "version_token": version.token},
+        headers=ctx.headers,
     )
     # Then
     assert response.status_code == 413
@@ -121,10 +127,12 @@ async def test_bytes_allow_exact_limit_when_file_is_unchanged(preview_context, m
     ctx = preview_context
     content = b"%PDF-preview"
     monkeypatch.setattr(file_previews, "MAX_PREVIEW_BYTES", len(content))
-    version = await ctx.storage.get_version(f"{ctx.agent_id}/report.pdf")
+    version = await ctx.storage.get_version(f"{ctx.agent_id}/workspace/report.pdf")
     # When
     response = await ctx.client.get(
-        f"{ctx.url}/preview-bytes", params={"path": "report.pdf", "version_token": version.token}, headers=ctx.headers
+        f"{ctx.url}/preview-bytes",
+        params={"path": "workspace/report.pdf", "version_token": version.token},
+        headers=ctx.headers,
     )
     # Then
     assert response.status_code == 200
@@ -134,19 +142,21 @@ async def test_bytes_allow_exact_limit_when_file_is_unchanged(preview_context, m
 async def test_preview_rejects_symlink_swap_when_it_occurs_after_path_validation(preview_context, monkeypatch):
     # Given
     ctx = preview_context
-    path = ctx.root / str(ctx.agent_id) / "report.pdf"
+    path = ctx.root / str(ctx.agent_id) / "workspace" / "report.pdf"
     secret = ctx.root / "private.txt"
     secret.write_bytes(b"private")
-    original = ctx.storage.read_bytes_bounded
+    original = ctx.storage.get_version_bounded
 
     async def swapped_read(key, maximum):
         path.unlink()
         path.symlink_to(secret)
         return await original(key, maximum)
 
-    monkeypatch.setattr(ctx.storage, "read_bytes_bounded", swapped_read)
+    monkeypatch.setattr(ctx.storage, "get_version_bounded", swapped_read)
     # When
-    response = await ctx.client.get(f"{ctx.url}/preview-metadata", params={"path": "report.pdf"}, headers=ctx.headers)
+    response = await ctx.client.get(
+        f"{ctx.url}/preview-metadata", params={"path": "workspace/report.pdf"}, headers=ctx.headers
+    )
     # Then
     assert response.status_code == 403
     assert b"private" not in response.content
@@ -155,9 +165,11 @@ async def test_preview_rejects_symlink_swap_when_it_occurs_after_path_validation
 async def test_preview_rejects_nonregular_file_without_opening_a_fifo(preview_context):
     # Given
     ctx = preview_context
-    os.mkfifo(ctx.root / str(ctx.agent_id) / "pipe")
+    os.mkfifo(ctx.root / str(ctx.agent_id) / "workspace" / "pipe")
     # When
-    response = await ctx.client.get(f"{ctx.url}/preview-metadata", params={"path": "pipe"}, headers=ctx.headers)
+    response = await ctx.client.get(
+        f"{ctx.url}/preview-metadata", params={"path": "workspace/pipe"}, headers=ctx.headers
+    )
     # Then
     assert response.status_code == 404
 
@@ -170,9 +182,11 @@ async def test_fallback_metadata_uses_primary_identity_after_bounded_promotion(p
     monkeypatch.setattr(file_previews, "get_storage_backend", lambda: fallback)
     monkeypatch.setattr(ctx.storage, "read_bytes", AsyncMock(side_effect=AssertionError("Unbounded legacy read")))
     # When
-    response = await ctx.client.get(f"{ctx.url}/preview-metadata", params={"path": "report.pdf"}, headers=ctx.headers)
+    response = await ctx.client.get(
+        f"{ctx.url}/preview-metadata", params={"path": "workspace/report.pdf"}, headers=ctx.headers
+    )
     # Then
-    expected = await primary.get_version(f"{ctx.agent_id}/report.pdf")
+    expected = await primary.get_version(f"{ctx.agent_id}/workspace/report.pdf")
     assert response.status_code == 200
     assert response.json()["version_token"] == expected.token
     assert response.json()["size"] == len(b"%PDF-preview")
@@ -182,7 +196,9 @@ async def test_preview_validation_errors_are_uncacheable(preview_context):
     # Given
     ctx = preview_context
     # When
-    response = await ctx.client.get(f"{ctx.url}/preview-bytes", params={"path": "report.pdf"}, headers=ctx.headers)
+    response = await ctx.client.get(
+        f"{ctx.url}/preview-bytes", params={"path": "workspace/report.pdf"}, headers=ctx.headers
+    )
     # Then
     assert response.status_code == 422
     assert response.headers["cache-control"] == "no-store"

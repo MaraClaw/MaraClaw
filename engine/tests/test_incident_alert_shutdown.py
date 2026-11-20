@@ -5,7 +5,8 @@ import pytest
 from app.core import incident_reporting as capture
 from app.core.logging import get_trace_id, set_trace_id
 from app.db import session
-from app.runtime import incident_alerts
+from app.runtime import incident_alerts, shutdown_budget
+from app.services.agent_setup_lock import drain_on_cancel
 from app.services.incident_report import IncidentReport
 from incident_alert_fakes import AlertHarness, harness
 
@@ -65,7 +66,6 @@ async def test_shutdown_deadline_cancels_only_consumer(harness: AlertHarness, mo
         return True
 
     monkeypatch.setattr(harness.delivery, "deliver_incident", blocked)
-    monkeypatch.setattr(incident_alerts, "_DRAIN_SECONDS", 0)
     unrelated = asyncio.create_task(asyncio.Event().wait())
     alerts = incident_alerts.IncidentAlerts()
     alerts.start()
@@ -74,7 +74,7 @@ async def test_shutdown_deadline_cancels_only_consumer(harness: AlertHarness, mo
     # When
     try:
         async with asyncio.timeout(1):
-            await alerts.stop()
+            await alerts.stop(0)
         # Then
         assert cancelled.is_set()
         assert not unrelated.done()
@@ -175,3 +175,40 @@ async def test_event_processing_failure_keeps_consumer_alive_and_marks_done(
         await alerts.stop()
     # Then an unrelated later event is delivered and join did not hang on the failed event.
     assert [report.operation for report in harness.delivered] == ["second"]
+
+
+async def test_consumer_outliving_cancellation_is_abandoned_at_the_shutdown_deadline(
+    harness: AlertHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a delivery that keeps running through cancellation
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stubborn(_report: IncidentReport) -> bool:
+        entered.set()
+        await drain_on_cancel(release.wait())
+        return True
+
+    monkeypatch.setattr(harness.delivery, "deliver_incident", stubborn)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        incident_alerts.logger, "warning", lambda message, *args, **_kwargs: warnings.append(message.format(*args))
+    )
+    alerts = incident_alerts.IncidentAlerts()
+    alerts.start()
+    capture.report_exception(RuntimeError(), source="test")
+    await entered.wait()
+    consumer = alerts._consumer
+    assert consumer is not None
+    # When the stop has no grace inside a shutdown step whose deadline has passed
+    with shutdown_budget.joins_until(asyncio.get_running_loop().time()):
+        await alerts.stop(0)
+    # Then it returned with the consumer still running, after naming it, and lost the undelivered event
+    try:
+        assert not consumer.done()
+        assert alerts._consumer is None
+        assert any("incident-alerts" in line for line in warnings), warnings
+        assert "[incidents] Lost 1 events during overflow or shutdown" in warnings
+    finally:
+        release.set()
+        _ = await asyncio.gather(consumer, return_exceptions=True)

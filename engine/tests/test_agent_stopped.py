@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -13,7 +14,6 @@ from app.services import (
     agent_lifecycle as lifecycle,
     agent_lifecycle_events as lifecycle_events,
     agent_manager as mgr,
-    openclaw_update_exclusion as exclusion,
 )
 from app.services.guest_identity import GuestOwnershipError
 from test_agent_lifecycle_http import surface  # noqa: F401
@@ -151,19 +151,24 @@ async def test_ownership_refusal_does_not_publish(docker, monkeypatch):
     assert runtime.published == []
 
 
-async def test_upgrade_gate_refusal_does_not_publish(docker, monkeypatch):
-    # Given an active OpenClaw upgrade holds the agent.
+@pytest.mark.parametrize("gate", ["assert_no_active_run", "assert_transfer_ready"])
+async def test_refused_stop_cancels_nothing_and_does_not_publish(docker, monkeypatch, gate):
+    # Given an active OpenClaw upgrade or a pending company-transfer cleanup holds the agent.
     app, runtime, agent = docker
+    cancel = AsyncMock()
 
     async def refuse(_id):
-        raise HTTPException(status_code=423, detail="upgrade running")
+        raise HTTPException(status_code=423, detail="agent held")
 
     docker_stop(monkeypatch, "found")
-    monkeypatch.setattr(exclusion, "assert_no_active_run", refuse)
+    monkeypatch.setattr(lifecycle.start_store, "cancel", cancel)
+    monkeypatch.setattr(lifecycle, gate, refuse)
     # When the user stops the agent.
     response = await post_stop(app, agent)
-    # Then the gate response is returned untouched with no announcement.
+    # Then the gate response is returned untouched before any start is cancelled or the lock is taken.
     assert response.status_code == 423
+    cancel.assert_not_awaited()
+    assert "release" not in runtime.events
     assert runtime.published == []
 
 

@@ -13,7 +13,9 @@ from app.records.agent_start import AgentStartOperation
 from app.records.agent_start_retry import AgentStartRetryMetadata
 from app.services import agent_start_reconciler as reconciler
 from app.services.agent_start_store import PostgresStartStore
-from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
+from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, assert_start_active
+from app.services.guest_start import start_operation_id
+from test_guest_start_safety import Docker
 from test_openclaw_update_postgres import publish, runs
 
 db = fixtures.db
@@ -115,6 +117,38 @@ async def test_explicit_retry_reuses_pending_identity_and_preserves_history(star
     assert replay == operation
     assert metadata.attempts == 2
     assert metadata.next_retry_at is None
+
+
+@pytest.mark.parametrize("intent", ["stop", "expiry"])
+async def test_checkpoint_stop_in_a_scan_is_superseded_without_failure_or_retry(
+    start_db, executor, monkeypatch, intent
+):
+    # Given a due intent whose start a Stop, or the agent expiring, halts at its next checkpoint.
+    operation, original = await make_pending(start_db)
+
+    async def halted_start(record):
+        executor.append(record.id)
+        if intent == "stop":
+            await PostgresStartStore().cancel(record.id)
+        else:
+            await start_db.execute(
+                "UPDATE agents SET expires_at=now()-interval '1 second' WHERE id=%(id)s", {"id": record.id}
+            )
+        await assert_start_active(start_operation_id.get())
+        pytest.fail("a stopped start continued past its checkpoint")
+
+    monkeypatch.setattr(reconciler.agent_manager, "start_container", halted_start)
+    monkeypatch.setattr(reconciler.agent_manager, "docker_client", Docker())
+    # When scans run it and then run again.
+    await reconciler.reconcile_agent_starts_once()
+    await reconciler.reconcile_agent_starts_once()
+    # Then it was attempted once, recorded no failure code and left nothing to retry or clean up.
+    assert executor == [original.id]
+    assert (await retry_metadata(start_db, operation)).last_failure_code is None
+    current = await agent_start_dao.get(start_db, original.id)
+    assert current is not None
+    assert current.state == "cancelled"
+    assert await PostgresStartStore().outstanding() == []
 
 
 async def test_backoff_caps_at_three_hundred_seconds(start_db):

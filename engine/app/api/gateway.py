@@ -26,10 +26,12 @@ from app.schemas.channel_response_contracts import (
     GatewaySendMessageResponse,
     StatusAcknowledgement,
 )
+from app.schemas.file_share_links import FileShareLinkRequest, FileShareLinkResponse
 from app.schemas.schemas import (
     GatewayReportRequest,
     GatewaySendMessageRequest,
 )
+from app.services import file_share_links
 from app.services.openclaw_gateway_delivery import publish_report, record_report
 from app.services.openclaw_routing import enqueue_openclaw_message
 
@@ -85,6 +87,20 @@ async def heartbeat(x_api_key: str = Header(..., alias="X-Api-Key")) -> GatewayH
     if await agent_dao.touch_openclaw(agent) is None:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return {"status": "ok", "agent_id": str(agent.id)}
+
+
+# ─── File share links ───────────────────────────────────
+
+
+@router.post("/file-links", response_model=FileShareLinkResponse)
+async def create_file_link(
+    body: FileShareLinkRequest, x_api_key: str = Header(None, alias="X-Api-Key")
+) -> FileShareLinkResponse:
+    """OpenClaw agent asks for a short-lived public URL of one of its workspace files."""
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Missing X-Api-Key header")
+    agent = await _get_agent_by_key(x_api_key)
+    return await file_share_links.create_link(agent, body.path)
 
 
 # ─── Send message ───────────────────────────────────────

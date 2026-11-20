@@ -11,6 +11,7 @@ from app.services.agent_manager import agent_manager
 from app.services.channels import channel_media as media
 from app.services.openclaw_transcript import ReplyMediaError
 from app.services.storage_runtime import facade
+from app.services.storage_runtime.base import StorageLinkRefusedError
 from app.services.storage_runtime.local import LocalStorageBackend
 
 
@@ -100,7 +101,7 @@ async def test_local_atomic_creation_refuses_symlink_parent(local_media, tmp_pat
     other = tmp_path / "other"
     other.mkdir()
     (root / "workspace").symlink_to(other, target_is_directory=True)
-    with pytest.raises(OSError):
+    with pytest.raises(StorageLinkRefusedError):
         await media.store_inbound_media(
             agent, ChatAttachment(path="workspace/a.pdf", name="a.pdf"), b"private", kind="file"
         )
@@ -114,7 +115,7 @@ async def test_attempt_cleanup_never_follows_replaced_directory(local_media, tmp
     other.mkdir()
     (other / "report.pdf").write_bytes(b"another tenant")
     (root / "workspace/attempt").symlink_to(other, target_is_directory=True)
-    with pytest.raises(OSError):
+    with pytest.raises(StorageLinkRefusedError):
         await storage.delete(f"{root.name}/workspace/attempt/report.pdf")
     assert (other / "report.pdf").read_bytes() == b"another tenant"
 

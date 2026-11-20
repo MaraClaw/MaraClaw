@@ -272,15 +272,28 @@ async def test_page_fills_past_hidden_entries_and_only_the_first_root_page_has_e
     monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
 ):
     # Given: hidden names fall inside and at the edge of every page
-    names = (".gitkeep", "a1", "agenda.md", "b1", "focus.md", "g1", "g2", "Focus.MD", "h1")
+    names = (
+        ".gitkeep",
+        "AGENTS.md",
+        "agenda.md",
+        "HEARTBEAT.md",
+        "focus.md",
+        "soul.md",
+        "state.json",
+        "Focus.MD",
+        "tasks.json",
+        ".openclaw/x",
+        "agents/a.sqlite",
+        "openclaw.json",
+    )
     use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/{name}": b"x" for name in names}))
     # When
     pages = await read_pages(agent_id, make_tenant_user(), limit=2)
     # Then
     assert [[item.name for item in page.items] for page in pages] == [
-        ["enterprise_info", "a1", "b1"],
-        ["g1", "g2"],
-        ["h1"],
+        ["enterprise_info", "AGENTS.md", "HEARTBEAT.md"],
+        ["soul.md", "state.json"],
+        ["tasks.json"],
     ]
     assert [page.next_cursor is None for page in pages] == [False, False, True]
 
@@ -291,18 +304,20 @@ async def test_page_crosses_folder_boundaries_in_key_order_without_repeating_a_f
     # Given
     use_storage(
         monkeypatch,
-        PrefixOnlyStorage({f"{agent_id}/{name}": b"x" for name in ("a.txt", "a/x", "a/y", "a0", "b/y/z", "c.txt")}),
+        PrefixOnlyStorage(
+            {f"{agent_id}/workspace/{name}": b"x" for name in ("a.txt", "a/x", "a/y", "a0", "b/y/z", "c.txt")}
+        ),
     )
     # When
-    pages = await read_pages(agent_id, make_user(), limit=2)
+    pages = await read_pages(agent_id, make_user(), path="workspace", limit=2)
     # Then
     rows = [[(item.name, item.is_dir, item.path) for item in page.items] for page in pages]
     assert rows == [
-        [("a.txt", False, "a.txt"), ("a", True, "a")],
-        [("a0", False, "a0"), ("b", True, "b")],
-        [("c.txt", False, "c.txt")],
+        [("a.txt", False, "workspace/a.txt"), ("a", True, "workspace/a")],
+        [("a0", False, "workspace/a0"), ("b", True, "workspace/b")],
+        [("c.txt", False, "workspace/c.txt")],
     ]
-    assert pages[0].items[0].url == f"/api/agents/{agent_id}/files/download?path=a.txt"
+    assert pages[0].items[0].url == f"/api/agents/{agent_id}/files/download?path=workspace/a.txt"
     assert pages[0].items[1].url is None
 
 
@@ -310,11 +325,13 @@ async def test_page_lists_a_subfolder_with_paths_relative_to_the_agent(
     monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
 ):
     # Given
-    use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/docs/{name}": b"x" for name in ("a.md", "b.md", "c.md")}))
+    use_storage(
+        monkeypatch, PrefixOnlyStorage({f"{agent_id}/memory/{name}": b"x" for name in ("a.md", "b.md", "c.md")})
+    )
     # When
-    pages = await read_pages(agent_id, make_tenant_user(), path="docs", limit=2)
+    pages = await read_pages(agent_id, make_tenant_user(), path="memory", limit=2)
     # Then
-    assert [[item.path for item in page.items] for page in pages] == [["docs/a.md", "docs/b.md"], ["docs/c.md"]]
+    assert [[item.path for item in page.items] for page in pages] == [["memory/a.md", "memory/b.md"], ["memory/c.md"]]
 
 
 @pytest.mark.parametrize("path", ["", "/", "./", "docs/..", "//"])
@@ -322,12 +339,12 @@ async def test_page_treats_every_spelling_of_the_root_as_the_root(
     monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, path: str
 ):
     # Given
-    names = (".gitkeep", "agenda.md", "focus.md", "enterprise_info", "notes.md")
+    names = (".gitkeep", "agenda.md", "focus.md", "enterprise_info", "soul.md", "openclaw.json")
     use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/{name}": b"x" for name in names}))
     # When
     page = await files.list_files_page(agent_id, path=path, limit=10, cursor=None, current_user=make_tenant_user())
     # Then
-    assert [item.name for item in page.items] == ["enterprise_info", "notes.md"]
+    assert [item.name for item in page.items] == ["enterprise_info", "soul.md"]
     assert page.items[0].path == "enterprise_info"
     assert page.next_cursor is None
 
@@ -357,11 +374,11 @@ async def test_page_allows_an_empty_agent_root_and_a_user_without_a_tenant(
     assert (page.items, page.next_cursor) == ([], None)
 
 
-@pytest.mark.parametrize(("path", "status_code"), [("missing", 404), ("notes.md", 400)])
+@pytest.mark.parametrize(("path", "status_code"), [("workspace/missing", 404), ("workspace/notes.md", 400)])
 async def test_page_rejects_a_missing_path_and_a_file_path(
     monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, path: str, status_code: int
 ):
-    use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/notes.md": b"x"}))
+    use_storage(monkeypatch, PrefixOnlyStorage({f"{agent_id}/workspace/notes.md": b"x"}))
 
     with pytest.raises(HTTPException) as raised:
         _ = await files.list_files_page(agent_id, path=path, limit=5, cursor=None, current_user=make_user())
@@ -374,13 +391,15 @@ async def test_page_cursor_is_refused_for_another_agent_another_path_or_tamperin
 ):
     # Given
     other_agent = uuid.uuid4()
-    objects = {f"{agent_id}/{name}": b"x" for name in ("a", "b", "c", "docs/x")} | {f"{other_agent}/a": b"x"}
+    objects = {f"{agent_id}/{name}": b"x" for name in ("AGENTS.md", "HEARTBEAT.md", "soul.md", "memory/x")} | {
+        f"{other_agent}/AGENTS.md": b"x"
+    }
     use_storage(monkeypatch, PrefixOnlyStorage(objects))
     user = make_user()
     first = await files.list_files_page(agent_id, path="", limit=1, cursor=None, current_user=user)
     assert first.next_cursor is not None
     attempts = [
-        (agent_id, "docs", first.next_cursor),
+        (agent_id, "memory", first.next_cursor),
         (other_agent, "", first.next_cursor),
         (agent_id, "", first.next_cursor[:-2] + "AA"),
         (agent_id, "", "not-a-cursor"),
@@ -392,22 +411,29 @@ async def test_page_cursor_is_refused_for_another_agent_another_path_or_tamperin
             _ = await files.list_files_page(target, path=path, limit=1, cursor=cursor, current_user=user)
         assert (raised.value.status_code, raised.value.detail) == (400, "Invalid cursor")
     resumed = await files.list_files_page(agent_id, path="/", limit=5, cursor=first.next_cursor, current_user=user)
-    assert [item.name for item in resumed.items] == ["b", "c", "docs"]
+    assert [item.name for item in resumed.items] == ["HEARTBEAT.md", "memory", "soul.md"]
 
 
 async def test_page_resumes_through_the_fallback_merge_across_primary_and_legacy(
     monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID
 ):
     # Given
-    primary = PrefixOnlyStorage({f"{agent_id}/{name}": b"new" for name in ("a.txt", "b/x", "d.txt", "focus.md")})
-    legacy = PrefixOnlyStorage({f"{agent_id}/{name}": b"old!" for name in ("a.txt", "b/y", "c.txt", ".gitkeep")})
+    primary = PrefixOnlyStorage(
+        {f"{agent_id}/{name}": b"new" for name in ("AGENTS.md", "memory/x", "state.json", "focus.md")}
+    )
+    legacy = PrefixOnlyStorage(
+        {
+            f"{agent_id}/{name}": b"old!"
+            for name in ("AGENTS.md", "memory/y", "soul.md", ".gitkeep", "openclaw.json", ".openclaw/x")
+        }
+    )
     use_storage(monkeypatch, FallbackStorageBackend(primary, legacy))
     # When
     pages = await read_pages(agent_id, make_user(), limit=2)
     # Then
     assert [[(item.name, item.is_dir) for item in page.items] for page in pages] == [
-        [("a.txt", False), ("b", True)],
-        [("c.txt", False), ("d.txt", False)],
+        [("AGENTS.md", False), ("memory", True)],
+        [("soul.md", False), ("state.json", False)],
     ]
     assert pages[0].items[0].size == len(b"new")
 
@@ -418,18 +444,23 @@ async def test_unpaged_listing_still_returns_the_whole_folders_first_listing(
     # Given
     use_storage(
         monkeypatch,
-        PrefixOnlyStorage({f"{agent_id}/{name}": b"x" for name in ("a.txt", "z/x", ".gitkeep", "focus.md", "b.txt")}),
+        PrefixOnlyStorage(
+            {
+                f"{agent_id}/{name}": b"x"
+                for name in ("AGENTS.md", "workspace/x", ".gitkeep", "focus.md", "HEARTBEAT.md", "openclaw.json")
+            }
+        ),
     )
     # When
     listing = await files.list_files(agent_id, path="", current_user=make_tenant_user())
     # Then
-    assert [item.name for item in listing] == ["enterprise_info", "z", "a.txt", "b.txt"]
+    assert [item.name for item in listing] == ["enterprise_info", "workspace", "AGENTS.md", "HEARTBEAT.md"]
 
 
 def preview_over_s3(
     monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, name: str, data: bytes, *, pause: Pause = ""
 ) -> GatedObject:
-    source = GatedObject(f"{agent_id}/{name}", data, pause=pause)
+    source = GatedObject(f"{agent_id}/workspace/{name}", data, pause=pause)
     storage = source.backend(monkeypatch)
     use_storage(monkeypatch, storage)
     monkeypatch.setattr("app.services.storage_runtime.facade.get_storage_backend", lambda: storage)
@@ -437,7 +468,7 @@ def preview_over_s3(
 
 
 async def preview(agent_id: uuid.UUID, name: str) -> dict[str, object]:
-    return dict(await files.preview_file(agent_id=agent_id, path=name, current_user=make_user()))
+    return dict(await files.preview_file(agent_id=agent_id, path=f"workspace/{name}", current_user=make_user()))
 
 
 async def test_s3_office_preview_parses_a_copy_that_is_gone_once_it_returns(

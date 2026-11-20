@@ -1,13 +1,15 @@
 """Ordinary Start must not be a destructive configuration replacement."""
 
 from dataclasses import replace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
 import test_guest_start_safety as start_fixtures
 from app.services import guest_readiness, guest_start
-from app.services.guest_admission import GuestStartPreflightError
+from app.services.agent_start_store import start_store
+from app.services.guest_admission import GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError
 
 env = start_fixtures.env
@@ -191,7 +193,7 @@ async def test_unready_guest_is_preserved_and_new_writer_quiesced(env, monkeypat
         docker.guests.clear()
         agent.container_id = None
 
-    async def unready(_client, _reference):
+    async def unready(_client, _reference, *, halted=None):
         return False
 
     monkeypatch.setattr(guest_start, "guest_ready", unready)
@@ -203,6 +205,66 @@ async def test_unready_guest_is_preserved_and_new_writer_quiesced(env, monkeypat
     reference = "old" if existing else "created-1"
     assert docker.guests[reference].state.status == ("running" if existing else "exited")
     assert docker.removed == []
+
+
+@pytest.mark.parametrize("existing", [True, False])
+async def test_stop_during_readiness_ends_the_start_and_quiesces_only_its_new_writer(env, monkeypatch, existing):
+    # Given a start polling a guest that is not ready yet, under a durable operation.
+    manager, docker, agent = env
+    if not existing:
+        docker.guests.clear()
+        agent.container_id = None
+    operation = uuid4()
+    stopped = False
+
+    def probe(_client, reference, _timeout):
+        nonlocal stopped
+        docker.probes.append(reference)
+        # The stop commits while this probe is in flight.
+        stopped = True
+        return False
+
+    async def halted(operation_id):
+        assert operation_id == operation
+        return "cancelled" if stopped else None
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
+    monkeypatch.setattr(start_store, "halted", halted)
+    monkeypatch.setattr(start_store, "observe", AsyncMock(return_value=True))
+    token = guest_start.start_operation_id.set(operation)
+    # When readiness reaches its next poll.
+    try:
+        with pytest.raises(GuestStartStoppedError) as stop:
+            await manager.start_container(agent)
+    finally:
+        guest_start.start_operation_id.reset(token)
+    # Then the stop is reported at that poll, apart from a readiness failure, and only a writer this start
+    # created is stopped.
+    reference = "old" if existing else "created-1"
+    assert stop.value.reason == "cancelled"
+    assert docker.probes == [reference]
+    assert docker.guests[reference].state.status == ("running" if existing else "exited")
+    assert agent.status != "error"
+    assert docker.removed == []
+
+
+async def test_superseded_resume_is_a_stop_and_never_starts_the_guest(env, monkeypatch):
+    # Given an owned stopped guest whose start operation was cancelled before its candidate was recorded.
+    manager, docker, agent = env
+    docker.guests["old"].state.status = "exited"
+    agent.status = "stopped"
+    monkeypatch.setattr(start_store, "observe", AsyncMock(return_value=False))
+    token = guest_start.start_operation_id.set(uuid4())
+    # When Start reaches the resume.
+    try:
+        with pytest.raises(GuestStartStoppedError) as stop:
+            await manager.start_container(agent)
+    finally:
+        guest_start.start_operation_id.reset(token)
+    # Then the superseded refusal is the same stop outcome and the guest stays stopped.
+    assert stop.value.reason == "cancelled"
+    assert docker.starts == docker.probes == []
+    assert docker.guests["old"].state.status == "exited"
 
 
 async def test_ready_probe_cannot_succeed_after_deadline(env, monkeypatch):

@@ -1,4 +1,5 @@
 import time
+from collections.abc import Awaitable, Callable
 from time import monotonic
 
 from anyio import move_on_after, sleep, to_thread
@@ -7,6 +8,8 @@ from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException, NoSuchContainer, ObservationLimitError, ObservationTimeout
 
 from app.core.logging import logger
+from app.records.agent_start import StartHalt
+from app.services.guest_admission import GuestStartStoppedError
 from app.services.guest_probe import probe_guest
 
 READY_TIMEOUT_SECONDS = 120.0
@@ -36,11 +39,16 @@ def observe_guest(
     return baseline, None
 
 
-async def guest_ready(client: DockerClient, reference: str) -> bool:
+async def guest_ready(
+    client: DockerClient, reference: str, *, halted: Callable[[], Awaitable[StartHalt | None]] | None = None
+) -> bool:
+    """False when the guest failed or timed out; a stop that ``halted`` reports at a poll raises instead."""
     deadline = monotonic() + READY_TIMEOUT_SECONDS
     passes = 0
     restarts: int | None = None
     while (remaining := deadline - monotonic()) > 0:
+        if halted is not None and (reason := await halted()) is not None:
+            raise GuestStartStoppedError(reason)
         ready = await to_thread.run_sync(probe_guest, client, reference, remaining)
         passes = passes + 1 if ready else 0
         if passes == 2 and monotonic() < deadline:

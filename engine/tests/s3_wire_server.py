@@ -2,7 +2,8 @@
 
 It speaks just the path-style calls the storage backend makes (PutObject with ``If-None-Match``, HeadObject,
 GetObject, DeleteObject, DeleteObjects, ListObjectsV2) and records every call, so tests can assert both what was
-stored and whether the provider was reached at all.
+stored and whether the provider was reached at all. It also keeps the bucket's ``?versioning`` status and
+``?lifecycle`` document (``state.versioning`` and ``state.lifecycle``), recorded as ``?versioning`` / ``?lifecycle`` calls.
 """
 
 import hashlib
@@ -18,6 +19,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 type PutFault = Literal["reject_403", "reject_500", "apply_then_500", "apply_then_drop"]
 type DeleteFault = Literal["reject_500", "apply_then_500"]
 PAGE_SIZE = 1000
+BUCKET_CONFIGS = ("versioning", "lifecycle")
 
 
 @dataclass
@@ -32,12 +34,16 @@ class Gate:
 @dataclass
 class S3State:
     objects: dict[str, bytes] = field(default_factory=dict)
+    content_types: dict[str, str] = field(default_factory=dict)
     calls: list[tuple[str, str]] = field(default_factory=list)
     put_faults: dict[str, PutFault] = field(default_factory=dict)
     gates: dict[str, Gate] = field(default_factory=dict)
     refused_deletes: set[str] = field(default_factory=set)
     delete_faults: dict[str, DeleteFault] = field(default_factory=dict)
     multi_delete_status: int = 200
+    versioning: str = ""
+    lifecycle: bytes | None = None
+    refused_bucket_requests: set[str] = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def count(self, method: str, key_prefix: str = "") -> int:
@@ -100,8 +106,48 @@ class _Handler(BaseHTTPRequestHandler):
             else raw
         )
 
+    def _bucket_config(self, key: str, query: dict[str, list[str]]) -> str | None:
+        """The bucket-level subresource (``versioning`` or ``lifecycle``) a request addresses, if any."""
+        return None if key else next((name for name in BUCKET_CONFIGS if name in query), None)
+
+    def _get_bucket_config(self, config: str) -> None:
+        state = self._state()
+        with state.lock:
+            state.calls.append(("GET", f"?{config}"))
+            refused = config in state.refused_bucket_requests
+            versioning, lifecycle = state.versioning, state.lifecycle
+        if refused:
+            self._error(403, "AccessDenied")
+        elif config == "versioning":
+            status = f"<Status>{escape(versioning)}</Status>" if versioning else ""
+            xml = f"<VersioningConfiguration>{status}</VersioningConfiguration>"
+            self._reply(200, xml.encode(), {"Content-Type": "application/xml"})
+        elif lifecycle is None:
+            self._error(404, "NoSuchLifecycleConfiguration")
+        else:
+            self._reply(200, lifecycle, {"Content-Type": "application/xml"})
+
+    def _put_bucket_config(self, config: str) -> None:
+        body, state = self._read_body(), self._state()
+        with state.lock:
+            state.calls.append(("PUT", f"?{config}"))
+            refused = config in state.refused_bucket_requests
+            if not refused and config == "lifecycle":
+                state.lifecycle = body
+            elif not refused:
+                status = re.search(r"<Status>(.*?)</Status>", body.decode())
+                state.versioning = unescape(status.group(1)) if status else ""
+        if refused:
+            self._error(403, "AccessDenied")
+        else:
+            self._reply(200)
+
     def do_PUT(self) -> None:
-        key, _ = self._target()
+        key, query = self._target()
+        config = self._bucket_config(key, query)
+        if config is not None:
+            self._put_bucket_config(config)
+            return
         data, state = self._read_body(), self._state()
         with state.lock:
             state.calls.append(("PUT", key))
@@ -121,6 +167,7 @@ class _Handler(BaseHTTPRequestHandler):
             _ = gate.release.wait(30)
         with state.lock:
             state.objects[key] = data
+            state.content_types[key] = self.headers.get("Content-Type", "")
         if gate is not None and gate.apply_before_hold:
             gate.arrived.set()
             _ = gate.release.wait(30)
@@ -146,6 +193,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         key, query = self._target()
         state = self._state()
+        config = self._bucket_config(key, query)
+        if config is not None:
+            self._get_bucket_config(config)
+            return
         if "list-type" not in query:
             with state.lock:
                 state.calls.append(("GET", key))
@@ -160,10 +211,11 @@ class _Handler(BaseHTTPRequestHandler):
         with state.lock:
             state.calls.append(("LIST", prefix))
             keys = sorted(k for k in state.objects if k.startswith(prefix) and k > after)
-            sizes = {k: len(state.objects[k]) for k in keys[:PAGE_SIZE]}
+            listed = {k: state.objects[k] for k in keys[:PAGE_SIZE]}
         page, truncated = keys[:PAGE_SIZE], len(keys) > PAGE_SIZE
         contents = "".join(
-            f"<Contents><Key>{escape(k)}</Key><Size>{sizes[k]}</Size><ETag>&quot;x&quot;</ETag></Contents>"
+            f"<Contents><Key>{escape(k)}</Key><Size>{len(listed[k])}</Size>"
+            f"<ETag>&quot;{_etag(listed[k])}&quot;</ETag></Contents>"
             for k in page
         )
         token = f"<NextContinuationToken>{escape(page[-1])}</NextContinuationToken>" if truncated else ""

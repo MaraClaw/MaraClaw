@@ -37,7 +37,9 @@ def get_storage_backend() -> StorageBackend:
         )
         if settings.STORAGE_LOCAL_FALLBACK_ENABLED:
             fallback = LocalStorageBackend(settings.STORAGE_LOCAL_ROOT or settings.AGENT_DATA_DIR)
-            _storage_backend = FallbackStorageBackend(primary=primary, fallback=fallback)
+            _storage_backend = FallbackStorageBackend(
+                primary=primary, fallback=fallback, promote=not settings.WORKSPACE_MIRROR_ENABLED
+            )
         else:
             _storage_backend = primary
     else:

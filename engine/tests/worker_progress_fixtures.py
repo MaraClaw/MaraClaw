@@ -32,6 +32,7 @@ WORKER_BUDGETED_LOOPS: Final = frozenset(
         "chat_history_retention",
         "agent_workspace_quota",
         "agent_resource_pressure",
+        "workspace_mirror",
         "operational_log_retention",
         "capacity_renewal",
     }

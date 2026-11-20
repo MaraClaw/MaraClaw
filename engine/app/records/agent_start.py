@@ -1,8 +1,13 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 from uuid import UUID
 
 from app.core.json_types import uuid_from_row
+
+# Why a running start must stop at its next checkpoint: its operation is no longer pending (Stop cancelled it or
+# a later start replaced it), or it is pending but the agent no longer meets the start's active condition.
+type StartHalt = Literal["cancelled", "ineligible"]
 
 
 @dataclass(frozen=True, slots=True)

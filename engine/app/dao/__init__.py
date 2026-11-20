@@ -73,6 +73,7 @@ from app.dao.trigger_dao import agent_trigger_dao, trigger_execution_dao
 from app.dao.user_dao import user_dao
 from app.dao.web_search_event_dao import web_search_event_dao
 from app.dao.workspace_dao import workspace_edit_lock_dao, workspace_file_revision_dao
+from app.dao.workspace_mirror_entry_dao import workspace_mirror_entry_dao
 
 __all__ = [
     "admin_audit_log_dao",
@@ -157,4 +158,5 @@ __all__ = [
     "work_report_dao",
     "workspace_edit_lock_dao",
     "workspace_file_revision_dao",
+    "workspace_mirror_entry_dao",
 ]

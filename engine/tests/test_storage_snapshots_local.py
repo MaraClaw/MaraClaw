@@ -137,15 +137,15 @@ async def test_snapshot_missing_and_unsupported_backends_fail_closed(tmp_path):
 async def test_local_snapshot_cancelled_awaiter_leaves_worker_owning_descriptor(tmp_path, monkeypatch):
     (tmp_path / "report").write_bytes(b"document")
     entered, release, closed = threading.Event(), threading.Event(), threading.Event()
-    open_file, read = local_snapshot.open_regular_file, local_snapshot.read_bounded
+    open_entry, read = local_snapshot.open_regular_entry, local_snapshot.read_bounded
     streams = []
 
     @contextmanager
-    def tracked_open(path):
+    def tracked_open(root, relative):
         try:
-            with open_file(path) as stream:
-                streams.append(stream)
-                yield stream
+            with open_entry(root, relative) as entry:
+                streams.append(entry[0])
+                yield entry
         finally:
             closed.set()
 
@@ -154,7 +154,7 @@ async def test_local_snapshot_cancelled_awaiter_leaves_worker_owning_descriptor(
         assert release.wait(5)
         return read(stream, cap)
 
-    monkeypatch.setattr(local_snapshot, "open_regular_file", tracked_open)
+    monkeypatch.setattr(local_snapshot, "open_regular_entry", tracked_open)
     monkeypatch.setattr(local_snapshot, "read_bounded", paused_read)
     try:
         async with anyio.create_task_group() as tasks:

@@ -3,7 +3,7 @@
 A worker measures each agent's host workspace directory plus its guest container's writable layer. An agent whose last
 measurement is over its tier's allowance refuses new human work until a later measurement is back under it; it can
 still start, relay reports, run work already accepted and delete files. Measurements run off the event loop and never
-inside a database connection.
+inside a database connection. A directory walk that passes its deadline stops and records nothing.
 """
 
 import asyncio
@@ -11,6 +11,8 @@ import contextvars
 import os
 import stat
 import subprocess
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +33,8 @@ from app.services.organization_plans import plan_for, tier_for_tenant
 from app.services.quota_guard import QuotaExceededError
 
 LAYER_INSPECT_TIMEOUT_SECONDS: Final = 60.0
+WALK_DEADLINE_SECONDS: Final = 120.0
+ENTRIES_PER_DEADLINE_CHECK: Final = 256
 _VANISHED: Final = (FileNotFoundError, PermissionError, NotADirectoryError)
 _GIB: Final = 1024**3
 _DELETE_FILES: Final = "Delete files to continue."
@@ -94,25 +98,46 @@ class LayerReads:
     unavailable: bool = False
 
 
+class WorkspaceMeasurementTimeoutError(Exception):
+    """A directory walk passed its deadline and stopped; whatever it had counted is not a measurement."""
+
+
 WorkspaceDiskQuotaExceeded = WorkspaceDiskQuotaExceededError
 
 
-def measure_directory_bytes(path: Path) -> int:
+def measure_directory_bytes(
+    path: Path, deadline_seconds: float = WALK_DEADLINE_SECONDS, clock: Callable[[], float] = time.monotonic
+) -> int:
     """Sum of the regular files' sizes under ``path``; a missing root is empty.
 
     Symlinks are neither followed nor counted, and a file reachable through several hard links counts once.
     Entries that vanish or cannot be read during the walk are skipped.
+
+    The walk checks ``deadline_seconds`` itself, before each directory and every ``ENTRIES_PER_DEADLINE_CHECK`` entries,
+    and raises ``WorkspaceMeasurementTimeoutError`` instead of returning a partial total. A cancelled caller can
+    therefore abandon the thread without leaving it scanning past the deadline.
     """
     if path.is_symlink():
         return 0
+    expires = clock() + deadline_seconds
+
+    def check_deadline() -> None:
+        if clock() >= expires:
+            raise WorkspaceMeasurementTimeoutError(f"directory walk passed its {deadline_seconds:g} second deadline")
+
     total = 0
+    seen = 0
     linked: set[tuple[int, int]] = set()
     pending = [os.fspath(path)]
     while pending:
+        check_deadline()
         directory = pending.pop()
         try:
             with os.scandir(directory) as entries:
                 for entry in entries:
+                    seen += 1
+                    if seen % ENTRIES_PER_DEADLINE_CHECK == 0:
+                        check_deadline()
                     try:
                         info = entry.stat(follow_symlinks=False)
                     except _VANISHED:
@@ -180,6 +205,9 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
     read and keep their stored size. Each stored measurement also feeds the resource-pressure episodes, which can never
     fail this pass.
 
+    A directory walk that passes ``WALK_DEADLINE_SECONDS`` is logged and abandons the measurement before the layer
+    read and the store: no size, usage row, pressure sample or alert, and the stored row stands.
+
     A measurement is ordered by when it started. If one that started later is already stored (a delete's re-measure
     overtook this one), nothing is written, fed to the episodes or alerted: the stored row decides.
     """
@@ -189,9 +217,17 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
         return
     tier = await tier_for_tenant(agent.tenant_id)
     started = datetime.now(UTC)
-    dir_bytes = await to_thread.run_sync(
-        measure_directory_bytes, agent_manager._agent_dir(agent.id), abandon_on_cancel=True
-    )
+    try:
+        dir_bytes = await to_thread.run_sync(
+            measure_directory_bytes, agent_manager._agent_dir(agent.id), abandon_on_cancel=True
+        )
+    except WorkspaceMeasurementTimeoutError:
+        logger.warning(
+            "[WorkspaceQuota] directory walk passed its {} second deadline; nothing recorded; agent={}",
+            WALK_DEADLINE_SECONDS,
+            agent.id,
+        )
+        return
     layer_bytes = 0
     client = agent_manager.reacquire_docker_client()
     container_id = agent.container_id

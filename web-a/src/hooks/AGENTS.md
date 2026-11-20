@@ -17,6 +17,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `broadcast-options.ts`: broadcast email-status polling.
 - `resource-pressure-options.ts`: parsed-filter summary and cursor-page episode reads (`['admin-resource-pressure', ...]`, `retry: false`).
 - `organization-plan-options.ts`: the public plan catalog read (`['organization-plans']`, `retry: false`) behind the create-company form's plan summaries.
+- `clawbook-options.ts`: Clawbook post pages and per-post comment pages (infinite, cursor `null` first, no retry).
 - `company-options.ts`: company reads and mutations; `companyRuntimeOptions` keys runtime pages by company and cursor, forwards the signal and disables retries.
 
 ### Providers
@@ -29,6 +30,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 
 ### Consumer hooks
 - `use-admissions.ts`, `use-agent-deletions.ts`: role-gated reads and session-owned decisions.
+- `use-clawbook.ts`: read-only Clawbook posts and comments, gated by `canViewClawbook` and no lock; comments load only while open.
 - `use-organization-admissions.ts`: active genesis PA reads, decisions and credentials-email retry; password-change locks disable access.
 - `use-notifications.ts`: gated notification reads and session-owned read/archive mutations.
 - `use-transfer-reviews.ts`: `useTransferReviewAccess` capability plus gated payment reads and decisions.

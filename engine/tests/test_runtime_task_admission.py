@@ -2,7 +2,9 @@ import asyncio
 
 import pytest
 
+from app.runtime import shutdown_budget
 from app.runtime.tasks import AdmissionClosedError, TaskAdmission
+from app.services.agent_setup_lock import drain_on_cancel
 
 
 def admission() -> TaskAdmission:
@@ -187,3 +189,33 @@ async def test_drain_logs_but_survives_task_failures(grace: float) -> None:
     # When / Then
     await gate.drain(grace_seconds=grace)
     assert task.done()
+
+
+async def test_drain_stops_waiting_at_the_shutdown_deadline_and_names_what_it_abandons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an owned task that keeps running through cancellation
+    gate = admission()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        shutdown_budget.logger, "warning", lambda message, *args, **_kwargs: warnings.append(message.format(*args))
+    )
+
+    async def stubborn() -> None:
+        started.set()
+        await drain_on_cancel(release.wait())
+
+    task = asyncio.create_task(stubborn(), name="stubborn-wake")
+    track(gate, task)
+    await started.wait()
+    # When the drain runs out of grace inside a shutdown step whose deadline has passed
+    with shutdown_budget.joins_until(asyncio.get_running_loop().time()):
+        await gate.drain(grace_seconds=0)
+    # Then it returned with the task still running, after naming it
+    assert not task.done()
+    assert any("stubborn-wake" in line for line in warnings), warnings
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task

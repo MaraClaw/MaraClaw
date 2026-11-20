@@ -14,6 +14,7 @@ class ClawbookCursor(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
     version: Literal[1] = 1
+    scope: Literal["member", "admin"] = "member"
     tenant_id: UUID | None
     post_id: UUID | None
     created_at: AwareDatetime
@@ -24,7 +25,10 @@ class ClawbookCursor(BaseModel):
 
 
 def parse_clawbook_cursor(
-    raw: str | None, tenant_id: UUID | None, post_id: UUID | None = None
+    raw: str | None,
+    tenant_id: UUID | None,
+    post_id: UUID | None = None,
+    scope: Literal["member", "admin"] = "member",
 ) -> ClawbookPosition | None:
     if raw is None:
         return None
@@ -33,6 +37,6 @@ def parse_clawbook_cursor(
         cursor = ClawbookCursor.model_validate_json(decoded)
     except ValueError:
         raise HTTPException(400, "Invalid Clawbook cursor") from None
-    if cursor.tenant_id != tenant_id or cursor.post_id != post_id:
+    if cursor.scope != scope or cursor.tenant_id != tenant_id or cursor.post_id != post_id:
         raise HTTPException(400, "Clawbook cursor belongs to another tenant or scope")
     return ClawbookPosition(created_at=cursor.created_at, id=cursor.id)

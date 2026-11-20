@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import tempfile
 import uuid
+from collections.abc import AsyncGenerator, Callable
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 from typing import override
 
 import pytest
 
-from app.services import agent_manager as module
+from app.services import agent_manager as module, agent_materialize
 from app.services.agent_manager import AgentManager
 from app.services.storage_runtime.base import MaterializedFile, StorageBackend, StorageEntry
 from app.services.storage_runtime.local import LocalStorageBackend
@@ -56,6 +59,25 @@ class RemoteStorage(StorageBackend):
         with tempfile.NamedTemporaryFile(delete=False) as file:
             file.write(self.objects[key])
         return MaterializedFile(Path(file.name), owned=True)
+
+    @override
+    async def list_files_flat(self, prefix: str) -> AsyncGenerator[StorageEntry]:
+        for key in sorted(self.objects):
+            if key.startswith(prefix):
+                yield StorageEntry(name=key.rsplit("/", 1)[-1], key=key, is_dir=False, size=len(self.objects[key]))
+
+
+class SwappingStorage(RemoteStorage):
+    """Replaces a directory with a symlink once the engine has checked it, as a lingering guest process could."""
+
+    def __init__(self, objects: dict[str, bytes], swap: Callable[[], None]) -> None:
+        super().__init__(objects)
+        self.swap: Callable[[], None] = swap
+
+    @override
+    async def materialize(self, key: str) -> MaterializedFile | None:
+        self.swap()
+        return await super().materialize(key)
 
 
 @pytest.fixture
@@ -138,3 +160,124 @@ async def test_remote_materialization_replaces_stale_local_files(tmp_path: Path,
     assert (agent_dir / "soul.md").read_bytes() == b"remote soul"
     assert (agent_dir / "memory" / "notes.md").read_bytes() == b"remote notes"
     assert (agent_dir / "scratch.txt").read_bytes() == b"local only"
+
+
+type MirrorTree = tuple[AgentManager, dict[str, bytes], uuid.UUID]
+
+
+@pytest.fixture
+def mirror_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MirrorTree:
+    """A mirror-active manager: only the durable store may be read, so the facade's merged view is a bare namespace."""
+    objects: dict[str, bytes] = {}
+    monkeypatch.setattr(module, "get_storage_backend", lambda: SimpleNamespace())
+    monkeypatch.setattr(agent_materialize, "durable_store", lambda: RemoteStorage(objects))
+    monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
+    return AgentManager.__new__(AgentManager), objects, uuid.uuid4()
+
+
+def _files(agent_dir: Path) -> list[str]:
+    return sorted(
+        path.relative_to(agent_dir).as_posix()
+        for path in agent_dir.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+
+
+async def test_mirror_materialization_writes_only_what_the_mirror_does_not_own(
+    mirror_tree: MirrorTree, tmp_path: Path
+) -> None:
+    # Given a durable store holding mirrored keys, runtime state, the mirror marker and keys that cannot be local paths.
+    manager, objects, agent_id = mirror_tree
+    owned = [
+        "workspace/notes.md",
+        "memory/m.md",
+        "skills/x/SKILL.md",
+        "soul.md",
+        ".openclaw/agents/a.json",
+        ".maraclaw-mirror-generation",
+    ]
+    kept = ["openclaw.json", "agents/main/agent/auth.json", ".cache/blob"]
+    unsafe = ["a/../../escape", "../outside.txt"]
+    objects.update({f"{agent_id}/{rel}": rel.encode() for rel in [*owned, *kept, *unsafe]})
+    # When the agent directory is rehydrated.
+    agent_dir = await manager._materialize_agent_dir(agent_id)
+    # Then only the keys nothing else owns are written, under the agent directory, and the layout still exists.
+    assert _files(agent_dir) == sorted(kept)
+    assert {rel: (agent_dir / rel).read_bytes() for rel in kept} == {rel: rel.encode() for rel in kept}
+    assert not (tmp_path / "escape").exists()
+    assert not (tmp_path / "outside.txt").exists()
+    assert (agent_dir / "workspace").is_dir()
+    assert (agent_dir / ".openclaw" / "workspace").is_symlink()
+
+
+@pytest.mark.parametrize("planted", ["parent", "destination"])
+async def test_mirror_materialization_never_writes_through_a_guest_symlink(
+    mirror_tree: MirrorTree, tmp_path: Path, planted: str
+) -> None:
+    # Given a guest-planted symlink on the path of one stored file, pointing outside the agent directory.
+    manager, objects, agent_id = mirror_tree
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _ = (elsewhere / "keep.txt").write_text("keep")
+    agent_dir = tmp_path / str(agent_id)
+    agent_dir.mkdir()
+    if planted == "parent":
+        (agent_dir / "agents").symlink_to(elsewhere)
+    else:
+        (agent_dir / "openclaw.json").symlink_to(elsewhere / "keep.txt")
+    objects.update(
+        {
+            f"{agent_id}/agents/main/auth.json": b"pwned",
+            f"{agent_id}/openclaw.json": b"pwned",
+            f"{agent_id}/.cache/blob": b"fine",
+        }
+    )
+    # When the agent directory is rehydrated.
+    _ = await manager._materialize_agent_dir(agent_id)
+    # Then nothing was written outside it, and the other files still hydrate.
+    assert sorted(entry.name for entry in elsewhere.iterdir()) == ["keep.txt"]
+    assert (elsewhere / "keep.txt").read_text() == "keep"
+    assert (agent_dir / ".cache" / "blob").read_bytes() == b"fine"
+
+
+async def test_facade_materialization_never_writes_through_a_directory_swapped_for_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a stored file whose directory becomes a symlink after the engine checked it and before it wrote.
+    agent_id = uuid.uuid4()
+    agent_dir = tmp_path / str(agent_id)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    def swap() -> None:
+        shutil.rmtree(agent_dir / "data")
+        (agent_dir / "data").symlink_to(elsewhere)
+
+    monkeypatch.setattr(module, "get_storage_backend", lambda: SwappingStorage({f"{agent_id}/data/x.txt": b"x"}, swap))
+    monkeypatch.setattr(agent_materialize, "durable_store", lambda: None)
+    monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
+    # When the agent directory is rehydrated.
+    _ = await AgentManager.__new__(AgentManager)._materialize_agent_dir(agent_id)
+    # Then the write was refused rather than redirected.
+    assert list(elsewhere.iterdir()) == []
+
+
+async def test_with_the_mirror_off_every_key_is_materialized_from_the_facade_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given remote storage with the mirror off, whose flat listing must not be used.
+    agent_id = uuid.uuid4()
+    storage = RemoteStorage({f"{agent_id}/workspace/notes.md": b"notes", f"{agent_id}/.openclaw/state.json": b"state"})
+
+    def forbidden(_prefix: str) -> AsyncGenerator[StorageEntry]:
+        raise AssertionError("the flat listing belongs to the mirror")
+
+    monkeypatch.setattr(storage, "list_files_flat", forbidden)
+    monkeypatch.setattr(module, "get_storage_backend", lambda: storage)
+    monkeypatch.setattr(agent_materialize, "durable_store", lambda: None)
+    monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
+    # When the agent directory is rehydrated.
+    agent_dir = await AgentManager.__new__(AgentManager)._materialize_agent_dir(agent_id)
+    # Then in-scope keys are written as before, exactly as without a mirror.
+    assert (agent_dir / "workspace" / "notes.md").read_bytes() == b"notes"
+    assert (agent_dir / ".openclaw" / "state.json").read_bytes() == b"state"

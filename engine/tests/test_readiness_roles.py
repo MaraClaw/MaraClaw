@@ -71,6 +71,7 @@ async def test_actual_start_registers_required_role_evidence(
         scheduler,
         task_lease,
         trigger_daemon,
+        workspace_mirror_worker,
     )
     from app.services.channels import whatsapp_personal_supervisor
     from app.services.tavily import export
@@ -130,6 +131,7 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(task_lease, "task_lease_recovery_loop", loop)
     monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
     monkeypatch.setattr(agent_workspace_quota_worker, "start_agent_workspace_quota_worker", loop)
+    monkeypatch.setattr(workspace_mirror_worker, "start_workspace_mirror_worker", loop)
     monkeypatch.setattr(agent_resource_pressure_worker, "start_agent_resource_pressure_worker", loop)
     monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(capacity_renewal_worker, "start_capacity_renewal_worker", loop)
@@ -158,6 +160,7 @@ async def test_actual_start_registers_required_role_evidence(
             assert required["openclaw_dispatch"][1] is False
         assert ("chat_history_retention" in required) == role_enabled(roles, "worker")
         assert ("agent_workspace_quota" in required) == role_enabled(roles, "worker")
+        assert ("workspace_mirror" in required) == role_enabled(roles, "worker")
         assert ("agent_resource_pressure" in required) == role_enabled(roles, "worker")
         assert ("operational_log_retention" in required) == role_enabled(roles, "worker")
         assert ("transfer_cleanup" in required) == role_enabled(roles, "connector")

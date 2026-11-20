@@ -13,6 +13,7 @@ from app.dao.published_page_dao import published_page_dao
 from app.records.published_page import PublishedPageRecord
 from app.records.user import UserRecord
 from app.schemas.content_response_catalog import DeletedAcknowledgement, PublishedPageResponse
+from app.services.file_storage_paths import require_member_visible_path
 from app.services.storage import get_storage_backend, normalize_storage_key
 
 # Public router - no /api prefix, no auth
@@ -96,6 +97,7 @@ async def publish_page(
 
     _agent, access_level = await check_agent_access(current_user, body.agent_id)
     _require_manage(current_user, access_level)
+    require_member_visible_path(body.agent_id, body.path)
 
     result = await _publish_page(body.agent_id, current_user.id, Path(), {"path": body.path})
     if not result.startswith("Published successfully"):

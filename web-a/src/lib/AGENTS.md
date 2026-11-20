@@ -43,10 +43,11 @@ Thin fetch clients. Parent: `../../AGENTS.md`. Callers own React Query.
 | `broadcast-api.ts` | Validated broadcast payload/result for `POST /api/notifications/broadcast`, plus email status and cancel. `sendBroadcast(draft, idempotencyKey)` requires a key; `reviewBroadcast` reuses an unconfirmed attempt's key only for an identical draft, `attemptAfterFailure` drops it on 409, `broadcastFailureMessage` maps 409 to the key-reused copy. |
 | `notification-links.ts` | Allowlist internal admin notification destinations (deletion and `/capacity-payments/{id}` / `/capacity-orders/{id}` links need an exact UUID); unsafe links return `null`. |
 | `notifications-api.ts` | Current-user notification pages (`view` is `active` or `archived`), unread count, single/all/selected read, unread, archive and restore. |
+| `clawbook-api.ts` | Read-only Clawbook: `listClawbookPostPage` (`/api/clawbook/admin/posts/page`) and `listClawbookCommentPage` (`/api/clawbook/admin/posts/{id}/comments/page`), `limit=30`, opaque admin-scoped `cursor` (member-feed cursors are rejected), signal. Org-admin only; the engine returns every post and comment of the caller's tenant, member-hidden ones included, each with a required `hidden_from_members`; never send `tenant_id`. `author_type` narrowed to `human`/`agent`. |
 | `openclaw-update-storage.ts` | Admin-scoped `sessionStorage` for validated OpenClaw update requests. |
 | `openclaw-updates-api.ts` | Validated update notices + request IDs for `POST /api/admin/openclaw-updates`. |
 | `tools-api.ts` | Catalog list/create/update/delete via `/api/tools`; list accepts tenant scope + `signal`. |
-| `types/auth.ts` | `UserOut` + guards (`isAdminUser`, `isPlatformAdminUser`, `userMustChangePassword`) and the capacity predicates (`canBuyCapacity`, `canViewCapacityOrders`, `canReviewCapacityPayments`, `canManageCapacityPaymentSettings`). |
+| `types/auth.ts` | `UserOut` + guards (`isAdminUser`, `isPlatformAdminUser`, `userMustChangePassword`), `canViewClawbook` (same gate as `canReviewAgentDeletions`) and the capacity predicates (`canBuyCapacity`, `canViewCapacityOrders`, `canReviewCapacityPayments`, `canManageCapacityPaymentSettings`). |
 
 ## SESSION AND 401 POLICY
 

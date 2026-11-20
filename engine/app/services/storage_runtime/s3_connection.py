@@ -69,6 +69,12 @@ def _is_s3_client(value: object) -> TypeIs[S3Client]:
     return value is not None
 
 
+def response_version_id(response: Mapping[str, object]) -> str:
+    """The response's VersionId, or "" when there is none; S3 names an unversioned object's version "null"."""
+    version_id = str(response.get("VersionId") or "")
+    return "" if version_id == "null" else version_id
+
+
 class S3Connection(StorageBackend):
     def __init__(
         self,

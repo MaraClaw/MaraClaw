@@ -1,3 +1,5 @@
+from contextlib import suppress
+
 from anyio import sleep, to_thread
 from psycopg import Error as PsycopgError
 from pywhales.exceptions import DockerException, NoSuchContainer
@@ -14,7 +16,12 @@ from app.services.agent_manager import agent_manager
 from app.services.agent_runtime_loss import guest_published, report_runtime_loss
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_cancel, setup_workspace_lock
 from app.services.agent_start_store import committed_start_connection, start_store
-from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
+from app.services.guest_admission import (
+    GuestAdmissionError,
+    GuestStartPreflightError,
+    GuestStartStoppedError,
+    assert_start_active,
+)
 from app.services.guest_identity import (
     AGENT_LABEL,
     GuestOwnershipError,
@@ -31,6 +38,7 @@ PROGRESS_BUDGET_SECONDS = 300.0
 
 async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, due_only: bool = False) -> bool:
     if not await start_store.reserve(operation, due_only=due_only):
+        await assert_start_active(operation.operation_id)
         return False
     try:
         published = await _execute_start(operation, agent)
@@ -68,6 +76,12 @@ async def _execute_start(operation: AgentStartOperation, agent: AgentRecord) -> 
         # Docker preparation and admission have no total deadline; retain the workspace fence until drained.
         with loop_progress().exempt(restart_on_error=False):
             reference = await agent_manager.start_container(agent)
+    except GuestStartStoppedError:
+        # Preparation may hold this agent's row lock in the request transaction, and recovery locks that row.
+        with suppress(DbError, PsycopgError, RedisError, OSError):
+            await flush_request_transaction()
+        await _settle_stopped(operation)
+        raise
     finally:
         start_operation_id.reset(token)
     if reference is None and agent.status != "idle":
@@ -86,9 +100,28 @@ async def _execute_start(operation: AgentStartOperation, agent: AgentRecord) -> 
         if not published:
             return False
     if not published:
-        await start_store.recover(operation)
-        await cleanup_cancelled_start(operation)
+        # Read why first: recovery cancels a pending operation whose agent no longer qualifies.
+        reason = await start_store.halted(operation.operation_id)
+        if reason is None:
+            await _settle_unpublished(operation)
+        else:
+            await _settle_stopped(operation)
+            raise GuestStartStoppedError(reason)
     return published
+
+
+async def _settle_unpublished(operation: AgentStartOperation) -> None:
+    await start_store.recover(operation)
+    await cleanup_cancelled_start(operation)
+
+
+async def _settle_stopped(operation: AgentStartOperation) -> None:
+    """Settle a start a stop ended without letting a settlement failure hide the stop. The reconciler selects the
+    operation again: a pending one until recovery cancels it, a cancelled one until its candidate is cleaned up."""
+    try:
+        await _settle_unpublished(operation)
+    except (DockerException, DbError, PsycopgError, RedisError, OSError) as exc:
+        logger.warning("[AgentStart] Settling stopped start {} failed: {}", operation.operation_id, type(exc).__name__)
 
 
 async def cleanup_cancelled_start(operation: AgentStartOperation) -> None:
@@ -163,6 +196,10 @@ async def reconcile_agent_starts_once() -> None:
     for operation in operations:
         try:
             await reconcile_agent_start(operation, due_only=True)
+        except GuestStartStoppedError as exc:
+            # Superseded: already settled, with nothing failed and nothing to retry.
+            logger.info("Pending guest start for agent {} ended at a checkpoint: {}", operation.agent_id, exc.reason)
+            loop_progress().beat()
         except (
             DbError,
             PsycopgError,

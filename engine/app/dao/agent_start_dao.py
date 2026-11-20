@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 from app.dao.agent_start_retry_dao import START_RETRY_METADATA_DDL, agent_start_retry_dao
 from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
-from app.records.agent_start import AgentStartOperation
+from app.records.agent_start import AgentStartOperation, StartHalt
 
 # Parent integration copies this additive fresh-schema DDL into the shared baseline.
 START_OPERATIONS_DDL = (
@@ -34,6 +34,14 @@ AND EXISTS (SELECT 1 FROM users u JOIN identities i ON i.id=u.identity_id
 AND (a.tenant_id IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id=a.tenant_id AND t.is_active))
 AND NOT EXISTS (SELECT 1 FROM company_transfer_runtime_cleanup c WHERE c.agent_id=a.id AND c.state='pending')
 """
+
+# Agent a may still run operation o: the operation is pending for the creator, tenant and container it began with.
+ACTIVE_OPERATION_SQL = (
+    "o.state='pending' "
+    "AND a.creator_id=o.creator_id AND a.tenant_id IS NOT DISTINCT FROM o.tenant_id "
+    "AND a.container_id IS NOT DISTINCT FROM o.expected_container_id "
+    f"AND {ELIGIBLE_SQL}"
+)
 
 
 class AgentStartDAO:
@@ -99,13 +107,22 @@ class AgentStartDAO:
     async def active_agent(self, db: DbConnection, operation: AgentStartOperation) -> AgentRecord | None:
         row = await db.fetchone(
             "SELECT a.* FROM agents a JOIN agent_start_operations o ON o.agent_id=a.id "
-            "WHERE o.operation_id=%(op)s AND o.state='pending' "
-            "AND a.creator_id=o.creator_id AND a.tenant_id IS NOT DISTINCT FROM o.tenant_id "
-            "AND a.container_id IS NOT DISTINCT FROM o.expected_container_id "
-            f"AND {ELIGIBLE_SQL} FOR UPDATE OF a",
+            f"WHERE o.operation_id=%(op)s AND {ACTIVE_OPERATION_SQL} FOR UPDATE OF a",
             {"op": operation.operation_id},
         )
         return AgentRecord.from_row(row) if row is not None else None
+
+    async def halt(self, db: DbConnection, operation_id: UUID) -> StartHalt | None:
+        """Why the operation may no longer proceed, or None; the read takes no row locks."""
+        row = await db.fetchone(
+            "SELECT o.state='pending' AS pending,"
+            f"EXISTS (SELECT 1 FROM agents a WHERE a.id=o.agent_id AND {ACTIVE_OPERATION_SQL}) AS active "
+            "FROM agent_start_operations o WHERE o.operation_id=%(op)s",
+            {"op": operation_id},
+        )
+        if row is None or row["pending"] is not True:
+            return "cancelled"
+        return None if row["active"] is True else "ineligible"
 
     async def publish(self, db: DbConnection, operation: AgentStartOperation, agent: AgentRecord) -> bool:
         row = await db.fetchone(
@@ -114,10 +131,7 @@ class AgentStartDAO:
             # The engine owns heartbeat: every published start re-enables it for non-system agents.
             "heartbeat_enabled=(a.heartbeat_enabled OR a.is_system IS NOT TRUE) "
             "FROM agent_start_operations o WHERE a.id=%(id)s AND o.agent_id=a.id "
-            "AND o.operation_id=%(op)s AND o.state='pending' "
-            "AND a.creator_id=o.creator_id AND a.tenant_id IS NOT DISTINCT FROM o.tenant_id "
-            "AND a.container_id IS NOT DISTINCT FROM o.expected_container_id "
-            f"AND {ELIGIBLE_SQL} RETURNING a.id",
+            f"AND o.operation_id=%(op)s AND {ACTIVE_OPERATION_SQL} RETURNING a.id",
             {
                 "id": agent.id,
                 "op": operation.operation_id,

@@ -27,6 +27,8 @@
 #   APT_MIRROR           build-time apt mirror           (e.g. mirrors.ustc.edu.cn)
 #   MARACLAW_PIP_INDEX_URL, MARACLAW_PIP_TRUSTED_HOST      (build-time pip mirror)
 #   ENV_FILE             path to env file to source      (default: .env)
+#   SHUTDOWN_HTTP_GRACE_SECONDS, SHUTDOWN_CLEANUP_BUDGET_SECONDS (or UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN)
+#                        their sum plus 10 s is the container's --stop-timeout (default: 115)
 #   DETACH=1             run detached (docker -d)
 #   PULL=1               docker pull base image before build
 
@@ -65,6 +67,18 @@ IMAGE_NAME="${IMAGE_NAME:-maraclaw-engine:local}"
 CONTAINER_NAME="${CONTAINER_NAME:-maraclaw-engine}"
 PORT="${PORT:-8000}"
 DATA_DIR="${DATA_DIR:-$SCRIPT_DIR/.docker-data}"
+
+# docker stop waits this long between SIGTERM and SIGKILL: the uvicorn HTTP window, the lifespan cleanup budget and a
+# 10 s margin for interpreter exit (app/config.py SHUTDOWN_KILL_MARGIN_SECONDS).
+for key in UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN SHUTDOWN_HTTP_GRACE_SECONDS SHUTDOWN_CLEANUP_BUDGET_SECONDS; do
+    value="${!key:-}"
+    if [ -n "$value" ] && ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        echo "[docker-run] ERROR: $key=$value is not a whole number of seconds" >&2
+        exit 1
+    fi
+done
+HTTP_GRACE_SECONDS="${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-${SHUTDOWN_HTTP_GRACE_SECONDS:-30}}"
+STOP_TIMEOUT=$((10#$HTTP_GRACE_SECONDS + 10#${SHUTDOWN_CLEANUP_BUDGET_SECONDS:-75} + 10))
 
 DO_BUILD=1
 DO_RUN=1
@@ -169,6 +183,7 @@ fi
 
 RUN_ARGS=(
     --name "$CONTAINER_NAME"
+    --stop-timeout "$STOP_TIMEOUT"
     --network "$DOCKER_NETWORK"
     --network-alias maraclaw-engine
     -p "${PORT}:8000"

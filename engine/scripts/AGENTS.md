@@ -12,6 +12,7 @@ Engine-root operators, run from `engine/`. Not the same as `app/scripts/` (impor
 | `contract_codegen/` | Dependency-free Node generator: `generate.mjs` entry plus `compiler.mjs`, `constraints.mjs`, `document.mjs`. Never imports app code. |
 | `verify_anydoc.py` | Proves `firecrawl-anydoc` converts `tests/fixtures/anydoc/supported.docx`; the Dockerfile runs it at build time. |
 | `pg-throwaway.sh` | Disposable local PostgreSQL 18.6 for opt-in `*_postgres.py` tests and load tests: `start [--watchdog]`, `dsn`, `stop`. Always `--rm` (a bare `docker run postgres` leaks an anonymous volume per run), durability off, refuses to start under 10 GB host free space. |
+| `s3_lifecycle.py` | Lifecycle rule that expires noncurrent object versions under `<S3_PREFIX>/`: `python -m scripts.s3_lifecycle` from `engine/` with the engine's settings. `--check` (default) exits 0 when versioning is off or a rule covers the prefix, 1 when not, 2 for unsupported settings or an S3 error; `--apply [--days N]` (default 30) puts rule `maraclaw-agent-noncurrent-versions` and keeps every other rule. Why, IAM and limits: `../docs/managed-storage-quota.md` (Scope). |
 | `lint.sh` / `format.sh` / `test.sh` | Wrappers; none run the freeze scripts. `format.sh` mutates (`ruff check --fix`, then `ruff format`). |
 | `pytest_shard.py` | CI pytest plugin (`-p scripts.pytest_shard`): SHA-256 of each node ID assigns it to one shard; requires `0 <= --test-shard-index < --test-shard-count`. |
 

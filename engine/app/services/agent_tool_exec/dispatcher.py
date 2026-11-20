@@ -57,14 +57,12 @@ async def _execute_tool_direct(
 ) -> str:
     """Execute a tool directly, bypassing autonomy checks."""
     agent_tenant_id = await agent_tools._get_agent_tenant_id(agent_id)
-    workspace_root = agent_tools._agent_workspace_root(agent_id)
     try:
         if tool_name in {"delete_file", "write_file", "move_file", "edit_file"}:
             return await agent_tools._execute_workspace_mutation(
                 tool_name,
                 arguments,
                 agent_id=agent_id,
-                base_dir=workspace_root,
                 session_id=None,
             )
         if tool_name in ("execute_code", "execute_code_e2b"):

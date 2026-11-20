@@ -96,10 +96,10 @@ async def test_new_candidate_stays_creating_until_readiness_publishes_running(en
     observed = []
     wait = guest_start.guest_ready
 
-    async def ready(client, reference):
+    async def ready(client, reference, *, halted=None):
         observed.append(agent.status)
         boot.guest(reference, boot="B1", event="B1")
-        return await wait(client, reference)
+        return await wait(client, reference, halted=halted)
 
     monkeypatch.setattr(guest_start, "guest_ready", ready)
     # When Start creates the candidate.

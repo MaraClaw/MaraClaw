@@ -2,14 +2,18 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from uuid import UUID
 
+from psycopg import Error as PsycopgError
+
+from app.core.logging import logger
 from app.core.row_memo import memo_drop
 from app.dao.agent_start_dao import agent_start_dao
 from app.dao.agent_start_retry_dao import agent_start_retry_dao
 from app.db.connection import DbConnection
+from app.db.errors import DbError
 from app.db.pool import get_pool
 from app.db.session import transaction
 from app.records.agent import AgentRecord
-from app.records.agent_start import AgentStartOperation
+from app.records.agent_start import AgentStartOperation, StartHalt
 from app.records.agent_start_retry import StartFailureCode
 
 
@@ -73,6 +77,19 @@ class PostgresStartStore:
     async def cancel(self, agent_id: UUID) -> None:
         async with committed_start_connection() as db:
             await agent_start_dao.cancel(db, agent_id)
+
+    async def halted(self, operation_id: UUID) -> StartHalt | None:
+        """Checkpoint probe for a running start. Read-only: ``observe`` writes candidate fields under row locks.
+
+        An unreadable operation answers ``None``: the start goes on to its next checkpoint, and publication still
+        checks the operation under its row lock.
+        """
+        try:
+            async with committed_start_connection() as db:
+                return await agent_start_dao.halt(db, operation_id)
+        except (DbError, PsycopgError, OSError) as exc:
+            logger.warning("[AgentStart] Start checkpoint for {} unreadable: {}", operation_id, type(exc).__name__)
+            return None
 
     async def observe(self, operation_id: UUID, candidate: AgentRecord) -> bool:
         async with committed_start_connection() as db:

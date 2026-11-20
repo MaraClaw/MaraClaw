@@ -498,26 +498,24 @@ async def test_storage_read_callbacks_use_direct_owners_with_facade_dependencies
     ],
 )
 async def test_storage_mutation_callbacks_use_workspace_owner(
-    monkeypatch, tmp_path, tool_name: str, arguments: ToolArguments
+    monkeypatch, tool_name: str, arguments: ToolArguments
 ) -> None:
     agent_id = uuid.uuid4()
-    calls: list[tuple[str, ToolArguments, uuid.UUID, Path, str | None]] = []
+    calls: list[tuple[str, ToolArguments, uuid.UUID, str | None]] = []
 
     async def mutation_owner(
         received_tool_name: str,
         received_arguments: ToolArguments,
         *,
         agent_id: uuid.UUID,
-        base_dir: Path,
         session_id: str | None,
     ) -> str:
-        calls.append((received_tool_name, received_arguments, agent_id, base_dir, session_id))
+        calls.append((received_tool_name, received_arguments, agent_id, session_id))
         return "mutation result"
 
     async def legacy_owner(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("storage callbacks must not call legacy mutation wrappers")
 
-    monkeypatch.setattr(agent_tools, "_agent_workspace_root", lambda _: tmp_path)
     monkeypatch.setattr(workspace, "_execute_workspace_mutation", mutation_owner)
     monkeypatch.setattr(agent_tools, "_execute_workspace_mutation", legacy_owner)
 
@@ -527,7 +525,7 @@ async def test_storage_mutation_callbacks_use_workspace_owner(
     )
     assert not isinstance(handler_result, str)
     assert await handler_result == "mutation result"
-    assert calls == [(tool_name, arguments, agent_id, tmp_path, "mutation")]
+    assert calls == [(tool_name, arguments, agent_id, "mutation")]
 
 
 async def test_storage_focus_callbacks_use_focus_service_owners(monkeypatch) -> None:
@@ -682,12 +680,11 @@ def test_local_workspace_mutations_preserve_protections_errors_and_success(monke
 
 
 @pytest.mark.asyncio
-async def test_workspace_mutation_rejects_tasks_snapshot_move_without_io(tmp_path):
+async def test_workspace_mutation_rejects_tasks_snapshot_move_without_io():
     result = await workspace._execute_workspace_mutation(
         "move_file",
         {"source_path": "tasks.json", "destination_path": "workspace/tasks.json"},
         agent_id=uuid.uuid4(),
-        base_dir=tmp_path,
         session_id=None,
     )
 
@@ -866,7 +863,6 @@ async def test_write_workspace_file_does_not_mirror_to_local_for_non_local_stora
 
     result = await workspace_collaboration.write_workspace_file(
         agent_id=agent_id,
-        base_dir=tmp_path / str(agent_id),
         path="workspace/test.md",
         content="hello",
         actor_type="agent",
@@ -990,7 +986,6 @@ async def test_write_workspace_file_fails_on_expected_version_conflict(monkeypat
     await storage.write_bytes(f"{agent_id}/workspace/test.md", b"remote-new")
     result = await workspace_collaboration.write_workspace_file(
         agent_id=agent_id,
-        base_dir=tmp_path / str(agent_id),
         path="workspace/test.md",
         content="local-new",
         actor_type="agent",
@@ -1023,7 +1018,6 @@ async def test_move_workspace_path_fails_when_source_changes(monkeypatch, tmp_pa
     await storage.write_bytes(f"{agent_id}/workspace/source.md", b"remote-new")
     result = await workspace_collaboration.move_workspace_path(
         agent_id=agent_id,
-        base_dir=tmp_path / str(agent_id),
         source_path="workspace/source.md",
         destination_path="workspace/dest.md",
         actor_type="agent",
@@ -1055,7 +1049,6 @@ async def test_delete_workspace_directory_uses_prefix_existence(monkeypatch, tmp
 
     result = await workspace_collaboration.delete_workspace_file(
         agent_id=agent_id,
-        base_dir=tmp_path / str(agent_id),
         path="workspace/dir",
         actor_type="user",
         actor_id=agent_id,

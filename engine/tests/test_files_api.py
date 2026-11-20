@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -6,8 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 from tests.membership_generation_fixtures import pin_membership_generation
@@ -19,24 +20,11 @@ from app.core.security import create_access_token
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.services import file_download_tickets
+from app.services.storage_runtime.disposition import content_disposition
 from app.services.storage_runtime.local import LocalStorageBackend
-from app.services.workspace_collaboration import safe_agent_path
 from materialize_fixtures import GatedObject, temp_files, temp_root
 
 __all__ = ["temp_root"]
-
-
-def test_safe_agent_path_rejects_sibling_symlink_and_accepts_symlinked_root(tmp_path):
-    root = tmp_path / "agent"
-    sibling = tmp_path / "agent.rollback-run"
-    root.mkdir()
-    sibling.mkdir()
-    (root / "escape").symlink_to(sibling, target_is_directory=True)
-    alias = tmp_path / "alias"
-    alias.symlink_to(root, target_is_directory=True)
-    with pytest.raises(ValueError):
-        safe_agent_path(alias, "escape/secret")
-    assert safe_agent_path(alias, "nested/file") == root / "nested/file"
 
 
 def make_user(*, identity: IdentityRecord | None = None) -> UserRecord:
@@ -48,16 +36,6 @@ def make_user(*, identity: IdentityRecord | None = None) -> UserRecord:
         is_active=True,
         identity=identity,
     )
-
-
-def test_safe_agent_path_rejects_symlink_to_rollback_sibling(tmp_path):
-    base = tmp_path / "agent"
-    sibling = tmp_path / "agent.rollback-1"
-    base.mkdir()
-    sibling.mkdir()
-    (base / "link").symlink_to(sibling, target_is_directory=True)
-    with pytest.raises(ValueError):
-        safe_agent_path(base, "link/secret.md")
 
 
 @pytest.mark.parametrize("suffix", ["docx", "pptx", "xls"])
@@ -285,8 +263,11 @@ class DownloadStorage:
         self.presign_calls.append((key, filename, inline))
         return self.presigned
 
-    async def local_path_for(self, _key):
-        return self.local_path
+    async def open_local_file(self, _key):
+        if self.local_path is None:
+            return None
+        stream = self.local_path.open("rb")
+        return stream, os.fstat(stream.fileno())
 
     async def read_bytes(self, _key):
         return b"report-bytes"
@@ -336,13 +317,25 @@ async def _issue_ticket(download, path: str, inline: bool) -> str:
     return (await file_download_tickets.issue(binding)).ticket
 
 
-async def _download(download, auth: str, *, inline: bool = False):
+def request_with(headers: dict[str, str] | None = None) -> Request:
+    raw = [(name.lower().encode(), value.encode()) for name, value in (headers or {}).items()]
+    return Request({"type": "http", "method": "GET", "headers": raw})
+
+
+async def _download(download, auth: str, *, inline: bool = False, headers: dict[str, str] | None = None):
     path = "workspace/report.pdf"
+    request = request_with(headers)
     if auth == "bearer":
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="session-jwt")
-        return await files_api.download_file(download.agent_id, path, inline=inline, credentials=credentials)
+        return await files_api.download_file(request, download.agent_id, path, inline=inline, credentials=credentials)
     ticket = await _issue_ticket(download, path, inline)
-    return await files_api.download_file(download.agent_id, path, inline=inline, ticket=ticket, credentials=None)
+    return await files_api.download_file(
+        request, download.agent_id, path, inline=inline, ticket=ticket, credentials=None
+    )
+
+
+async def _body(response) -> bytes:
+    return b"".join([chunk async for chunk in response.body_iterator])
 
 
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
@@ -356,15 +349,44 @@ async def test_download_presigned_branch_redirects(monkeypatch, download, auth):
 
 
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
-async def test_download_local_branch_returns_file_response(monkeypatch, tmp_path, download, auth):
+async def test_download_local_branch_streams_the_contained_file(monkeypatch, tmp_path, download, auth):
     local = tmp_path / "report.pdf"
     local.write_bytes(b"local-bytes")
     storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", local_path=local)
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
     response = await _download(download, auth)
-    assert isinstance(response, FileResponse)
-    assert response.path == str(local)
-    assert response.headers["content-disposition"] == 'attachment; filename="report.pdf"'
+    assert isinstance(response, StreamingResponse)
+    assert await _body(response) == b"local-bytes"
+    assert response.media_type == "application/pdf"
+    assert response.headers["content-length"] == "11"
+    assert response.headers["content-disposition"] == content_disposition("report.pdf", "attachment")
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["cache-control"] == "private, no-cache"
+    info = local.stat()
+    assert response.headers["etag"] == f'"{info.st_mtime_ns:x}-{info.st_size:x}"'
+    assert response.headers["last-modified"]
+
+
+@pytest.mark.parametrize("auth", ["bearer", "ticket"])
+async def test_download_local_branch_answers_range_and_conditional_requests(monkeypatch, tmp_path, download, auth):
+    local = tmp_path / "report.pdf"
+    local.write_bytes(b"local-bytes")
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", local_path=local)
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    etag = (await _download(download, auth)).headers["etag"]
+
+    partial = await _download(download, auth, headers={"Range": "bytes=6-"})
+    unchanged = await _download(download, auth, headers={"If-None-Match": etag})
+    unsatisfiable = await _download(download, auth, headers={"Range": "bytes=11-"})
+
+    assert isinstance(partial, StreamingResponse)
+    assert (partial.status_code, await _body(partial)) == (206, b"bytes")
+    assert partial.headers["content-range"] == "bytes 6-10/11"
+    assert partial.headers["content-length"] == "5"
+    assert partial.headers["content-disposition"] == content_disposition("report.pdf", "attachment")
+    assert (unchanged.status_code, unchanged.body) == (304, b"")
+    assert unchanged.headers["etag"] == etag
+    assert (unsatisfiable.status_code, unsatisfiable.headers["content-range"]) == (416, "bytes */11")
 
 
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
@@ -374,7 +396,7 @@ async def test_download_bytes_branch_sets_disposition(monkeypatch, download, aut
     response = await _download(download, auth, inline=True)
     assert response.body == b"report-bytes"
     assert response.media_type == "application/pdf"
-    assert response.headers["content-disposition"] == 'inline; filename="report.pdf"'
+    assert response.headers["content-disposition"] == content_disposition("report.pdf", "inline")
 
 
 async def test_bearer_wins_without_consuming_ticket(monkeypatch, download):
@@ -383,7 +405,7 @@ async def test_bearer_wins_without_consuming_ticket(monkeypatch, download):
     ticket = await _issue_ticket(download, "workspace/report.pdf", False)
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="session-jwt")
     response = await files_api.download_file(
-        download.agent_id, "workspace/report.pdf", ticket=ticket, credentials=credentials
+        request_with(), download.agent_id, "workspace/report.pdf", ticket=ticket, credentials=credentials
     )
     assert response.status_code == 200
     assert len(download.redis.values) == 1
@@ -395,7 +417,9 @@ async def test_ticket_for_other_path_is_consumed_and_refused(monkeypatch, downlo
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
     ticket = await _issue_ticket(download, "workspace/report.pdf", False)
     with pytest.raises(HTTPException) as exc:
-        await files_api.download_file(download.agent_id, "workspace/other.pdf", ticket=ticket, credentials=None)
+        await files_api.download_file(
+            request_with(), download.agent_id, "workspace/other.pdf", ticket=ticket, credentials=None
+        )
     assert exc.value.status_code == 403
     assert download.redis.values == {}
 

@@ -57,6 +57,24 @@ class ClawbookCommentPage(BaseModel):
     next_cursor: str | None
 
 
+class ClawbookAdminPost(PostOut):
+    hidden_from_members: bool
+
+
+class ClawbookAdminComment(CommentOut):
+    hidden_from_members: bool
+
+
+class ClawbookAdminPostPage(BaseModel):
+    items: list[ClawbookAdminPost]
+    next_cursor: str | None
+
+
+class ClawbookAdminCommentPage(BaseModel):
+    items: list[ClawbookAdminComment]
+    next_cursor: str | None
+
+
 class PostDetail(PostOut):
     comments: list[CommentOut] = Field(default_factory=list)
     next_cursor: str | None = None

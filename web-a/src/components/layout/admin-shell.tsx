@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useNotificationUnreadCount } from '@/hooks/use-notifications'
 import { useTransferReviewAccess } from '@/hooks/use-transfer-reviews'
-import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canSendBroadcast, isPlatformAdminUser } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canSendBroadcast, canViewClawbook, isPlatformAdminUser } from '@/lib/types/auth'
 import { cn } from '@/lib/utils'
 
 type NavItem = {
@@ -28,6 +28,7 @@ type NavItem = {
   admissionReviewOnly?: boolean
   agentDeletionReviewOnly?: boolean
   paymentReviewOnly?: boolean
+  clawbookOnly?: boolean
 }
 
 const navItems: NavItem[] = [
@@ -38,6 +39,7 @@ const navItems: NavItem[] = [
   { to: '/openclaw-updates', label: 'Updates', icon: 'tools', platformAdminOnly: true },
   { to: '/upgrade-signals', label: 'Upgrade signals', icon: 'analytics', platformAdminOnly: true },
   { to: '/users', label: 'Users', icon: 'users' },
+  { to: '/clawbook', label: 'Clawbook', icon: 'clawbook', clawbookOnly: true },
   { to: '/invitations', label: 'Invitations', icon: 'users', invitationsOnly: true },
   { to: '/activity', label: 'Activity', icon: 'analytics' },
   { to: '/admission-approvals', label: 'Admissions', icon: 'users', admissionReviewOnly: true },
@@ -123,13 +125,14 @@ function NavItems({
   return (
     <>
       {navItems.map((item) => {
-        const { to, label, icon, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly } = item
+        const { to, label, icon, platformAdminOnly, broadcastOnly, invitationsOnly, admissionReviewOnly, agentDeletionReviewOnly, paymentReviewOnly, clawbookOnly } = item
         if (platformAdminOnly && !platformAdmin) return null
         if (broadcastOnly && !canSendBroadcast(user)) return null
         if (invitationsOnly && !canManageInvitations(user)) return null
         if (admissionReviewOnly && !canReviewAdmissions(user)) return null
         if (agentDeletionReviewOnly && !canReviewAgentDeletions(user)) return null
         if (paymentReviewOnly && !paymentAccess.canReview) return null
+        if (clawbookOnly && !canViewClawbook(user)) return null
         const notificationCount = to === '/notifications' ? unreadCount : undefined
         const locked = mustChangePassword && to !== '/settings'
         const matched = matchesNavItem(item, pathname)

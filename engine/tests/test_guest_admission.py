@@ -6,10 +6,12 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import anyio
 import pytest
+from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 from pywhales import DockerClient
 from pywhales.components.container import cli_wrapper as container_cli
@@ -19,9 +21,16 @@ from tests.test_guest_start_safety import Docker, env
 __all__ = ["env"]
 
 from app.config import Settings
+from app.db.errors import DbOverloadError
 from app.records.agent import AgentRecord
-from app.services import guest_admission as module
-from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, guest_admission
+from app.services import agent_start_store, guest_admission as module
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError
+from app.services.guest_admission import (
+    GuestAdmissionError,
+    GuestStartPreflightError,
+    GuestStartStoppedError,
+    guest_admission,
+)
 from app.services.guest_identity import AGENT_LABEL
 
 
@@ -179,7 +188,7 @@ async def test_admission_preflight_errors_preserve_old_runtime(env, monkeypatch,
     monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 40)
 
     @asynccontextmanager
-    async def fail_lock(_directory):
+    async def fail_lock(_directory, **_kwargs):
         raise OSError("read-only lock directory")
         yield
 
@@ -196,6 +205,85 @@ async def test_admission_preflight_errors_preserve_old_runtime(env, monkeypatch,
     # Then the HTTP boundary can report failure without false runtime publication.
     assert (agent.status, agent.container_id, agent.container_port) == ("running", "old", 18888)
     assert docker.removed == docker.runs == []
+
+
+@pytest.mark.parametrize("aggregate", [0, 40])
+async def test_stopped_start_is_refused_on_admission_entry(env, monkeypatch, aggregate):
+    # Given an agent that stopped qualifying before its start reached admission.
+    _manager, docker, agent = env
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", aggregate)
+    monkeypatch.setattr(module.start_store, "halted", AsyncMock(return_value="ineligible"))
+
+    @asynccontextmanager
+    async def forbidden_lock(_directory, **_kwargs):
+        pytest.fail("a stopped start waited for the admission lock")
+        yield
+
+    monkeypatch.setattr(module, "setup_workspace_lock", forbidden_lock)
+    # When admission is entered, with or without aggregate admission.
+    with pytest.raises(GuestStartStoppedError) as stop:
+        async with guest_admission(docker, agent, Path("unused"), operation_id=uuid4()):
+            pytest.fail("a stopped start was admitted")
+    # Then it is refused before the lock and the inventory.
+    assert stop.value.reason == "ineligible"
+    assert docker.events == []
+
+
+@pytest.mark.parametrize("failure", [DbOverloadError("pool saturated"), PoolTimeout("pool timeout"), OSError("reset")])
+async def test_unreadable_checkpoint_lets_the_start_go_on(monkeypatch, failure):
+    @asynccontextmanager
+    async def unreadable():
+        raise failure
+        yield
+
+    monkeypatch.setattr(agent_start_store, "committed_start_connection", unreadable)
+
+    await module.assert_start_active(uuid4())
+
+
+async def test_stop_during_admission_wait_ends_the_start_at_its_next_bounded_wait(env, monkeypatch):
+    # Given a creating start queued behind another holder of the admission lock.
+    manager, docker, agent = env
+    docker.guests.clear()
+    agent.container_id = None
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 40)
+    monkeypatch.setattr(module, "ADMISSION_LOCK_POLL_SECONDS", 0.01)
+    operation = uuid4()
+    waiting, stopped = anyio.Event(), anyio.Event()
+    lock = module.setup_workspace_lock
+
+    @asynccontextmanager
+    async def observed_lock(directory, **kwargs):
+        try:
+            async with lock(directory, **kwargs):
+                yield
+        except WorkspaceLockTimeoutError:
+            waiting.set()
+            raise
+
+    async def halted(operation_id):
+        assert operation_id == operation
+        return "cancelled" if stopped.is_set() else None
+
+    monkeypatch.setattr(module, "setup_workspace_lock", observed_lock)
+    monkeypatch.setattr(module.start_store, "halted", halted)
+    outcome = []
+
+    async def start():
+        with pytest.raises(GuestStartStoppedError) as stop:
+            await manager.replace_container(agent, create_only=True, operation_id=operation)
+        outcome.append(stop.value.reason)
+
+    async with lock(manager._agent_dir(agent.id).parent / "_guest_admission"):
+        async with anyio.create_task_group() as group:
+            group.start_soon(start)
+            with anyio.fail_after(5):
+                await waiting.wait()
+            # When the stop commits while the start waits for the admission lock.
+            stopped.set()
+        # Then the start ends after one more bounded wait, without the lock, the inventory or a container.
+        assert outcome == ["cancelled"]
+    assert docker.events == []
 
 
 def _admission_contender(root, connection):

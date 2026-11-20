@@ -90,7 +90,7 @@ async def test_two_humans_share_live_transcript_replay_and_http_history(receipt_
         return (db.user if binding.user_id == db.user.id else viewer), db.agent, "use"
 
     monkeypatch.setattr(chat_tickets, "redeem", redeem)
-    monkeypatch.setattr(chat_tickets, "authorize", authorize)
+    monkeypatch.setattr(chat_tickets, "authorize_identity", authorize)
     monkeypatch.setattr(websocket, "manager", websocket.ConnectionManager())
     monkeypatch.setattr(websocket.realtime_router, "register_connection", AsyncMock())
     monkeypatch.setattr(websocket.realtime_router, "unregister_connection", AsyncMock())

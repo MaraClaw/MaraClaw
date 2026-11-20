@@ -38,8 +38,13 @@ async def conditional_write(
                 if condition is not None and condition.require_absent:
                     return await storage._create(claim, key, data, content_type)
                 await storage._call(claim, lambda: S3StorageBackend.write_bytes(storage, key, data, content_type))
-                await storage._finish(claim, Outcome.LANDED)
-                return ConditionalWriteResult(ok=True, current_version=await storage.get_version(key))
+                # The claim keeps every other managed writer off the key until it settles, so this version is ours.
+                # The write landed even when the HEAD fails, so the claim settles as landed either way.
+                try:
+                    written = await storage.get_version(key)
+                finally:
+                    await storage._finish(claim, Outcome.LANDED)
+                return ConditionalWriteResult(ok=True, current_version=written)
             case unreachable:
                 assert_never(unreachable)
 
@@ -62,7 +67,10 @@ async def conditional_delete(
                     await storage._finish(claim, Outcome.REJECTED)
                     return ConditionalWriteResult(ok=not conflict, conflict=conflict, current_version=current)
                 await storage._call(claim, lambda: S3StorageBackend.delete(storage, key))
-                await storage._finish(claim, Outcome.LANDED)
-                return ConditionalWriteResult(ok=True, current_version=await storage.get_version(key))
+                try:
+                    remaining = await storage.get_version(key)
+                finally:
+                    await storage._finish(claim, Outcome.LANDED)
+                return ConditionalWriteResult(ok=True, current_version=remaining)
             case unreachable:
                 assert_never(unreachable)

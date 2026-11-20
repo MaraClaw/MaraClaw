@@ -1,32 +1,53 @@
-"""Local filesystem storage backend."""
+"""Local filesystem storage backend.
+
+Every operation walks the normalized key from the resolved root through directory descriptors opened with O_NOFOLLOW
+(`local_contained`, `local_create`). A symlink anywhere below the root, planted before the call or swapped in during
+it, is refused with `StorageLinkRefusedError` (403) and never followed, so a guest that writes its own agent directory
+cannot redirect a member read or write elsewhere. Nothing above the root is ever opened, so the folders above it need
+no read permission.
+"""
 
 from __future__ import annotations
 
-import asyncio
 import os
+import stat
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import cast, override
+from typing import BinaryIO, override
 
-import aiofiles
 import anyio
-from fastapi import HTTPException, status
 
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
+    MaterializedFile,
     StorageBackend,
     StorageEntry,
     StoragePage,
-    StorageReadLimitExceededError,
     StorageSnapshot,
     StorageVersion,
     checked_page_limit,
     content_hash_bytes,
 )
-from app.services.storage_runtime.bounded import open_regular_file, read_bounded
-from app.services.storage_runtime.local_create import delete_contained_entry, publish_complete_file
+from app.services.storage_runtime.bounded import read_bounded
+from app.services.storage_runtime.local_contained import (
+    local_version_token,
+    lstat_entry,
+    open_regular_file,
+    read_entry,
+    read_version,
+    scan_directory,
+    scan_page,
+)
+from app.services.storage_runtime.local_create import (
+    delete_contained_entry,
+    delete_contained_tree,
+    publish_complete_file,
+    remove_empty_contained_directory,
+    write_contained_file,
+)
 from app.services.storage_runtime.local_snapshot import read_file_snapshot
+from app.services.storage_runtime.owned_copy import materialize_copy
 from app.services.storage_runtime.utils import normalize_storage_key
 
 
@@ -34,28 +55,26 @@ class LocalStorageBackend(StorageBackend):
     def __init__(self, root: str):
         self.root: Path = Path(root)
 
-    def _full_path(self, key: str) -> Path:
-        normalized = normalize_storage_key(key)
-        full = (self.root / normalized).resolve()
-        root_resolved = self.root.resolve()
-        if not full.is_relative_to(root_resolved):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Path traversal not allowed")
-        return full
+    async def _in_thread[T](self, operation: Callable[[Path, str], T], key: str, *, abandon: bool = True) -> T:
+        """Run `operation(resolved root, normalized key)` in a worker; writes are not abandoned on cancel."""
+        root, relative = self.root, normalize_storage_key(key)
+        return await anyio.to_thread.run_sync(lambda: operation(root.resolve(), relative), abandon_on_cancel=abandon)
 
-    async def _probe(self, key: str, probe: Callable[[Path], bool]) -> bool:
-        return await anyio.to_thread.run_sync(lambda: probe(self._full_path(key)), abandon_on_cancel=True)
+    async def _probe(self, key: str, accept: Callable[[int], bool]) -> bool:
+        info = await self._in_thread(lstat_entry, key)
+        return info is not None and accept(info.st_mode)
 
     @override
     async def exists(self, key: str) -> bool:
-        return await self._probe(key, Path.exists)
+        return await self._probe(key, lambda _mode: True)
 
     @override
     async def is_file(self, key: str) -> bool:
-        return await self._probe(key, Path.is_file)
+        return await self._probe(key, stat.S_ISREG)
 
     @override
     async def is_dir(self, key: str) -> bool:
-        return await self._probe(key, Path.is_dir)
+        return await self._probe(key, stat.S_ISDIR)
 
     @override
     async def list_dir(self, key: str) -> list[StorageEntry]:
@@ -68,147 +87,64 @@ class LocalStorageBackend(StorageBackend):
         return await anyio.to_thread.run_sync(self._scan_page, key, bounded, after, abandon_on_cancel=True)
 
     def _scan_page(self, key: str, limit: int, after: str) -> StoragePage:
-        """Order names by ``walk_order`` first and ``stat`` only the returned slice."""
-        base = self._full_path(key)
-        if not base.is_dir():
-            return StoragePage([], False)
-        names: list[tuple[str, os.DirEntry[str]]] = []
-        with os.scandir(base) as scanner:
-            for entry in scanner:
-                if entry.name == ".gitkeep" or entry.is_symlink():
-                    continue
-                order = f"{entry.name}/" if entry.is_dir(follow_symlinks=False) else entry.name
-                if order > after:
-                    names.append((order, entry))
-        names.sort(key=lambda item: item[0])
-        root = self.root.resolve()
-        entries = [built for _order, entry in names[:limit] if (built := _storage_entry(Path(entry.path), root))]
-        return StoragePage(entries, len(names) > limit)
+        return scan_page(self.root.resolve(), normalize_storage_key(key), limit, after)
 
     def _scan_directory(self, key: str) -> list[StorageEntry]:
-        base = self._full_path(key)
-        if not base.is_dir():
-            return []
-        root = self.root.resolve()
-        entries: list[StorageEntry] = []
-        for entry in base.iterdir():
-            if entry.name == ".gitkeep" or entry.is_symlink():
-                continue
-            built = _storage_entry(entry, root)
-            if built is not None:
-                entries.append(built)
-        return entries
+        return scan_directory(self.root.resolve(), normalize_storage_key(key))
 
     @override
     async def read_bytes(self, key: str) -> bytes:
-        path = self._full_path(key)
-        async with aiofiles.open(path, "rb") as f:
-            return cast("bytes", await f.read())
+        return await self._in_thread(_read_file, key)
 
     @override
     async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
         if offset is not None and offset < 0:
             raise ValueError("offset must be nonnegative")
-        path = self.root.resolve() / normalize_storage_key(key)
-        return await anyio.to_thread.run_sync(_read_file_bounded, path, max_bytes, offset, abandon_on_cancel=True)
+        return await self._in_thread(lambda root, relative: _read_file_bounded(root, relative, max_bytes, offset), key)
 
     @override
     async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
         if max_bytes < 0:
             raise ValueError("max_bytes must be nonnegative")
-        normalized = normalize_storage_key(key)
-        path = self.root.resolve() / normalized
-        return await anyio.to_thread.run_sync(read_file_snapshot, path, normalized, max_bytes, abandon_on_cancel=True)
+        return await self._in_thread(lambda root, relative: read_file_snapshot(root, relative, max_bytes), key)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
-        path = self._full_path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiofiles.open(path, "wb") as f:
-            _ = await f.write(data)
+        await self._in_thread(lambda root, relative: write_contained_file(root, relative, data), key, abandon=False)
 
     @override
     async def delete(self, key: str) -> None:
         with suppress(FileNotFoundError):
-            await anyio.to_thread.run_sync(delete_contained_entry, self.root.resolve(), normalize_storage_key(key))
+            await self._in_thread(delete_contained_entry, key, abandon=False)
 
     @override
     async def delete_tree(self, key: str) -> None:
-        path = self._full_path(key)
-        if not path.exists():
-            return
-        await asyncio.to_thread(_local_delete_tree, path)
+        await self._in_thread(delete_contained_tree, key, abandon=False)
+
+    @override
+    async def remove_empty_directory(self, key: str) -> None:
+        await self._in_thread(remove_empty_contained_directory, key, abandon=False)
 
     @override
     async def stat(self, key: str) -> StorageEntry:
-        path = self._full_path(key)
-        stat = path.stat()
-        file_hash = ""
-        version_id = _local_version_token(stat, None)
-        if path.is_file():
-            data = await self.read_bytes(key)
-            file_hash = content_hash_bytes(data)
-            version_id = _local_version_token(stat, file_hash)
-        return StorageEntry(
-            name=path.name,
-            key=normalize_storage_key(key),
-            is_dir=path.is_dir(),
-            size=stat.st_size if path.is_file() else 0,
-            modified_at=str(stat.st_mtime),
-            version_id=version_id,
-            etag=file_hash,
-            content_hash=file_hash,
-        )
+        return await self._in_thread(read_entry, key)
 
     @override
     async def get_version(self, key: str) -> StorageVersion:
-        return await self._get_version(key, None)
+        return await self._in_thread(lambda root, relative: read_version(root, relative, None), key)
 
     @override
     async def get_version_bounded(self, key: str, max_bytes: int) -> StorageVersion:
-        requested = self.root.resolve() / normalize_storage_key(key)
-        if requested != requested.resolve():
-            raise HTTPException(status_code=403, detail="Symlink previews are not allowed")
-        return await self._get_version(key, max_bytes)
-
-    async def _get_version(self, key: str, max_bytes: int | None) -> StorageVersion:
-        path = self._full_path(key)
-        if not path.exists():
-            return StorageVersion(key=normalize_storage_key(key), exists=False, is_dir=False)
-        stat = path.stat()
-        if path.is_dir():
-            return StorageVersion(
-                key=normalize_storage_key(key),
-                exists=True,
-                is_dir=True,
-                modified_at=str(stat.st_mtime),
-                version_id=_local_version_token(stat, None),
-            )
-        if max_bytes is not None and stat.st_size > max_bytes:
-            raise StorageReadLimitExceededError(max_bytes, stat.st_size)
-        if max_bytes is not None and not path.is_file():
-            raise FileNotFoundError(key)
-        data = await self.read_bytes(key) if max_bytes is None else await self.read_bytes_bounded(key, max_bytes)
-        file_hash = content_hash_bytes(data)
-        return StorageVersion(
-            key=normalize_storage_key(key),
-            exists=True,
-            is_dir=False,
-            size=stat.st_size,
-            modified_at=str(stat.st_mtime),
-            etag=file_hash,
-            version_id=_local_version_token(stat, file_hash),
-            content_hash=file_hash,
-        )
+        return await self._in_thread(lambda root, relative: read_version(root, relative, max_bytes), key)
 
     @override
     async def create_bytes_if_absent(
         self, key: str, data: bytes, content_type: str | None = None
     ) -> ConditionalWriteResult:
-        stat = await anyio.to_thread.run_sync(
-            publish_complete_file, self.root.resolve(), normalize_storage_key(key), data
+        info = await self._in_thread(
+            lambda root, relative: publish_complete_file(root, relative, data), key, abandon=False
         )
-        if stat is None:
+        if info is None:
             return ConditionalWriteResult(ok=False, conflict=True)
         file_hash = content_hash_bytes(data)
         return ConditionalWriteResult(
@@ -218,51 +154,46 @@ class LocalStorageBackend(StorageBackend):
                 exists=True,
                 is_dir=False,
                 size=len(data),
-                modified_at=str(stat.st_mtime),
+                modified_at=str(info.st_mtime),
                 etag=file_hash,
-                version_id=_local_version_token(stat, file_hash),
+                version_id=local_version_token(info, file_hash),
                 content_hash=file_hash,
             ),
         )
 
     @override
-    async def local_path_for(self, key: str) -> Path | None:
-        return self._full_path(key)
+    async def open_local_file(self, key: str) -> tuple[BinaryIO, os.stat_result] | None:
+        """A duplicate of the contained descriptor of a regular file with its `fstat`; the caller closes it.
+
+        Not abandoned on cancel, so the descriptor always reaches the awaiter. None when the key is missing or is not
+        a regular file; a link on the way raises `StorageLinkRefusedError` (403).
+        """
+        return await self._in_thread(_open_local_file, key, abandon=False)
+
+    @override
+    async def materialize(self, key: str) -> MaterializedFile:
+        """An owned temp copy read from a contained descriptor, so no caller reopens the guest path by name."""
+        root, relative = self.root, normalize_storage_key(key)
+        return await materialize_copy(lambda: open_regular_file(root.resolve(), relative), Path(relative).suffix)
 
 
-def _storage_entry(entry: Path, root: Path) -> StorageEntry | None:
-    try:
-        stat = entry.stat(follow_symlinks=False)
-    except OSError:
-        return None
-    try:
-        rel = str(entry.resolve().relative_to(root))
-    except OSError, ValueError:
-        return None
-    return StorageEntry(
-        name=entry.name,
-        key=rel,
-        is_dir=entry.is_dir(),
-        size=stat.st_size if entry.is_file() else 0,
-        modified_at=str(stat.st_mtime),
-        version_id=_local_version_token(stat, None),
-    )
+def _read_file(root: Path, relative: str) -> bytes:
+    with open_regular_file(root, relative) as stream:
+        return stream.readall()
 
 
-def _local_delete_tree(path: Path) -> None:
-    import shutil
-
-    shutil.rmtree(path)
-
-
-def _local_version_token(stat: os.stat_result, file_hash: str | None) -> str:
-    hash_part = file_hash or ""
-    return f"{stat.st_mtime_ns}:{stat.st_size}:{hash_part}"
-
-
-def _read_file_bounded(path: Path, max_bytes: int, offset: int | None = None) -> bytes:
-    with open_regular_file(path) as stream:
+def _read_file_bounded(root: Path, relative: str, max_bytes: int, offset: int | None = None) -> bytes:
+    with open_regular_file(root, relative) as stream:
         if offset is not None:
             _ = stream.seek(offset)
             return read_bounded(stream, max_bytes, range_read=True)
         return read_bounded(stream, max_bytes)
+
+
+def _open_local_file(root: Path, relative: str) -> tuple[BinaryIO, os.stat_result] | None:
+    try:
+        with open_regular_file(root, relative) as source:
+            info = os.fstat(source.fileno())
+            return os.fdopen(os.dup(source.fileno()), "rb"), info
+    except FileNotFoundError:
+        return None

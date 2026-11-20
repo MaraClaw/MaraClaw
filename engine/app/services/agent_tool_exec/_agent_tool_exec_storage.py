@@ -186,16 +186,8 @@ async def write_file(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, on_output
-    from app.services import agent_tools
-
-    context = current_execution_context()
-    base_dir = context.workspace_root if context is not None else agent_tools._agent_workspace_root(agent_id)
     return await workspace._execute_workspace_mutation(
-        "write_file",
-        arguments,
-        agent_id=agent_id,
-        base_dir=base_dir,
-        session_id=session_id,
+        "write_file", arguments, agent_id=agent_id, session_id=session_id
     )
 
 
@@ -209,17 +201,7 @@ async def move_file(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, on_output
-    from app.services import agent_tools
-
-    context = current_execution_context()
-    base_dir = context.workspace_root if context is not None else agent_tools._agent_workspace_root(agent_id)
-    return await workspace._execute_workspace_mutation(
-        "move_file",
-        arguments,
-        agent_id=agent_id,
-        base_dir=base_dir,
-        session_id=session_id,
-    )
+    return await workspace._execute_workspace_mutation("move_file", arguments, agent_id=agent_id, session_id=session_id)
 
 
 @register("delete_file")
@@ -232,16 +214,8 @@ async def delete_file(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, on_output
-    from app.services import agent_tools
-
-    context = current_execution_context()
-    base_dir = context.workspace_root if context is not None else agent_tools._agent_workspace_root(agent_id)
     return await workspace._execute_workspace_mutation(
-        "delete_file",
-        arguments,
-        agent_id=agent_id,
-        base_dir=base_dir,
-        session_id=session_id,
+        "delete_file", arguments, agent_id=agent_id, session_id=session_id
     )
 
 
@@ -255,14 +229,4 @@ async def edit_file(
     on_output: ToolOutputCallback | None,
 ) -> str:
     del user_id, on_output
-    from app.services import agent_tools
-
-    context = current_execution_context()
-    base_dir = context.workspace_root if context is not None else agent_tools._agent_workspace_root(agent_id)
-    return await workspace._execute_workspace_mutation(
-        "edit_file",
-        arguments,
-        agent_id=agent_id,
-        base_dir=base_dir,
-        session_id=session_id,
-    )
+    return await workspace._execute_workspace_mutation("edit_file", arguments, agent_id=agent_id, session_id=session_id)

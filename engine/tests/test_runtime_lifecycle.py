@@ -295,6 +295,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         scheduler_tasks,
         task_lease,
         trigger_daemon,
+        workspace_mirror_worker,
     )
     from app.services.channels import whatsapp_personal_supervisor, zalo_personal_supervisor
     from app.services.tavily import export
@@ -411,6 +412,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(openclaw_delayed_replies, "openclaw_delayed_reply_loop", loop)
     monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
     monkeypatch.setattr(agent_workspace_quota_worker, "start_agent_workspace_quota_worker", loop)
+    monkeypatch.setattr(workspace_mirror_worker, "start_workspace_mirror_worker", loop)
     monkeypatch.setattr(agent_resource_pressure_worker, "start_agent_resource_pressure_worker", loop)
     monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(capacity_renewal_worker, "start_capacity_renewal_worker", loop)
@@ -520,6 +522,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("openclaw_delayed_replies" in names) == role_enabled(roles, "worker")
     assert ("chat_history_retention" in names) == role_enabled(roles, "worker")
     assert ("agent_workspace_quota" in names) == role_enabled(roles, "worker")
+    assert ("workspace_mirror" in names) == role_enabled(roles, "worker")
     assert ("agent_resource_pressure" in names) == role_enabled(roles, "worker")
     assert ("operational_log_retention" in names) == role_enabled(roles, "worker")
     assert ("capacity_renewal" in names) == role_enabled(roles, "worker")
@@ -592,7 +595,7 @@ async def test_route_drain_precedes_manager_and_resource_cleanup(monkeypatch, dr
     background_tasks.schedule_background_task(configure_client(), "configure connector")
     await manager.started.wait()
 
-    async def drain() -> None:
+    async def drain(_grace_seconds: float) -> None:
         await background_tasks.drain_background_tasks(grace_seconds=0)
         events.append("route-drained")
         if drain_failure:
@@ -637,7 +640,7 @@ async def test_setup_shutdown_drains_write_before_database_closes(monkeypatch) -
             events.append("setup-released")
             raise
 
-    async def drain_routes() -> None:
+    async def drain_routes(_grace_seconds: float) -> None:
         cancelled.set()
 
     monkeypatch.setattr(lifecycle, "drain_background_tasks", drain_routes)
@@ -656,7 +659,7 @@ async def test_shutdown_closes_the_http_pools_after_producer_drains(monkeypatch:
     runtime = lifecycle.Runtime()
     runtime.pool_attempted = True
 
-    async def drained() -> None:
+    async def drained(_grace_seconds: float) -> None:
         events.append("drained")
 
     monkeypatch.setattr(lifecycle, "drain_heartbeat_tasks", drained)
@@ -667,8 +670,8 @@ async def test_shutdown_closes_the_http_pools_after_producer_drains(monkeypatch:
 
 
 def fake_producer_drains(monkeypatch: pytest.MonkeyPatch, events: list[str], failing: str | None = None) -> None:
-    def drain(name: str) -> Callable[[], Awaitable[None]]:
-        async def record() -> None:
+    def drain(name: str) -> Callable[[float], Awaitable[None]]:
+        async def record(_grace_seconds: float) -> None:
             events.append(f"{name}-drain")
             if name == failing:
                 raise RuntimeError(f"{name} drain failed")
@@ -699,7 +702,7 @@ async def test_producer_gates_close_before_the_first_awaited_cleanup(monkeypatch
     runtime = lifecycle.Runtime()
     seen: list[dict[str, bool]] = []
 
-    async def first_cleanup() -> None:
+    async def first_cleanup(_grace_seconds: float) -> None:
         seen.append(producer_gates())
 
     monkeypatch.setattr(lifecycle, "drain_background_tasks", first_cleanup)
@@ -750,7 +753,7 @@ async def test_cancelled_producer_drain_does_not_skip_later_cleanup(monkeypatch:
     fake_resources(monkeypatch, events)
     fake_producer_drains(monkeypatch, events)
 
-    async def cancelled() -> None:
+    async def cancelled(_grace_seconds: float) -> None:
         events.append("heartbeat-drain")
         raise asyncio.CancelledError
 
@@ -767,7 +770,6 @@ async def test_cancelled_producer_drain_does_not_skip_later_cleanup(monkeypatch:
 async def test_real_producer_work_is_cancelled_before_the_pool_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a real A2A invocation in flight and a pool close that records the order
     import uuid
-    from functools import partial
 
     from app.services import trigger_daemon
 
@@ -782,8 +784,11 @@ async def test_real_producer_work_is_cancelled_before_the_pool_closes(monkeypatc
         finally:
             events.append("invocation-cancelled")
 
+    async def drain_now(_grace_seconds: float) -> None:
+        await trigger_daemon.drain_trigger_tasks(grace_seconds=0)
+
     monkeypatch.setattr(trigger_daemon, "_invoke_agent_for_triggers", invocation)
-    monkeypatch.setattr(lifecycle, "drain_trigger_tasks", partial(trigger_daemon.drain_trigger_tasks, grace_seconds=0))
+    monkeypatch.setattr(lifecycle, "drain_trigger_tasks", drain_now)
     runtime = lifecycle.Runtime()
     runtime.pool_attempted = True
     await trigger_daemon.wake_agent_with_context(uuid.uuid4(), "hello", skip_dedup=True)
@@ -853,6 +858,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         scheduler,
         task_lease,
         trigger_daemon,
+        workspace_mirror_worker,
     )
     from app.services.tavily import export
 
@@ -891,6 +897,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         (chat_history_retention_worker, "start_chat_history_retention_worker", "chat_history_retention"),
         (agent_workspace_quota_worker, "start_agent_workspace_quota_worker", "agent_workspace_quota"),
         (agent_resource_pressure_worker, "start_agent_resource_pressure_worker", "agent_resource_pressure"),
+        (workspace_mirror_worker, "start_workspace_mirror_worker", "workspace_mirror"),
         (operational_log_retention_worker, "start_operational_log_retention_worker", "operational_log_retention"),
         (capacity_renewal_worker, "start_capacity_renewal_worker", "capacity_renewal"),
     ):
@@ -941,7 +948,10 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert runtime.tasks.progress["capacity_renewal"].budget_seconds == (
             capacity_renewal_worker.progress_budget_seconds()
         )
-        interval_loops = {"agent_workspace_quota", "agent_resource_pressure", "capacity_renewal"}
+        assert runtime.tasks.progress["workspace_mirror"].budget_seconds == (
+            workspace_mirror_worker.progress_budget_seconds()
+        )
+        interval_loops = {"agent_workspace_quota", "agent_resource_pressure", "capacity_renewal", "workspace_mirror"}
         slow = WORKER_BUDGETED_LOOPS - {"broadcast_fanout", *interval_loops}
         boundary_workers = {"broadcast_fanout"} if budget_seconds == 90 else slow
         assert all(not runtime.tasks.progress[name].stale() for name in boundary_workers)
@@ -955,6 +965,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert not runtime.tasks.progress["agent_workspace_quota"].stale()
         assert not runtime.tasks.progress["agent_resource_pressure"].stale()
         assert not runtime.tasks.progress["capacity_renewal"].stale()
+        assert not runtime.tasks.progress["workspace_mirror"].stale()
         # Then readiness is stale with an unchanged ready body contract, and the loops keep running.
         assert not await runtime.readiness.check()
         assert all(not task.done() for task, _ in runtime.tasks.required.values())

@@ -2,7 +2,7 @@ _AGENTS = "SELECT id FROM agents WHERE tenant_id = %(tid)s"
 _USERS = "SELECT id FROM users WHERE tenant_id = %(tid)s"
 _AUTHORS = (
     "(author_type = 'agent' AND author_id IN (" + _AGENTS + ")) OR "
-    "(author_type = 'user' AND author_id IN (" + _USERS + "))"
+    "(author_type = 'human' AND author_id IN (" + _USERS + "))"
 )
 _PARTICIPANTS = (
     "SELECT id FROM participants WHERE "

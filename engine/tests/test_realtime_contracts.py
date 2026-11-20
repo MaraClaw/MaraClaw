@@ -10,6 +10,7 @@ from starlette.types import Message
 from app.api import websocket
 from app.core.json_types import json_loads_object, object_attr
 from app.services.realtime_runtime import router
+from app.services.realtime_runtime.chat_authorization import DeliveryVerdict
 from app.services.realtime_runtime.contracts import LocalDeliverer, RoutingOutcome
 
 
@@ -210,10 +211,13 @@ async def test_routing_is_local_first_and_publishes_once_per_matching_remote(mon
     instance = router.RealtimeRouter()
     instance.instance_id = "local"
 
-    async def authorize(_socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None) -> bool:
+    async def authorize(
+        _socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None, *, wait_seconds: float
+    ) -> DeliveryVerdict:
         assert acl_version is None  # an ordinary session reads no ACL version
+        assert wait_seconds == router.DEFAULT_AUTHORIZATION_WAIT_SECONDS
         events.append("authorize")
-        return True
+        return DeliveryVerdict.ALLOWED
 
     async def presence(_agent: str) -> list[dict[str, str]]:
         events.append("presence")
@@ -304,6 +308,7 @@ class Observer:
     def __init__(self) -> None:
         self.calls: list[tuple[str, WebSocket]] = []
         self.evicted: list[WebSocket] = []
+        self.refusals: list[tuple[WebSocket, int]] = []
 
     def is_live(self, websocket: WebSocket) -> bool:
         self.calls.append(("is_live", websocket))
@@ -318,11 +323,16 @@ class Observer:
         self.evicted.append(websocket)
         return True
 
+    def refused(self, agent_id: str, websocket: WebSocket, close_code: int) -> None:
+        assert agent_id == "agent"
+        self.calls.append(("refused", websocket))
+        self.refusals.append((websocket, close_code))
+
 
 async def test_routing_returns_its_outcome_counts_remote_publish_errors_and_keeps_no_socket_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    healthy, stalled, refused = (
+    healthy, stalled, stranger = (
         await Peer().accepted(),
         await Peer(stalled=True).accepted(),
         await Peer().accepted(),
@@ -332,8 +342,10 @@ async def test_routing_returns_its_outcome_counts_remote_publish_errors_and_keep
     published: list[str] = []
     warnings: list[str] = []
 
-    async def authorize(socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None) -> bool:
-        return socket is not refused
+    async def authorize(
+        socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None, *, wait_seconds: float
+    ) -> DeliveryVerdict:
+        return DeliveryVerdict.NOT_VIEWER if socket is stranger else DeliveryVerdict.ALLOWED
 
     async def presence(_agent: str) -> list[dict[str, str]]:
         return [{"instance_id": identity, "session_id": "session", "user_id": "user"} for identity in ("up", "down")]
@@ -355,7 +367,7 @@ async def test_routing_returns_its_outcome_counts_remote_publish_errors_and_keep
         instance.route_message(
             agent_id="agent",
             message={"type": "chunk", "seq": 0},
-            local_connections=[(socket, "session", "user") for socket in (healthy, stalled, refused)],
+            local_connections=[(socket, "session", "user") for socket in (healthy, stalled, stranger)],
             session_id="session",
             send_timeout=0.0,
             observer=observer,
@@ -372,18 +384,66 @@ async def test_routing_returns_its_outcome_counts_remote_publish_errors_and_keep
     # The stalled socket went back to its owner; the router remembers nothing about any socket.
     assert sorted(name for name, socket in observer.calls if socket is stalled) == ["is_live", "timed_out"]
     assert sorted(name for name, socket in observer.calls if socket is healthy) == ["is_live", "sent"]
-    assert not [name for name, socket in observer.calls if socket is refused]
+    assert not [name for name, socket in observer.calls if socket is stranger]
     assert vars(instance) == state_before
 
 
-@pytest.mark.parametrize("listener", ["none", "refused"])
+async def test_a_skipped_socket_counts_as_dropped_and_a_revoked_one_goes_back_to_its_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    viewers = {
+        DeliveryVerdict.ALLOWED: await Peer().accepted(),
+        DeliveryVerdict.SKIPPED: await Peer().accepted(),
+        DeliveryVerdict.UNAUTHENTICATED: await Peer().accepted(),
+        DeliveryVerdict.FORBIDDEN: await Peer().accepted(),
+    }
+    verdicts = {socket: verdict for verdict, socket in viewers.items()}
+    waits: list[float] = []
+    instance = router.RealtimeRouter()
+    instance.instance_id = "local"
+
+    async def authorize(
+        socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None, *, wait_seconds: float
+    ) -> DeliveryVerdict:
+        waits.append(wait_seconds)
+        return verdicts[socket]
+
+    async def presence(_agent: str) -> list[dict[str, str]]:
+        return []
+
+    monkeypatch.setattr(router, "authorize_chat_delivery", authorize)
+    monkeypatch.setattr(instance, "_list_presence", presence)
+    observer = Observer()
+
+    outcome = await instance.route_message(
+        agent_id="agent",
+        message={"type": "chunk", "seq": 0},
+        local_connections=[(socket, "session", "user") for socket in viewers.values()],
+        session_id="session",
+        observer=observer,
+    )
+
+    assert outcome == RoutingOutcome(local_targets=4, delivered=1, skipped=1)
+    assert outcome.dropped
+    assert waits == [router.CHUNK_AUTHORIZATION_WAIT_SECONDS] * 4
+    # The router closes nothing itself: each revoked socket goes to its owner once, with the code of its verdict.
+    assert sorted(observer.refusals, key=lambda refusal: refusal[1]) == [
+        (viewers[DeliveryVerdict.UNAUTHENTICATED], 4001),
+        (viewers[DeliveryVerdict.FORBIDDEN], 4003),
+    ]
+    assert not [name for name, socket in observer.calls if socket is viewers[DeliveryVerdict.SKIPPED]]
+
+
+@pytest.mark.parametrize("listener", ["none", "not_viewer", "revoked"])
 async def test_an_event_nobody_may_receive_is_not_dropped(monkeypatch: pytest.MonkeyPatch, listener: str) -> None:
     instance = router.RealtimeRouter()
     instance.instance_id = "local"
     socket = await Peer().accepted()
 
-    async def refuse(_socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None) -> bool:
-        return False
+    async def refuse(
+        _socket: WebSocket, _agent: str, _session: str | None, acl_version: str | None = None, *, wait_seconds: float
+    ) -> DeliveryVerdict:
+        return DeliveryVerdict.FORBIDDEN if listener == "revoked" else DeliveryVerdict.NOT_VIEWER
 
     async def presence(_agent: str) -> list[dict[str, str]]:
         return []

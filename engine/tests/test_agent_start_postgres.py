@@ -11,7 +11,8 @@ from app.dao.agent_start_dao import START_OPERATIONS_DDL, agent_start_dao
 from app.db.session import connection_ctx
 from app.services import agent_start_reconciler as reconciler, guest_readiness
 from app.services.agent_lifecycle import LifecycleSuccess, start_agent_guest
-from app.services.agent_start_store import PostgresStartStore
+from app.services.agent_start_store import PostgresStartStore, committed_start_connection
+from app.services.guest_admission import GuestStartStoppedError
 from app.services.guest_identity import guest_container_name
 from test_guest_start_safety import Docker
 from test_openclaw_update_postgres import agent, member, tenant
@@ -114,6 +115,78 @@ async def test_fresh_eligibility_blocks_disabled_subjects(start_db, subject):
     store = PostgresStartStore()
     assert not await store.publish(operation, replace(original, status="running", container_id="new"))
     assert await store.recover(operation) is None
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [("cancel", "cancelled"), ("supersede", "cancelled"), ("expiry", "ineligible"), ("container", "ineligible")],
+)
+async def test_checkpoint_probe_tells_a_stop_from_lost_eligibility(start_db, change, reason):
+    # Given a pending start that may still proceed.
+    operation, original = await pending_start(start_db)
+    store = PostgresStartStore()
+    assert await store.halted(operation.operation_id) is None
+    # When Stop cancels it, a later start replaces it, the agent expires or another writer moves its container.
+    if change in ("cancel", "supersede"):
+        await store.cancel(original.id)
+    if change == "supersede":
+        assert await store.begin(original.id) is not None
+    elif change == "expiry":
+        await start_db.execute(
+            "UPDATE agents SET expires_at=now()-interval '1 second' WHERE id=%(id)s", {"id": original.id}
+        )
+    elif change == "container":
+        await start_db.execute("UPDATE agents SET container_id='moved' WHERE id=%(id)s", {"id": original.id})
+    # Then the probe reports a stop for a non-pending operation and lost eligibility for a failed active condition.
+    assert await store.halted(operation.operation_id) == reason
+
+
+async def test_checkpoint_probe_does_not_wait_for_row_locks(start_db):
+    # Given a pending start whose agent and operation rows another transaction holds locked.
+    operation, original = await pending_start(start_db)
+    async with committed_start_connection() as holder:
+        await holder.execute("SELECT 1 FROM agents WHERE id=%(id)s FOR UPDATE", {"id": original.id})
+        await holder.execute(
+            "SELECT 1 FROM agent_start_operations WHERE agent_id=%(id)s FOR UPDATE", {"id": original.id}
+        )
+        # When a checkpoint probes the operation.
+        halted = await asyncio.wait_for(PostgresStartStore().halted(operation.operation_id), 5)
+    # Then it reads committed state without waiting for those locks.
+    assert halted is None
+
+
+@pytest.mark.parametrize(("intent", "reason"), [("stop", "cancelled"), ("expiry", "ineligible")])
+async def test_stop_or_expiry_during_readiness_quiesces_the_candidate_without_failure_or_retry(
+    start_db, guest_surface, monkeypatch, intent, reason
+):
+    # Given a resumed guest that passed its first readiness probe.
+    operation, original = await pending_start(start_db)
+    docker, probes = guest_surface
+    guest = docker.add(replace(original, container_id="stopping-candidate"), status="exited")
+
+    async def between_passes(_seconds):
+        if intent == "stop":
+            await PostgresStartStore().cancel(original.id)
+        else:
+            await start_db.execute(
+                "UPDATE agents SET expires_at=now()-interval '1 second' WHERE id=%(id)s", {"id": original.id}
+            )
+
+    monkeypatch.setattr(guest_readiness, "sleep", between_passes)
+    # When the stop or the expiry commits before the next poll.
+    with pytest.raises(GuestStartStoppedError) as stop:
+        await reconciler.execute_start(operation, original)
+    # Then the start ends at that poll, its candidate is stopped, and nothing is failed or left to retry.
+    assert stop.value.reason == reason
+    assert probes == ["stopping-candidate"]
+    assert guest.state.status == "exited"
+    row = await start_db.fetchone(
+        "SELECT o.state,o.cleanup_complete,r.last_failure_code FROM agent_start_operations o "
+        "LEFT JOIN agent_start_retry_metadata r ON r.operation_id=o.operation_id WHERE o.agent_id=%(id)s",
+        {"id": original.id},
+    )
+    assert row == {"state": "cancelled", "cleanup_complete": True, "last_failure_code": None}
+    assert await PostgresStartStore().outstanding() == []
 
 
 @pytest.mark.parametrize("is_system", [False, True])
@@ -248,15 +321,17 @@ async def test_cancelled_adoption_quiesces_unrecorded_candidate(start_db, guest_
     docker, _probes = guest_surface
     guest = docker.add(replace(original, container_id="unrecorded"), status="exited")
 
-    async def ready_then_cancel(_client, _reference):
+    async def ready_then_cancel(_client, _reference, *, halted=None):
         await PostgresStartStore().cancel(original.id)
         return True
 
     monkeypatch.setattr("app.services.guest_start.guest_ready", ready_then_cancel)
     # When a later stop cancels the start between resume and publication.
-    published = await reconciler.execute_start(operation, original)
-    # Then the observed candidate is quiesced even without a creation-operation label.
-    assert published is False
+    with pytest.raises(GuestStartStoppedError) as stop:
+        await reconciler.execute_start(operation, original)
+    # Then the refused publication is reported as the stop, and the observed candidate is quiesced even without
+    # a creation-operation label.
+    assert stop.value.reason == "cancelled"
     assert guest.state.status == "exited"
     assert await PostgresStartStore().outstanding() == []
 

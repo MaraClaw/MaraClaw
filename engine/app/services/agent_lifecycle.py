@@ -14,9 +14,11 @@ from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel
 from app.services.agent_start_reconciler import execute_start
 from app.services.agent_start_store import start_store
-from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError
+from app.services.company_transfer_runtime_gate import assert_transfer_ready
+from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_identity import GuestOwnershipError
 from app.services.openclaw_update_exclusion import locked_fresh_agent
+from app.services.openclaw_update_gate import assert_no_active_run
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +35,9 @@ class LifecycleFailure:
 
 type LifecycleOutcome = LifecycleSuccess | LifecycleFailure
 type RuntimePersistence = Callable[[AgentRecord], Awaitable[AgentRecord]]
+
+_INELIGIBLE = LifecycleFailure(409, "guest_start_ineligible", "Agent is not eligible to start")
+_CANCELLED = LifecycleFailure(409, "guest_start_cancelled", "Agent was stopped before it finished starting")
 
 
 async def persist_agent_runtime(agent: AgentRecord) -> AgentRecord:
@@ -55,7 +60,7 @@ async def start_agent_guest(agent_id: UUID, _persist: RuntimePersistence = persi
                 return LifecycleFailure(409, "guest_setup_incomplete", "Agent setup is incomplete")
             pending = await start_store.begin(agent_id)
             if pending is None:
-                return LifecycleFailure(409, "guest_start_ineligible", "Agent is not eligible to start")
+                return _INELIGIBLE
             operation, agent = pending
             return await run_start(operation, agent)
 
@@ -66,6 +71,9 @@ async def run_start(operation: AgentStartOperation, agent: AgentRecord) -> Lifec
     """Execute a begun start under the caller's lifecycle lock and map its outcome to the HTTP contract."""
     try:
         published = await execute_start(operation, agent)
+    except GuestStartStoppedError as exc:
+        logger.info("Guest start for agent {} ended at a checkpoint: {}", agent.id, exc.reason)
+        return _CANCELLED if exc.reason == "cancelled" else _INELIGIBLE
     except GuestAdmissionError as exc:
         logger.warning("Guest admission refused for agent {}: {}", agent.id, exc.code)
         return LifecycleFailure(409, exc.code, exc.message)
@@ -84,6 +92,12 @@ async def run_start(operation: AgentStartOperation, agent: AgentRecord) -> Lifec
 
 async def stop_agent_guest(agent_id: UUID, persist: RuntimePersistence = persist_agent_runtime) -> LifecycleOutcome:
     async def section() -> LifecycleOutcome:
+        # Refusals come first, so a refused stop cancels nothing. The cancel then commits before the lock wait:
+        # a start holding the lock sees it at its next checkpoint and lets go. Under the lock, cancel again for a
+        # start that began in between.
+        await assert_no_active_run(agent_id)
+        await assert_transfer_ready(agent_id)
+        await start_store.cancel(agent_id)
         async with locked_fresh_agent(agent_id) as agent:
             await start_store.cancel(agent_id)
             stopped = await agent_manager.stop_container(agent)

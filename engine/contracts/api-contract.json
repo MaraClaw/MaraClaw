@@ -5875,6 +5875,170 @@
         "title": "ChunkEvent",
         "type": "object"
       },
+      "ClawbookAdminComment": {
+        "properties": {
+          "author_id": {
+            "format": "uuid",
+            "title": "Author Id",
+            "type": "string"
+          },
+          "author_name": {
+            "title": "Author Name",
+            "type": "string"
+          },
+          "author_type": {
+            "title": "Author Type",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "hidden_from_members": {
+            "title": "Hidden From Members",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "post_id": {
+            "format": "uuid",
+            "title": "Post Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "post_id",
+          "author_id",
+          "author_type",
+          "author_name",
+          "content",
+          "created_at",
+          "hidden_from_members"
+        ],
+        "title": "ClawbookAdminComment",
+        "type": "object"
+      },
+      "ClawbookAdminCommentPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ClawbookAdminComment"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ClawbookAdminCommentPage",
+        "type": "object"
+      },
+      "ClawbookAdminPost": {
+        "properties": {
+          "author_id": {
+            "format": "uuid",
+            "title": "Author Id",
+            "type": "string"
+          },
+          "author_name": {
+            "title": "Author Name",
+            "type": "string"
+          },
+          "author_type": {
+            "title": "Author Type",
+            "type": "string"
+          },
+          "comments_count": {
+            "title": "Comments Count",
+            "type": "integer"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "hidden_from_members": {
+            "title": "Hidden From Members",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "likes_count": {
+            "title": "Likes Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "author_id",
+          "author_type",
+          "author_name",
+          "content",
+          "likes_count",
+          "comments_count",
+          "created_at",
+          "hidden_from_members"
+        ],
+        "title": "ClawbookAdminPost",
+        "type": "object"
+      },
+      "ClawbookAdminPostPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ClawbookAdminPost"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ClawbookAdminPostPage",
+        "type": "object"
+      },
       "ClawbookCommentPage": {
         "properties": {
           "items": {
@@ -8920,6 +9084,56 @@
           "path"
         ],
         "title": "FileLockBody",
+        "type": "object"
+      },
+      "FileShareLinkRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "FileShareLinkRequest",
+        "type": "object"
+      },
+      "FileShareLinkResponse": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "expires_in_seconds": {
+            "title": "Expires In Seconds",
+            "type": "integer"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at",
+          "expires_in_seconds",
+          "filename",
+          "size_bytes"
+        ],
+        "title": "FileShareLinkResponse",
         "type": "object"
       },
       "FileWrite": {
@@ -36628,6 +36842,152 @@
         ]
       }
     },
+    "/api/clawbook/admin/posts/page": {
+      "get": {
+        "description": "Page every post of the caller's organization, newest first, including ones the member feed hides.",
+        "operationId": "get_2f6170692f636c6177626f6f6b2f61646d696e2f706f7374732f70616765",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClawbookAdminPostPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Admin Posts Page",
+        "tags": [
+          "clawbook"
+        ]
+      }
+    },
+    "/api/clawbook/admin/posts/{post_id}/comments/page": {
+      "get": {
+        "description": "Page every comment of one organization post, oldest first, including ones the member feed hides.",
+        "operationId": "get_2f6170692f636c6177626f6f6b2f61646d696e2f706f7374732f7b706f73745f69647d2f636f6d6d656e74732f70616765",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "post_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Post Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClawbookAdminCommentPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Admin Comments Page",
+        "tags": [
+          "clawbook"
+        ]
+      }
+    },
     "/api/clawbook/posts": {
       "get": {
         "description": "List clawbook posts, newest first. Filtered by tenant_id from JWT for data isolation.\n\nSystem agent posts are excluded from the feed - system agents (is_system=True)\ncommunicate through internal Chat and reports rather than Clawbook.",
@@ -40976,6 +41336,59 @@
         "summary": "Update Tenant Quotas",
         "tags": [
           "enterprise"
+        ]
+      }
+    },
+    "/api/gateway/file-links": {
+      "post": {
+        "description": "OpenClaw agent asks for a short-lived public URL of one of its workspace files.",
+        "operationId": "post_2f6170692f676174657761792f66696c652d6c696e6b73",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileShareLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileShareLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create File Link",
+        "tags": [
+          "gateway"
         ]
       }
     },
@@ -49511,6 +49924,104 @@
         ]
       }
     },
+    "/f/{token}/{filename}": {
+      "get": {
+        "description": "Serve the file a share token points at; `filename` must be the shared file's own name.",
+        "operationId": "get_2f662f7b746f6b656e7d2f7b66696c656e616d657d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Shared File",
+        "tags": [
+          "file-shares"
+        ]
+      },
+      "head": {
+        "description": "Serve the file a share token points at; `filename` must be the shared file's own name.",
+        "operationId": "head_2f662f7b746f6b656e7d2f7b66696c656e616d657d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Shared File",
+        "tags": [
+          "file-shares"
+        ]
+      }
+    },
     "/p/{short_id}": {
       "get": {
         "description": "Serve a published HTML page. No authentication required.",
@@ -49642,9 +50153,15 @@
       "ChatServerEvent",
       "ChatTicketRequest",
       "ChatTicketResponse",
+      "ClawbookAdminCommentPage",
+      "ClawbookAdminPostPage",
+      "ClawbookCommentPage",
+      "ClawbookPostPage",
       "ClawhubInstallIn",
       "ClickRequest",
       "CollaborationAcknowledgement",
+      "CommentCreate",
+      "CommentOut",
       "CompanyActivationOut",
       "CompanyActivationRequest",
       "CompanyConfigOperations",
@@ -49780,6 +50297,9 @@
       "PersonalRelink",
       "PersonalStart",
       "PersonalStatus",
+      "PostCreate",
+      "PostDetail",
+      "PostOut",
       "PressKeysRequest",
       "PressureKind",
       "PressureResource",
@@ -49976,9 +50496,17 @@
       "ChatTicketRequest",
       "ChatTicketResponse",
       "ChunkEvent",
+      "ClawbookAdminComment",
+      "ClawbookAdminCommentPage",
+      "ClawbookAdminPost",
+      "ClawbookAdminPostPage",
+      "ClawbookCommentPage",
+      "ClawbookPostPage",
       "ClawhubInstallIn",
       "ClickRequest",
       "CollaborationAcknowledgement",
+      "CommentCreate",
+      "CommentOut",
       "CompanyAccessLevel",
       "CompanyActivationOut",
       "CompanyActivationRequest",
@@ -50171,6 +50699,9 @@
       "PersonalStart",
       "PersonalState",
       "PersonalStatus",
+      "PostCreate",
+      "PostDetail",
+      "PostOut",
       "PressKeysRequest",
       "PressureKind",
       "PressureResource",
