@@ -189,6 +189,10 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as TRIGGER_DAEMON_BUDGET_SECONDS,
                 start_trigger_daemon,
             )
+            from app.services.workspace_mirror_worker import (
+                progress_budget_seconds as workspace_mirror_budget_seconds,
+                start_workspace_mirror_worker,
+            )
 
             self.tasks.start(
                 "trigger_daemon",
@@ -249,6 +253,12 @@ class Runtime:
                 start_agent_workspace_quota_worker(),
                 requirement="loop",
                 progress_budget_seconds=agent_workspace_quota_budget_seconds(),
+            )
+            self.tasks.start(
+                "workspace_mirror",
+                start_workspace_mirror_worker(),
+                requirement="loop",
+                progress_budget_seconds=workspace_mirror_budget_seconds(),
             )
             self.tasks.start(
                 "agent_resource_pressure",

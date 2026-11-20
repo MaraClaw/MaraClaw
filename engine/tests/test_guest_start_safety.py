@@ -17,11 +17,12 @@ from app.core.domain.agents import AgentStatus
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.records.agent import AgentRecord
-from app.services import agent_manager as module, guest_admission as admission
+from app.services import agent_manager as module, agent_materialize, guest_admission as admission
 from app.services.agent_manager import AgentManager
 from app.services.agent_start_store import start_store
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_container_name
+from app.services.workspace_mirror import MirrorMode, MirrorReconcileError, ReconcileReport
 from builtin_keyword_fakes import IncludeAllKeyword
 
 
@@ -413,4 +414,87 @@ async def test_cleanup_ownership_refusal_after_replacement_clears_stale_runtime(
     assert result is None
     assert (agent.status, agent.container_id, agent.container_port) == ("error", None, None)
     assert docker.removed == ["old"]
+    assert len(docker.runs) == 1
+
+
+def mirror_active(
+    monkeypatch: pytest.MonkeyPatch,
+    manager: AgentManager,
+    *,
+    store: object | None,
+    failure: MirrorReconcileError | None = None,
+) -> list[tuple[str, tuple[object, ...]]]:
+    """Make the start path mirror-aware; the events record the pull and the materialize in the order they happen."""
+    events: list[tuple[str, tuple[object, ...]]] = []
+
+    async def reconcile(agent_id, agent_dir, durable, *, mode: MirrorMode, **_options: object) -> ReconcileReport:
+        events.append(("pull", (agent_id, agent_dir, durable, mode)))
+        if failure is not None:
+            raise failure
+        return ReconcileReport()
+
+    async def materialize(agent_id):
+        events.append(("materialize", (agent_id,)))
+        return manager._agent_dir(agent_id)
+
+    monkeypatch.setattr(agent_materialize, "durable_store", lambda: store)
+    monkeypatch.setattr(agent_materialize, "reconcile_agent", reconcile)
+    monkeypatch.setattr(manager, "_materialize_agent_dir", materialize)
+    return events
+
+
+async def test_rehydration_pulls_the_mirror_before_it_materializes(env, monkeypatch):
+    # Given a mirror-active start of an agent that has a guest.
+    manager, docker, agent = env
+    store = object()
+    events = mirror_active(monkeypatch, manager, store=store)
+    # When the guest is replaced.
+    result = await manager.replace_container(agent)
+    # Then storage is pulled in pull-only mode into the guest directory before the directory is materialized.
+    assert result == agent.container_id
+    assert events == [
+        ("pull", (agent.id, manager._agent_dir(agent.id), store, MirrorMode.PULL_ONLY)),
+        ("materialize", (agent.id,)),
+    ]
+    assert len(docker.runs) == 1
+
+
+@pytest.mark.parametrize(("guest_present", "code"), [(True, "runtime_failed"), (False, "configuration_failed")])
+async def test_a_pull_that_stopped_early_without_a_base_fails_the_start(env, monkeypatch, guest_present, code):
+    # Given a pull that cannot finish for a directory with no valid mirror base.
+    manager, docker, agent = env
+    if not guest_present:
+        docker.guests.clear()
+        agent.container_id = None
+    failure = MirrorReconcileError("storage unreachable", had_base=False)
+    events = mirror_active(monkeypatch, manager, store=object(), failure=failure)
+    # When the guest is replaced.
+    with pytest.raises(GuestStartPreflightError) as refused:
+        await manager.replace_container(agent)
+    # Then the start fails as a preparation error, before the directory is materialized or a guest is created.
+    assert refused.value.code == code
+    assert [name for name, _ in events] == ["pull"]
+    assert docker.runs == []
+
+
+async def test_a_pull_that_stopped_early_with_a_base_does_not_stop_the_start(env, monkeypatch):
+    manager, docker, agent = env
+    failure = MirrorReconcileError("storage slow", had_base=True)
+    events = mirror_active(monkeypatch, manager, store=object(), failure=failure)
+
+    result = await manager.replace_container(agent)
+
+    assert result == agent.container_id
+    assert [name for name, _ in events] == ["pull", "materialize"]
+    assert len(docker.runs) == 1
+
+
+async def test_without_a_durable_store_the_start_never_pulls(env, monkeypatch):
+    manager, docker, agent = env
+    events = mirror_active(monkeypatch, manager, store=None)
+
+    result = await manager.replace_container(agent)
+
+    assert result == agent.container_id
+    assert [name for name, _ in events] == ["materialize"]
     assert len(docker.runs) == 1

@@ -295,6 +295,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         scheduler_tasks,
         task_lease,
         trigger_daemon,
+        workspace_mirror_worker,
     )
     from app.services.channels import whatsapp_personal_supervisor, zalo_personal_supervisor
     from app.services.tavily import export
@@ -411,6 +412,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(openclaw_delayed_replies, "openclaw_delayed_reply_loop", loop)
     monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
     monkeypatch.setattr(agent_workspace_quota_worker, "start_agent_workspace_quota_worker", loop)
+    monkeypatch.setattr(workspace_mirror_worker, "start_workspace_mirror_worker", loop)
     monkeypatch.setattr(agent_resource_pressure_worker, "start_agent_resource_pressure_worker", loop)
     monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(capacity_renewal_worker, "start_capacity_renewal_worker", loop)
@@ -520,6 +522,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("openclaw_delayed_replies" in names) == role_enabled(roles, "worker")
     assert ("chat_history_retention" in names) == role_enabled(roles, "worker")
     assert ("agent_workspace_quota" in names) == role_enabled(roles, "worker")
+    assert ("workspace_mirror" in names) == role_enabled(roles, "worker")
     assert ("agent_resource_pressure" in names) == role_enabled(roles, "worker")
     assert ("operational_log_retention" in names) == role_enabled(roles, "worker")
     assert ("capacity_renewal" in names) == role_enabled(roles, "worker")
@@ -855,6 +858,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         scheduler,
         task_lease,
         trigger_daemon,
+        workspace_mirror_worker,
     )
     from app.services.tavily import export
 
@@ -893,6 +897,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         (chat_history_retention_worker, "start_chat_history_retention_worker", "chat_history_retention"),
         (agent_workspace_quota_worker, "start_agent_workspace_quota_worker", "agent_workspace_quota"),
         (agent_resource_pressure_worker, "start_agent_resource_pressure_worker", "agent_resource_pressure"),
+        (workspace_mirror_worker, "start_workspace_mirror_worker", "workspace_mirror"),
         (operational_log_retention_worker, "start_operational_log_retention_worker", "operational_log_retention"),
         (capacity_renewal_worker, "start_capacity_renewal_worker", "capacity_renewal"),
     ):
@@ -943,7 +948,10 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert runtime.tasks.progress["capacity_renewal"].budget_seconds == (
             capacity_renewal_worker.progress_budget_seconds()
         )
-        interval_loops = {"agent_workspace_quota", "agent_resource_pressure", "capacity_renewal"}
+        assert runtime.tasks.progress["workspace_mirror"].budget_seconds == (
+            workspace_mirror_worker.progress_budget_seconds()
+        )
+        interval_loops = {"agent_workspace_quota", "agent_resource_pressure", "capacity_renewal", "workspace_mirror"}
         slow = WORKER_BUDGETED_LOOPS - {"broadcast_fanout", *interval_loops}
         boundary_workers = {"broadcast_fanout"} if budget_seconds == 90 else slow
         assert all(not runtime.tasks.progress[name].stale() for name in boundary_workers)
@@ -957,6 +965,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert not runtime.tasks.progress["agent_workspace_quota"].stale()
         assert not runtime.tasks.progress["agent_resource_pressure"].stale()
         assert not runtime.tasks.progress["capacity_renewal"].stale()
+        assert not runtime.tasks.progress["workspace_mirror"].stale()
         # Then readiness is stale with an unchanged ready body contract, and the loops keep running.
         assert not await runtime.readiness.check()
         assert all(not task.done() for task, _ in runtime.tasks.required.values())
