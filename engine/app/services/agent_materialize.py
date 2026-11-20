@@ -9,7 +9,7 @@ import anyio
 
 from app.core.logging import logger
 from app.services.storage import LocalStorageBackend, normalize_storage_key
-from app.services.storage_runtime.base import StorageBackend
+from app.services.storage_runtime.base import StorageBackend, StorageLinkRefusedError
 from app.services.storage_runtime.channel_files import copy_into_guest_file, ensure_guest_directory
 from app.services.workspace_mirror import MirrorMode, MirrorReconcileError, durable_store, reconcile_agent
 from app.services.workspace_mirror_local import MARKER
@@ -64,6 +64,14 @@ async def materialize_agent_files(storage: StorageBackend, prefix: str, agent_di
 
 
 async def materialize_entry(storage: StorageBackend, storage_key: str, local_root: Path) -> None:
+    """Materialize one entry; a guest symlink on its storage path skips only that entry."""
+    try:
+        await _materialize_entry(storage, storage_key, local_root)
+    except StorageLinkRefusedError:
+        logger.warning("[Materialize] left {} alone: a symlink blocks its storage path", storage_key)
+
+
+async def _materialize_entry(storage: StorageBackend, storage_key: str, local_root: Path) -> None:
     rel = Path(storage_key).relative_to(Path(storage_key).parts[0]).as_posix()
     local_path = local_root / rel
     if local_path.is_symlink():

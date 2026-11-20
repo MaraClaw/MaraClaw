@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anyio
+from fastapi import HTTPException, status
 
 
 @dataclass
@@ -116,6 +117,13 @@ class StorageReadChangedError(OSError):
     def __init__(self, key: str):
         self.key: str = key
         super().__init__(f"Storage file changed while reading: {key}")
+
+
+class StorageLinkRefusedError(HTTPException):
+    """A local storage path reaches a symlink below the root, which is refused instead of followed (403)."""
+
+    def __init__(self) -> None:
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail="Path traversal not allowed")
 
 
 MAX_DIR_PAGE_LIMIT = 500

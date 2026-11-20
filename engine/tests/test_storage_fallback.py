@@ -157,11 +157,12 @@ async def test_fallback_materialize_never_removes_real_local_files(tmp_path: Pat
     # When
     handle = await storage.materialize("report.txt")
     assert handle is not None
+    copied = handle.path.read_bytes()
     handle.close()
-    # Then
-    assert not handle.owned
-    assert handle.path == tmp_path / "primary" / "report.txt"
-    assert handle.path.read_bytes() == b"real"
+    # Then: the caller gets an owned copy, and closing it removes only the copy
+    assert handle.owned
+    assert copied == b"real"
+    assert (tmp_path / "primary" / "report.txt").read_bytes() == b"real"
     assert (tmp_path / "legacy" / "report.txt").exists() == unpromoted_legacy
     assert temp_files(temp_root) == []
 
@@ -607,7 +608,10 @@ async def observe(storage: StorageBackend, surface: str, key: str = KEY) -> obje
         case "materialize":
             handle = await storage.materialize(key)
             assert handle is not None
-            return (handle.path, handle.owned)
+            try:
+                return (handle.path.read_bytes(), handle.owned)
+            finally:
+                handle.close()
         case "presign_download_url":
             return await storage.presign_download_url(key)
         case _:
@@ -641,7 +645,7 @@ async def test_unpromoted_fallback_serves_a_local_only_key_read_only(surface: st
         "get_version": (True, 6),
         "get_version_bounded": (True, 6),
         "local_path_for": legacy_path,
-        "materialize": (legacy_path, False),
+        "materialize": (b"legacy", True),
         "presign_download_url": None,
     }
 
@@ -665,7 +669,7 @@ async def test_unpromoted_fallback_still_serves_a_primary_key_from_the_primary(s
         "get_version": (True, 8),
         "get_version_bounded": (True, 8),
         "local_path_for": primary_path,
-        "materialize": (primary_path, False),
+        "materialize": (b"primary!", True),
         "presign_download_url": "https://signed.test/report.txt?expires=None",
     }
 

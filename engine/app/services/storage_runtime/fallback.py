@@ -260,10 +260,14 @@ class FallbackStorageBackend(StorageBackend):
                 return True
             if not await self.fallback.is_file(key):
                 return False
-            legacy_path = await self.fallback.local_path_for(key)
-            if legacy_path is None:
-                raise RuntimeError(f"Fallback file has no local path: {key}")
-            _ = await self.primary.create_file_if_absent(key, legacy_path)
+            # Publish from a copy the fallback read through its own contained descriptor, never its path by name.
+            legacy = await self.fallback.materialize(key)
+            if legacy is None:
+                raise RuntimeError(f"Fallback file has no local copy: {key}")
+            try:
+                _ = await self.primary.create_file_if_absent(key, legacy.path)
+            finally:
+                legacy.close()
             if await self.primary.exists(key):
                 return True
         raise StorageConditionalRaceError(key, 3)

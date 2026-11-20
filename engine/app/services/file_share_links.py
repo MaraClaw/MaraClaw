@@ -7,7 +7,6 @@ whoever holds it. The token store, the guest-path rules and the durable storage 
 import asyncio
 import errno
 import os
-from collections.abc import Iterator
 from pathlib import Path
 from typing import BinaryIO
 from urllib.parse import quote
@@ -29,6 +28,7 @@ from app.services.storage_runtime.agent_files import agent_storage_key
 from app.services.storage_runtime.base import MaterializedFile
 from app.services.storage_runtime.channel_files import GuestStamp, open_guest_file, stat_guest_file
 from app.services.storage_runtime.disposition import content_disposition
+from app.services.storage_runtime.file_stream import stream_chunks
 from app.services.workspace_mirror import (
     MirrorBusyError,
     MirrorConflictError,
@@ -40,7 +40,6 @@ from app.services.workspace_mirror import (
 from app.services.workspace_mirror_scope import GuestPathError, is_shareable, normalize_guest_path
 
 PRESIGN_SECONDS = 60
-_CHUNK_BYTES = 1024 * 1024
 # What opening a guest path reports when it is not a plain file: missing, symlink, directory, device, socket, no access.
 _NOT_A_FILE_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EISDIR, errno.ENXIO, errno.EACCES})
 
@@ -146,15 +145,6 @@ def _open_materialized(materialized: MaterializedFile) -> tuple[BinaryIO, int]:
     return stream, os.fstat(stream.fileno()).st_size
 
 
-def _chunks(stream: BinaryIO, size: int) -> Iterator[bytes]:
-    """Read at most `size` bytes, so a file that grew after its length was announced cannot overrun it."""
-    with stream:
-        remaining = size
-        while remaining > 0 and (chunk := stream.read(min(_CHUNK_BYTES, remaining))):
-            remaining -= len(chunk)
-            yield chunk
-
-
 def _download_headers(filename: str) -> dict[str, str]:
     return {
         "Content-Disposition": content_disposition(filename, "attachment"),
@@ -175,7 +165,7 @@ def _file_response(stream: BinaryIO, size: int, headers: dict[str, str], *, head
     if head:
         stream.close()
         return _head_response(headers, size)
-    return StreamingResponse(_chunks(stream, size), headers={**headers, "Content-Length": str(size)})
+    return StreamingResponse(stream_chunks(stream, size), headers={**headers, "Content-Length": str(size)})
 
 
 async def open_share(token: str, filename: str, *, head: bool) -> Response:

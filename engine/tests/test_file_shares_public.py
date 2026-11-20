@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from redis.exceptions import RedisError
 
 from app.services import file_share_links as links, file_share_tokens as shares
+from app.services.storage_runtime import file_stream
 from app.services.storage_runtime.base import MaterializedFile, StorageVersion
 
 TTL_SECONDS = 900
@@ -171,10 +172,10 @@ async def test_serving_a_file_leaves_no_descriptor_open(env: Env, method: str) -
 
 
 def test_stream_stops_at_the_announced_size_and_closes_the_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(links, "_CHUNK_BYTES", 3)
+    monkeypatch.setattr(file_stream, "_CHUNK_BYTES", 3)
     stream = io.BytesIO(b"abcdefgh")
 
-    assert list(links._chunks(stream, 5)) == [b"abc", b"de"]  # pyright: ignore[reportPrivateUsage]
+    assert list(file_stream.stream_chunks(stream, 5)) == [b"abc", b"de"]
     assert stream.closed
 
 

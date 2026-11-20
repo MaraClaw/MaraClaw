@@ -46,7 +46,7 @@ async def test_bytes_conflict_when_file_changes_during_read(preview_context, mon
         nonlocal reads
         data = await original(key, maximum)
         reads += 1
-        if reads == 2:
+        if reads == 1:
             match mutation:
                 case "replace":
                     path.write_bytes(b"%PDF-mutated")
@@ -104,7 +104,7 @@ async def test_bytes_reject_growth_during_read_at_actual_byte_limit(preview_cont
     def growing_read(stream, maximum):
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 1:
             with path.open("ab") as writer:
                 writer.write(b"overflow")
         observed.append(stream)
@@ -145,14 +145,14 @@ async def test_preview_rejects_symlink_swap_when_it_occurs_after_path_validation
     path = ctx.root / str(ctx.agent_id) / "workspace" / "report.pdf"
     secret = ctx.root / "private.txt"
     secret.write_bytes(b"private")
-    original = ctx.storage.read_bytes_bounded
+    original = ctx.storage.get_version_bounded
 
     async def swapped_read(key, maximum):
         path.unlink()
         path.symlink_to(secret)
         return await original(key, maximum)
 
-    monkeypatch.setattr(ctx.storage, "read_bytes_bounded", swapped_read)
+    monkeypatch.setattr(ctx.storage, "get_version_bounded", swapped_read)
     # When
     response = await ctx.client.get(
         f"{ctx.url}/preview-metadata", params={"path": "workspace/report.pdf"}, headers=ctx.headers

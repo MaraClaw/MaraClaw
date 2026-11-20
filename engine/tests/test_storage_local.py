@@ -2,26 +2,31 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+from contextlib import AbstractContextManager
 from multiprocessing.connection import Connection
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
+from stat import S_IMODE
 from threading import Event, get_ident
 
 import anyio
 import pytest
 from fastapi import HTTPException
 
-from app.services.storage_runtime import local as local_module
+from app.services.storage_runtime import local_contained
 from app.services.storage_runtime.base import (
     AtomicCreateUnsupportedError,
     ConditionalWriteResult,
     StorageBackend,
+    StoragePage,
     StorageReadLimitExceededError,
+    StorageVersion,
     WriteCondition,
     walk_order,
 )
 from app.services.storage_runtime.bounded import BoundedReader
 from app.services.storage_runtime.local import LocalStorageBackend
+from materialize_fixtures import temp_files, temp_root
 from storage_walk_fixtures import (
     EXPECTED_WALK,
     FILE_SIZE,
@@ -31,6 +36,8 @@ from storage_walk_fixtures import (
     shape,
     tree_client,
 )
+
+__all__ = ["temp_root"]
 
 
 async def test_local_absence_condition_has_one_winner_when_writers_race(
@@ -334,7 +341,7 @@ async def test_local_storage_rejects_symlink_to_prefix_sibling_of_root(tmp_path:
     backend = LocalStorageBackend(str(root))
 
     with pytest.raises(HTTPException) as raised:
-        backend._full_path(key)
+        await backend.exists(key)
     with pytest.raises(HTTPException):
         await backend.read_bytes(key)
     with pytest.raises(HTTPException):
@@ -345,15 +352,17 @@ async def test_local_storage_rejects_symlink_to_prefix_sibling_of_root(tmp_path:
     assert sorted(path.name for path in sibling.iterdir()) == ["secret.txt"]
 
 
-async def test_local_storage_keeps_symlinks_that_stay_inside_root(tmp_path: Path):
+async def test_local_storage_refuses_symlinks_that_stay_inside_root(tmp_path: Path):
     root = tmp_path / "storage"
     (root / "real").mkdir(parents=True)
     (root / "real" / "a.txt").write_text("inside")
     (root / "alias").symlink_to(root / "real", target_is_directory=True)
     backend = LocalStorageBackend(str(root))
 
-    assert backend._full_path("alias/a.txt") == (root / "real" / "a.txt").resolve()
-    assert await backend.read_bytes("alias/a.txt") == b"inside"
+    with pytest.raises(HTTPException) as raised:
+        await backend.read_bytes("alias/a.txt")
+
+    assert (raised.value.status_code, raised.value.detail) == (403, "Path traversal not allowed")
 
 
 async def test_local_s3_and_list_only_backends_walk_the_same_tree_identically(
@@ -376,13 +385,13 @@ async def test_local_probes_listing_and_walk_run_off_the_event_loop(tmp_path: Pa
     build_tree_on_disk(tmp_path)
     backend = LocalStorageBackend(str(tmp_path))
     resolve_threads: list[int] = []
-    resolve = backend._full_path
+    enter = local_contained.contained_parent
 
-    def spy(key: str) -> Path:
+    def spy(root: Path, relative: str, *, create: bool = False) -> AbstractContextManager[tuple[int, str]]:
         resolve_threads.append(get_ident())
-        return resolve(key)
+        return enter(root, relative, create=create)
 
-    monkeypatch.setattr(backend, "_full_path", spy)
+    monkeypatch.setattr(local_contained, "contained_parent", spy)
     # When
     assert await backend.exists("w")
     assert await backend.is_dir("w")
@@ -505,19 +514,19 @@ async def test_local_page_stats_only_the_returned_slice_off_the_event_loop(
     backend = LocalStorageBackend(str(tmp_path))
     built: list[str] = []
     threads: list[int] = []
-    entry_for = local_module._storage_entry
-    resolve = backend._full_path
+    entry_for = local_contained._storage_entry
+    enter = local_contained.contained_parent
 
-    def spy_entry(entry: Path, root: Path):
-        built.append(entry.name)
-        return entry_for(entry, root)
+    def spy_entry(directory: int, name: str, prefix: str):
+        built.append(name)
+        return entry_for(directory, name, prefix)
 
-    def spy_path(key: str) -> Path:
+    def spy_parent(root: Path, relative: str, *, create: bool = False) -> AbstractContextManager[tuple[int, str]]:
         threads.append(get_ident())
-        return resolve(key)
+        return enter(root, relative, create=create)
 
-    monkeypatch.setattr(local_module, "_storage_entry", spy_entry)
-    monkeypatch.setattr(backend, "_full_path", spy_path)
+    monkeypatch.setattr(local_contained, "_storage_entry", spy_entry)
+    monkeypatch.setattr(local_contained, "contained_parent", spy_parent)
     # When
     page = await backend.list_dir_page("", limit=5, after="f09")
     # Then
@@ -545,3 +554,175 @@ async def test_local_page_answers_403_for_a_key_that_escapes_the_root(tmp_path: 
         _ = await LocalStorageBackend(str(root)).list_dir_page("link", limit=3)
     # Then
     assert raised.value.status_code == 403
+
+
+@pytest.fixture
+def linked_root(tmp_path: Path) -> Path:
+    """Agent ``A`` holds links a guest planted into agent ``B``: one to a file and one to the whole directory."""
+    root = tmp_path / "storage"
+    (root / "A").mkdir(parents=True)
+    (root / "B").mkdir()
+    _ = (root / "B" / "secret.txt").write_bytes(b"other agent")
+    (root / "A" / "up").symlink_to("../B", target_is_directory=True)
+    (root / "A" / "leak.txt").symlink_to("../B/secret.txt")
+    return root
+
+
+LINKED_KEYS = {"final-file": "A/leak.txt", "final-directory": "A/up", "middle-directory": "A/up/secret.txt"}
+LOCAL_OPERATIONS = (
+    "exists",
+    "is_file",
+    "is_dir",
+    "list_dir",
+    "list_dir_page",
+    "walk",
+    "read_bytes",
+    "read_bytes_bounded",
+    "read_snapshot_bounded",
+    "write_bytes",
+    "create_bytes_if_absent",
+    "delete",
+    "delete_tree",
+    "stat",
+    "get_version",
+    "get_version_bounded",
+    "local_path_for",
+    "materialize",
+)
+
+
+async def run_local_operation(backend: LocalStorageBackend, operation: str, key: str) -> object:
+    match operation:
+        case "list_dir_page":
+            return await backend.list_dir_page(key, limit=10)
+        case "walk":
+            return [entry async for entry in backend.walk(key)]
+        case "read_bytes_bounded" | "read_snapshot_bounded" | "get_version_bounded":
+            return await getattr(backend, operation)(key, 1024)
+        case "write_bytes" | "create_bytes_if_absent":
+            return await getattr(backend, operation)(key, b"overwritten")
+        case "materialize":
+            handle = await backend.materialize(key)
+            handle.close()
+            return handle
+        case _:
+            return await getattr(backend, operation)(key)
+
+
+@pytest.mark.parametrize("operation", LOCAL_OPERATIONS)
+@pytest.mark.parametrize("link", LINKED_KEYS)
+async def test_local_storage_refuses_every_operation_through_a_link_below_the_root(
+    linked_root: Path, temp_root: Path, operation: str, link: str
+):
+    # Given
+    backend = LocalStorageBackend(str(linked_root))
+    # When
+    with pytest.raises(HTTPException) as raised:
+        _ = await run_local_operation(backend, operation, LINKED_KEYS[link])
+    # Then
+    assert (raised.value.status_code, raised.value.detail) == (403, "Path traversal not allowed")
+    assert [path.name for path in (linked_root / "B").iterdir()] == ["secret.txt"]
+    assert (linked_root / "B" / "secret.txt").read_bytes() == b"other agent"
+    assert (linked_root / "A" / "up").is_symlink()
+    assert (linked_root / "A" / "leak.txt").is_symlink()
+    assert temp_files(temp_root) == []
+
+
+MISSING_ANSWERS: dict[str, object] = {
+    "exists": False,
+    "is_file": False,
+    "is_dir": False,
+    "list_dir": [],
+    "list_dir_page": StoragePage([], False),
+    "walk": [],
+    "delete": None,
+    "delete_tree": None,
+    "local_path_for": None,
+}
+
+
+@pytest.mark.parametrize("key", ["A/nowhere.txt", "A/nowhere/deeper.txt"])
+@pytest.mark.parametrize(
+    "operation",
+    [operation for operation in LOCAL_OPERATIONS if operation not in {"write_bytes", "create_bytes_if_absent"}],
+)
+async def test_local_storage_reports_missing_paths_as_missing(
+    linked_root: Path, temp_root: Path, operation: str, key: str
+):
+    backend = LocalStorageBackend(str(linked_root))
+
+    if operation in {"read_bytes", "read_bytes_bounded", "read_snapshot_bounded", "stat", "materialize"}:
+        with pytest.raises(FileNotFoundError):
+            _ = await run_local_operation(backend, operation, key)
+    elif operation in {"get_version", "get_version_bounded"}:
+        version = await run_local_operation(backend, operation, key)
+        assert isinstance(version, StorageVersion)
+        assert not version.exists
+    else:
+        assert await run_local_operation(backend, operation, key) == MISSING_ANSWERS[operation]
+    assert not (linked_root / "A" / "nowhere").exists()
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize("operation", ["read_bytes", "write_bytes", "get_version", "stat", "list_dir", "delete_tree"])
+async def test_local_storage_refuses_a_directory_swapped_for_a_link_during_the_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+):
+    # Given: the guest swaps "real" for a link into agent B right when storage reaches it
+    root = tmp_path / "storage"
+    (root / "A" / "real").mkdir(parents=True)
+    _ = (root / "A" / "real" / "a.txt").write_bytes(b"inside")
+    (root / "B").mkdir()
+    _ = (root / "B" / "a.txt").write_bytes(b"other agent")
+    backend = LocalStorageBackend(str(root))
+    original_open = os.open
+    swapped: list[str] = []
+
+    def swap_then_open(path: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if path == "real" and not swapped:
+            swapped.append(path)
+            (root / "A" / "real").rename(root / "A" / "moved")
+            (root / "A" / "real").symlink_to("../B", target_is_directory=True)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", swap_then_open)
+    # When
+    with pytest.raises(HTTPException) as raised:
+        _ = await run_local_operation(backend, operation, "A/real" if operation == "list_dir" else "A/real/a.txt")
+    # Then
+    assert swapped
+    assert raised.value.status_code == 403
+    assert [path.name for path in (root / "B").iterdir()] == ["a.txt"]
+    assert (root / "B" / "a.txt").read_bytes() == b"other agent"
+    assert (root / "A" / "moved" / "a.txt").read_bytes() == b"inside"
+
+
+async def test_local_materialize_hands_out_an_owned_copy_and_leaves_the_file(tmp_path: Path, temp_root: Path):
+    # Given
+    (tmp_path / "A").mkdir()
+    _ = (tmp_path / "A" / "report.xlsx").write_bytes(b"sheet")
+    # When
+    handle = await LocalStorageBackend(str(tmp_path)).materialize("A/report.xlsx")
+    # Then
+    assert handle is not None
+    assert handle.owned
+    assert (handle.path.parent, handle.path.suffix) == (temp_root, ".xlsx")
+    assert handle.path.read_bytes() == b"sheet"
+    handle.close()
+    assert temp_files(temp_root) == []
+    assert (tmp_path / "A" / "report.xlsx").read_bytes() == b"sheet"
+
+
+async def test_local_write_rewrites_an_existing_file_in_place(tmp_path: Path):
+    # Given
+    target = tmp_path / "A" / "notes.md"
+    target.parent.mkdir()
+    _ = target.write_bytes(b"a much longer original")
+    target.chmod(0o600)
+    before = target.stat()
+    # When
+    await LocalStorageBackend(str(tmp_path)).write_bytes("A/notes.md", b"short")
+    # Then
+    after = target.stat()
+    assert target.read_bytes() == b"short"
+    assert (after.st_ino, S_IMODE(after.st_mode)) == (before.st_ino, 0o600)

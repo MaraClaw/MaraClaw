@@ -9,9 +9,7 @@ from io import FileIO
 from pathlib import Path
 from typing import Protocol
 
-from fastapi import HTTPException
-
-from app.services.storage_runtime.base import StorageReadLimitExceededError
+from app.services.storage_runtime.base import StorageLinkRefusedError, StorageReadLimitExceededError
 
 
 class BoundedReader(Protocol):
@@ -46,7 +44,7 @@ def open_regular_file(path: Path) -> Generator[FileIO]:
             fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
         except OSError as exc:
             if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
-                raise HTTPException(403, "Symlink previews are not allowed") from exc
+                raise StorageLinkRefusedError from exc
             raise
         with FileIO(fd, "rb") as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
