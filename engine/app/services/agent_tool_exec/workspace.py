@@ -55,7 +55,6 @@ async def _execute_workspace_mutation(
     arguments: ToolArguments,
     *,
     agent_id: uuid.UUID,
-    base_dir: Path,
     session_id: str | None,
 ) -> str:
     """Handle shared workspace mutations for both direct and normal tool execution."""
@@ -75,7 +74,6 @@ async def _execute_workspace_mutation(
             )
         write_result = await write_workspace_file(
             agent_id=agent_id,
-            base_dir=base_dir,
             path=path,
             content=content,
             actor_type="agent",
@@ -107,7 +105,6 @@ async def _execute_workspace_mutation(
             )
         move_result = await move_workspace_path(
             agent_id=agent_id,
-            base_dir=base_dir,
             source_path=source_path,
             destination_path=destination_path,
             actor_type="agent",
@@ -128,7 +125,6 @@ async def _execute_workspace_mutation(
             )
         delete_result = await delete_workspace_file(
             agent_id=agent_id,
-            base_dir=base_dir,
             path=path,
             actor_type="agent",
             actor_id=agent_id,
@@ -182,7 +178,6 @@ async def _execute_workspace_mutation(
         )
         write_result = await write_workspace_file(
             agent_id=agent_id,
-            base_dir=base_dir,
             path=normalized_path,
             content=new_content,
             actor_type="agent",

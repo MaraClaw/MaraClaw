@@ -5,7 +5,6 @@ import base64
 import csv
 import io
 import mimetypes
-import shutil
 import uuid
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -173,12 +172,6 @@ async def _write_workspace_file(
         return workspace.WorkspaceWriteResult(False, normalized, "Missing file path")
     storage = workspace.get_storage_backend()
     storage_key = normalize_storage_key(f"{agent.id}/{normalized}")
-    local_base_available = workspace._should_mirror_to_local_filesystem(storage)
-    try:
-        target = workspace.safe_agent_path(_agent_base_dir(agent.id), normalized)
-    except Exception:
-        target = None
-        local_base_available = False
     before = (
         await storage.read_text(storage_key, encoding="utf-8", errors="replace")
         if await storage.exists(storage_key)
@@ -193,10 +186,6 @@ async def _write_workspace_file(
     )
     if not write_result.ok:
         return workspace.WorkspaceWriteResult(False, normalized, f"Conflict detected while writing {normalized}")
-    if local_base_available and target is not None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        async with aiofiles.open(target, "w", encoding="utf-8") as output:
-            _ = await output.write(data.content)
     revision = await _persist_workspace_revision(
         current_user,
         agent,
@@ -222,12 +211,6 @@ async def _delete_workspace_file(
     normalized = workspace.normalize_workspace_path(path)
     storage = workspace.get_storage_backend()
     storage_key = normalize_storage_key(f"{agent.id}/{normalized}")
-    target = None
-    if workspace._should_mirror_to_local_filesystem(storage):
-        try:
-            target = workspace.safe_agent_path(_agent_base_dir(agent.id), normalized)
-        except Exception:
-            target = None
     storage_exists = await storage.exists(storage_key)
     storage_is_dir = await storage.is_dir(storage_key)
     if not storage_exists and not storage_is_dir:
@@ -256,11 +239,6 @@ async def _delete_workspace_file(
                 return workspace.WorkspaceWriteResult(
                     False, normalized, f"Conflict detected while deleting {normalized}"
                 )
-    if target is not None and target.exists():
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
     revision = await _persist_workspace_revision(
         current_user,
         agent,

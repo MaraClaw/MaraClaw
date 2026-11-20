@@ -858,8 +858,8 @@ async def test_execute_tool_direct_bypasses_autonomy_and_preserves_unsupported_m
     async def tenant_lookup(_agent_id: uuid.UUID) -> str:
         return "tenant-direct"
 
-    async def execute_workspace_mutation(tool_name, arguments, *, agent_id, base_dir, session_id):
-        mutation_calls.append((tool_name, arguments, agent_id, base_dir, session_id))
+    async def execute_workspace_mutation(tool_name, arguments, *, agent_id, session_id):
+        mutation_calls.append((tool_name, arguments, agent_id, session_id))
         return "direct mutation result"
 
     monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
@@ -871,7 +871,7 @@ async def test_execute_tool_direct_bypasses_autonomy_and_preserves_unsupported_m
     unsupported = await agent_tools._execute_tool_direct("unsupported_direct_tool", {}, agent_id)
 
     assert result == "direct mutation result"
-    assert mutation_calls == [("write_file", write_arguments, agent_id, tmp_path / str(agent_id), None)]
+    assert mutation_calls == [("write_file", write_arguments, agent_id, None)]
     assert unsupported == "Tool unsupported_direct_tool does not support post-approval execution"
 
 
