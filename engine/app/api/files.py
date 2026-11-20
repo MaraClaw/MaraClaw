@@ -16,12 +16,14 @@ from fastapi import (
     File as FastFile,
     HTTPException,
     Query,
+    Request,
     UploadFile as UploadFileType,
     status,
 )
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+from starlette.datastructures import Headers
 
 from app.config import get_settings
 from app.core.logging import logger
@@ -88,7 +90,7 @@ from app.services.storage_runtime.base import (
 )
 from app.services.storage_runtime.dir_page import DirPageRequest, collect_visible_page
 from app.services.storage_runtime.disposition import content_disposition
-from app.services.storage_runtime.file_stream import open_contained_stream, stream_chunks
+from app.services.storage_runtime.file_stream import file_response
 from app.services.workspace_collaboration import (
     acquire_edit_lock,
     content_hash,
@@ -869,7 +871,7 @@ async def _downloadable_storage_key(agent_id: uuid.UUID, path: str, tenant_id: u
     return key
 
 
-async def _download_response(key: str, path: str, inline: bool) -> Response:
+async def _download_response(key: str, path: str, inline: bool, request_headers: Headers) -> Response:
     storage = get_storage_backend()
     filename = Path(path).name
     presigned = await storage.presign_download_url(key, filename=filename, inline=inline)
@@ -880,13 +882,10 @@ async def _download_response(key: str, path: str, inline: bool) -> Response:
         )
     media_type = guess_content_type(filename)
     headers = {"Content-Disposition": content_disposition(filename, "inline" if inline else "attachment")}
-    local_path = await storage.local_path_for(key)
-    if local_path is not None:
-        # Stream the descriptor an O_NOFOLLOW walk opened: a link the guest swaps in after the checks is refused.
-        stream, size = await asyncio.to_thread(open_contained_stream, local_path)
-        return StreamingResponse(
-            stream_chunks(stream, size), media_type=media_type, headers={**headers, "Content-Length": str(size)}
-        )
+    if (opened := await storage.open_local_file(key)) is not None:
+        # Serve the descriptor an O_NOFOLLOW walk opened: a link the guest swaps in after the checks is refused.
+        stream, info = opened
+        return file_response(request_headers, stream, info, media_type=media_type, headers=headers)
     data = await storage.read_bytes(key)
     return Response(content=data, media_type=media_type, headers=headers)
 
@@ -912,6 +911,7 @@ async def create_download_ticket(
 
 @router.get("/download")
 async def download_file(
+    request: Request,
     agent_id: uuid.UUID,
     path: str,
     inline: bool = False,
@@ -936,7 +936,7 @@ async def download_file(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
     key = await _downloadable_storage_key(agent_id, path, user.tenant_id)
-    return await _download_response(key, path, inline)
+    return await _download_response(key, path, inline, request.headers)
 
 
 @router.put("/content", response_model=dict[str, object], dependencies=[Depends(guest_write_exclusion)])

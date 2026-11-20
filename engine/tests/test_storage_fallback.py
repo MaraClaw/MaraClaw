@@ -195,7 +195,7 @@ async def test_fallback_materialize_passes_on_the_ownership_of_the_primary_winne
     assert await original_read("report.txt") == b"old"
 
 
-@pytest.mark.parametrize("surface", ["read_bytes", "stat", "get_version", "local_path_for", "presign_download_url"])
+@pytest.mark.parametrize("surface", ["read_bytes", "stat", "get_version", "open_local_file", "presign_download_url"])
 async def test_fallback_promotion_returns_primary_when_upload_wins(
     surface: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -227,9 +227,11 @@ async def test_fallback_promotion_returns_primary_when_upload_wins(
         assert result == b"winning upload"
     elif surface in {"stat", "get_version"}:
         assert result.size == len(b"winning upload")
-    elif surface == "local_path_for":
-        assert result == tmp_path / "primary" / key
-        assert result.read_bytes() == b"winning upload"
+    elif surface == "open_local_file":
+        assert result is not None
+        stream, info = result
+        with stream:
+            assert (stream.read(), info.st_size) == (b"winning upload", len(b"winning upload"))
     else:
         assert result == "winning upload"
     assert await original_read(key) == b"old"
@@ -562,7 +564,7 @@ SURFACES = [
     "stat",
     "get_version",
     "get_version_bounded",
-    "local_path_for",
+    "open_local_file",
     "materialize",
     "presign_download_url",
 ]
@@ -603,8 +605,12 @@ async def observe(storage: StorageBackend, surface: str, key: str = KEY) -> obje
         case "get_version_bounded":
             version = await storage.get_version_bounded(key, 100)
             return (version.exists, version.size)
-        case "local_path_for":
-            return await storage.local_path_for(key)
+        case "open_local_file":
+            opened = await storage.open_local_file(key)
+            assert opened is not None
+            stream, info = opened
+            with stream:
+                return stream.read(), info.st_size
         case "materialize":
             handle = await storage.materialize(key)
             assert handle is not None
@@ -644,7 +650,7 @@ async def test_unpromoted_fallback_serves_a_local_only_key_read_only(surface: st
         "stat": 6,
         "get_version": (True, 6),
         "get_version_bounded": (True, 6),
-        "local_path_for": legacy_path,
+        "open_local_file": (b"legacy", 6),
         "materialize": (b"legacy", True),
         "presign_download_url": None,
     }
@@ -659,7 +665,6 @@ async def test_unpromoted_fallback_serves_a_local_only_key_read_only(surface: st
 async def test_unpromoted_fallback_still_serves_a_primary_key_from_the_primary(surface: str, tmp_path: Path):
     storage = await legacy_only_storage(tmp_path, promote=False)
     await storage.primary.write_bytes(KEY, b"primary!")
-    primary_path = tmp_path / "primary" / KEY
     expected: dict[str, object] = {
         "read_bytes": b"primary!",
         "read_bytes_bounded": b"primary!",
@@ -668,7 +673,7 @@ async def test_unpromoted_fallback_still_serves_a_primary_key_from_the_primary(s
         "stat": 8,
         "get_version": (True, 8),
         "get_version_bounded": (True, 8),
-        "local_path_for": primary_path,
+        "open_local_file": (b"primary!", 8),
         "materialize": (b"primary!", True),
         "presign_download_url": "https://signed.test/report.txt?expires=None",
     }

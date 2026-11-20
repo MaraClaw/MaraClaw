@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 import anyio
 from fastapi import HTTPException, status
@@ -333,19 +335,23 @@ class StorageBackend:
             await self.delete(key)
         return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
 
-    async def local_path_for(self, key: str) -> Path | None:
-        """The key's existing local file, or None. Never copies, so a caller can stream it without cleanup."""
+    async def open_local_file(self, key: str) -> tuple[BinaryIO, os.stat_result] | None:
+        """The key's regular file as an open read stream with the `fstat` of the same descriptor, or None.
+
+        The caller owns the stream and closes it. Never copies and never reopens a path by name, so what the caller
+        reads and the stat it holds describe one file. A backend that keeps nothing on a local disk returns None.
+        """
         del key
         return None
 
     async def materialize(self, key: str) -> MaterializedFile | None:
         """A local file for ``key``, or None when the backend cannot provide one.
 
-        The default reports an existing local file as not owned. Backends that copy the object override this and
-        report the copy as owned; the caller closes the handle exactly once.
+        The default cannot. Backends that copy the object override this and report the copy as owned; the caller
+        closes the handle exactly once.
         """
-        path = await self.local_path_for(key)
-        return None if path is None else MaterializedFile(path)
+        del key
+        return None
 
     async def presign_download_url(
         self, key: str, filename: str | None = None, inline: bool = False, expires_in_seconds: int | None = None

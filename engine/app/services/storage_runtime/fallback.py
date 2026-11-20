@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncGenerator
 from heapq import merge
 from pathlib import Path
-from typing import override
+from typing import BinaryIO, override
 
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
@@ -226,10 +227,10 @@ class FallbackStorageBackend(StorageBackend):
         return result
 
     @override
-    async def local_path_for(self, key: str) -> Path | None:
+    async def open_local_file(self, key: str) -> tuple[BinaryIO, os.stat_result] | None:
         if await self._primary_serves(key):
-            return await self.primary.local_path_for(key)
-        return await self.fallback.local_path_for(key)
+            return await self.primary.open_local_file(key)
+        return await self.fallback.open_local_file(key)
 
     @override
     async def materialize(self, key: str) -> MaterializedFile | None:

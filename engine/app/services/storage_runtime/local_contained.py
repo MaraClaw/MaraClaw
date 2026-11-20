@@ -100,12 +100,6 @@ def lstat_entry(root: Path, relative: str) -> os.stat_result | None:
     return info
 
 
-def regular_file_path(root: Path, relative: str) -> Path | None:
-    """The path of an existing regular file reached without links, else None. Open it only with O_NOFOLLOW walks."""
-    info = lstat_entry(root, relative)
-    return root / relative if info is not None and stat.S_ISREG(info.st_mode) else None
-
-
 @contextmanager
 def open_regular_entry(root: Path, relative: str) -> Generator[tuple[FileIO, int, str]]:
     """Yield a read stream of the regular file at `relative` with the descriptor of its directory and its name.

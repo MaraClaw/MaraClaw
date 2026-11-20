@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from multiprocessing.connection import Connection
 from multiprocessing.synchronize import Barrier
@@ -587,7 +588,7 @@ LOCAL_OPERATIONS = (
     "stat",
     "get_version",
     "get_version_bounded",
-    "local_path_for",
+    "open_local_file",
     "materialize",
 )
 
@@ -606,6 +607,11 @@ async def run_local_operation(backend: LocalStorageBackend, operation: str, key:
             handle = await backend.materialize(key)
             handle.close()
             return handle
+        case "open_local_file":
+            opened = await backend.open_local_file(key)
+            if opened is not None:
+                opened[0].close()
+            return opened
         case _:
             return await getattr(backend, operation)(key)
 
@@ -638,8 +644,8 @@ MISSING_ANSWERS: dict[str, object] = {
     "walk": [],
     "delete": None,
     "delete_tree": None,
-    "local_path_for": None,
     "remove_empty_directory": None,
+    "open_local_file": None,
 }
 
 
@@ -713,6 +719,120 @@ async def test_local_materialize_hands_out_an_owned_copy_and_leaves_the_file(tmp
     handle.close()
     assert temp_files(temp_root) == []
     assert (tmp_path / "A" / "report.xlsx").read_bytes() == b"sheet"
+
+
+@pytest.fixture
+def storage_below_unreadable_folder(tmp_path: Path) -> Iterator[LocalStorageBackend]:
+    """Storage whose parent folder can be passed through but not read (mode 0311), as on a locked-down host."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads every folder")
+    parent = tmp_path / "locked"
+    (parent / "storage" / "A").mkdir(parents=True)
+    _ = (parent / "storage" / "A" / "report.txt").write_bytes(b"report")
+    parent.chmod(0o311)
+    try:
+        yield LocalStorageBackend(str(parent / "storage"))
+    finally:
+        parent.chmod(0o755)
+
+
+async def read_report(backend: LocalStorageBackend, operation: str) -> object:
+    key = "A/report.txt"
+    match operation:
+        case "read_bytes":
+            return await backend.read_bytes(key)
+        case "read_bytes_bounded":
+            return await backend.read_bytes_bounded(key, 100)
+        case "read_snapshot_bounded":
+            return (await backend.read_snapshot_bounded(key, 100)).data
+        case "get_version":
+            version = await backend.get_version(key)
+            return (version.exists, version.size)
+        case "materialize":
+            handle = await backend.materialize(key)
+            try:
+                return handle.path.read_bytes()
+            finally:
+                handle.close()
+        case "open_local_file":
+            opened = await backend.open_local_file(key)
+            assert opened is not None
+            stream, info = opened
+            with stream:
+                return stream.read(), info.st_size
+        case _:
+            raise AssertionError(operation)
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        ("read_bytes", b"report"),
+        ("read_bytes_bounded", b"report"),
+        ("read_snapshot_bounded", b"report"),
+        ("get_version", (True, 6)),
+        ("materialize", b"report"),
+        ("open_local_file", (b"report", 6)),
+    ],
+)
+async def test_local_reads_need_no_read_access_to_the_folders_above_the_root(
+    storage_below_unreadable_folder: LocalStorageBackend, temp_root: Path, operation: str, expected: object
+):
+    assert await read_report(storage_below_unreadable_folder, operation) == expected
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize(
+    "operation", ["read_bytes", "read_bytes_bounded", "read_snapshot_bounded", "materialize", "open_local_file"]
+)
+async def test_local_storage_refuses_a_file_swapped_for_a_link_during_the_call(
+    tmp_path: Path, temp_root: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+):
+    # Given: the guest swaps the file for a link into agent B right when storage reaches it
+    root = tmp_path / "storage"
+    (root / "A").mkdir(parents=True)
+    _ = (root / "A" / "a.txt").write_bytes(b"inside")
+    (root / "B").mkdir()
+    _ = (root / "B" / "a.txt").write_bytes(b"other agent")
+    backend = LocalStorageBackend(str(root))
+    original_open = os.open
+    swapped: list[str] = []
+
+    def swap_then_open(path: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if path == "a.txt" and not swapped:
+            swapped.append(path)
+            (root / "A" / "a.txt").rename(root / "A" / "moved.txt")
+            (root / "A" / "a.txt").symlink_to("../B/a.txt")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", swap_then_open)
+    # When
+    with pytest.raises(HTTPException) as raised:
+        _ = await run_local_operation(backend, operation, "A/a.txt")
+    # Then
+    assert swapped
+    assert raised.value.status_code == 403
+    assert (root / "B" / "a.txt").read_bytes() == b"other agent"
+    assert (root / "A" / "moved.txt").read_bytes() == b"inside"
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize("key", ["B/secret.txt/deeper.txt", "A", "A/pipe"], ids=["file-mid-path", "directory", "fifo"])
+@pytest.mark.parametrize(
+    "operation", ["read_bytes", "read_bytes_bounded", "read_snapshot_bounded", "materialize", "open_local_file"]
+)
+async def test_local_storage_reads_nothing_that_is_not_a_regular_file(
+    linked_root: Path, temp_root: Path, operation: str, key: str
+):
+    os.mkfifo(linked_root / "A" / "pipe")
+    backend = LocalStorageBackend(str(linked_root))
+
+    if operation == "open_local_file":
+        assert await backend.open_local_file(key) is None
+    else:
+        with pytest.raises(FileNotFoundError):
+            _ = await run_local_operation(backend, operation, key)
+    assert temp_files(temp_root) == []
 
 
 async def test_local_write_rewrites_an_existing_file_in_place(tmp_path: Path):

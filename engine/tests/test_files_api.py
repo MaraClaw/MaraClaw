@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -6,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
@@ -262,8 +263,11 @@ class DownloadStorage:
         self.presign_calls.append((key, filename, inline))
         return self.presigned
 
-    async def local_path_for(self, _key):
-        return self.local_path
+    async def open_local_file(self, _key):
+        if self.local_path is None:
+            return None
+        stream = self.local_path.open("rb")
+        return stream, os.fstat(stream.fileno())
 
     async def read_bytes(self, _key):
         return b"report-bytes"
@@ -313,13 +317,25 @@ async def _issue_ticket(download, path: str, inline: bool) -> str:
     return (await file_download_tickets.issue(binding)).ticket
 
 
-async def _download(download, auth: str, *, inline: bool = False):
+def request_with(headers: dict[str, str] | None = None) -> Request:
+    raw = [(name.lower().encode(), value.encode()) for name, value in (headers or {}).items()]
+    return Request({"type": "http", "method": "GET", "headers": raw})
+
+
+async def _download(download, auth: str, *, inline: bool = False, headers: dict[str, str] | None = None):
     path = "workspace/report.pdf"
+    request = request_with(headers)
     if auth == "bearer":
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="session-jwt")
-        return await files_api.download_file(download.agent_id, path, inline=inline, credentials=credentials)
+        return await files_api.download_file(request, download.agent_id, path, inline=inline, credentials=credentials)
     ticket = await _issue_ticket(download, path, inline)
-    return await files_api.download_file(download.agent_id, path, inline=inline, ticket=ticket, credentials=None)
+    return await files_api.download_file(
+        request, download.agent_id, path, inline=inline, ticket=ticket, credentials=None
+    )
+
+
+async def _body(response) -> bytes:
+    return b"".join([chunk async for chunk in response.body_iterator])
 
 
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
@@ -340,10 +356,37 @@ async def test_download_local_branch_streams_the_contained_file(monkeypatch, tmp
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
     response = await _download(download, auth)
     assert isinstance(response, StreamingResponse)
-    assert b"".join([chunk async for chunk in response.body_iterator]) == b"local-bytes"
+    assert await _body(response) == b"local-bytes"
     assert response.media_type == "application/pdf"
     assert response.headers["content-length"] == "11"
     assert response.headers["content-disposition"] == content_disposition("report.pdf", "attachment")
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["cache-control"] == "private, no-cache"
+    info = local.stat()
+    assert response.headers["etag"] == f'"{info.st_mtime_ns:x}-{info.st_size:x}"'
+    assert response.headers["last-modified"]
+
+
+@pytest.mark.parametrize("auth", ["bearer", "ticket"])
+async def test_download_local_branch_answers_range_and_conditional_requests(monkeypatch, tmp_path, download, auth):
+    local = tmp_path / "report.pdf"
+    local.write_bytes(b"local-bytes")
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", local_path=local)
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    etag = (await _download(download, auth)).headers["etag"]
+
+    partial = await _download(download, auth, headers={"Range": "bytes=6-"})
+    unchanged = await _download(download, auth, headers={"If-None-Match": etag})
+    unsatisfiable = await _download(download, auth, headers={"Range": "bytes=11-"})
+
+    assert isinstance(partial, StreamingResponse)
+    assert (partial.status_code, await _body(partial)) == (206, b"bytes")
+    assert partial.headers["content-range"] == "bytes 6-10/11"
+    assert partial.headers["content-length"] == "5"
+    assert partial.headers["content-disposition"] == content_disposition("report.pdf", "attachment")
+    assert (unchanged.status_code, unchanged.body) == (304, b"")
+    assert unchanged.headers["etag"] == etag
+    assert (unsatisfiable.status_code, unsatisfiable.headers["content-range"]) == (416, "bytes */11")
 
 
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
@@ -362,7 +405,7 @@ async def test_bearer_wins_without_consuming_ticket(monkeypatch, download):
     ticket = await _issue_ticket(download, "workspace/report.pdf", False)
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="session-jwt")
     response = await files_api.download_file(
-        download.agent_id, "workspace/report.pdf", ticket=ticket, credentials=credentials
+        request_with(), download.agent_id, "workspace/report.pdf", ticket=ticket, credentials=credentials
     )
     assert response.status_code == 200
     assert len(download.redis.values) == 1
@@ -374,7 +417,9 @@ async def test_ticket_for_other_path_is_consumed_and_refused(monkeypatch, downlo
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
     ticket = await _issue_ticket(download, "workspace/report.pdf", False)
     with pytest.raises(HTTPException) as exc:
-        await files_api.download_file(download.agent_id, "workspace/other.pdf", ticket=ticket, credentials=None)
+        await files_api.download_file(
+            request_with(), download.agent_id, "workspace/other.pdf", ticket=ticket, credentials=None
+        )
     assert exc.value.status_code == 403
     assert download.redis.values == {}
 

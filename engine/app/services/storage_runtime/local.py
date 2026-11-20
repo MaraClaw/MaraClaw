@@ -9,11 +9,12 @@ no read permission.
 
 from __future__ import annotations
 
+import os
 import stat
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import override
+from typing import BinaryIO, override
 
 import anyio
 
@@ -35,7 +36,6 @@ from app.services.storage_runtime.local_contained import (
     open_regular_file,
     read_entry,
     read_version,
-    regular_file_path,
     scan_directory,
     scan_page,
 )
@@ -162,9 +162,13 @@ class LocalStorageBackend(StorageBackend):
         )
 
     @override
-    async def local_path_for(self, key: str) -> Path | None:
-        """An existing regular file reached without links, else None; open it only through `open_regular_file`."""
-        return await self._in_thread(regular_file_path, key)
+    async def open_local_file(self, key: str) -> tuple[BinaryIO, os.stat_result] | None:
+        """A duplicate of the contained descriptor of a regular file with its `fstat`; the caller closes it.
+
+        Not abandoned on cancel, so the descriptor always reaches the awaiter. None when the key is missing or is not
+        a regular file; a link on the way raises `StorageLinkRefusedError` (403).
+        """
+        return await self._in_thread(_open_local_file, key, abandon=False)
 
     @override
     async def materialize(self, key: str) -> MaterializedFile:
@@ -184,3 +188,12 @@ def _read_file_bounded(root: Path, relative: str, max_bytes: int, offset: int | 
             _ = stream.seek(offset)
             return read_bounded(stream, max_bytes, range_read=True)
         return read_bounded(stream, max_bytes)
+
+
+def _open_local_file(root: Path, relative: str) -> tuple[BinaryIO, os.stat_result] | None:
+    try:
+        with open_regular_file(root, relative) as source:
+            info = os.fstat(source.fileno())
+            return os.fdopen(os.dup(source.fileno()), "rb"), info
+    except FileNotFoundError:
+        return None
