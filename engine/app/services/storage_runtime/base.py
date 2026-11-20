@@ -183,6 +183,15 @@ class StorageBackend:
         """
         return walk_tree(self.list_dir, key)
 
+    def list_files_flat(self, prefix: str) -> AsyncGenerator[StorageEntry]:
+        """Lazily yield every file under ``prefix`` in key order, from a listing with no delimiter.
+
+        Unlike ``walk`` this yields no directories and skips no names, hidden ones included, so a caller comparing
+        successive listings sees every object once with its size and etag. Backends that cannot list flat fail closed.
+        """
+        del prefix
+        raise NotImplementedError
+
     async def read_bytes(self, key: str) -> bytes:
         raise NotImplementedError
 
@@ -326,8 +335,10 @@ class StorageBackend:
         path = await self.local_path_for(key)
         return None if path is None else MaterializedFile(path)
 
-    async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
-        del key, filename, inline
+    async def presign_download_url(
+        self, key: str, filename: str | None = None, inline: bool = False, expires_in_seconds: int | None = None
+    ) -> str | None:
+        del key, filename, inline, expires_in_seconds
         return None
 
 

@@ -12,7 +12,7 @@ from app.services.storage_runtime.base import (
     StorageConditionalRaceError,
     StorageVersion,
 )
-from app.services.storage_runtime.s3_connection import S3Connection
+from app.services.storage_runtime.s3_connection import S3Connection, response_version_id
 from app.services.storage_runtime.upload_source import UploadSource, open_upload_source
 from app.services.storage_runtime.utils import normalize_storage_key
 
@@ -28,7 +28,7 @@ def _created(key: str, size: int, response: Mapping[str, object]) -> Conditional
             is_dir=False,
             size=size,
             etag=str(response.get("ETag") or "").strip('"'),
-            version_id=str(response.get("VersionId") or ""),
+            version_id=response_version_id(response),
         ),
     )
 

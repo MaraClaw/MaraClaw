@@ -160,10 +160,11 @@ class _Handler(BaseHTTPRequestHandler):
         with state.lock:
             state.calls.append(("LIST", prefix))
             keys = sorted(k for k in state.objects if k.startswith(prefix) and k > after)
-            sizes = {k: len(state.objects[k]) for k in keys[:PAGE_SIZE]}
+            listed = {k: state.objects[k] for k in keys[:PAGE_SIZE]}
         page, truncated = keys[:PAGE_SIZE], len(keys) > PAGE_SIZE
         contents = "".join(
-            f"<Contents><Key>{escape(k)}</Key><Size>{sizes[k]}</Size><ETag>&quot;x&quot;</ETag></Contents>"
+            f"<Contents><Key>{escape(k)}</Key><Size>{len(listed[k])}</Size>"
+            f"<ETag>&quot;{_etag(listed[k])}&quot;</ETag></Contents>"
             for k in page
         )
         token = f"<NextContinuationToken>{escape(page[-1])}</NextContinuationToken>" if truncated else ""

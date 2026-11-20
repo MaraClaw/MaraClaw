@@ -21,6 +21,7 @@ from app.services.storage_runtime.base import (
     content_hash_bytes,
 )
 from app.services.storage_runtime.bounded import read_bounded
+from app.services.storage_runtime.s3_connection import response_version_id
 
 _COPY_CHUNK_BYTES = 64 * 1024
 
@@ -109,7 +110,7 @@ def read_object_snapshot(get_object: Callable[[], Mapping[str, object]], key: st
                 size=len(data),
                 modified_at=str(response.get("LastModified") or ""),
                 etag=etag,
-                version_id=str(response.get("VersionId") or ""),
+                version_id=response_version_id(response),
                 content_hash=etag,
             ),
             sha256=content_hash_bytes(data),

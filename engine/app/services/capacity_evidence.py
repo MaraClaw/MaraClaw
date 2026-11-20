@@ -10,13 +10,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Final
-from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, Response
 
 from app.core.logging import logger
 from app.services.storage_runtime.base import StorageBackend
+from app.services.storage_runtime.disposition import content_disposition
 
 MAX_EVIDENCE_BYTES: Final = 10 * 1024 * 1024
 STORAGE_PREFIX: Final = "_capacity_payments"
@@ -101,12 +101,6 @@ def safe_filename(client_name: str | None, kind: EvidenceKind) -> str:
     printable = "".join(char for char in stem if not unicodedata.category(char).startswith("C")).strip(" .")
     room = MAX_FILENAME_LENGTH - len(kind.extension) - 1
     return f"{(printable or DEFAULT_STEM)[:room]}.{kind.extension}"
-
-
-def content_disposition(filename: str) -> str:
-    """An ``inline`` header value whose plain and RFC 5987 names cannot break out of the header."""
-    ascii_name = "".join(char if char.isascii() and (char.isalnum() or char in "._- ") else "_" for char in filename)
-    return f"inline; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
 def evidence_response(evidence: EvidenceFile) -> Response:
