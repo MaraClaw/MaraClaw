@@ -91,6 +91,11 @@ from app.services.storage_runtime.base import (
 from app.services.storage_runtime.dir_page import DirPageRequest, collect_visible_page
 from app.services.storage_runtime.disposition import content_disposition
 from app.services.storage_runtime.file_stream import file_response
+from app.services.storage_runtime.skill_install import (
+    SkillFilesConflictError,
+    SkillFilesInvalidError,
+    write_skill_files,
+)
 from app.services.workspace_collaboration import (
     acquire_edit_lock,
     content_hash,
@@ -1120,10 +1125,22 @@ def _skill_file_keys(agent_id: uuid.UUID, folder_name: str, paths: Iterable[str]
 
 
 async def _write_skill_files(agent_id: uuid.UUID, folder_name: str, files: list[tuple[str, str]]) -> list[str]:
+    """Write every file of the import or none of them (`write_skill_files` undoes a partial import)."""
+    from app.api.background_tasks import schedule_background_task
+    from app.services.agent_context_cache import invalidate_for_workspace_paths
+
     keys = _skill_file_keys(agent_id, folder_name, (path for path, _content in files))
-    storage = get_storage_backend()
-    for key, (_path, content) in zip(keys, files, strict=True):
-        await storage.write_text(key, content, encoding="utf-8")
+    payload = [(key, content.encode("utf-8")) for key, (_path, content) in zip(keys, files, strict=True)]
+    folder = _agent_storage_key(agent_id, f"skills/{folder_name}")
+    try:
+        _ = await write_skill_files(get_storage_backend(), payload, folder=folder)
+    except SkillFilesInvalidError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except SkillFilesConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    schedule_background_task(
+        invalidate_for_workspace_paths(agent_id, f"skills/{folder_name}"), "invalidate workspace context"
+    )
     return [path for path, _content in files]
 
 

@@ -605,6 +605,40 @@ async def test_skill_imports_still_write_under_skills(api: Api, monkeypatch: pyt
     assert await api.storage.read_text(f"{api.agent_id}/skills/demo/SKILL.md") == "x"
 
 
+@pytest.mark.parametrize("route", IMPORT_ROUTES)
+async def test_skill_imports_answer_409_and_write_nothing_when_a_file_is_in_the_way(
+    api: Api, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    # Given
+    await api.storage.write_bytes(f"{api.agent_id}/skills/demo/refs", b"in the way")
+    route, body = stage_import(api, monkeypatch, route, "refs/notes.md")
+    # When
+    response = await api.client.post(f"{api.url}/{route}", json=body, headers=AUTH)
+    # Then
+    assert (response.status_code, response.json()) == (409, {"detail": "A file is in the way of skill folder: refs"})
+    assert [entry.name for entry in await api.storage.list_dir(f"{api.agent_id}/skills/demo")] == ["refs"]
+    assert await api.storage.read_bytes(f"{api.agent_id}/skills/demo/refs") == b"in the way"
+
+
+@pytest.mark.parametrize("route", IMPORT_ROUTES)
+async def test_skill_imports_refresh_the_agent_context_for_the_skill_folder(
+    api: Api, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    # Given
+    invalidate = AsyncMock()
+    scheduled: list[Coroutine[object, object, None]] = []
+    monkeypatch.setattr("app.services.agent_context_cache.invalidate_for_workspace_paths", invalidate)
+    monkeypatch.setattr("app.api.background_tasks.schedule_background_task", lambda task, _name: scheduled.append(task))
+    route, body = stage_import(api, monkeypatch, route, "SKILL.md")
+    # When
+    response = await api.client.post(f"{api.url}/{route}", json=body, headers=AUTH)
+    for task in scheduled:
+        await task
+    # Then
+    assert response.status_code == 200, response.text
+    invalidate.assert_awaited_once_with(api.agent_id, "skills/demo")
+
+
 # Captured at import, before the `api` fixture swaps in its stub, so a test can run the real storage write.
 REAL_WRITE_WORKSPACE_FILE = files_api._write_workspace_file
 RACED_LINKS = ("workspace/leak.json", "workspace/up/openclaw.json", "workspace/other/AGENTS.md")
