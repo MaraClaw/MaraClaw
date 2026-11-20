@@ -24,11 +24,15 @@ from app.core.domain.users import UserRole
 from app.core.logging import logger
 from app.core.security import hash_password_async, verify_password_async
 from app.dao import identity_dao, participant_dao, tenant_dao, user_dao
+from app.db.connection import DbConnection
 from app.db.session import connection_ctx
 from app.records.identity import IdentityRecord
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services.system_org_seeder import MARACLAW_SLUG
+
+_SEED_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(%(key)s, 0))"
+_SEED_LOCK_KEY = "maraclaw:seed:platform-admin"
 
 
 class PlatformAdminSeedError(RuntimeError):
@@ -189,34 +193,46 @@ async def _repair_genesis_from_env(genesis: UserRecord, *, email: str, password:
     return await _ensure_platform_user(identity)
 
 
+async def _lock_seed(db: DbConnection) -> None:
+    await db.execute(_SEED_LOCK_SQL, {"key": _SEED_LOCK_KEY})
+
+
+async def _adopt_existing_genesis(existing: UserRecord) -> UserRecord:
+    """Keep a genesis platform admin that already has usable credentials; the env seed is skipped."""
+    settings = get_settings()
+    env_email = (settings.PLATFORM_ADMIN_EMAIL or "").strip().lower()
+    actual = ((existing.identity.email if existing.identity is not None else None) or "").strip().lower()
+    if env_email and actual and env_email != actual:
+        logger.warning(
+            "[startup] PLATFORM_ADMIN_EMAIL=%s does not match genesis platform admin %s; "
+            "env seed skipped because the database already has usable credentials. "
+            "Sign in with the genesis email (admin console).",
+            env_email,
+            actual,
+        )
+    else:
+        logger.info(
+            "[startup] Genesis platform admin credentials found in database (user_id=%s); skipping env seed",
+            existing.id,
+        )
+    identity = existing.identity
+    if identity is not None:
+        return await _ensure_platform_user(identity)
+    return existing
+
+
 async def ensure_platform_admin() -> UserRecord:
     """Ensure genesis platform-admin credentials exist (database, then env).
+
+    Seeding runs in one transaction behind a transaction-level advisory lock, and the genesis rows are read again once
+    it is held, so replicas booting together on an empty database leave one genesis platform admin and all return.
 
     Raises:
         PlatformAdminSeedError: when neither the database nor env can supply them.
     """
     existing = await _load_genesis_with_credentials()
     if existing is not None:
-        settings = get_settings()
-        env_email = (settings.PLATFORM_ADMIN_EMAIL or "").strip().lower()
-        actual = ((existing.identity.email if existing.identity is not None else None) or "").strip().lower()
-        if env_email and actual and env_email != actual:
-            logger.warning(
-                "[startup] PLATFORM_ADMIN_EMAIL=%s does not match genesis platform admin %s; "
-                "env seed skipped because the database already has usable credentials. "
-                "Sign in with the genesis email (admin console).",
-                env_email,
-                actual,
-            )
-        else:
-            logger.info(
-                "[startup] Genesis platform admin credentials found in database (user_id=%s); skipping env seed",
-                existing.id,
-            )
-        identity = existing.identity
-        if identity is not None:
-            return await _ensure_platform_user(identity)
-        return existing
+        return await _adopt_existing_genesis(existing)
 
     settings = get_settings()
     email = (settings.PLATFORM_ADMIN_EMAIL or "").strip().lower()
@@ -231,9 +247,12 @@ async def ensure_platform_admin() -> UserRecord:
     if len(password) < 6:
         raise PlatformAdminSeedError("PLATFORM_ADMIN_PASSWORD must be at least 6 characters.")
 
-    existing_genesis = await _find_genesis_membership()
-
-    async with connection_ctx():
+    async with connection_ctx() as db:
+        await _lock_seed(db)
+        existing = await _load_genesis_with_credentials()
+        if existing is not None:
+            return await _adopt_existing_genesis(existing)
+        existing_genesis = await _find_genesis_membership()
         if existing_genesis is not None:
             user = await _repair_genesis_from_env(existing_genesis, email=email, password=password)
             logger.info(

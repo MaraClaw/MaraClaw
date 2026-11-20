@@ -67,6 +67,15 @@ def _patch_maraclaw(monkeypatch, seeder, *, tenant_id=None):
     return tenant
 
 
+@pytest.fixture(autouse=True)
+def seed_lock(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    from app.services import platform_admin_seeder
+
+    lock = AsyncMock()
+    monkeypatch.setattr(platform_admin_seeder, "_lock_seed", lock)
+    return lock
+
+
 def _identity_record(
     *,
     email="admin@example.com",
@@ -436,7 +445,7 @@ async def test_create_company_rejects_existing_admin_email(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
+async def test_ensure_platform_admin_creates_when_missing(monkeypatch, seed_lock):
     from app.services import platform_admin_seeder as seeder
 
     settings = SimpleNamespace(
@@ -480,6 +489,7 @@ async def test_ensure_platform_admin_creates_when_missing(monkeypatch):
         result = await seeder.ensure_platform_admin()
 
     assert result is user
+    seed_lock.assert_awaited_once()
     assert create_identity.await_args is not None
     kwargs = create_identity.await_args.kwargs
     assert kwargs["email"] == "platform@example.com"
@@ -623,6 +633,43 @@ async def test_ensure_platform_admin_skips_when_admin_exists(monkeypatch):
     get_by_email.assert_not_awaited()
     assert warned
     assert "does not match genesis platform admin" in warned[0][0]
+
+
+@pytest.mark.asyncio
+async def test_ensure_platform_admin_adopts_the_genesis_a_peer_committed_while_it_queued_for_the_lock(
+    monkeypatch, seed_lock
+):
+    from app.services import platform_admin_seeder as seeder
+
+    # Given no genesis before the seed lock and the peer's committed one once the lock is held.
+    settings = SimpleNamespace(PLATFORM_ADMIN_EMAIL="admin@example.com", PLATFORM_ADMIN_PASSWORD="bootstrap-secret")
+    admin = _user_record(_identity_record())
+    order = []
+    seed_lock.side_effect = lambda _db: order.append("lock")
+
+    async def genesis_platform_admin():
+        order.append("read")
+        return admin if "lock" in order else None
+
+    monkeypatch.setattr(seeder, "get_settings", lambda: settings)
+    monkeypatch.setattr(seeder.user_dao, "genesis_platform_admin", genesis_platform_admin)
+    monkeypatch.setattr(seeder.user_dao, "get_with_identity", AsyncMock(return_value=admin))
+    monkeypatch.setattr(seeder.user_dao, "get_by_identity_id", AsyncMock(return_value=[admin]))
+    monkeypatch.setattr(seeder.user_dao, "update", AsyncMock(return_value=admin))
+    create_identity = AsyncMock()
+    monkeypatch.setattr(seeder.identity_dao, "create_identity", create_identity)
+    _patch_maraclaw(monkeypatch, seeder)
+
+    # When the replica seeds.
+    with patch.object(seeder, "connection_ctx") as ctx:
+        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
+        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+        result = await seeder.ensure_platform_admin()
+
+    # Then it read before and again after taking the lock, and created nothing.
+    assert result is admin
+    assert order == ["read", "lock", "read"]
+    create_identity.assert_not_awaited()
 
 
 @pytest.mark.asyncio
