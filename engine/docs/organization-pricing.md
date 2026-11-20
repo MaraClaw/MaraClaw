@@ -189,7 +189,7 @@ Each plan also carries `storage_limit_bytes` and `max_file_size_bytes`, whole in
 
 Scope of these numbers:
 
-- `storage_limit_bytes` is per agent: the logical bytes of that agent's current managed S3 objects. Direct guest or local-disk writes and historical S3 object versions are not counted.
+- `storage_limit_bytes` is per agent: the logical bytes of that agent's current managed S3 objects. In S3 mode that includes the guest files the workspace mirror uploads ([workspace-mirror.md](workspace-mirror.md)); guest files outside its scope, every guest file in local storage mode and historical S3 object versions are not counted.
 - `max_file_size_bytes` is the largest single managed file, not the size of any individual HTTP upload.
 - This is not a limit on all workspace storage, and it does not make every API upload accept 100 MiB. Individual upload tools and document-parser paths can enforce stricter limits of their own, and the global operation upload maximum is unchanged.
 - Storage limits leave the prices and the per-account agent cap as they are.
@@ -204,6 +204,6 @@ Each plan also carries per-agent guest limits and a workspace disk allowance, ow
 | Max | 3 GiB | 2.0 | 1536 | 768 | 5 GiB |
 | Ultra | 5 GiB | 3.0 | 2048 | 1024 | 8 GiB |
 
-Like every other plan field, a stored snapshot without these five fields, or with a value outside the enum, is refused when read: deployments start from a blank database, so there is no fill-in or compatibility parser. The guest limits apply when a guest is created and when a stopped guest resumes; workspace disk is a measured soft quota (host workspace directory plus the guest's writable layer) that refuses new human work while exceeded. It is separate from `storage_limit_bytes`, which counts managed S3 objects only. Enforcement details, the system-agent fallback and the resource-pressure records used for upgrade suggestions: [guest-containers.md](guest-containers.md).
+Like every other plan field, a stored snapshot without these five fields, or with a value outside the enum, is refused when read: deployments start from a blank database, so there is no fill-in or compatibility parser. The guest limits apply when a guest is created and when a stopped guest resumes; workspace disk is a measured soft quota (host workspace directory plus the guest's writable layer) that refuses new human work while exceeded. It is separate from `storage_limit_bytes`, which counts managed S3 objects only (the mirrored guest files among them). Enforcement details, the system-agent fallback and the resource-pressure records used for upgrade suggestions: [guest-containers.md](guest-containers.md).
 
 The repository initializes database objects from `engine/scripts/schema_baseline.sql`. An existing `organization_admission_requests` table created before named provisioning is upgraded in place on the next bootstrap (rows kept, organization name empty, never provisioned retroactively); no other existing-database migration is provided. The payment and evidence columns of `organization_admission_requests` (billing, amount, rate, recipient, payment reference and the evidence metadata, all `NOT NULL`) are fresh-baseline only: no upgrade block adds them, so a database whose `organization_admission_requests` table predates the paid flow must be recreated from the baseline before the new routes are used.

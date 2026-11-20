@@ -55,6 +55,7 @@ Full-stack: engine first (API + schema + tests), then the matching UI. Landing n
 | Generated API contracts | `engine` + clients | `engine/contracts/README.md`; export in engine, generate/check validators in each frontend |
 | Agent role catalog | `engine` | `engine/agent_templates/` ≠ `engine/agent_template/` |
 | Tool / sandbox / LLM / web search | `engine` | `engine/app/services/` nested AGENTS; Tavily proxy is `tavily/`; bundled skills live in the sibling guest image project (not a function-calling tool) |
+| Guest file sync / share links | `engine` | `engine/docs/workspace-mirror.md`: S3-mode mirror of guest files and the public `/f/{token}/{filename}` download links (`web-e` proxies `/f`) |
 | Inbound office parse (PDF/DOCX/XLSX/PPTX) | `engine` | `app/services/document_parser/` (`firecrawl-anydoc`). Not `document_conversion/` |
 | Landing copy / channels list | `web-e` | `web-e/AGENTS.md` — landing shows 12 of 22 `agent_templates/` roles |
 | Admin screen | `web-a` | `web-a/AGENTS.md`, `engine/docs/admin-apis.md` |

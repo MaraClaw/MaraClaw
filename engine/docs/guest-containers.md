@@ -391,6 +391,34 @@ lift the block. When the files alone exceed the allowance the message says to de
 files and Start resumes as before; a running guest, or a guest without the host state
 mount, is never recreated.
 
+## Workspace Mirror
+
+In S3 storage mode the worker loop `workspace_mirror`
+([loop](../app/services/workspace_mirror_worker.py),
+[pass](../app/services/workspace_mirror.py)) copies guest files between the host agent
+directory and the agent's durable storage in both directions: `workspace/`, `memory/`,
+`daily_reports/`, `skills/`, `media/outbound/` and the root `AGENTS.md`,
+`HEARTBEAT.md`, `soul.md` and `state.json`. It runs every
+`WORKSPACE_MIRROR_INTERVAL_SECONDS` (default `60`) for OpenClaw agents (system agents included) in
+`running`, `idle`, `stopped` and `error`, and skips an agent whose setup lock stays
+exclusively held for more than a second, whose OpenClaw upgrade is active or whose
+company-transfer cleanup is pending. Local storage is the agent directory itself, so the
+loop is idle there.
+
+A start that rehydrates pulls first: `_apply_guest_state` calls
+[`pull_durable_state`](../app/services/agent_materialize.py) under the exclusive flock
+the start already holds. That pass only pulls: it writes nothing to storage and charges
+no quota. If the directory has no finished mirror generation and the pass fails or runs
+out of its 120-second budget, the start fails with `WorkspaceRestoreError`, because
+storage could not restore a workspace with no usable local copy. With a finished
+generation the failure is logged and the start goes on.
+Upgrades start with `rehydrate=False` and skip the pull.
+
+Mirrored files count against the managed S3 quota
+([managed-storage-quota.md](managed-storage-quota.md)), not against the workspace disk
+allowance above, which measures the host directory and the writable layer. Scope,
+conflict rule, freezes, quota behaviour and limits: [workspace-mirror.md](workspace-mirror.md).
+
 ## Resource Pressure Episodes
 
 Platform admins need evidence of which organizations outgrow their tier. The engine
