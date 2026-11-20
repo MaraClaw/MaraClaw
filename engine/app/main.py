@@ -138,6 +138,7 @@ from app.api.discord_bot import router as discord_router
 from app.api.enterprise import router as enterprise_router
 from app.api.feishu import router as feishu_router
 from app.api.file_previews import router as file_previews_router
+from app.api.file_shares import public_router as file_shares_public_router
 from app.api.files import enterprise_kb_router, router as files_router, upload_router as files_upload_router
 from app.api.focus import router as focus_router
 from app.api.gateway import router as gateway_router
@@ -249,6 +250,7 @@ app.include_router(admin_resource_pressure_export_router, prefix=settings.API_PR
 app.include_router(tavily_proxy_router)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(pages_public_router)
+app.include_router(file_shares_public_router)
 app.include_router(credentials_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(agentbay_control_router, prefix=settings.API_PREFIX)
 app.include_router(gogcli_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

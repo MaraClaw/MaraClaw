@@ -151,6 +151,7 @@ def test_other_crud_routers_keep_request_binding(router: APIRouter) -> None:
         main.gateway_router,
         main.tavily_proxy_router,
         main.pages_public_router,
+        main.file_shares_public_router,
         main.agentbay_control_router,
     ],
 )

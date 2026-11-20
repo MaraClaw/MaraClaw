@@ -9086,6 +9086,56 @@
         "title": "FileLockBody",
         "type": "object"
       },
+      "FileShareLinkRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "FileShareLinkRequest",
+        "type": "object"
+      },
+      "FileShareLinkResponse": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "expires_in_seconds": {
+            "title": "Expires In Seconds",
+            "type": "integer"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at",
+          "expires_in_seconds",
+          "filename",
+          "size_bytes"
+        ],
+        "title": "FileShareLinkResponse",
+        "type": "object"
+      },
       "FileWrite": {
         "properties": {
           "autosave": {
@@ -41289,6 +41339,59 @@
         ]
       }
     },
+    "/api/gateway/file-links": {
+      "post": {
+        "description": "OpenClaw agent asks for a short-lived public URL of one of its workspace files.",
+        "operationId": "post_2f6170692f676174657761792f66696c652d6c696e6b73",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Api-Key",
+            "required": false,
+            "schema": {
+              "title": "X-Api-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileShareLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileShareLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create File Link",
+        "tags": [
+          "gateway"
+        ]
+      }
+    },
     "/api/gateway/heartbeat": {
       "post": {
         "description": "Pure heartbeat ping - keeps the OpenClaw agent marked as online.",
@@ -49818,6 +49921,104 @@
         "summary": "Serve Wecom Verify File",
         "tags": [
           "wecom"
+        ]
+      }
+    },
+    "/f/{token}/{filename}": {
+      "get": {
+        "description": "Serve the file a share token points at; `filename` must be the shared file's own name.",
+        "operationId": "get_2f662f7b746f6b656e7d2f7b66696c656e616d657d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Shared File",
+        "tags": [
+          "file-shares"
+        ]
+      },
+      "head": {
+        "description": "Serve the file a share token points at; `filename` must be the shared file's own name.",
+        "operationId": "head_2f662f7b746f6b656e7d2f7b66696c656e616d657d",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Shared File",
+        "tags": [
+          "file-shares"
         ]
       }
     },

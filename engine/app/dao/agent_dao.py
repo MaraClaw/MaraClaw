@@ -343,6 +343,15 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return AgentRecord.from_row(row) if row is not None else None
 
+    async def is_openclaw_active(self, agent_id: UUID) -> bool:
+        """Whether the agent still passes the gateway predicate, so a key of it would still authenticate."""
+        async with self.session() as db:
+            value = await db.fetchval(
+                "SELECT 1 FROM agents WHERE id = %(id)s AND " + _GATEWAY_ACTIVE_SQL,
+                {"id": agent_id},
+            )
+            return value is not None
+
     async def lock_openclaw(self, agent: AgentRecord) -> AgentRecord | None:
         from app.core.acl_locks import lock_agent, lock_tenants
 
