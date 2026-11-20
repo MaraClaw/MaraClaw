@@ -542,7 +542,7 @@ export const vietnamese = {
   'Reviewed by': 'Người xét duyệt',
   'Back to requests': 'Quay lại yêu cầu',
   'Organization name not provided': 'Chưa cung cấp tên tổ chức',
-  'Storage allowances apply to managed S3 uploads/files only. Direct guest workspace/local writes are excluded. Some upload tools have stricter limits.': 'Hạn mức lưu trữ chỉ áp dụng cho tệp tải lên S3 được quản lý. Không bao gồm ghi trực tiếp vào không gian làm việc hoặc ổ cục bộ của khách. Một số công cụ tải lên có giới hạn chặt hơn.',
+  'Storage allowances count the agent\'s files in managed S3: uploads, and the workspace files the agent writes, which are mirrored there. The agent\'s runtime state and caches are not counted. Some upload tools have stricter limits.': 'Hạn mức lưu trữ tính các tệp của trợ lý trong S3 được quản lý: tệp tải lên và các tệp không gian làm việc do trợ lý ghi, vốn được sao chép đồng bộ lên đó. Trạng thái chạy và bộ nhớ đệm của trợ lý không được tính. Một số công cụ tải lên có giới hạn chặt hơn.',
   'Saved review note': 'Ghi chú xét duyệt đã lưu',
   'No note provided.': 'Không có ghi chú.',
   'Approval creates the named organization and its genesis administrator account, then queues an email with initial sign-in credentials to the applicant. The administrator must change the password at first sign-in. Approve only after you have checked that a transfer of the amount above, with its transfer note, arrived in the bank account.': 'Việc duyệt tạo tổ chức và tài khoản quản trị viên khởi tạo, sau đó xếp hàng email thông tin đăng nhập ban đầu cho người nộp đơn. Quản trị viên phải đổi mật khẩu khi đăng nhập lần đầu. Chỉ duyệt sau khi bạn đã kiểm tra rằng khoản chuyển khoản đúng số tiền nêu trên, kèm nội dung chuyển khoản, đã vào tài khoản ngân hàng.',
