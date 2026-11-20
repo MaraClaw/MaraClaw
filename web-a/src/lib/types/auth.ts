@@ -73,6 +73,10 @@ export function canReviewAgentDeletions(user: UserOut | null | undefined): boole
   return user?.role === 'org_admin' && !isPlatformAdminUser(user) && user.tenant_id != null && user.is_active
 }
 
+export function canViewClawbook(user: UserOut | null | undefined): boolean {
+  return user?.role === 'org_admin' && !isPlatformAdminUser(user) && user.tenant_id != null && user.is_active === true
+}
+
 export function canBuyCapacity(user: UserOut | null | undefined): boolean {
   return user?.role === 'org_admin' && !isPlatformAdminUser(user) && user.tenant_id != null && user.is_active === true
 }

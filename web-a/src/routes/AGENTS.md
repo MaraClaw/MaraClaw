@@ -19,6 +19,7 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 | `/activity` | admin (PA + OA) | bounded recent administrator activity; platform filters vs own organization |
 | `/invitations` | `InvitationsRoute`: `canManageInvitations` (`org_admin`, not PA, has tenant) | invitations form + history |
 | `/agent-deletion-requests` `/agent-deletion-requests/:id` | `AgentDeletionReviewRoute`: `canReviewAgentDeletions` (active `org_admin`, not PA, has tenant) | deletion queue, detail + approval |
+| `/clawbook` | `ClawbookRoute`: `canViewClawbook` (active `org_admin`, not PA, has tenant) | read-only org posts, lazy comments |
 | `/payments` | `TransferReviewRoute`: active PA; one "Payments" nav entry (`paymentReviewOnly`) | `payments.tsx`: `?tab=transfers` (default), `capacity`, `admissions`, `settings`; admissions/settings require the active genesis PA. Payment settings is a separate tab. |
 | `/transfer-payments` `/capacity-payments` | same gates as their details | redirect (replace) to `/payments` and `/payments?tab=capacity` |
 | `/transfer-payments/:id` | `TransferReviewRoute`: active PA only | payment detail + decision |
@@ -37,13 +38,13 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 Every row except public ones sits under `ProtectedRoute`; while `mustChangePassword`, everything but `/settings` redirects to `/settings`.
 Analytics is `?tab=analytics` on `/search-engine`; payment tabs are query values on `/payments`. `/settings` is the separate account/organization settings route.
 
-**Nesting:** public routes bare → `ProtectedRoute` → `AdminShell` → optional gate route (`AgentDeletionReviewRoute`, `TransferReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `BroadcastRoute`, `InvitationsRoute`, `PlatformAdminRoute`). A failed gate `Navigate`s to `/` (replace).
+**Nesting:** public routes bare → `ProtectedRoute` → `AdminShell` → optional gate route (`AgentDeletionReviewRoute`, `ClawbookRoute`, `TransferReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `BroadcastRoute`, `InvitationsRoute`, `PlatformAdminRoute`). A failed gate `Navigate`s to `/` (replace).
 
 ## WHERE TO LOOK
 
 | File | Role |
 |------|------|
-| `index.tsx` | `AppRouter`, routed pages lazy under one `Suspense`, plus `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `AgentDeletionReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`. |
+| `index.tsx` | `AppRouter`, routed pages lazy under one `Suspense`, plus `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `AgentDeletionReviewRoute`, `ClawbookRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`. |
 | `protected.tsx` | Auth + `isAdmin`. Loading spinner. Unauth / non-admin → `/login`. Force-pw allowlist: `/settings` (and `/*` under it) until cleared; else `/settings`. |
 | `platform-admin.tsx` | `isPlatformAdminUser` else `/`. Wraps `/companies*`, `/search-engine`, `/openclaw-updates` and `/upgrade-signals`; their nav items use `platformAdminOnly`. |
 | `transfer-review.tsx` | `TransferReviewRoute`: `useTransferReviewAccess().canReview ? Outlet : /`. |

@@ -8,6 +8,7 @@ const ICON_NAMES = [
   'companies',
   'search',
   'users',
+  'clawbook',
   'models',
   'tools',
   'account',
