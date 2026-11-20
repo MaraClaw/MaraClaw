@@ -461,6 +461,30 @@ export type ChatTicketRequest = z.infer<typeof ChatTicketRequestSchema>;
 export const ChatTicketResponseSchema = z.looseObject({ ["session_id"]: z.guid(), ["ticket"]: z.string() });
 export type ChatTicketResponse = z.infer<typeof ChatTicketResponseSchema>;
 
+export const ClawbookAdminCommentSchema = z.looseObject({ ["author_id"]: z.guid(), ["author_name"]: z.string(), ["author_type"]: z.string(), ["content"]: z.string(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["hidden_from_members"]: z.boolean(), ["id"]: z.guid(), ["post_id"]: z.guid() });
+export type ClawbookAdminComment = z.infer<typeof ClawbookAdminCommentSchema>;
+
+export const ClawbookAdminCommentPageSchema = z.looseObject({ ["items"]: z.array(ClawbookAdminCommentSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type ClawbookAdminCommentPage = z.infer<typeof ClawbookAdminCommentPageSchema>;
+
+export const ClawbookAdminPostSchema = z.looseObject({ ["author_id"]: z.guid(), ["author_name"]: z.string(), ["author_type"]: z.string(), ["comments_count"]: z.number().refine(Number.isInteger), ["content"]: z.string(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["hidden_from_members"]: z.boolean(), ["id"]: z.guid(), ["likes_count"]: z.number().refine(Number.isInteger) });
+export type ClawbookAdminPost = z.infer<typeof ClawbookAdminPostSchema>;
+
+export const ClawbookAdminPostPageSchema = z.looseObject({ ["items"]: z.array(ClawbookAdminPostSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type ClawbookAdminPostPage = z.infer<typeof ClawbookAdminPostPageSchema>;
+
+export const CommentOutSchema = z.looseObject({ ["author_id"]: z.guid(), ["author_name"]: z.string(), ["author_type"]: z.string(), ["content"]: z.string(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["id"]: z.guid(), ["post_id"]: z.guid() });
+export type CommentOut = z.infer<typeof CommentOutSchema>;
+
+export const ClawbookCommentPageSchema = z.looseObject({ ["items"]: z.array(CommentOutSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type ClawbookCommentPage = z.infer<typeof ClawbookCommentPageSchema>;
+
+export const PostOutSchema = z.looseObject({ ["author_id"]: z.guid(), ["author_name"]: z.string(), ["author_type"]: z.string(), ["comments_count"]: z.number().refine(Number.isInteger), ["content"]: z.string(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["id"]: z.guid(), ["likes_count"]: z.number().refine(Number.isInteger) });
+export type PostOut = z.infer<typeof PostOutSchema>;
+
+export const ClawbookPostPageSchema = z.looseObject({ ["items"]: z.array(PostOutSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type ClawbookPostPage = z.infer<typeof ClawbookPostPageSchema>;
+
 export const ClawhubInstallInSchema = z.looseObject({ ["slug"]: z.string().regex(new RegExp("^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", "u")), ["version"]: z.union([z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 200).regex(new RegExp("^[A-Za-z0-9._+-]+$", "u")), z.null()]).optional() });
 export type ClawhubInstallIn = z.infer<typeof ClawhubInstallInSchema>;
 
@@ -469,6 +493,9 @@ export type ClickRequest = z.infer<typeof ClickRequestSchema>;
 
 export const CollaborationAcknowledgementSchema = z.looseObject({ ["status"]: z.intersection(z.literal("ok"), z.string()) });
 export type CollaborationAcknowledgement = z.infer<typeof CollaborationAcknowledgementSchema>;
+
+export const CommentCreateSchema = z.looseObject({ ["author_id"]: z.union([z.guid(), z.null()]).optional(), ["author_name"]: z.union([z.string(), z.null()]).optional(), ["author_type"]: z.intersection(z.union([z.literal("human"), z.literal("agent")]), z.string()).optional(), ["content"]: z.string().refine(value => [...value].length <= 300) });
+export type CommentCreate = z.infer<typeof CommentCreateSchema>;
 
 export const CompanyActivationOutSchema = z.looseObject({ ["inactive_members"]: z.number().refine(Number.isInteger), ["is_active"]: z.boolean(), ["ok"]: z.boolean().optional(), ["restored_members"]: z.number().refine(Number.isInteger) });
 export type CompanyActivationOut = z.infer<typeof CompanyActivationOutSchema>;
@@ -1036,6 +1063,12 @@ export type PersonalState = z.infer<typeof PersonalStateSchema>;
 
 export const PersonalStatusSchema = z.strictObject({ ["account_hint"]: z.union([z.string(), z.null()]).optional(), ["attempt_id"]: z.union([z.guid(), z.null()]).optional(), ["error_code"]: z.union([PersonalErrorSchema, z.null()]).optional(), ["expires_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["generation"]: z.union([z.guid(), z.null()]).optional(), ["mode"]: z.intersection(z.literal("personal_qr"), z.string()).optional(), ["qr"]: z.union([PersonalQRSchema, z.null()]).optional(), ["revision"]: z.number().refine(Number.isInteger).optional(), ["state"]: PersonalStateSchema.optional() });
 export type PersonalStatus = z.infer<typeof PersonalStatusSchema>;
+
+export const PostCreateSchema = z.looseObject({ ["author_id"]: z.union([z.guid(), z.null()]).optional(), ["author_name"]: z.union([z.string(), z.null()]).optional(), ["author_type"]: z.intersection(z.union([z.literal("human"), z.literal("agent")]), z.string()).optional(), ["content"]: z.string().refine(value => [...value].length <= 1000), ["tenant_id"]: z.union([z.guid(), z.null()]).optional() });
+export type PostCreate = z.infer<typeof PostCreateSchema>;
+
+export const PostDetailSchema = z.looseObject({ ["author_id"]: z.guid(), ["author_name"]: z.string(), ["author_type"]: z.string(), ["comments"]: z.array(CommentOutSchema).optional(), ["comments_count"]: z.number().refine(Number.isInteger), ["content"]: z.string(), ["created_at"]: z.iso.datetime({ offset: true, local: true }), ["id"]: z.guid(), ["likes_count"]: z.number().refine(Number.isInteger), ["next_cursor"]: z.union([z.string(), z.null()]).optional() });
+export type PostDetail = z.infer<typeof PostDetailSchema>;
 
 export const PressKeysRequestSchema = z.looseObject({ ["keys"]: z.array(z.string()), ["owner_token"]: z.union([z.string(), z.null()]).optional(), ["session_id"]: z.string() });
 export type PressKeysRequest = z.infer<typeof PressKeysRequestSchema>;

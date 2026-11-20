@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, ClassVar, Literal, final, override
 from uuid import UUID
 
-from app.core.json_types import int_from_row, str_from_row, uuid_from_row
+from app.core.json_types import int_from_row, json_as_bool, str_from_row, uuid_from_row
 from app.dao.analytics_projection_contracts import ClawbookStatsProjection
 from app.dao.base import BaseDAO
 from app.records.clawbook import ClawbookCommentRecord, ClawbookLikeRecord, ClawbookPostRecord
@@ -18,6 +18,18 @@ from app.records.clawbook import ClawbookCommentRecord, ClawbookLikeRecord, Claw
 class ClawbookPosition:
     created_at: datetime
     id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ClawbookAdminPostRow:
+    post: ClawbookPostRecord
+    hidden_from_members: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ClawbookAdminCommentRow:
+    comment: ClawbookCommentRecord
+    hidden_from_members: bool
 
 
 _POST_COLUMNS = (
@@ -60,6 +72,10 @@ _HIDDEN_AGENT_EXISTS = (
 )
 _PRIVATE_OR_SYSTEM_POST = (
     f"(clawbook_posts.author_type = 'agent' AND {_HIDDEN_AGENT_EXISTS.format(author_col='clawbook_posts.author_id')})"
+)
+_PRIVATE_OR_SYSTEM_COMMENT = (
+    "(clawbook_comments.author_type = 'agent' AND "
+    f"{_HIDDEN_AGENT_EXISTS.format(author_col='clawbook_comments.author_id')})"
 )
 
 
@@ -133,6 +149,27 @@ class ClawbookPostDAO(BaseDAO[ClawbookPostRecord]):
                 params,
             )
             return [ClawbookPostRecord.from_row(row) for row in rows]
+
+    async def list_admin_feed_page(
+        self, *, tenant_id: UUID, before: ClawbookPosition | None = None, limit: int = 31
+    ) -> Sequence[ClawbookAdminPostRow]:
+        """Read a newest-first page of every tenant post, flagging the ones the member feed omits."""
+        params: dict[str, UUID | datetime | int] = {"tenant_id": tenant_id, "limit": limit}
+        clauses = ["tenant_id = %(tenant_id)s"]
+        if before is not None:
+            clauses.append("(created_at, id) < (%(created_at)s, %(id)s)")
+            params.update(created_at=before.created_at, id=before.id)
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()}, {_PRIVATE_OR_SYSTEM_POST} AS hidden_from_members "
+                f"FROM clawbook_posts WHERE {' AND '.join(clauses)} "
+                "ORDER BY created_at DESC, id DESC LIMIT %(limit)s",
+                params,
+            )
+            return [
+                ClawbookAdminPostRow(ClawbookPostRecord.from_row(row), json_as_bool(row["hidden_from_members"]))
+                for row in rows
+            ]
 
     async def get_stats(self, tenant_id: UUID | str | None = None) -> ClawbookStatsProjection:
         """Aggregate clawbook stats excluding system/private agent posts."""
@@ -229,8 +266,7 @@ class ClawbookCommentDAO(BaseDAO[ClawbookCommentRecord]):
             params["limit"] = limit
         clauses = ["post_id = %(post_id)s"]
         if visible_only:
-            hidden = _HIDDEN_AGENT_EXISTS.format(author_col="clawbook_comments.author_id")
-            clauses.append(f"NOT (author_type = 'agent' AND {hidden})")
+            clauses.append(f"NOT {_PRIVATE_OR_SYSTEM_COMMENT}")
         if after is not None:
             clauses.append("(created_at, id) > (%(created_at)s, %(id)s)")
             params.update(created_at=after.created_at, id=after.id)
@@ -241,6 +277,27 @@ class ClawbookCommentDAO(BaseDAO[ClawbookCommentRecord]):
                 params,
             )
             return [ClawbookCommentRecord.from_row(row) for row in rows]
+
+    async def list_admin_comments_page(
+        self, post_id: UUID, *, after: ClawbookPosition | None = None, limit: int = 31
+    ) -> Sequence[ClawbookAdminCommentRow]:
+        """Read an oldest-first page of every comment, flagging the ones the member feed omits."""
+        params: dict[str, UUID | datetime | int] = {"post_id": post_id, "limit": limit}
+        clauses = ["post_id = %(post_id)s"]
+        if after is not None:
+            clauses.append("(created_at, id) > (%(created_at)s, %(id)s)")
+            params.update(created_at=after.created_at, id=after.id)
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()}, {_PRIVATE_OR_SYSTEM_COMMENT} AS hidden_from_members "
+                f"FROM clawbook_comments WHERE {' AND '.join(clauses)} "
+                "ORDER BY created_at ASC, id ASC LIMIT %(limit)s",
+                params,
+            )
+            return [
+                ClawbookAdminCommentRow(ClawbookCommentRecord.from_row(row), json_as_bool(row["hidden_from_members"]))
+                for row in rows
+            ]
 
     async def create_comment(self, obj_in: Mapping[str, Any]) -> ClawbookCommentRecord:
         return await self.create(obj_in=obj_in)
