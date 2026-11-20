@@ -10,12 +10,13 @@ from app.services.storage_runtime.base import (
     StorageVersion,
     content_hash_bytes,
 )
-from app.services.storage_runtime.bounded import open_regular_file, read_bounded
+from app.services.storage_runtime.bounded import read_bounded
+from app.services.storage_runtime.local_contained import open_regular_entry
 
 
-def read_file_snapshot(path: Path, key: str, max_bytes: int) -> StorageSnapshot:
-    """Read and hash once, rejecting detected descriptor or path changes."""
-    with open_regular_file(path) as stream:
+def read_file_snapshot(root: Path, relative: str, max_bytes: int) -> StorageSnapshot:
+    """Read and hash once, rejecting a change of the descriptor or of the entry it was opened from."""
+    with open_regular_entry(root, relative) as (stream, directory, name):
         before = os.fstat(stream.fileno())
         if before.st_size > max_bytes:
             raise StorageReadLimitExceededError(max_bytes, before.st_size)
@@ -23,19 +24,19 @@ def read_file_snapshot(path: Path, key: str, max_bytes: int) -> StorageSnapshot:
         digest = content_hash_bytes(data)
         after = os.fstat(stream.fileno())
         try:
-            current = path.stat(follow_symlinks=False)
+            current = os.stat(name, dir_fd=directory, follow_symlinks=False)
         except FileNotFoundError:
-            raise StorageReadChangedError(key) from None
+            raise StorageReadChangedError(relative) from None
         if (
             _identity(before) != _identity(after)
             or _identity(after) != _identity(current)
             or len(data) != after.st_size
         ):
-            raise StorageReadChangedError(key)
+            raise StorageReadChangedError(relative)
     return StorageSnapshot(
         data=data,
         version=StorageVersion(
-            key=key,
+            key=relative,
             exists=True,
             is_dir=False,
             size=len(data),

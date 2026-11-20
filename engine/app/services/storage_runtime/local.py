@@ -1,9 +1,10 @@
 """Local filesystem storage backend.
 
 Every operation walks the normalized key from the resolved root through directory descriptors opened with O_NOFOLLOW
-(`local_contained`, `local_create`, `bounded.open_regular_file`). A symlink anywhere below the root, planted before the
-call or swapped in during it, is refused with `StorageLinkRefusedError` (403) and never followed, so a guest that writes
-its own agent directory cannot redirect a member read or write elsewhere.
+(`local_contained`, `local_create`). A symlink anywhere below the root, planted before the call or swapped in during
+it, is refused with `StorageLinkRefusedError` (403) and never followed, so a guest that writes its own agent directory
+cannot redirect a member read or write elsewhere. Nothing above the root is ever opened, so the folders above it need
+no read permission.
 """
 
 from __future__ import annotations
@@ -27,10 +28,11 @@ from app.services.storage_runtime.base import (
     checked_page_limit,
     content_hash_bytes,
 )
-from app.services.storage_runtime.bounded import open_regular_file, read_bounded
+from app.services.storage_runtime.bounded import read_bounded
 from app.services.storage_runtime.local_contained import (
     local_version_token,
     lstat_entry,
+    open_regular_file,
     read_entry,
     read_version,
     regular_file_path,
@@ -98,15 +100,13 @@ class LocalStorageBackend(StorageBackend):
     async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
         if offset is not None and offset < 0:
             raise ValueError("offset must be nonnegative")
-        return await self._in_thread(lambda root, relative: _read_file_bounded(root / relative, max_bytes, offset), key)
+        return await self._in_thread(lambda root, relative: _read_file_bounded(root, relative, max_bytes, offset), key)
 
     @override
     async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
         if max_bytes < 0:
             raise ValueError("max_bytes must be nonnegative")
-        return await self._in_thread(
-            lambda root, relative: read_file_snapshot(root / relative, relative, max_bytes), key
-        )
+        return await self._in_thread(lambda root, relative: read_file_snapshot(root, relative, max_bytes), key)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
@@ -170,16 +170,16 @@ class LocalStorageBackend(StorageBackend):
     async def materialize(self, key: str) -> MaterializedFile:
         """An owned temp copy read from a contained descriptor, so no caller reopens the guest path by name."""
         root, relative = self.root, normalize_storage_key(key)
-        return await materialize_copy(lambda: open_regular_file(root.resolve() / relative), Path(relative).suffix)
+        return await materialize_copy(lambda: open_regular_file(root.resolve(), relative), Path(relative).suffix)
 
 
 def _read_file(root: Path, relative: str) -> bytes:
-    with open_regular_file(root / relative) as stream:
+    with open_regular_file(root, relative) as stream:
         return stream.readall()
 
 
-def _read_file_bounded(path: Path, max_bytes: int, offset: int | None = None) -> bytes:
-    with open_regular_file(path) as stream:
+def _read_file_bounded(root: Path, relative: str, max_bytes: int, offset: int | None = None) -> bytes:
+    with open_regular_file(root, relative) as stream:
         if offset is not None:
             _ = stream.seek(offset)
             return read_bounded(stream, max_bytes, range_read=True)

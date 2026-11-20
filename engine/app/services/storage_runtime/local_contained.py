@@ -106,6 +106,38 @@ def regular_file_path(root: Path, relative: str) -> Path | None:
     return root / relative if info is not None and stat.S_ISREG(info.st_mode) else None
 
 
+@contextmanager
+def open_regular_entry(root: Path, relative: str) -> Generator[tuple[FileIO, int, str]]:
+    """Yield a read stream of the regular file at `relative` with the descriptor of its directory and its name.
+
+    Nothing above `root` is opened, so only the root and the folders below it need to be readable. A link anywhere on
+    the path raises `StorageLinkRefusedError`. A missing path, a file where a directory should be, and an entry that is
+    not a regular file (a directory, a pipe) raise `FileNotFoundError`; the entry is opened non-blocking and
+    checked with `fstat` before anything reads it, so a pipe the guest planted cannot stall a worker.
+    """
+    with ExitStack() as stack:
+        try:
+            directory, name = stack.enter_context(contained_parent(root, relative))
+        except NotADirectoryError as error:
+            raise FileNotFoundError(relative) from error
+        try:
+            fd = os.open(name, _ENTRY, dir_fd=directory)
+        except OSError as error:
+            refuse_if_link(directory, name, error)
+            raise
+        stack.callback(os.close, fd)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise FileNotFoundError(relative)
+        yield stack.enter_context(FileIO(fd, "rb", closefd=False)), directory, name
+
+
+@contextmanager
+def open_regular_file(root: Path, relative: str) -> Generator[FileIO]:
+    """Yield a read stream of the regular file at `relative`; `open_regular_entry` says what it refuses."""
+    with open_regular_entry(root, relative) as (stream, _directory, _name):
+        yield stream
+
+
 def local_version_token(info: os.stat_result, file_hash: str | None) -> str:
     return f"{info.st_mtime_ns}:{info.st_size}:{file_hash or ''}"
 
