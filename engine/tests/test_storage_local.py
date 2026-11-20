@@ -583,6 +583,7 @@ LOCAL_OPERATIONS = (
     "create_bytes_if_absent",
     "delete",
     "delete_tree",
+    "remove_empty_directory",
     "stat",
     "get_version",
     "get_version_bounded",
@@ -638,6 +639,7 @@ MISSING_ANSWERS: dict[str, object] = {
     "delete": None,
     "delete_tree": None,
     "local_path_for": None,
+    "remove_empty_directory": None,
 }
 
 
@@ -726,3 +728,18 @@ async def test_local_write_rewrites_an_existing_file_in_place(tmp_path: Path):
     after = target.stat()
     assert target.read_bytes() == b"short"
     assert (after.st_ino, S_IMODE(after.st_mode)) == (before.st_ino, 0o600)
+
+
+async def test_local_remove_empty_directory_removes_only_an_empty_directory(tmp_path: Path):
+    # Given
+    (tmp_path / "A" / "empty").mkdir(parents=True)
+    (tmp_path / "A" / "full").mkdir()
+    _ = (tmp_path / "A" / "full" / "keep.md").write_bytes(b"keep")
+    _ = (tmp_path / "A" / "file.md").write_bytes(b"file")
+    backend = LocalStorageBackend(str(tmp_path))
+    # When
+    for key in ("A/empty", "A/full", "A/file.md", "A/missing", ""):
+        await backend.remove_empty_directory(key)
+    # Then
+    assert sorted(path.name for path in (tmp_path / "A").iterdir()) == ["file.md", "full"]
+    assert (tmp_path / "A" / "full" / "keep.md").read_bytes() == b"keep"

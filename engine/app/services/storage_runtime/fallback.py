@@ -152,6 +152,11 @@ class FallbackStorageBackend(StorageBackend):
         await self.fallback.delete_tree(key)
 
     @override
+    async def remove_empty_directory(self, key: str) -> None:
+        # Writes land in the primary, so only directories the primary holds can be this backend's leftovers.
+        await self.primary.remove_empty_directory(key)
+
+    @override
     async def stat(self, key: str) -> StorageEntry:
         if await self._primary_serves(key):
             return await self.primary.stat(key)

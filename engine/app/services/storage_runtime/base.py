@@ -264,6 +264,10 @@ class StorageBackend:
     async def delete_tree(self, key: str) -> None:
         raise NotImplementedError
 
+    async def remove_empty_directory(self, key: str) -> None:
+        """Remove the directory at ``key`` only while it is empty; stores without real directories have none."""
+        del key
+
     async def stat(self, key: str) -> StorageEntry:
         raise NotImplementedError
 

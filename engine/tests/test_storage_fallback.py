@@ -776,3 +776,17 @@ async def test_fallback_flat_listing_is_the_primary_listing_alone(tmp_path: Path
 def test_a_backend_without_a_flat_listing_fails_closed():
     with pytest.raises(NotImplementedError):
         _ = StorageBackend().list_files_flat("w")
+
+
+async def test_fallback_removes_empty_directories_only_from_the_primary(tmp_path: Path):
+    # Given
+    for side in ("primary", "legacy"):
+        (tmp_path / side / "A" / "skills" / "demo").mkdir(parents=True)
+    storage = FallbackStorageBackend(
+        LocalStorageBackend(str(tmp_path / "primary")), LocalStorageBackend(str(tmp_path / "legacy")), promote=False
+    )
+    # When
+    await storage.remove_empty_directory("A/skills/demo")
+    # Then
+    assert not (tmp_path / "primary" / "A" / "skills" / "demo").exists()
+    assert (tmp_path / "legacy" / "A" / "skills" / "demo").is_dir()

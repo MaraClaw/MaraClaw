@@ -1,5 +1,6 @@
 """Local storage writes and deletes that never follow a symlink below the storage root (see `local_contained`)."""
 
+import errno
 import os
 import shutil
 import stat
@@ -72,6 +73,23 @@ def delete_contained_entry(root: Path, relative: str) -> None:
             shutil.rmtree(name, dir_fd=directory)
         else:
             os.unlink(name, dir_fd=directory)
+
+
+def remove_empty_contained_directory(root: Path, relative: str) -> None:
+    """`rmdir` the directory at `relative` while it is empty; a missing, non-empty or plain-file entry stays."""
+    with suppress(FileNotFoundError, NotADirectoryError), contained_parent(root, relative) as (directory, name):
+        if name == ".":
+            return  # the storage root itself is never removed
+        mode = os.stat(name, dir_fd=directory, follow_symlinks=False).st_mode
+        if stat.S_ISLNK(mode):
+            raise StorageLinkRefusedError
+        if not stat.S_ISDIR(mode):
+            return
+        try:
+            os.rmdir(name, dir_fd=directory)
+        except OSError as error:
+            if error.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                raise
 
 
 def delete_contained_tree(root: Path, relative: str) -> None:

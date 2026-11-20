@@ -41,6 +41,7 @@ from app.services.storage_runtime.local_create import (
     delete_contained_entry,
     delete_contained_tree,
     publish_complete_file,
+    remove_empty_contained_directory,
     write_contained_file,
 )
 from app.services.storage_runtime.local_snapshot import read_file_snapshot
@@ -119,6 +120,10 @@ class LocalStorageBackend(StorageBackend):
     @override
     async def delete_tree(self, key: str) -> None:
         await self._in_thread(delete_contained_tree, key, abandon=False)
+
+    @override
+    async def remove_empty_directory(self, key: str) -> None:
+        await self._in_thread(remove_empty_contained_directory, key, abandon=False)
 
     @override
     async def stat(self, key: str) -> StorageEntry:
