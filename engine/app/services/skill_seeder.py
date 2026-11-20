@@ -389,6 +389,16 @@ Brief summary of main topics discussed
         "is_default": True,
         "files": [],  # populated at runtime from agent_template/skills/mcp-installer/SKILL.md
     },
+    # ─── File Share Links (mandatory default) ──────────────
+    {
+        "name": "File Share Links",
+        "description": "Create a temporary download link for a workspace file so remote tools, webhooks, emails and users outside the container can fetch it",
+        "category": "development",
+        "icon": "🔗",
+        "folder_name": "file-share-links",
+        "is_default": True,
+        "files": [],  # populated at runtime from agent_template/skills/file-share-links/SKILL.md
+    },
     # ─── Market Data (trading agents) ──────────────
     {
         "name": "Market Data",
@@ -777,6 +787,9 @@ To avoid unnecessary deployments, save Vercel build limits, and prevent serving 
     },
 ]
 
+# Default skills whose SKILL.md is read from agent_template/skills/<folder>/ instead of being inlined above.
+TEMPLATE_SKILL_FOLDERS = ("mcp-installer", "file-share-links")
+
 
 async def seed_skills():
     """Insert builtin skills if they don't exist."""
@@ -796,12 +809,12 @@ async def seed_skills():
             crw_file = _files_dir / "content_research_writer__SKILL.md"
             if crw_file.exists():
                 s["files"] = [{"path": "SKILL.md", "content": crw_file.read_text(encoding="utf-8")}]
-        elif s["folder_name"] == "mcp-installer" and not s["files"]:
-            mcp_file = _template_skills_dir / "mcp-installer" / "SKILL.md"
-            if mcp_file.exists():
-                s["files"] = [{"path": "SKILL.md", "content": mcp_file.read_text(encoding="utf-8")}]
+        elif s["folder_name"] in TEMPLATE_SKILL_FOLDERS and not s["files"]:
+            template_file = _template_skills_dir / s["folder_name"] / "SKILL.md"
+            if template_file.exists():
+                s["files"] = [{"path": "SKILL.md", "content": template_file.read_text(encoding="utf-8")}]
             else:
-                logger.warning("[SkillSeeder] mcp-installer/SKILL.md not found in agent_template/skills/")
+                logger.warning(f"[SkillSeeder] {s['folder_name']}/SKILL.md not found in agent_template/skills/")
 
     async with connection_ctx():
         for skill_data in BUILTIN_SKILLS:
@@ -829,7 +842,9 @@ async def seed_skills():
 async def push_default_skills_to_existing_agents():
     """Deploy all is_default skills into the workspace of every existing agent that is missing them.
 
-    Called at startup after seed_skills() so existing agents automatically receive new default skills.
+    Called at startup after seed_skills() so existing agents automatically receive new default skills. One agent's
+    failure (a storage quota or storage error) is logged and skipped; the sync hash is recorded only when every agent
+    succeeded, so the next startup retries the others.
     """
     import hashlib
 
@@ -855,20 +870,34 @@ async def push_default_skills_to_existing_agents():
 
         agent_ids = await agent_dao.list_all_ids()
         pushed = 0
+        failed = 0
         storage = get_storage_backend()
         for agent_id in agent_ids:
             agent_prefix = agent_manager._agent_storage_prefix(agent_id)
-            for skill in default_skills:
-                if not skill.files:
-                    continue
-                first_file_key = f"{agent_prefix}/skills/{skill.folder_name}/{skill.files[0].path}"
-                if await storage.is_file(first_file_key):
-                    continue
-                for sf in skill.files:
-                    key = f"{agent_prefix}/skills/{skill.folder_name}/{sf.path}"
-                    await storage.write_text(key, sf.content, encoding="utf-8")
-                    pushed += 1
-                logger.info(f"[SkillSeeder] Pushed new default skill '{skill.name}' to agent {agent_id}")
+            try:
+                for skill in default_skills:
+                    if not skill.files:
+                        continue
+                    first_file_key = f"{agent_prefix}/skills/{skill.folder_name}/{skill.files[0].path}"
+                    if await storage.is_file(first_file_key):
+                        continue
+                    for sf in skill.files:
+                        key = f"{agent_prefix}/skills/{skill.folder_name}/{sf.path}"
+                        await storage.write_text(key, sf.content, encoding="utf-8")
+                        pushed += 1
+                    logger.info(f"[SkillSeeder] Pushed new default skill '{skill.name}' to agent {agent_id}")
+            except Exception as exc:
+                failed += 1
+                logger.warning(
+                    f"[SkillSeeder] Could not push default skills to agent {agent_id}: {type(exc).__name__}: {exc}"
+                )
+
+        if failed:
+            logger.warning(
+                f"[SkillSeeder] Default skills not pushed to {failed} of {len(agent_ids)} agents "
+                f"({pushed} files pushed); sync hash not recorded, so the next startup retries them"
+            )
+            return
 
         sync_hash_value: JsonObject = {"hash": current_hash}
         if setting:

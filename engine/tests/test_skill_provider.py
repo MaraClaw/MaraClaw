@@ -155,16 +155,17 @@ def test_parse_skill_md_frontmatter_defaults_malformed_values() -> None:
     assert frontmatter == {}
 
 
-def test_mcp_installer_metadata_when_parsing_bundled_template() -> None:
+@pytest.mark.parametrize("folder", ["mcp-installer", "file-share-links"])
+def test_bundled_template_skill_metadata_when_parsing_bundled_template(folder: str) -> None:
     # Given
-    template = Path(__file__).resolve().parents[1] / "agent_template" / "skills" / "mcp-installer" / "SKILL.md"
+    template = Path(__file__).resolve().parents[1] / "agent_template" / "skills" / folder / "SKILL.md"
     content = template.read_text(encoding="utf-8")
 
     # When
     frontmatter = parse_skill_md_frontmatter(content)
 
     # Then
-    assert frontmatter.get("name") == "mcp-installer"
+    assert frontmatter.get("name") == folder
     assert frontmatter.get("description", "").strip()
 
 
