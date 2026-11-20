@@ -19,6 +19,7 @@ Provider-specific LLM clients live here. They translate external protocols into 
 - Normalize finish reasons consistently: tool calls become tool-call completion, while stop/length/content-filter cases map to shared finish fields.
 - Preserve usage normalization, including provider-specific cache/read/write token fields when available.
 - Respect registry feature flags such as `supports_tool_choice`; OpenAI-compatible does not mean every endpoint supports every OpenAI option.
+- Retries: wrap each request attempt in `retry_policy.call_with_retry` (`complete` posts through `raise_for_status`; `stream` is a thin wrapper holding a `StreamDelivery` around `_stream_once`, whose accumulators are local so a retry starts clean, and which raises `stream_http_error` for an error status). OpenAI Responses `stream` delegates to `complete`, so it inherits the retries. Pass every callback the stream can fire to `StreamDelivery`.
 
 ## Provider-Specific Gotchas
 
@@ -29,7 +30,7 @@ Provider-specific LLM clients live here. They translate external protocols into 
 
 ## Avoid
 
-- Keep provider parsing and protocol-specific retries in the owning provider modules.
+- Keep provider parsing and the decision to retry in the owning provider modules; the shared policy is `../retry_policy.py`. No sleeps or retry loops in `caller.py`, `failover.py` or `http_pool.py`.
 - Do not bypass the parent `finish` tool protocol or tool-call sanitization from provider code.
 - HTTP is acquired from `app.services.llm.http_pool`. Wrapper `close()` detaches only; do not `aclose()` the pooled transport.
 - Do not log API keys, request headers, raw credentials, or full prompt payloads in provider errors.

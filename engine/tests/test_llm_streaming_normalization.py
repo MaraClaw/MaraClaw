@@ -1,6 +1,23 @@
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from types import TracebackType
 
+import httpx
+import pytest
+from tests.llm_retry_fakes import (
+    ANTHROPIC,
+    CASE_PARAMS,
+    FAILURES,
+    STREAMING_CASE_PARAMS,
+    Outcome,
+    ProviderCase,
+    ScriptedHttpClient,
+    ScriptedResponse,
+    call_provider,
+    install_retry_policy,
+)
+
+from app.services.llm.base import LLMError
+from app.services.llm.failover import FailoverErrorType, classify_error
 from app.services.llm.providers import (
     AnthropicClient,
     GeminiClient,
@@ -307,3 +324,99 @@ async def test_openai_responses_stream_delegates_to_complete_and_forwards_callba
     assert thinking == ["Reasoning summary"]
     assert complete_calls[0]["messages"] == [LLMMessage(role="user", content="hello")]
     assert complete_calls[0]["max_tokens"] == 32
+
+
+@pytest.fixture
+def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    return install_retry_policy(monkeypatch)
+
+
+@pytest.mark.parametrize("case", CASE_PARAMS)
+@pytest.mark.parametrize("failure", FAILURES)
+async def test_stream_failing_before_any_callback_is_retried_and_delivers_each_chunk_once(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, failure: Callable[[], Outcome], sleeps: list[float]
+) -> None:
+    # Given a stream that fails while opening and a healthy one behind it.
+    http = ScriptedHttpClient(failure(), case.ok())
+    chunks: list[str] = []
+
+    async def on_chunk(text: str) -> None:
+        chunks.append(text)
+
+    # When it is streamed.
+    response = await call_provider(monkeypatch, case, "stream", http, on_chunk=on_chunk)
+    # Then the second request answers and every chunk reached the callback exactly once.
+    assert response.content == "Hello"
+    assert chunks == list(case.chunks)
+    assert len(http.requests) == 2
+    assert sleeps == [0.75]
+
+
+@pytest.mark.parametrize("case", STREAMING_CASE_PARAMS)
+async def test_stream_disconnect_after_a_delivered_chunk_is_raised_not_retried(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, sleeps: list[float]
+) -> None:
+    # Given a stream that delivers its first chunk and then drops, with a healthy one queued behind it.
+    http = ScriptedHttpClient(case.partial(httpx.ReadError("dropped")), case.ok())
+    chunks: list[str] = []
+
+    async def on_chunk(text: str) -> None:
+        chunks.append(text)
+
+    # When it is streamed.
+    with pytest.raises(LLMError, match=r"^Connection failed: dropped$") as raised:
+        await call_provider(monkeypatch, case, "stream", http, on_chunk=on_chunk)
+    # Then the chunk was delivered once, exactly one request was made and no wait happened.
+    assert chunks == [case.chunks[0]]
+    assert len(http.requests) == 1
+    assert sleeps == []
+    assert classify_error(raised.value) is FailoverErrorType.RETRYABLE
+
+
+@pytest.mark.parametrize("case", STREAMING_CASE_PARAMS)
+async def test_stream_disconnect_before_any_callback_restarts_from_a_clean_slate(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, sleeps: list[float]
+) -> None:
+    # Given a stream that accumulates its first chunk, drops, and a caller that supplied no callbacks.
+    http = ScriptedHttpClient(case.partial(httpx.ReadError("dropped")), case.ok())
+    # When it is streamed.
+    response = await call_provider(monkeypatch, case, "stream", http)
+    # Then the retry starts over: the first chunk is not accumulated twice.
+    assert response.content == "Hello"
+    assert len(http.requests) == 2
+    assert sleeps == [0.75]
+
+
+@pytest.mark.parametrize(
+    ("callback", "lines"),
+    [
+        (
+            "on_thinking",
+            ("event: content_block_delta", 'data: {"index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}'),
+        ),
+        (
+            "on_tool_delta",
+            (
+                "event: content_block_start",
+                'data: {"index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"search"}}',
+            ),
+        ),
+    ],
+)
+async def test_stream_thinking_or_tool_delta_delivery_also_blocks_the_retry(
+    monkeypatch: pytest.MonkeyPatch, callback: str, lines: tuple[str, ...], sleeps: list[float]
+) -> None:
+    # Given a stream whose first event reaches the thinking or tool-delta callback before it drops.
+    http = ScriptedHttpClient(ScriptedResponse(lines=lines, disconnect=httpx.ReadError("dropped")), ANTHROPIC.ok())
+    seen: list[object] = []
+
+    async def record(payload: object) -> None:
+        seen.append(payload)
+
+    # When it is streamed.
+    with pytest.raises(LLMError, match=r"^Connection failed: dropped$"):
+        await call_provider(monkeypatch, ANTHROPIC, "stream", http, **{callback: record})
+    # Then the event was delivered once and nothing was replayed.
+    assert len(seen) == 1
+    assert len(http.requests) == 1
+    assert sleeps == []

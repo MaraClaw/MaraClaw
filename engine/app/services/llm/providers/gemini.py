@@ -24,6 +24,7 @@ from app.core.json_types import (
 )
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
 from app.services.llm.providers.openai_compatible import OpenAICompatibleClient
+from app.services.llm.retry_policy import StreamDelivery, call_with_retry, raise_for_status, stream_http_error
 from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, ToolPayload
 
 
@@ -418,11 +419,13 @@ class GeminiClient(LLMClient):
         payload = self._build_payload(messages, tools, temperature, max_tokens, **kwargs)
 
         client = await self._get_client()
-        response = await client.post(url, json=payload, headers=self._get_headers())
 
-        if response.status_code >= 400:
-            error_text = response.text[:500]
-            raise LLMError(f"HTTP {response.status_code}: {error_text}")
+        async def send() -> httpx.Response:
+            response = await client.post(url, json=payload, headers=self._get_headers())
+            await raise_for_status(response)
+            return response
+
+        response = await call_with_retry(send, provider="gemini")
 
         data = json_object_from_response(response)
         if (error := data.get("error")) is not None and error:
@@ -442,7 +445,7 @@ class GeminiClient(LLMClient):
         on_thinking: ThinkingCallback | None = None,
         **kwargs: object,
     ) -> LLMResponse:
-        """Streaming completion using Gemini SSE endpoint."""
+        """Streaming completion using Gemini SSE endpoint. A failed attempt is retried until a callback fires."""
         if self._is_openai_compatible_base():
             fallback = await self._get_openai_fallback_client()
             return await fallback.stream(
@@ -460,6 +463,16 @@ class GeminiClient(LLMClient):
         url = f"{self._normalize_base_url()}/models/{model_name}:streamGenerateContent"
         payload = self._build_payload(messages, tools, temperature, max_tokens, **kwargs)
 
+        # The native stream only ever fires on_chunk.
+        delivery = StreamDelivery(on_chunk, None, None)
+        return await call_with_retry(
+            lambda: self._stream_once(url, payload, delivery.on_chunk),
+            provider="gemini",
+            delivery=delivery,
+        )
+
+    async def _stream_once(self, url: str, payload: dict[str, Any], on_chunk: ChunkCallback | None) -> LLMResponse:
+        """One streaming attempt. Its accumulators are local, so a retry starts clean."""
         full_text = ""
         tool_calls: list[LLMToolCall] = []
         seen_tool_calls: set[str] = set()
@@ -468,88 +481,81 @@ class GeminiClient(LLMClient):
 
         client = await self._get_client()
 
-        try:
-            async with client.stream(
-                "POST",
-                url,
-                params={"alt": "sse"},
-                json=payload,
-                headers=self._get_headers(),
-            ) as resp:
-                if resp.status_code >= 400:
-                    error_body = ""
-                    async for chunk in resp.aiter_bytes():
-                        error_body += chunk.decode(errors="replace")
-                    raise LLMError(f"HTTP {resp.status_code}: {error_body[:500]}")
+        async with client.stream(
+            "POST",
+            url,
+            params={"alt": "sse"},
+            json=payload,
+            headers=self._get_headers(),
+        ) as resp:
+            if resp.status_code >= 400:
+                raise await stream_http_error(resp)
 
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data_str = line[len("data:") :].strip()
-                    if not data_str or data_str == "[DONE]":
-                        continue
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[len("data:") :].strip()
+                if not data_str or data_str == "[DONE]":
+                    continue
 
-                    try:
-                        parsed = json_loads_value(data_str)
-                    except json.JSONDecodeError:
-                        continue
+                try:
+                    parsed = json_loads_value(data_str)
+                except json.JSONDecodeError:
+                    continue
 
-                    if not is_str_dict(parsed):
-                        continue
-                    data = json_object_from(parsed)
-                    if (error := data.get("error")) is not None and error:
-                        raise LLMError(f"API error: {data['error']}")
+                if not is_str_dict(parsed):
+                    continue
+                data = json_object_from(parsed)
+                if (error := data.get("error")) is not None and error:
+                    raise LLMError(f"API error: {data['error']}")
 
-                    usage = self._normalize_usage(data.get("usageMetadata"))
-                    if usage is not None and usage:
-                        final_usage = usage
+                usage = self._normalize_usage(data.get("usageMetadata"))
+                if usage is not None and usage:
+                    final_usage = usage
 
-                    candidates = object_list_from_row(data.get("candidates"))
-                    if not candidates:
-                        continue
-                    candidate = json_object_from(candidates[0])
-                    final_finish_reason = json_as_str(candidate.get("finishReason")) or final_finish_reason
-                    content_obj = json_object_from(candidate.get("content"))
-                    for part_raw in object_list_from_row(content_obj.get("parts")):
-                        part = json_object_from(part_raw)
-                        text = json_as_str(part.get("text"))
-                        if text not in (None, ""):
-                            full_text += text
-                            if on_chunk:
-                                await on_chunk(text)
+                candidates = object_list_from_row(data.get("candidates"))
+                if not candidates:
+                    continue
+                candidate = json_object_from(candidates[0])
+                final_finish_reason = json_as_str(candidate.get("finishReason")) or final_finish_reason
+                content_obj = json_object_from(candidate.get("content"))
+                for part_raw in object_list_from_row(content_obj.get("parts")):
+                    part = json_object_from(part_raw)
+                    text = json_as_str(part.get("text"))
+                    if text not in (None, ""):
+                        full_text += text
+                        if on_chunk:
+                            await on_chunk(text)
 
-                        function_call = (
-                            json_object_from(raw_call)
-                            if (raw_call := part.get("functionCall")) is not None and raw_call
-                            else {}
-                        )
-                        if function_call:
-                            name = json_as_str_or(function_call.get("name"))
-                            args_raw: object = function_call.get("args")
-                            args_str = json.dumps(json_object_from(args_raw), ensure_ascii=False)
-                            dedup_key = f"{name}:{args_str}"
-                            if dedup_key in seen_tool_calls:
-                                continue
-                            seen_tool_calls.add(dedup_key)
+                    function_call = (
+                        json_object_from(raw_call)
+                        if (raw_call := part.get("functionCall")) is not None and raw_call
+                        else {}
+                    )
+                    if function_call:
+                        name = json_as_str_or(function_call.get("name"))
+                        args_raw: object = function_call.get("args")
+                        args_str = json.dumps(json_object_from(args_raw), ensure_ascii=False)
+                        dedup_key = f"{name}:{args_str}"
+                        if dedup_key in seen_tool_calls:
+                            continue
+                        seen_tool_calls.add(dedup_key)
 
-                            extra: ToolPayload = {
-                                key: value for key, value in function_call.items() if key not in ["name", "args"]
+                        extra: ToolPayload = {
+                            key: value for key, value in function_call.items() if key not in ["name", "args"]
+                        }
+
+                        tool_calls.append(
+                            {
+                                "id": f"call_{len(tool_calls) + 1}",
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": args_str,
+                                },
+                                "_gemini_extra": extra,
                             }
-
-                            tool_calls.append(
-                                {
-                                    "id": f"call_{len(tool_calls) + 1}",
-                                    "type": "function",
-                                    "function": {
-                                        "name": name,
-                                        "arguments": args_str,
-                                    },
-                                    "_gemini_extra": extra,
-                                }
-                            )
-
-        except (httpx.ConnectError, httpx.ReadError, httpx.ConnectTimeout) as e:
-            raise LLMError(f"Connection failed: {e}") from e
+                        )
 
         return LLMResponse(
             content=full_text,
