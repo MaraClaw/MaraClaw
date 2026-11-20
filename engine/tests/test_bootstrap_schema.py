@@ -198,3 +198,18 @@ def test_broadcast_submissions_are_unique_per_sender_key_and_cascade_with_tenant
     assert "tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE" in statement
     assert "sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE" in statement
     assert "ALTER TABLE broadcast_submissions" not in sql
+
+
+def test_workspace_mirror_entries_are_keyed_by_agent_path_and_leave_with_their_agent() -> None:
+    # Given the fresh-install manifest statement.
+    sql = BASELINE.read_text(encoding="utf-8")
+    statement = next(
+        body
+        for body in _statement_bodies(sql)
+        if body.startswith("CREATE TABLE IF NOT EXISTS agent_workspace_mirror_entries")
+    )
+    # Then one row exists per agent path, rows leave with their agent, and only the known skip reason is accepted.
+    assert "PRIMARY KEY (agent_id, path)" in statement
+    assert "agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE" in statement
+    assert "skip_reason TEXT CHECK (skip_reason IS NULL OR skip_reason IN ('too_large'))" in statement
+    assert "ALTER TABLE agent_workspace_mirror_entries" not in sql

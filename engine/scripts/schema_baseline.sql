@@ -890,6 +890,28 @@ CREATE TABLE IF NOT EXISTS agent_workspace_usage (
     notified_at TIMESTAMPTZ
 );
 
+-- Last reconciled state of the durable workspace mirror, one row per agent and workspace-relative path. The local_*
+-- columns fingerprint the guest-visible file (inode, size, mtime and ctime in ns) and content_sha256 its bytes at that
+-- moment, while remote_etag, remote_size and remote_token describe the stored object it matched. A row is written only
+-- after its path finished, and a row whose generation differs from the agent directory's marker is no base. skip_reason
+-- marks a file the mirror refuses to upload.
+CREATE TABLE IF NOT EXISTS agent_workspace_mirror_entries (
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    generation UUID NOT NULL,
+    local_ino BIGINT NOT NULL,
+    local_size BIGINT NOT NULL,
+    local_mtime_ns BIGINT NOT NULL,
+    local_ctime_ns BIGINT NOT NULL,
+    content_sha256 TEXT,
+    remote_etag TEXT,
+    remote_size BIGINT,
+    remote_token TEXT,
+    skip_reason TEXT CHECK (skip_reason IS NULL OR skip_reason IN ('too_large')),
+    synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (agent_id, path)
+);
+
 -- Tier-upsell evidence: one 'threshold' row per continuous stretch an agent's resource stayed at or above the pressure
 -- threshold of its limit (memory, workspace_disk, managed_storage: bytes; cpu: millicpus), one 'oom_kill' row per guest
 -- OOM kill. No foreign key to agents so rows outlive the agent (agent_name is a snapshot); they belong to the tenant
