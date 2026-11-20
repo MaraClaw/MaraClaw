@@ -1166,6 +1166,14 @@ upload_router = APIRouter(prefix="/agents/{agent_id}/files", tags=["files"])
 DEFAULT_UPLOAD_DIR = "workspace/uploads"
 
 
+def _upload_filename(raw: str | None) -> str:
+    """The stored name for an uploaded file; a name that would collapse onto its folder is a 400."""
+    filename = (raw or "unnamed").replace("/", "_").replace("\\", "_").strip()
+    if filename in ("", ".", "..") or "\x00" in filename:
+        raise HTTPException(status_code=400, detail="Invalid file name")
+    return filename
+
+
 @upload_router.post("/upload", response_model=dict[str, object], dependencies=[Depends(guest_write_exclusion)])
 async def upload_file_to_workspace(
     agent_id: uuid.UUID,
@@ -1189,9 +1197,7 @@ async def upload_file_to_workspace(
             detail="The right-side root view is the agent root directory; upload files to workspace/ or skills/.",
         )
 
-    filename = file.filename or "unnamed"
-    # Sanitize filename
-    filename = filename.replace("/", "_").replace("\\", "_")
+    filename = _upload_filename(file.filename)
     rel = normalize_storage_key(f"{normalized_path}/{filename}")
     if not _is_agent_workspace_upload_rel(rel):
         raise HTTPException(
@@ -1302,8 +1308,7 @@ async def upload_enterprise_kb_file(
     if not current_user.tenant_id:
         raise HTTPException(status_code=400, detail="No tenant associated")
 
-    filename = file.filename or "unnamed"
-    filename = filename.replace("/", "_").replace("\\", "_")
+    filename = _upload_filename(file.filename)
     storage = get_storage_backend()
     rel_path = normalize_storage_key(f"{sub_path}/{filename}" if sub_path else filename)
     storage_key = _enterprise_storage_key(str(current_user.tenant_id), rel_path)

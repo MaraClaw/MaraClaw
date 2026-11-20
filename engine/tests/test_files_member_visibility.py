@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import anyio
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -440,6 +441,51 @@ async def test_members_cannot_edit_the_knowledge_base_through_an_unnormalized_pa
     assert response.status_code == 403, response.text
     api.write.assert_not_awaited()
     api.delete.assert_not_awaited()
+
+
+BAD_UPLOAD_NAMES = (".", "..", "  ", " .. ")
+
+
+@pytest.mark.parametrize("filename", BAD_UPLOAD_NAMES)
+async def test_upload_refuses_a_name_that_is_not_a_file_name(api: Api, filename: str) -> None:
+    # When
+    response = await api.client.post(f"{api.url}/upload", files={"file": (filename, b"x")}, headers=AUTH)
+    # Then
+    assert (response.status_code, response.json()) == (400, {"detail": "Invalid file name"})
+    assert not (api.guest_root / str(api.agent_id) / "workspace" / "knowledge_base").exists()
+
+
+async def _upload_to_knowledge_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str) -> httpx.Response:
+    admin = UserRecord(
+        id=uuid.uuid4(), display_name="Admin", role=UserRole.ORG_ADMIN, tenant_id=uuid.uuid4(), is_active=True
+    )
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: LocalStorageBackend(str(tmp_path)))
+    monkeypatch.setattr(files_api, "_recheck_enterprise_admin", AsyncMock())
+    app = FastAPI()
+    app.include_router(files_api.enterprise_kb_router, prefix="/api")
+    app.dependency_overrides[get_current_user] = lambda: admin
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        return await client.post(
+            "/api/enterprise/knowledge-base/upload", files={"file": (filename, b"x")}, headers=AUTH
+        )
+
+
+@pytest.mark.parametrize("filename", BAD_UPLOAD_NAMES)
+async def test_knowledge_base_upload_refuses_a_name_that_is_not_a_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
+) -> None:
+    response = await _upload_to_knowledge_base(tmp_path, monkeypatch, filename)
+    assert (response.status_code, response.json()) == (400, {"detail": "Invalid file name"})
+    assert await anyio.to_thread.run_sync(lambda: list(tmp_path.iterdir())) == []
+
+
+@pytest.mark.parametrize("filename", ["notes.md", "..."])
+async def test_knowledge_base_upload_keeps_ordinary_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
+) -> None:
+    response = await _upload_to_knowledge_base(tmp_path, monkeypatch, filename)
+    assert response.status_code == 200, response.text
+    assert response.json()["path"] == filename
 
 
 def stage_import(api: Api, monkeypatch: pytest.MonkeyPatch, route: str, file_path: str) -> tuple[str, dict[str, str]]:
