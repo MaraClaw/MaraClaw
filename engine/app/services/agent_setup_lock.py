@@ -5,6 +5,7 @@ import fcntl
 from collections.abc import AsyncGenerator, Coroutine
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import IO
 
 import anyio
 
@@ -34,16 +35,7 @@ async def setup_workspace_lock(
             lock.close()
 
     try:
-        deadline = None if timeout_seconds is None else anyio.current_time() + timeout_seconds
-        while True:
-            try:
-                fcntl.flock(lock, mode | fcntl.LOCK_NB)
-                break
-            except BlockingIOError as exc:
-                remaining = None if deadline is None else deadline - anyio.current_time()
-                if remaining is not None and remaining <= 0:
-                    raise WorkspaceLockTimeoutError("Timed out waiting for the workspace lock.") from exc
-                await anyio.sleep(0.05 if remaining is None else min(0.05, remaining))
+        await wait_for_flock(lock, mode, timeout_seconds)
         if until_transaction_end:
             from app.db.session import get_connection, run_after_commit
 
@@ -55,6 +47,20 @@ async def setup_workspace_lock(
     finally:
         if not deferred:
             release()
+
+
+async def wait_for_flock(lock: IO[bytes], mode: int, timeout_seconds: float | None) -> None:
+    """Take `mode` on an open lock file without blocking the loop; a timeout of 0 tries exactly once."""
+    deadline = None if timeout_seconds is None else anyio.current_time() + timeout_seconds
+    while True:
+        try:
+            fcntl.flock(lock, mode | fcntl.LOCK_NB)
+            return
+        except BlockingIOError as exc:
+            remaining = None if deadline is None else deadline - anyio.current_time()
+            if remaining is not None and remaining <= 0:
+                raise WorkspaceLockTimeoutError("Timed out waiting for the workspace lock.") from exc
+            await anyio.sleep(0.05 if remaining is None else min(0.05, remaining))
 
 
 async def drain_on_cancel[Result](operation: Coroutine[object, object, Result]) -> Result:
