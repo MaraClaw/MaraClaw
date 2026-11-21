@@ -1,18 +1,37 @@
-# Shared human OpenClaw runtime
+# Shared OpenClaw runtime
 
-Each agent's human transcript uses `shared_chat.shared_session_id(agent.id)`.
-Historical private sessions are not merged. Group, agent-peer and trigger
-conversations retain their own IDs and do not enter the shared claim lane.
+One guest serves each agent. Its workspace, memory files, skills, gogcli
+credentials and MCP servers are shared per agent. Conversations are not: each
+user has one private conversation per agent, and no shared conversation exists.
+
+## Human lanes
+
+A user's conversation with an agent is a canonical `chat_sessions` row:
+`source_channel = 'web'`, `is_primary` and not `is_group`
+(`shared_chat.is_canonical`). `uq_chat_sessions_primary_platform` allows one per
+`(agent_id, user_id)`. The user's web turns, linked IM direct messages and
+Personal WhatsApp bursts all land in it. Group, agent-peer and trigger
+conversations retain their own IDs and use ordinary lanes.
+
+`shared_chat.ensure_canonical_session` creates the row through
+`chat_session_dao.insert_primary_platform`, an insert with `ON CONFLICT` on that
+index followed by a read. `openclaw_human_lane.human_lane_session` classifies a
+conversation ID with one unlocked read. The lane lock re-checks the predicate,
+which stays valid because nothing updates `is_primary` after insert.
+
+Each canonical row is one FIFO lane per `(agent, user)`. Lanes of different
+users run in parallel (see `OPENCLAW_AGENT_MAX_PARALLEL_TURNS` below).
 
 ## Queue and destination contracts
 
 Both enqueue helpers accept optional keyword `reply_session_id: UUID | None`.
-For a human IM turn, `conversation_id` is the canonical shared UUID and
-`reply_session_id` identifies the existing provider session. In one transaction,
-enqueue locks and validates the provider session and inserts the pending gateway
-message plus its existing `gateway_report_deliveries` IM intent. Web turns omit
-the destination. Equal-content shared turns are distinct; transport receipt/event
-deduplication remains the caller's responsibility.
+For a human IM turn, `conversation_id` is the sender's canonical session UUID
+and `reply_session_id` identifies the existing provider session. In one
+transaction, enqueue locks and validates the provider session and inserts the
+pending gateway message plus its existing `gateway_report_deliveries` IM intent.
+Web turns omit the destination. Enqueue refuses a canonical-session turn whose
+sender is not the session owner. Equal-content human-lane turns are distinct;
+transport receipt/event deduplication remains the caller's responsibility.
 
 The accepted destination is immutable. Session deletion must hold the provider
 session lock and reject while `gateway_report_delivery_dao.has_outstanding_session`
@@ -21,21 +40,24 @@ but excludes acknowledged and terminal intents. Session channel/external identit
 must not be repurposed while those intents are outstanding.
 
 Native dispatch uses `openclaw_shared_dispatch.claim_ready_shared` as the sole
-Shared claim authority. It locks the current tenant/owner/agent scope before the
-canonical `chat_sessions` row, refuses while any shared turn is delivered, and
-claims the actual earliest ready pending `(created_at, id)` item. An unready
+human-lane claim authority; its request names the lane's session. It locks the
+current tenant/owner/agent scope before that canonical `chat_sessions` row,
+refuses while any turn of the lane is delivered, and claims the lane's actual
+earliest ready pending `(created_at, id)` item. An unready
 Personal WhatsApp burst head blocks younger rows. Stored provider/model selections
 must still be eligible; dispatch never substitutes another model. Claims commit
 before guest inference, with no database transaction held across RPC.
 
 `openclaw_routing` re-lists pending work after commit and schedules one
 `TaskAdmission`-owned task per `(agent_id, conversation_id or message_id)` lane;
-enqueue returns without waiting for inference. Lanes of one agent run in parallel
-up to `OPENCLAW_AGENT_MAX_PARALLEL_TURNS` (default 4, range 1-16). Setting it to 1
-restores one turn at a time per agent. A wake during a lane task coalesces into
-one more pass through that lane. Shared remains a single FIFO lane. All scan and
-lane tasks are registered for shutdown drain; queued tasks recheck admission
-after acquiring their agent's semaphore. This limit is per engine process;
+enqueue returns without waiting for inference. Lanes of one agent, including the
+human lanes of different users, run in parallel up to
+`OPENCLAW_AGENT_MAX_PARALLEL_TURNS` (default 4, range 1-16). Setting it to 1
+serializes them to one turn at a time per agent. A wake during a lane task
+coalesces into one more pass through that lane. Each human lane remains FIFO.
+All scan and lane tasks are registered for shutdown drain; queued tasks recheck
+admission after acquiring their agent's semaphore. This limit is per engine
+process;
 database claim guards enforce one delivered turn per lane across processes.
 Real parallelism is also bounded by OpenClaw's `agents.defaults.maxConcurrent`
 (default `max(8, CPUs x 4)`) and `OPENCLAW_GUEST_CPUS` (default 1.0).
@@ -87,16 +109,16 @@ Ordinary claim/settlement uses `FOR SHARE` on tenants and `FOR KEY SHARE` on
 users. The latter permits quota updates while still excluding ACL mutators'
 explicit `FOR UPDATE`; a stronger user lock deadlocks with concurrent receipt
 insertion holding an agent foreign-key lock.
-Both ordinary and Shared claims check the work gate inside their claim
+Both ordinary and human-lane claims check the work gate inside their claim
 transaction before claiming the head. A mandatory upgrade notice leaves the
 message pending and unclaimed. Gate reads never upgrade tenant or owner locks.
 
 `settle_native_report` takes the same shared tenant/owner and exclusive agent locks
-before `record_report` takes the Shared session lock, then rechecks the captured
+before `record_report` takes the human-lane session lock, then rechecks the captured
 owner/tenant. The first winning
 completion atomically persists the result, canonical assistant and reply intents.
-Publication follows commit, and the next Shared wake is deferred until commit.
-Notifications target the canonical session, without filtering to the submitting human.
+Publication follows commit, and the next human-lane wake is deferred until commit.
+Notifications go only to the sender, who owns the lane.
 
 Only a proven pre-submission refusal or request rejection releases the exact claim
 using its `delivered_at` compare-and-set. An accepted or uncertain request, a lost
@@ -117,14 +139,46 @@ completion arrives. Any operator recovery must first establish that no old guest
 execution remains; a detached Gateway run is not proven cancelled by stopping the
 local Docker CLI. This is not an exactly-once execution guarantee.
 
+## Lock order
+
+Claim (`openclaw_shared_dispatch.claim_shared_turn`): the guest-write flock, then
+one short transaction that takes the shared tenant, owner and agent locks
+(`openclaw_shared_scope.authorize_lane`), checks the work gate, and calls
+`gateway_message_dao.lock_human_lane`. That is `personal_burst_sql.lock_parent`:
+`SELECT id FROM chat_sessions WHERE id AND agent_id AND source_channel = 'web'
+AND is_primary IS TRUE AND is_group IS FALSE FOR UPDATE`. An ID that fails the
+predicate is never locked and the claim blocks with `lane_missing`. Only then
+does the claim read the lane's head and mark it delivered.
+
+Settlement (`record_report`, `adopt_recovered_report`) classifies the conversation
+with `human_lane_session`, takes `lock_human_lane`, and requires the re-read
+candidate to be `delivered` before it completes the turn. For a canonical session,
+enqueue takes the same lock (`personal_burst_dao.next_created_at`) before it
+assigns `created_at`.
+
+Call `shared_chat.ensure_canonical_session` before locking any chat session row of
+the agent, and never while holding `FOR UPDATE` on the tenant, user or agent row:
+its insert takes foreign-key locks on them and can deadlock. Personal WhatsApp
+events ensure the creator's canonical session in
+`channels/submissions._ensure_owner_transcript` before the acceptance transaction,
+because `personal_owner` holds `FOR UPDATE` on tenant, creator and agent until
+commit. Linked IM senders ensure inside that transaction, in
+`binding.bind_channel_conversation`, before the transcript is locked.
+
 ## Guest session identity
 
 `openclaw_turns.runtime_session_key` returns
-`agent:main:hook:maraclaw:<reply_binding_id>` for newly claimed web/shared turns.
-The claim transaction creates or reuses this durable owner/tenant/session epoch
-before opening the native socket. Other conversations retain their conversation
-ID (message ID only when no conversation exists). Shared web and IM humans select
-the same epoch key until its authorization scope changes or history is cleared.
+`agent:main:hook:maraclaw:<reply_binding_id>` for newly claimed turns of a `web`
+session, which includes every canonical session. The claim transaction creates or
+reuses this durable owner/tenant/session epoch before opening the native socket.
+Other conversations retain their conversation ID (message ID only when no
+conversation exists). A user's web and IM turns select the same epoch key until
+its authorization scope changes or history is cleared.
+
+The generated guest config sets `tools.sessions.visibility` to `"self"` and
+`memory.search.rememberAcrossConversations` to `false`, so one user's conversation
+stays out of another user's turns. The config fingerprint prefix is
+`native-gateway-rpc-v2`; a different fingerprint rewrites the file.
 
 The `hook:maraclaw` segment is an opaque, preserved transcript namespace, not a
 requirement to use the retired HTTP hook transport. Native `agent` requests pass
@@ -163,8 +217,8 @@ delta text, followed by the authoritative terminal outcome. The engine's
 `openclaw_gateway_stream.DeltaRelay` bridges Docker stdout to the event loop
 through 64 reserved slots; overflow drops live deltas, never the terminal result.
 Docker output remains bounded to 4 MiB, and each local socket send of a chunk has a
-one-second deadline. Only the send is deadlined: Shared-session authorization and
-Redis routing run to completion, because cancelling authorization discards the
+one-second deadline. Only the send is deadlined: canonical-session authorization
+and Redis routing run to completion, because cancelling authorization discards the
 positive decision it would cache (valid for 5 seconds per socket and ACL version)
 and would starve every later chunk whenever it is merely slower than the deadline.
 A timed-out send skips that socket and still routes to remote instances. Ingestion
@@ -176,7 +230,8 @@ slow but healthy path skips obsolete intermediate updates instead of queueing th
 The native path drains the in-flight chunk and that one snapshot before settlement
 for at most 2 seconds (`DRAIN_SECONDS`); anything left is superseded by the
 authoritative `done`.
-IM-origin turns, including Personal bursts in Shared, remain final-only.
+IM-origin turns, including Personal bursts in the creator's canonical session,
+remain final-only.
 
 Every native payload also carries `extraSystemPrompt` (`response_identity.identity_prompt`), which the adapter
 forwards unchanged to the Gateway `agent` request: keep the agent's own name and persona, and never disclose the
@@ -244,8 +299,7 @@ back, revoke the epoch transactionally. Session scope changes or deletion and ra
 history deletion revoke it too; the clear DAO explicitly revokes even empty history.
 Clear or transfer committed between persistence and publication therefore suppresses
 the obsolete send. A new claim gets a fresh guest key, preventing old replies from
-entering the new epoch. Private web sends filter by the bound user; Shared sends use
-the existing session authorization for each connected viewer.
+entering the new epoch. Sends filter by the bound user.
 
 These tables and triggers are **fresh-baseline only**; no existing-database upgrade
 is supplied. Historical unbound replies have no trustworthy dispatch ownership
@@ -282,3 +336,24 @@ existing guest or engine database. A live continuity check must inspect the
 provider's second request for the first human input and assistant response, and
 confirm both are absent from a request using another key. Admission responses or
 source inspection alone do not establish context retention.
+
+## Upgrade notes
+
+### Unreleased: one private conversation per user and agent
+
+- Each user has one private conversation per agent. The shared agent
+  conversation is gone. Workspace, memory files, skills, credentials and MCP
+  servers stay shared per agent.
+- Only company admins (`org_admin`) can read other users' conversations, and only
+  read-only. Agent creators, `agent_admin` and `platform_admin` lose list, view,
+  rename and delete of other users' sessions, including group IM sessions owned by
+  another sender and agent-to-agent sessions where their agent is the peer.
+- Trigger and tool messages addressed to a user now land in that user's own
+  conversation.
+- API: 409 `session_read_only` replaces `session_archived`, 409
+  `canonical_session_required` replaces `shared_session_required`, and
+  `SessionOut` gains `writable`.
+- Fresh baseline only: `personal_burst_batches` and `personal_busy_notices` rename
+  `shared_session_id` to `transcript_session_id`, and `bind_openclaw_reply` accepts
+  `web` sessions only. There is no upgrade path. Deploy on a new database and
+  recreate dev and staging databases.
