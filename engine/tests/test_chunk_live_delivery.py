@@ -30,14 +30,15 @@ from app.services import (
 from app.services.realtime_runtime import chat_authorization, fanout, router as realtime
 from app.services.realtime_runtime.chat_authorization import DeliveryVerdict
 from app.services.realtime_runtime.contracts import RoutingOutcome
-from app.services.shared_chat import shared_session_id
 from test_openclaw_gateway_coalescing import IngestProbe, delta_line
-from test_openclaw_gateway_rpc import _Turn, wire_terminal
+from test_openclaw_gateway_rpc import _Turn, no_channel_media, wire_terminal
 from test_websocket_session_query import MemoryPresence
+
+__all__ = ["no_channel_media"]
 
 # Healthy but slower than the one-second publication deadline this suite guards against regressing to.
 SLOW = 1.3
-# Failures of what a shared-session decision reads through: each skips one event and never closes the socket.
+# Failures of what a canonical-session decision reads through: each skips one event and never closes the socket.
 TRANSIENT_FAILURES: dict[str, Callable[[], Exception]] = {
     "transfer-gate-423": lambda: HTTPException(423, {"code": "transfer_cleanup_pending", "retryable": True}),
     "unavailable-503": lambda: HTTPException(503, "Chat authentication unavailable"),
@@ -150,7 +151,7 @@ class GatedPresence(MemoryPresence):
 
 
 class HeldDecisionTime:
-    """The shared-session decision clock, where every wait runs out in full while the decision is held at its gate."""
+    """The canonical-session decision clock, where every wait runs out in full while the decision is held at its gate."""
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch, gate: Gate) -> None:
         self.now = 0.0
@@ -172,10 +173,11 @@ def decisions() -> list[asyncio.Task[object]]:
 class Pipeline:
     """publish_chunk -> manager -> router -> authorize_chat_delivery, with fake sockets, Redis and ticket authorization."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, shared: bool) -> None:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, canonical: bool) -> None:
         self.agent_id, self.user_id = uuid4(), uuid4()
-        self.shared = shared
-        self.session_id = shared_session_id(self.agent_id) if shared else uuid4()
+        # A canonical session's tickets flag their bindings, so its sockets authorize every delivery.
+        self.canonical = canonical
+        self.session_id = uuid4()
         self.message = GatewayMessageRecord(
             uuid4(), self.agent_id, "hi", conversation_id=str(self.session_id), sender_user_id=self.user_id
         )
@@ -241,19 +243,19 @@ class Pipeline:
         tenant_id: UUID | None = None,
         auth_deadline: int | None = None,
     ) -> Link:
-        """``tenant_id`` gives a shared socket the identity of an earlier one; by default each is its own viewer."""
+        """``tenant_id`` gives a socket the identity of an earlier one; by default each is its own identity."""
         link = Link(stalled=stalled, gate=gate, fail=fail, stalls=stalls)
         await link.socket.accept()
         link.frames.clear()
-        if self.shared:
-            link.socket.state.chat_binding = chat_tickets.ChatTicketBinding(
-                user_id=self.user_id,
-                tenant_id=tenant_id or uuid4(),
-                agent_id=self.agent_id,
-                session_id=self.session_id,
-                auth_deadline=int(time.time()) + 3600 if auth_deadline is None else auth_deadline,
-                auth_generation=0,
-            )
+        link.socket.state.chat_binding = chat_tickets.ChatTicketBinding(
+            user_id=self.user_id,
+            tenant_id=tenant_id or uuid4(),
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+            auth_deadline=int(time.time()) + 3600 if auth_deadline is None else auth_deadline,
+            auth_generation=0,
+            authorize_deliveries=self.canonical,
+        )
         websocket.manager.active_connections[str(self.agent_id)].append(
             (link.socket, str(self.session_id), str(self.user_id))
         )
@@ -267,8 +269,8 @@ class Pipeline:
             self.outcomes.append(await delivery.publish_chunk(self.message, delta))
 
 
-async def test_slow_shared_authorization_cannot_starve_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipe = Pipeline(monkeypatch, shared=True)
+async def test_slow_canonical_authorization_cannot_starve_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipe = Pipeline(monkeypatch, canonical=True)
     link = await pipe.connect()
     pipe.delay = SLOW
 
@@ -281,7 +283,7 @@ async def test_slow_shared_authorization_cannot_starve_chunks(monkeypatch: pytes
 async def test_slow_presence_read_still_routes_the_chunk_to_the_remote_instance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     link = await pipe.connect()
     remote_record = {"instance_id": "remote", "session_id": str(pipe.session_id), "user_id": str(pipe.user_id)}
     pipe.store = SlowPresence(str(pipe.agent_id), {"remote-connection": remote_record})
@@ -302,7 +304,7 @@ async def test_slow_presence_read_still_routes_the_chunk_to_the_remote_instance(
 
 async def test_stalled_socket_is_bounded_and_does_not_block_other_recipients(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.01)
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     stalled = await pipe.connect(stalled=True)
     healthy = await pipe.connect()
     remote_record = {"instance_id": "remote", "session_id": str(pipe.session_id), "user_id": str(pipe.user_id)}
@@ -319,7 +321,7 @@ async def test_stalled_local_socket_delays_healthy_sockets_only_until_the_send_b
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 60.0)
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     gate = Gate()
     slow = await pipe.connect(gate=gate)
     healthy = [await pipe.connect(), await pipe.connect()]
@@ -340,7 +342,7 @@ async def test_stalled_local_socket_delays_healthy_sockets_only_until_the_send_b
 
 
 async def test_presence_lookup_runs_alongside_the_local_sends(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     store = GatedPresence(str(pipe.agent_id), {})
     store.release.set()
     pipe.store = store
@@ -356,7 +358,7 @@ async def test_presence_lookup_runs_alongside_the_local_sends(monkeypatch: pytes
 async def test_one_failing_socket_stops_neither_the_others_nor_remote_publication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     broken = await pipe.connect(fail=True)
     healthy = [await pipe.connect(), await pipe.connect()]
     remote_record = {"instance_id": "remote", "session_id": str(pipe.session_id), "user_id": str(pipe.user_id)}
@@ -374,7 +376,7 @@ async def test_one_failing_socket_stops_neither_the_others_nor_remote_publicatio
 
 async def test_local_fanout_never_runs_more_sends_than_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     bound = fanout.LOCAL_FANOUT_CONCURRENCY
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     gate = Gate(saturate_at=bound)
     links = [await pipe.connect(gate=gate) for _ in range(bound + 4)]
 
@@ -388,11 +390,11 @@ async def test_local_fanout_never_runs_more_sends_than_the_bound(monkeypatch: py
     assert [link.seqs() for link in links] == [[0]] * (bound + 4)
 
 
-async def test_cold_shared_authorization_is_bounded_and_reads_the_acl_version_once(
+async def test_cold_canonical_authorization_is_bounded_and_reads_the_acl_version_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bound = fanout.LOCAL_FANOUT_CONCURRENCY
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     pipe.auth_gate = Gate(saturate_at=bound)
     links = [await pipe.connect() for _ in range(bound + 4)]
 
@@ -408,7 +410,7 @@ async def test_cold_shared_authorization_is_bounded_and_reads_the_acl_version_on
 
 
 async def test_ordinary_session_delivery_reads_no_acl_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     links = [await pipe.connect() for _ in range(3)]
 
     await asyncio.wait_for(pipe.publish(0, 1), 5)
@@ -418,8 +420,24 @@ async def test_ordinary_session_delivery_reads_no_acl_version(monkeypatch: pytes
     pipe.authorize.assert_not_awaited()
 
 
+async def test_only_flagged_sockets_authorize_on_one_acl_read_per_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given one socket whose ticket flagged it for the canonical session and one whose binding is not flagged.
+    pipe = Pipeline(monkeypatch, canonical=True)
+    flagged = await pipe.connect()
+    unflagged = await pipe.connect()
+    binding = unflagged.socket.state.chat_binding
+    unflagged.socket.state.chat_binding = binding.model_copy(update={"authorize_deliveries": False})
+
+    await asyncio.wait_for(pipe.publish(0, 1), 5)
+
+    # Both get every chunk; the version is read once per delivery and only the flagged socket is decided, once.
+    assert [flagged.seqs(), unflagged.seqs()] == [[0, 1], [0, 1]]
+    assert pipe.read_version.await_count == 2
+    pipe.authorize.assert_awaited_once_with(flagged.socket.state.chat_binding)
+
+
 async def test_revocation_applies_to_the_next_event_for_every_socket(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     links = [await pipe.connect(), await pipe.connect()]
     await asyncio.wait_for(pipe.publish(0), 5)
 
@@ -442,7 +460,7 @@ async def test_revocation_applies_to_the_next_event_for_every_socket(monkeypatch
 
 async def test_one_viewers_sockets_share_one_decision_on_one_fresh_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given three cold sockets of one viewer and one of another, published to from inside a held connection.
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     pipe.auth_gate = Gate(saturate_at=2)
     viewer = uuid4()
     tabs = [await pipe.connect(tenant_id=viewer) for _ in range(3)]
@@ -469,7 +487,7 @@ async def test_a_decision_that_outlasts_the_chunk_wait_still_fills_the_cache_and
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given a cold socket whose decision is held past every wait.
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     pipe.auth_gate = Gate()
     clock = HeldDecisionTime(monkeypatch, pipe.auth_gate)
     link = await pipe.connect()
@@ -499,7 +517,7 @@ async def test_a_decision_that_outlasts_the_chunk_wait_still_fills_the_cache_and
 
 async def test_every_wait_counts_from_the_decision_start_whatever_the_event(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a cold socket whose decision is held past every wait.
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     pipe.auth_gate = Gate()
     clock = HeldDecisionTime(monkeypatch, pipe.auth_gate)
     link = await pipe.connect()
@@ -529,7 +547,7 @@ async def test_an_expired_socket_closes_with_4001_while_the_same_viewers_live_on
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given two sockets of one viewer, one past its own deadline.
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     viewer = uuid4()
     live = await pipe.connect(tenant_id=viewer)
     expired = await pipe.connect(tenant_id=viewer, auth_deadline=int(time.time()) - 1)
@@ -550,7 +568,7 @@ async def test_an_expired_socket_closes_with_4001_while_the_same_viewers_live_on
 async def test_a_transient_failure_skips_only_that_chunk_and_keeps_the_socket(
     monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     link = await pipe.connect()
     pipe.failure = TRANSIENT_FAILURES[failure]()
 
@@ -568,7 +586,7 @@ async def test_a_transient_failure_skips_only_that_chunk_and_keeps_the_socket(
 
 
 async def test_each_event_serializes_once_for_all_local_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     links = [await pipe.connect() for _ in range(4)]
     encode = Mock(wraps=fanout.encode_event_text)
     monkeypatch.setattr(realtime, "encode_event_text", encode)
@@ -612,7 +630,7 @@ async def test_stalled_remote_socket_delays_healthy_receivers_only_until_the_sen
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 60.0)
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     pipe.store = remote_presence(pipe)
     await asyncio.wait_for(pipe.publish(0), 5)
     receiver = Receiver(pipe)
@@ -635,7 +653,7 @@ async def test_stalled_remote_socket_delays_healthy_receivers_only_until_the_sen
 @pytest.mark.parametrize("kind", ["chunk", "done"])
 async def test_the_chunk_bound_applies_to_chunk_events_only(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
     monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     receiver = Receiver(pipe)
     gate = Gate()
     slow = await receiver.connect(gate=gate)
@@ -662,7 +680,7 @@ async def test_stalled_done_socket_is_bounded_and_the_next_event_still_reaches_h
 ) -> None:
     monkeypatch.setattr(realtime, "TERMINAL_SEND_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.01)
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     receiver = Receiver(pipe)
     stalled = await receiver.connect(stalled=True)
     healthy = await receiver.connect()
@@ -687,7 +705,7 @@ async def test_stalled_done_socket_cannot_hold_back_the_publisher_or_remote_rout
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(realtime, "TERMINAL_SEND_TIMEOUT_SECONDS", 0.01)
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     pipe.store = remote_presence(pipe)
     stalled = await pipe.connect(stalled=True)
     healthy = await pipe.connect()
@@ -704,9 +722,9 @@ async def test_stalled_done_socket_cannot_hold_back_the_publisher_or_remote_rout
     assert len(pipe.store.published) == 1
 
 
-async def test_terminal_send_bound_never_cancels_shared_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_terminal_send_bound_never_cancels_canonical_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(realtime, "TERMINAL_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     pipe.auth_gate = Gate()
     link = await pipe.connect()
 
@@ -724,7 +742,7 @@ async def test_terminal_send_bound_never_cancels_shared_authorization(monkeypatc
 
 
 async def test_receiver_serializes_each_event_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     pipe.store = remote_presence(pipe)
     await asyncio.wait_for(pipe.publish(0), 5)
     receiver = Receiver(pipe)
@@ -743,7 +761,7 @@ async def test_chunks_reach_local_and_remote_sockets_in_seq_order_despite_stalle
 ) -> None:
     monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.01)
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     pipe.store = remote_presence(pipe)
     stalled = await pipe.connect(stalled=True)
     healthy = await pipe.connect()
@@ -768,7 +786,7 @@ async def test_publisher_evicts_a_stalled_socket_after_consecutive_timeouts_and_
 ) -> None:
     monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
     threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     stalled = await pipe.connect(stalled=True)
     healthy = await pipe.connect()
     seqs = list(range(threshold + 2))
@@ -792,7 +810,7 @@ async def test_receiver_evicts_a_stalled_socket_and_the_healthy_one_keeps_every_
 ) -> None:
     monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)  # expires at the first suspension of a send
     threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     pipe.store = remote_presence(pipe)
     seqs = list(range(threshold + 2))
     await asyncio.wait_for(pipe.publish(*seqs), 5)
@@ -818,7 +836,7 @@ async def test_a_slow_but_healthy_socket_that_reads_again_between_timeouts_is_ne
     monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)
     monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)
     threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     seqs = list(range(2 * threshold))
     # One timeout short of eviction, then one send that goes through, twice over.
     stalls = frozenset(seq for seq in seqs if seq % threshold != threshold - 1)
@@ -851,7 +869,7 @@ async def test_a_snapshot_taken_before_eviction_sends_nothing_more_to_the_evicte
 ) -> None:
     monkeypatch.setattr(delivery, "CHUNK_SEND_TIMEOUT_SECONDS", 0.0)
     threshold = websocket.STALLED_SEND_EVICTION_THRESHOLD
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     stalled = await pipe.connect(stalled=True)
     healthy = await pipe.connect()
     snapshot = list(pipe.manager.active_connections[str(pipe.agent_id)])
@@ -889,7 +907,7 @@ async def test_receiver_skips_a_socket_evicted_while_its_delivery_was_authorizin
 ) -> None:
     monkeypatch.setattr(websocket, "CHUNK_SEND_TIMEOUT_SECONDS", 60.0)  # a send the stalled socket must never get
     monkeypatch.setattr(websocket, "EVICTION_CLOSE_TIMEOUT_SECONDS", 60.0)
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     receiver = Receiver(pipe)
     stalled = await receiver.connect(stalled=True)
     stalled.socket.state.realtime_connection_id = "stalled-connection"
@@ -926,7 +944,7 @@ async def test_receiver_skips_a_socket_evicted_while_its_delivery_was_authorizin
 
 
 async def test_revocation_during_slow_authorization_refuses_every_later_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     pipe.auth_gate = Gate()
     link = await pipe.connect()
     first = asyncio.create_task(pipe.publish(0))
@@ -948,7 +966,7 @@ async def test_revocation_during_slow_authorization_refuses_every_later_chunk(mo
 async def test_cancelling_publication_leaves_the_decision_running_until_the_router_stops(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pipe = Pipeline(monkeypatch, shared=True)
+    pipe = Pipeline(monkeypatch, canonical=True)
     link = await pipe.connect()
     pipe.hang = True
     task = asyncio.create_task(pipe.publish(0))
@@ -1005,7 +1023,7 @@ async def test_terminal_drain_is_bounded_when_chunk_delivery_never_answers(monke
 async def test_slow_routing_delivers_the_first_and_the_latest_chunk_without_a_backlog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pipe = Pipeline(monkeypatch, shared=False)
+    pipe = Pipeline(monkeypatch, canonical=False)
     link = await pipe.connect()
     store = GatedPresence(str(pipe.agent_id), {})
     pipe.store = store

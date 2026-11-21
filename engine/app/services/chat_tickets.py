@@ -15,9 +15,11 @@ from app.core.permissions import check_agent_access, is_agent_expired
 from app.core.security import check_membership_generation, check_token_generation, load_user_principal
 from app.dao.chat_dao import chat_session_dao
 from app.records.agent import AgentRecord
+from app.records.chat import ChatSessionRecord
 from app.records.user import UserRecord
 from app.services.chat_session_access import can_access_chat_session
 from app.services.chat_session_service import ensure_primary_platform_session
+from app.services.shared_chat import is_canonical
 
 
 class ChatTicketRequest(BaseModel):
@@ -38,6 +40,8 @@ class ChatTicketBinding(BaseModel):
     auth_deadline: int
     auth_generation: int = Field(strict=True, ge=0)
     membership_generation: int = Field(default=0, strict=True, ge=0)
+    # Set by ``issue`` from the session: a canonical session's socket re-authorizes before each delivery it gets.
+    authorize_deliveries: bool = False
 
 
 def ticket_key(ticket: str) -> str:
@@ -75,17 +79,20 @@ async def authorize_identity(binding: ChatTicketBinding) -> tuple[UserRecord, Ag
     return user, agent, level
 
 
-async def authorized_session(binding: ChatTicketBinding, user: UserRecord, agent: AgentRecord) -> None:
+async def authorized_session(binding: ChatTicketBinding, user: UserRecord, agent: AgentRecord) -> ChatSessionRecord:
+    """Return the binding's session if ``user`` may still open it; 403 otherwise."""
     session = await chat_session_dao.get_for_agent(binding.session_id, binding.agent_id)
     if session is None:
         raise HTTPException(403, "Session unavailable")
     if not can_access_chat_session(user, agent, session):
         raise HTTPException(403, "Not authorized for this session")
+    return session
 
 
 async def issue(binding: ChatTicketBinding) -> ChatTicketResponse:
     user, agent, _ = await authorize(binding)
-    await authorized_session(binding, user, agent)
+    session = await authorized_session(binding, user, agent)
+    binding = binding.model_copy(update={"authorize_deliveries": is_canonical(session)})
     ticket = secrets.token_urlsafe(32)
     try:
         redis = await get_redis()

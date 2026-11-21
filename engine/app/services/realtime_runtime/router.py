@@ -23,7 +23,7 @@ from app.services.realtime_runtime.chat_authorization import (
     DeliveryVerdict,
     authorize_chat_delivery,
     cancel_pending_decisions,
-    read_shared_acl_version,
+    read_delivery_acl_version,
 )
 from app.services.realtime_runtime.contracts import (
     LocalDeliverer,
@@ -47,7 +47,7 @@ PUBSUB_PREFIX = "realtime:ws"
 DEFAULT_SEND_TIMEOUT_SECONDS = 5.0
 TERMINAL_SEND_TIMEOUT_SECONDS = 15.0
 TERMINAL_EVENT_TYPES = frozenset({ChatEventType.DONE, ChatEventType.ERROR})
-# How long one delivery waits for a shared-session authorization decision, counted from the decision's start rather
+# How long one delivery waits for a canonical-session authorization decision, counted from the decision's start rather
 # than from the event, so a slow decision holds the serial subscriber loop once and the events after it skip at once.
 # The decision keeps running past a wait and still fills the socket's cache. These bound a wait, never a send.
 CHUNK_AUTHORIZATION_WAIT_SECONDS = 2.0
@@ -65,7 +65,7 @@ def resolve_send_timeout(message: Mapping[str, object]) -> float:
 
 
 def resolve_authorization_wait(message: Mapping[str, object]) -> float:
-    """Return how long a delivery of this event waits for a shared-session decision, counted from its start."""
+    """Return how long a delivery of this event waits for a canonical-session decision, counted from its start."""
     event_type = message.get("type")
     if event_type == ChatEventType.CHUNK:
         return CHUNK_AUTHORIZATION_WAIT_SECONDS
@@ -202,12 +202,12 @@ class RealtimeRouter:
         """Deliver locally while the presence lookup runs, then route to remote instances; report what happened.
 
         Local sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``; the event is serialized once and,
-        for a shared session, the ACL version is read once before any socket authorizes. ``send_timeout`` bounds
-        only ``ws.send_text``, the one wait a client controls; without one, ``resolve_send_timeout`` picks the default
-        or terminal bound. A shared-session socket waits for its authorization decision only until
-        ``resolve_authorization_wait`` after that decision started, and is skipped for this event (``skipped``)
-        when the decision is late or fails transiently; the decision itself is never cancelled, and neither is the
-        Redis presence lookup: aborting routing skips remote instances.
+        when a target socket is bound to a canonical session, the ACL version is read once before any socket
+        authorizes. ``send_timeout`` bounds only ``ws.send_text``, the one wait a client controls; without one,
+        ``resolve_send_timeout`` picks the default or terminal bound. A canonical-session socket waits for its
+        authorization decision only until ``resolve_authorization_wait`` after that decision started, and is skipped
+        for this event (``skipped``) when the decision is late or fails transiently; the decision itself is never
+        cancelled, and neither is the Redis presence lookup: aborting routing skips remote instances.
 
         ``observer`` owns the sockets: it hears every successful send, every send timeout (so it can evict a socket
         that keeps stalling) and every revoked socket (so it can close it), and a socket it no longer reports live is
@@ -266,7 +266,7 @@ class RealtimeRouter:
         if not targets:
             return RoutingOutcome()
         text = encode_event_text(message)
-        acl_version = await read_shared_acl_version(agent_id, (target_session for _, target_session in targets))
+        acl_version = await read_delivery_acl_version(agent_id, targets)
         failed = evicted = skipped = 0
 
         async def deliver(target: tuple[WebSocket, str | None]) -> bool:
@@ -341,7 +341,8 @@ class RealtimeRouter:
         )
 
     async def stop(self) -> None:
-        """Stop the subscriber, then cancel and await the shared-session decisions still running, before the pool closes."""
+        """Stop the subscriber, then cancel and await the canonical-session decisions still running, before the pool
+        closes."""
         self._started = False
         if self._subscription is not None:
             self._subscription.acknowledged = False

@@ -2,13 +2,14 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import override
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.api import background_tasks, websocket as ws_api
@@ -28,12 +29,13 @@ from app.services import (
     openclaw_routing as routing,
     openclaw_update_exclusion as exclusion,
     quota_guard,
+    shared_chat,
 )
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
 from app.services.quota_guard import AgentExpired, QuotaExceeded
-from app.services.shared_chat import shared_session_id
+from app.services.shared_chat import read_only_detail
 from app.services.storage import LocalStorageBackend
 from test_db_session import _FakePool, _FakeRawConnection
 
@@ -90,7 +92,6 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
     state = TurnState()
     storage = LocalStorageBackend(str(tmp_path / "storage"))
     monkeypatch.setattr(onboarding_greeting, "get_storage_backend", lambda: storage)
-    state.session_id = str(shared_session_id(state.agent.id))
     raw = TurnConnection(state)
     queued: list[GatewayMessageRecord] = []
     token = session._conn_ctx.set(None)
@@ -149,23 +150,25 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
     async def onboarded(_agent_id, _user_id):
         return state.already_onboarded
 
+    def canonical(session_id, agent_id):
+        return ChatSessionRecord(
+            id=session_id, agent_id=agent_id, user_id=state.user.id, source_channel="web", is_primary=True
+        )
+
     async def lock(session_id, agent_id):
         assert session.get_connection() is not None
         if not state.session_exists:
             return None
-        return ChatSessionRecord(
-            id=session_id, agent_id=agent_id, user_id=state.agent.creator_id, source_channel="shared"
-        )
+        return canonical(session_id, agent_id)
 
     async def get_session(session_id, agent_id):
-        return ChatSessionRecord(
-            id=session_id, agent_id=agent_id, user_id=state.agent.creator_id, source_channel="shared"
-        )
+        return canonical(session_id, agent_id)
 
     async def recent(**_kwargs):
+        # Differs from the socket's own history, so a turn that reloads the stored transcript shows it.
         return [
             ChatMessageRecord(
-                id=uuid4(), agent_id=state.agent.id, user_id=state.user.id, role="assistant", content="prior"
+                id=uuid4(), agent_id=state.agent.id, user_id=state.user.id, role="assistant", content="stored prior"
             )
         ]
 
@@ -227,7 +230,7 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
     monkeypatch.setattr(
         openclaw_enqueue, "load_agent_for_new_work", AsyncMock(side_effect=lambda _agent_id: state.agent)
     )
-    # The fake pool has no shared chat session to lock: the real reservation is proved against PostgreSQL.
+    # The fake pool has no chat session to lock: the real reservation is proved against PostgreSQL.
     monkeypatch.setattr(
         openclaw_enqueue.personal_burst_dao, "next_created_at", AsyncMock(side_effect=lambda *_args: datetime.now(UTC))
     )
@@ -296,6 +299,7 @@ async def drive_turn(
         session_id=UUID(state.session_id),
         auth_deadline=int(time.time()) + 3600,
         auth_generation=0,
+        authorize_deliveries=True,
     )
     handler.conversation = [{"role": "assistant", "content": "prior"}]
     from fastapi import HTTPException
@@ -339,7 +343,27 @@ async def test_accepted_turn_commits_before_append_status_and_wake(monkeypatch, 
         )
     assert state.frames == expected
     assert len(handler.conversation) == 2
-    assert state.prepared_history == [{"role": "assistant", "content": "prior"}]
+    # The canonical session may have turns from the owner's other tabs: both turn kinds prepare from the store.
+    assert state.prepared_history == [{"role": "assistant", "content": "stored prior"}]
+    echo = ws_api.manager.send_to_session
+    assert isinstance(echo, AsyncMock)
+    if onboarding:
+        echo.assert_not_awaited()
+    else:
+        # The accepted user turn is echoed to the owner's other tabs only.
+        echo.assert_awaited_once_with(
+            str(state.agent.id),
+            handler.conv_id,
+            {
+                "type": "done",
+                "role": "user",
+                "content": "hello",
+                "message_id": str(state.messages[0].id),
+                "client_submission_id": state.submission_id,
+                "session_id": handler.conv_id,
+            },
+            user_id=str(state.user.id),
+        )
 
 
 @pytest.mark.parametrize("soul", ["Voice sentinel: dry-witted pilot.\nRole sentinel: travel desk lead.", None])
@@ -526,6 +550,37 @@ async def test_onboarding_duplicate_never_charges_or_enqueues(monkeypatch, turn,
     assert not state.wake.is_set()
     assert state.frames == [{"type": "onboarded", "agent_id": str(handler.agent_id)}]
     assert len(handler.conversation) == 1
+
+
+async def test_onboarding_refusal_under_the_lock_escapes_with_the_callers_canonical_session(monkeypatch, turn):
+    state, raw = turn
+    writable = ChatSessionRecord(
+        id=UUID(state.session_id), agent_id=state.agent.id, user_id=state.user.id, source_channel="web", is_primary=True
+    )
+    canonical = replace(writable, id=uuid4())
+
+    async def locked(_session_id, _agent_id):
+        assert session.get_connection() is not None
+        return replace(writable, user_id=uuid4())
+
+    async def ensure(agent_id, user_id):
+        assert session.get_connection() is None
+        assert (agent_id, user_id) == (state.agent.id, state.user.id)
+        return canonical
+
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "get_for_agent", AsyncMock(return_value=writable))
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", locked)
+    monkeypatch.setattr(shared_chat, "ensure_canonical_session", ensure)
+
+    with pytest.raises(HTTPException) as refused:
+        await drive_turn(monkeypatch, state, onboarding=True)
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail == read_only_detail(canonical.id)
+    assert (raw.commits, raw.rollbacks) == (0, 1)
+    assert not state.pending
+    assert not state.committed
+    assert not state.frames
 
 
 @pytest.mark.parametrize("role", ["platform_admin", "org_admin"])

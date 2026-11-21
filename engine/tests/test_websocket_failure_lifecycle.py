@@ -29,7 +29,6 @@ from app.services.chat_submissions import AcceptedSubmission
 from app.services.realtime_runtime import chat_authorization, router as realtime
 from app.services.realtime_runtime.chat_authorization import DeliveryVerdict
 from app.services.realtime_runtime.router import PRESENCE_TTL_SECONDS
-from app.services.shared_chat import shared_session_id
 from test_chunk_live_delivery import TRANSIENT_FAILURES, Gate, HeldDecisionTime, decisions
 from test_realtime_presence_refresh import Clock, FakeRedis, closable_socket
 
@@ -154,7 +153,7 @@ async def test_malformed_frame_reports_error_and_next_submission_is_processed(
     message = ChatMessageRecord(
         id=uuid.uuid4(), agent_id=binding.agent_id, user_id=binding.user_id, role="user", content="hello"
     )
-    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True, canonical=False))
+    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True, canonical=True))
     monkeypatch.setattr(websocket, "accept_submission", accept)
     report = Mock()
     monkeypatch.setattr(websocket, "report_exception", report)
@@ -407,7 +406,7 @@ def accept_submissions(binding: chat_tickets.ChatTicketBinding, monkeypatch: pyt
     message = ChatMessageRecord(
         id=uuid.uuid4(), agent_id=binding.agent_id, user_id=binding.user_id, role="user", content="hello"
     )
-    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True, canonical=False))
+    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True, canonical=True))
     monkeypatch.setattr(websocket, "accept_submission", accept)
     return accept
 
@@ -750,7 +749,7 @@ async def test_disconnect_and_eviction_are_idempotent_in_either_order(
 
 @dataclass
 class Viewer:
-    """One registered shared-session socket on a receiving instance; its close parks until ``release_close`` is set."""
+    """A registered canonical-session socket on the receiving side; its close parks until ``release_close`` is set."""
 
     manager: websocket.ConnectionManager
     socket: WebSocket
@@ -792,9 +791,10 @@ async def viewer(monkeypatch: pytest.MonkeyPatch) -> Viewer:
         user_id=uuid.uuid4(),
         tenant_id=uuid.uuid4(),
         agent_id=agent,
-        session_id=shared_session_id(agent),
+        session_id=uuid.uuid4(),
         auth_deadline=int(time.time()) + 3600,
         auth_generation=0,
+        authorize_deliveries=True,
     )
     events: list[dict[str, object]] = []
     closes: list[int] = []
