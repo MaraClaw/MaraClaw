@@ -1,5 +1,6 @@
 import json
 import time
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,15 +11,15 @@ from app.core.json_types import JsonObject, json_loads_object, json_object_from
 from app.records.chat import ChatSessionRecord
 from app.schemas.chat_wire import (
     CHAT_SERVER_EVENT_ADAPTER,
-    ArchivedSessionErrorEvent,
     ChatEventType,
     ChatServerEvent,
     CorrelatedTurnRejectedEvent,
     InvalidSubmissionRejectedEvent,
+    ReadOnlySessionErrorEvent,
 )
+from app.services import shared_chat
 from app.services.chat_submissions import ChatSubmission
 from app.services.chat_tickets import ChatTicketBinding
-from app.services.shared_chat import shared_session_id
 from test_websocket_session_query import connected_socket
 from test_websocket_turn_transaction import TurnConnection, TurnState, drive_turn
 
@@ -65,30 +66,35 @@ async def test_rejection_keeps_uuid_correlation_when_attachments_are_invalid(
     assert event.reason == "invalid_attachments"
 
 
-async def test_archived_submission_emits_structured_error_when_session_is_read_only(
+async def test_read_only_submission_emits_structured_error_naming_the_callers_canonical_session(
     monkeypatch: pytest.MonkeyPatch, turn: tuple[TurnState, TurnConnection]
 ) -> None:
-    # Given an archived personal session and the real submission acceptance path.
+    # Given a session the caller may read but not write and the real submission acceptance path.
     state, _raw = turn
     socket, frames = await connected_socket()
     handler = ws_api.WebSocketChatHandler(socket, state.agent.id, "ticket")
     handler.user, handler.agent = state.user, state.agent
-    archived_id = uuid4()
+    read_only_id = uuid4()
     assert state.user.tenant_id is not None
     handler.binding = ChatTicketBinding(
         user_id=state.user.id,
         tenant_id=state.user.tenant_id,
         agent_id=state.agent.id,
-        session_id=archived_id,
+        session_id=read_only_id,
         auth_deadline=int(time.time()) + 3600,
         auth_generation=0,
     )
-    handler.conv_id = str(archived_id)
+    handler.conv_id = str(read_only_id)
 
-    async def archived_session(_session_id: UUID, _agent_id: UUID) -> ChatSessionRecord:
-        return ChatSessionRecord(id=archived_id, agent_id=state.agent.id, user_id=state.user.id, source_channel="web")
+    async def read_only_session(_session_id: UUID, _agent_id: UUID) -> ChatSessionRecord:
+        return ChatSessionRecord(id=read_only_id, agent_id=state.agent.id, user_id=state.user.id, source_channel="web")
 
-    monkeypatch.setattr(ws_api.chat_session_dao, "lock_for_agent", archived_session)
+    monkeypatch.setattr(ws_api.chat_session_dao, "lock_for_agent", read_only_session)
+    canonical = ChatSessionRecord(
+        id=uuid4(), agent_id=state.agent.id, user_id=state.user.id, source_channel="web", is_primary=True
+    )
+    ensure = AsyncMock(return_value=canonical)
+    monkeypatch.setattr(shared_chat, "ensure_canonical_session", ensure)
     submission = ChatSubmission(client_submission_id=UUID(state.submission_id), content="hello")
     # When the actual handler encounters the writable-session guard.
     keep_open = await handler._handle_submission(submission)
@@ -97,12 +103,13 @@ async def test_archived_submission_emits_structured_error_when_session_is_read_o
     assert isinstance(frame_text, str)
     payload = json_loads_object(frame_text)
     event = CHAT_SERVER_EVENT_ADAPTER.validate_python(payload)
-    assert isinstance(event, ArchivedSessionErrorEvent)
-    assert event.content.session_id == shared_session_id(state.agent.id)
+    assert isinstance(event, ReadOnlySessionErrorEvent)
+    assert event.content.session_id == canonical.id
     assert payload == {
         "type": "error",
-        "content": {"reason": "session_archived", "session_id": str(shared_session_id(state.agent.id))},
+        "content": {"reason": "session_read_only", "session_id": str(canonical.id)},
     }
+    ensure.assert_awaited_once_with(state.agent.id, state.user.id)
     assert not keep_open
     assert frames[1]["code"] == 4003
 
@@ -192,6 +199,6 @@ def test_json_schema_is_exportable_when_adapter_is_built_from_named_contract() -
     # Then both audited variants are represented by named schema definitions.
     definitions = json_object_from(schema["$defs"])
     assert "InvalidSubmissionRejectedEvent" in definitions
-    assert "ArchivedSessionErrorEvent" in definitions
+    assert "ReadOnlySessionErrorEvent" in definitions
     properties = json_object_from(json_object_from(definitions["CorrelatedTurnRejectedEvent"])["properties"])
     assert json_object_from(properties["client_submission_id"])["format"] == "uuid"

@@ -35,7 +35,7 @@ import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine a
 import { createChatSubmissions } from '@/lib/chat/submissions'
 import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
 import { isWritableSession } from '@/lib/chat/sessions'
-import { ChatEventType, archivedSessionId } from '@/lib/chat/protocol'
+import { ChatEventType, readOnlySessionId } from '@/lib/chat/protocol'
 import { userFacingRequestError } from '@/lib/http'
 import { chatUploadLimit, formatUploadLimit, getUploadPolicy } from '@/lib/upload-policy-api'
 import {
@@ -95,7 +95,7 @@ export function AgentChatPage() {
   const [socketReady, setSocketReady] = useState(0)
   const [socketStopped, setSocketStopped] = useState(false)
   const [connection, setConnection] = useState<ChatConnectionState>('connecting')
-  const [archivedId, setArchivedId] = useState<string | null>(null)
+  const [readOnlyId, setReadOnlyId] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   const [livePreview, setLivePreview] = useState<{ env?: string; screenshot?: string } | null>(null)
   const sendRef = useRef<((payload: ChatOutbound) => void) | null>(null)
@@ -156,7 +156,10 @@ export function AgentChatPage() {
   })
   const activeSession = loadedSession ?? lookupQuery.data
     ?? (sharedSessionQuery.data?.id === activeId ? sharedSessionQuery.data : undefined)
-  const writable = archivedId !== activeId && (!sessionId || isWritableSession(activeSession))
+  // A URL-opened session stays read-only until the engine says otherwise; the caller's own conversation is writable
+  // while it is being created, so text typed meanwhile is queued for it.
+  const writable = readOnlyId !== activeId
+    && (sessionId ? isWritableSession(activeSession) : activeSession?.writable !== false)
   const installedSkillsQuery = useWorkspaceQuery({
     ...installedAgentSkillsOptions(agent.id),
     enabled: authSession.isCurrent(mountedOwner) && Boolean(token) && writable,
@@ -312,11 +315,12 @@ export function AgentChatPage() {
       },
       onEvent(event: ChatInbound) {
         if (!current()) return
-        const archived = archivedSessionId(event)
-        if (archived !== undefined) {
-          if (archived !== activeId) return
-          setArchivedId(archived)
-          setInfo(translate('Archived conversation. Read-only history.'))
+        // The refusal names the caller's own conversation, where they can write; the active session is the read-only one.
+        if (readOnlySessionId(event) !== undefined) {
+          setReadOnlyId(activeId)
+          updateLines((previous) => previous.map((line) => line.role === 'user' && line.pending && line.delivery !== 'accepted'
+            ? { ...line, pending: false, delivery: 'rejected', retryable: false, rejectionNotice: translate('Message not sent. This conversation is read-only.') }
+            : line))
           setBusy(false)
           setThinking('')
           setSocketStopped(true)

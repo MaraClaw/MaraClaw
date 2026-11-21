@@ -27,6 +27,7 @@ export type ChatSession = {
   message_count: number
   unread_count: number
   is_primary?: boolean
+  writable?: boolean
 }
 
 export type FileInfo = {

@@ -1,7 +1,7 @@
 import time
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -17,18 +17,15 @@ from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.chat_submissions import ChatSubmission
-from app.services.shared_chat import ensure_shared_session, shared_session_id
 
 pytest_plugins = ("test_chat_submission_postgres",)
 
 
-@pytest.mark.parametrize("operation", ["list_all", "rename", "delete"])
-async def test_shared_visibility_does_not_grant_mutation_or_audit_rights(monkeypatch, operation):
+@pytest.mark.parametrize("operation", ["read", "list_all", "rename", "delete"])
+async def test_another_users_canonical_conversation_grants_a_member_no_read_or_mutation_rights(monkeypatch, operation):
     viewer = UserRecord(id=uuid4())
     agent = AgentRecord(id=uuid4(), name="Agent", creator_id=uuid4())
-    session = ChatSessionRecord(
-        id=shared_session_id(agent.id), agent_id=agent.id, user_id=agent.creator_id, source_channel="shared"
-    )
+    session = ChatSessionRecord(id=uuid4(), agent_id=agent.id, user_id=uuid4(), source_channel="web", is_primary=True)
 
     @asynccontextmanager
     async def connection():
@@ -45,8 +42,9 @@ async def test_shared_visibility_does_not_grant_mutation_or_audit_rights(monkeyp
     monkeypatch.setattr(chat_sessions.chat_session_dao, "update", update)
     monkeypatch.setattr(chat_sessions.chat_session_dao, "delete", delete)
 
-    assert await chat_sessions._authorize_history(agent.id, session.id, viewer) == session
-    if operation == "list_all":
+    if operation == "read":
+        action = chat_sessions._authorize_history(agent.id, session.id, viewer)
+    elif operation == "list_all":
         action = chat_sessions.list_sessions(agent.id, "all", viewer)
     elif operation == "rename":
         action = chat_sessions.rename_session(
@@ -57,48 +55,15 @@ async def test_shared_visibility_does_not_grant_mutation_or_audit_rights(monkeyp
     with pytest.raises(HTTPException) as error:
         await action
 
-    assert error.value.status_code == (409 if operation == "delete" else 403)
+    assert error.value.status_code == 403
     update.assert_not_awaited()
     delete.assert_not_awaited()
 
 
-async def test_two_humans_share_live_transcript_replay_and_http_history(receipt_db, monkeypatch):
-    db = receipt_db
-    viewer = UserRecord(id=uuid4(), quota_message_limit=1)
-    async with transaction(db.first):
-        await db.first.execute(
-            "INSERT INTO users (id, display_name, quota_message_limit) VALUES (%(id)s, 'Viewer', 1)",
-            {"id": viewer.id},
-        )
-        shared = await ensure_shared_session(db.agent.id)
-    bindings = {
-        token: chat_tickets.ChatTicketBinding(
-            user_id=user.id,
-            tenant_id=uuid4(),
-            agent_id=db.agent.id,
-            session_id=shared.id,
-            auth_deadline=int(time.time()) + 3600,
-            auth_generation=0,
-        )
-        for token, user in (("sender", db.user), ("viewer", viewer))
-    }
-
-    async def redeem(ticket):
-        return bindings[ticket]
-
-    async def authorize(binding):
-        return (db.user if binding.user_id == db.user.id else viewer), db.agent, "use"
-
-    monkeypatch.setattr(chat_tickets, "redeem", redeem)
-    monkeypatch.setattr(chat_tickets, "authorize_identity", authorize)
-    monkeypatch.setattr(websocket, "manager", websocket.ConnectionManager())
-    monkeypatch.setattr(websocket.realtime_router, "register_connection", AsyncMock())
-    monkeypatch.setattr(websocket.realtime_router, "unregister_connection", AsyncMock())
-    monkeypatch.setattr(websocket.realtime_router, "_list_presence", AsyncMock(return_value=[]))
-
+def _chat_app(conninfo: str, current_user) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        await init_pool(conninfo=db.conninfo, min_size=1, max_size=4)
+        await init_pool(conninfo=conninfo, min_size=1, max_size=4)
         try:
             yield
         finally:
@@ -107,54 +72,94 @@ async def test_two_humans_share_live_transcript_replay_and_http_history(receipt_
     app = FastAPI(lifespan=lifespan)
     app.include_router(websocket.router)
     app.include_router(chat_sessions.router)
-    app.dependency_overrides[get_current_user] = lambda: viewer
-    socket_path = f"/ws/chat/{db.agent.id}?session_id={shared.id}&ticket="
-    session_path = f"/api/agents/{db.agent.id}/sessions"
-    first = {"content": "first human", "client_submission_id": str(uuid4())}
-    second = {"content": "second human", "client_submission_id": str(uuid4())}
+    app.dependency_overrides[get_current_user] = current_user
+    return app
 
-    with TestClient(app) as client, client.websocket_connect(socket_path + "sender") as sender:
-        assert sender.receive_json()["type"] == "connected"
-        with client.websocket_connect(socket_path + "viewer") as observer:
-            assert observer.receive_json()["type"] == "connected"
-            sender.send_json(first)
-            accepted = sender.receive_json()
-            assert accepted["type"] == "turn_accepted"
-            completion = sender.receive_json()
-            assert completion["message_id"] == accepted["message_id"]
-            assert completion["role"] == "user"
-            assert "entry_id" not in completion
-            assert observer.receive_json() == completion
-            assert sender.receive_json() == {"type": "status", "content": "thinking"}
 
-            sender.send_json(first)
-            assert sender.receive_json() == accepted
-            sender.send_json({"content": "bad UUID"})
-            assert sender.receive_json()["reason"] == "invalid_submission_id"
+async def test_two_humans_each_get_a_private_conversation_over_rest_and_socket(receipt_db, monkeypatch):
+    db = receipt_db
+    other = UserRecord(id=uuid4(), quota_message_limit=1)
+    async with transaction(db.first):
+        await db.first.execute(
+            "INSERT INTO users (id, display_name, quota_message_limit) VALUES (%(id)s, 'Other', 1)",
+            {"id": other.id},
+        )
+    users = {db.user.id: db.user, other.id: other}
+    caller = {"user": db.user}
+    bindings: dict[str, chat_tickets.ChatTicketBinding] = {}
 
-            observer.send_json(second)
-            reply = observer.receive_json()
-            assert reply["type"] == "turn_accepted"
-            reply_completion = observer.receive_json()
-            assert reply_completion["message_id"] == reply["message_id"]
-            assert sender.receive_json() == reply_completion
-            assert observer.receive_json() == {"type": "status", "content": "thinking"}
+    def bind(user: UserRecord, session_id: str) -> chat_tickets.ChatTicketBinding:
+        return chat_tickets.ChatTicketBinding(
+            user_id=user.id,
+            tenant_id=uuid4(),
+            agent_id=db.agent.id,
+            session_id=UUID(session_id),
+            auth_deadline=int(time.time()) + 3600,
+            auth_generation=0,
+        )
 
-            history = client.get(f"{session_path}/{shared.id}/messages")
-            assert history.status_code == 200
-            assert [row["content"] for row in history.json()] == ["first human", "second human"]
-            resumed = client.post(session_path, json={"title": "ignored"})
-            assert resumed.status_code == 201
-            assert resumed.json()["id"] == str(shared.id)
-            assert resumed.json()["message_count"] == 2
-            assert resumed.json()["unread_count"] == 0
-            assert client.delete(f"{session_path}/{shared.id}").status_code == 409
+    monkeypatch.setattr(chat_tickets, "redeem", AsyncMock(side_effect=lambda ticket: bindings[ticket]))
+    monkeypatch.setattr(
+        chat_tickets,
+        "authorize",
+        AsyncMock(side_effect=lambda binding, *_a, **_k: (users[binding.user_id], db.agent, "use")),
+    )
+    monkeypatch.setattr(websocket, "manager", websocket.ConnectionManager())
+    monkeypatch.setattr(websocket.realtime_router, "register_connection", AsyncMock())
+    monkeypatch.setattr(websocket.realtime_router, "unregister_connection", AsyncMock())
+    monkeypatch.setattr(websocket.realtime_router, "_list_presence", AsyncMock(return_value=[]))
+    app = _chat_app(db.conninfo, lambda: caller["user"])
+    sessions_path = f"/api/agents/{db.agent.id}/sessions"
+
+    with TestClient(app) as client:
+        mine = client.post(sessions_path, json={"title": "ignored"})
+        assert mine.status_code == 201
+        assert client.post(sessions_path, json={}).json()["id"] == mine.json()["id"]
+        caller["user"] = other
+        theirs = client.post(sessions_path, json={})
+        assert theirs.status_code == 201
+        assert theirs.json()["id"] != mine.json()["id"]
+        for created, owner in ((mine.json(), db.user), (theirs.json(), other)):
+            assert (created["user_id"], created["source_channel"], created["writable"]) == (
+                str(owner.id),
+                "web",
+                True,
+            )
+
+        for ticket, owner, created, content in (
+            ("first", db.user, mine.json(), "first human"),
+            ("second", other, theirs.json(), "second human"),
+        ):
+            bindings[ticket] = bind(owner, created["id"])
+            submission = {"content": content, "client_submission_id": str(uuid4())}
+            path = f"/ws/chat/{db.agent.id}?session_id={created['id']}&ticket={ticket}"
+            with client.websocket_connect(path) as socket:
+                assert socket.receive_json()["type"] == "connected"
+                socket.send_json(submission)
+                accepted = socket.receive_json()
+                assert accepted["type"] == "turn_accepted"
+                assert accepted["session_id"] == created["id"]
+
+        caller["user"] = db.user
+        history = client.get(f"{sessions_path}/{mine.json()['id']}/messages")
+        assert [row["content"] for row in history.json()] == ["first human"]
+        assert client.delete(f"{sessions_path}/{mine.json()['id']}").json()["detail"] == {
+            "reason": "canonical_session_required",
+            "session_id": mine.json()["id"],
+        }
+        assert [row["id"] for row in client.get(sessions_path).json()] == [mine.json()["id"]]
+
+        caller["user"] = other
+        assert client.get(f"{sessions_path}/{mine.json()['id']}/messages").status_code == 403
+        history = client.get(f"{sessions_path}/{theirs.json()['id']}/messages")
+        assert [row["content"] for row in history.json()] == ["second human"]
+        assert [row["id"] for row in client.get(sessions_path).json()] == [theirs.json()["id"]]
 
 
 @pytest.mark.parametrize("kind", ["submission", "onboarding_trigger"])
-async def test_archive_socket_reads_and_replays_but_rejects_new_writes(receipt_db, monkeypatch, kind):
+async def test_read_only_socket_reads_and_replays_but_rejects_new_writes(receipt_db, monkeypatch, kind):
     db = receipt_db
-    submission = ChatSubmission(client_submission_id=uuid4(), content="archived message")
+    submission = ChatSubmission(client_submission_id=uuid4(), content="earlier message")
     original = ChatMessageRecord(
         id=uuid4(),
         agent_id=db.agent.id,
@@ -181,22 +186,11 @@ async def test_archive_socket_reads_and_replays_but_rejects_new_writes(receipt_d
     monkeypatch.setattr(websocket.realtime_router, "register_connection", AsyncMock())
     monkeypatch.setattr(websocket.realtime_router, "unregister_connection", AsyncMock())
     monkeypatch.setattr(websocket, "is_onboarded", AsyncMock(return_value=False))
-    prepare = AsyncMock(side_effect=AssertionError("Archive must not prepare a new turn"))
+    prepare = AsyncMock(side_effect=AssertionError("A read-only session must not prepare a new turn"))
     monkeypatch.setattr(websocket, "prepare_openclaw_message", prepare)
+    app = _chat_app(db.conninfo, lambda: db.user)
+    path = f"/ws/chat/{db.agent.id}?session_id={db.session_id}&ticket=read-only"
 
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI):
-        await init_pool(conninfo=db.conninfo, min_size=1, max_size=4)
-        try:
-            yield
-        finally:
-            await close_pool()
-
-    app = FastAPI(lifespan=lifespan)
-    app.include_router(websocket.router)
-    app.include_router(chat_sessions.router)
-    app.dependency_overrides[get_current_user] = lambda: db.user
-    path = f"/ws/chat/{db.agent.id}?session_id={db.session_id}&ticket=archive"
     with TestClient(app) as client, client.websocket_connect(path) as socket:
         assert socket.receive_json()["type"] == "connected"
         history = client.get(f"/api/agents/{db.agent.id}/sessions/{db.session_id}/messages")
@@ -210,8 +204,18 @@ async def test_archive_socket_reads_and_replays_but_rejects_new_writes(receipt_d
             "client_submission_id": str(submission.client_submission_id),
         }
         socket.send_json({"content": "new write", "client_submission_id": str(uuid4()), "kind": kind})
-        assert socket.receive_json() == {
-            "type": "error",
-            "content": {"reason": "session_archived", "session_id": str(shared_session_id(db.agent.id))},
-        }
+        refusal = socket.receive_json()
+
+    async with transaction(db.second):
+        canonical = await db.second.fetchone(
+            "SELECT id FROM chat_sessions WHERE agent_id = %(agent)s AND user_id = %(user)s "
+            "AND source_channel = 'web' AND is_primary AND is_group IS NOT TRUE",
+            {"agent": db.agent.id, "user": db.user.id},
+        )
+    assert canonical is not None
+    assert canonical["id"] != db.session_id
+    assert refusal == {
+        "type": "error",
+        "content": {"reason": "session_read_only", "session_id": str(canonical["id"])},
+    }
     prepare.assert_not_awaited()

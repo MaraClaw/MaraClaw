@@ -20,7 +20,7 @@ export type ChatInbound = ChatServerEvent
 export type ChatTurnAcceptance = TurnAcceptedEvent
 export type ChatTurnRejection = CorrelatedTurnRejectedEvent | OnboardingTurnRejectedEvent | InvalidSubmissionRejectedEvent
 
-export function archivedSessionId(event: ChatInbound): string | undefined {
+export function readOnlySessionId(event: ChatInbound): string | undefined {
   return event.type === ChatEventType.ERROR && typeof event.content === 'object' ? event.content.session_id : undefined
 }
 

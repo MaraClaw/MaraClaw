@@ -59,7 +59,7 @@ async def authorize(binding: ChatTicketBinding) -> tuple[UserRecord, AgentRecord
 async def authorize_identity(binding: ChatTicketBinding) -> tuple[UserRecord, AgentRecord, str]:
     """Everything ``authorize`` checks except the deadline, which belongs to each socket rather than to its identity.
 
-    Shared-session delivery runs this once for every socket bound to the same identity and checks each socket's own
+    Human-transcript delivery runs this once for every socket bound to the same identity and checks each socket's own
     deadline with ``is_expired``.
     """
     user = await load_user_principal(binding.user_id, fresh=True)

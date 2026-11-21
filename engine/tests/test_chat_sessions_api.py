@@ -2,6 +2,7 @@ import base64
 import json
 import uuid
 from collections.abc import Callable, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Literal, cast
@@ -17,7 +18,6 @@ from app.dao.chat_dao import SessionPosition, chat_session_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
-from app.services.shared_chat import shared_session_id
 
 pytest_plugins = ["tests.chat_history_fakes"]
 
@@ -27,19 +27,20 @@ pytest_plugins = ["tests.chat_history_fakes"]
     ("source", "group", "owner", "expected"),
     [
         ("web", False, True, 1),
+        ("canonical", False, True, 1),
         ("web", True, True, 0),
-        ("shared", False, True, 0),
         ("agent", False, True, 0),
         ("trigger", False, True, 0),
-        ("shared", False, False, 0),
+        ("canonical", False, False, 0),
     ],
 )
 async def test_conditional_polls_preserve_read_marker_rules(history_http, changed, source, group, owner, expected):
     h, client = history_http
-    h.session.source_channel, h.session.is_group = source, group
+    h.session.source_channel, h.session.is_group = ("web" if source == "canonical" else source), group
+    h.session.is_primary = source == "canonical"
     if not owner:
         h.session.user_id = uuid.uuid4()
-        h.agent.creator_id = h.viewer.id
+        h.viewer.role = UserRole.ORG_ADMIN
     held = h.held(h.rows[-1])
     if changed:
         h.rows[-1].content = "edited"
@@ -50,21 +51,22 @@ async def test_conditional_polls_preserve_read_marker_rules(history_http, change
     assert len(h.read_marks) == expected
 
 
-@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.mark.parametrize("source", ["web", "canonical", "agent"])
 @pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])
 async def test_history_access_matrix(monkeypatch, source, viewer):
     user = UserRecord(id=uuid.uuid4(), role=UserRole(viewer) if viewer not in ("owner", "creator") else UserRole.MEMBER)
     agent = AgentRecord(id=uuid.uuid4(), name="Agent", creator_id=user.id if viewer == "creator" else uuid.uuid4())
     session = ChatSessionRecord(
-        id=shared_session_id(agent.id) if source == "shared" else uuid.uuid4(),
+        id=uuid.uuid4(),
         agent_id=agent.id,
         user_id=user.id if viewer == "owner" else uuid.uuid4(),
-        source_channel=source,
+        source_channel="web" if source == "canonical" else source,
+        is_primary=source == "canonical",
     )
     monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent_or_peer", AsyncMock(return_value=session))
 
-    if viewer == "member" and source != "shared":
+    if viewer not in ("owner", "org_admin"):
         with pytest.raises(HTTPException) as error:
             await chat_sessions_api._authorize_history(agent.id, session.id, user)
         assert error.value.status_code == 403
@@ -72,15 +74,16 @@ async def test_history_access_matrix(monkeypatch, source, viewer):
         assert await chat_sessions_api._authorize_history(agent.id, session.id, user) == session
 
 
-@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.mark.parametrize("source", ["web", "canonical", "agent"])
 async def test_history_session_policy_cannot_bypass_agent_access(monkeypatch, source):
     user = UserRecord(id=uuid.uuid4(), role=UserRole.PLATFORM_ADMIN)
     agent_id = uuid.uuid4()
     session = ChatSessionRecord(
-        id=shared_session_id(agent_id) if source == "shared" else uuid.uuid4(),
+        id=uuid.uuid4(),
         agent_id=agent_id,
         user_id=user.id,
-        source_channel=source,
+        source_channel="web" if source == "canonical" else source,
+        is_primary=source == "canonical",
     )
     lookup = AsyncMock(return_value=session)
     monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(side_effect=HTTPException(403, "revoked")))
@@ -94,7 +97,7 @@ async def test_history_session_policy_cannot_bypass_agent_access(monkeypatch, so
 
 
 @pytest.mark.asyncio
-async def test_org_admin_can_list_all_sessions(monkeypatch):
+async def test_org_admin_lists_all_sessions_with_their_own_conversation_first_and_the_rest_read_only(monkeypatch):
     viewer_id = uuid.uuid4()
     agent_id = uuid.uuid4()
     owner_id = uuid.uuid4()
@@ -102,6 +105,9 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
 
     current_user: Any = SimpleNamespace(id=viewer_id, role="org_admin", tenant_id=uuid.uuid4())
     agent = SimpleNamespace(id=agent_id, creator_id=uuid.uuid4())
+    canonical = ChatSessionRecord(
+        id=uuid.uuid4(), agent_id=agent_id, user_id=viewer_id, source_channel="web", is_primary=True
+    )
     session = SimpleNamespace(
         id=uuid.uuid4(),
         agent_id=agent_id,
@@ -113,7 +119,7 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
         peer_agent_id=None,
         is_group=False,
         group_name=None,
-        is_primary=False,
+        is_primary=True,
     )
 
     async def fake_check_agent_access(_user, _agent_id):
@@ -123,7 +129,7 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
         return agent
 
     async def fake_list_all(_agent_id):
-        return [session]
+        return [session, canonical]
 
     async def fake_message_counts(_ids, agent_id=None):
         return {str(session.id): 3}
@@ -134,7 +140,7 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
     class _Conn:
         async def fetchall(self, sql, params=None):
             if "identities" in sql:
-                return [{"id": owner_id, "display": "Alice"}]
+                return [{"id": owner_id, "display": "Alice"}, {"id": viewer_id, "display": "Olivia"}]
             return []
 
     class _Ctx:
@@ -150,14 +156,8 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "message_counts", fake_message_counts)
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "unread_counts_for_user", fake_unread_counts)
     monkeypatch.setattr(chat_sessions_api, "connection_ctx", lambda: _Ctx())
-    shared = ChatSessionRecord(
-        id=shared_session_id(agent_id),
-        agent_id=agent_id,
-        user_id=agent.creator_id,
-        source_channel="shared",
-        is_primary=True,
-    )
-    monkeypatch.setattr(chat_sessions_api, "ensure_shared_session", AsyncMock(return_value=shared))
+    ensure = AsyncMock(return_value=canonical)
+    monkeypatch.setattr(chat_sessions_api, "ensure_canonical_session", ensure)
 
     sessions = await chat_sessions_api.list_sessions(
         agent_id=agent_id,
@@ -165,85 +165,30 @@ async def test_org_admin_can_list_all_sessions(monkeypatch):
         current_user=current_user,
     )
 
-    assert len(sessions) == 2
-    assert sessions[0].id == str(shared.id)
-    assert sessions[1].id == str(session.id)
+    ensure.assert_awaited_once_with(agent_id, viewer_id)
+    assert [row.id for row in sessions] == [str(canonical.id), str(session.id)]
+    assert (sessions[0].user_id, sessions[0].message_count, sessions[0].writable) == (str(viewer_id), 0, True)
     assert sessions[1].user_id == str(owner_id)
     assert sessions[1].username == "Alice"
+    assert (sessions[1].message_count, sessions[1].writable) == (3, False)
 
 
 @pytest.mark.asyncio
-async def test_creator_can_list_all_sessions(monkeypatch):
-    creator_id = uuid.uuid4()
-    agent_id = uuid.uuid4()
-    other_user_id = uuid.uuid4()
-    now = datetime.now(UTC)
-
-    current_user: Any = SimpleNamespace(id=creator_id, role="member", tenant_id=uuid.uuid4())
+@pytest.mark.parametrize("role", ["member", "agent_admin", "platform_admin"])
+async def test_only_company_admins_list_all_sessions(monkeypatch, role):
+    creator_id, agent_id = uuid.uuid4(), uuid.uuid4()
+    current_user: Any = SimpleNamespace(id=creator_id, role=role, tenant_id=uuid.uuid4())
     agent = SimpleNamespace(id=agent_id, creator_id=creator_id)
-    session = SimpleNamespace(
-        id=uuid.uuid4(),
-        agent_id=agent_id,
-        user_id=other_user_id,
-        source_channel="web",
-        title="Customer follow-up",
-        created_at=now,
-        last_message_at=now,
-        peer_agent_id=None,
-        is_group=False,
-        group_name=None,
-        is_primary=False,
-    )
+    list_all = AsyncMock()
+    monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    monkeypatch.setattr(chat_sessions_api.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "list_all_for_agent", list_all)
 
-    async def fake_check_agent_access(_user, _agent_id):
-        return agent, "manage"
+    with pytest.raises(HTTPException) as denied:
+        await chat_sessions_api.list_sessions(agent_id=agent_id, scope="all", current_user=current_user)
 
-    async def fake_agent_get(_id):
-        return agent
-
-    async def fake_list_all(_agent_id):
-        return [session]
-
-    async def fake_message_counts(_ids, agent_id=None):
-        return {str(session.id): 2}
-
-    async def fake_unread_counts(*, session_ids, user_id, mine_only=False):
-        return {}
-
-    class _Conn:
-        async def fetchall(self, sql, params=None):
-            if "identities" in sql:
-                return [{"id": other_user_id, "display": "Bob"}]
-            return []
-
-    class _Ctx:
-        async def __aenter__(self):
-            return _Conn()
-
-        async def __aexit__(self, *_a):
-            return False
-
-    monkeypatch.setattr(chat_sessions_api, "check_agent_access", fake_check_agent_access)
-    monkeypatch.setattr(chat_sessions_api.agent_dao, "get", fake_agent_get)
-    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "list_all_for_agent", fake_list_all)
-    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "message_counts", fake_message_counts)
-    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "unread_counts_for_user", fake_unread_counts)
-    monkeypatch.setattr(chat_sessions_api, "connection_ctx", lambda: _Ctx())
-    shared = ChatSessionRecord(
-        id=shared_session_id(agent_id), agent_id=agent_id, user_id=creator_id, source_channel="shared", is_primary=True
-    )
-    monkeypatch.setattr(chat_sessions_api, "ensure_shared_session", AsyncMock(return_value=shared))
-
-    sessions = await chat_sessions_api.list_sessions(
-        agent_id=agent_id,
-        scope="all",
-        current_user=current_user,
-    )
-
-    assert len(sessions) == 2
-    assert sessions[0].id == str(shared.id)
-    assert sessions[1].user_id == str(other_user_id)
-    assert sessions[1].username == "Bob"
+    assert denied.value.status_code == 403
+    list_all.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -308,104 +253,67 @@ async def test_org_admin_can_view_other_users_session_messages(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_creator_can_view_other_users_session_messages(monkeypatch):
-    creator_id = uuid.uuid4()
-    agent_id = uuid.uuid4()
-    other_user_id = uuid.uuid4()
-    session_id = uuid.uuid4()
-    now = datetime.now(UTC)
-
-    current_user: Any = SimpleNamespace(id=creator_id, role="member", tenant_id=uuid.uuid4())
+@pytest.mark.parametrize("role", ["member", "agent_admin", "platform_admin"])
+async def test_only_company_admins_view_other_users_session_messages(monkeypatch, role):
+    creator_id, agent_id, session_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    current_user: Any = SimpleNamespace(id=creator_id, role=role, tenant_id=uuid.uuid4())
     agent = SimpleNamespace(id=agent_id, creator_id=creator_id)
     session = SimpleNamespace(
         id=session_id,
         agent_id=agent_id,
         peer_agent_id=None,
-        user_id=other_user_id,
+        user_id=uuid.uuid4(),
         source_channel="web",
         is_group=False,
     )
-    message = SimpleNamespace(
-        id=uuid.uuid4(),
-        role="user",
-        content="hello",
-        created_at=now,
-        participant_id=None,
-        thinking=None,
-        client_submission_id=None,
-        attachments=(),
-    )
+    list_messages = AsyncMock()
+    monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent_or_peer", AsyncMock(return_value=session))
+    monkeypatch.setattr(chat_sessions_api.chat_message_dao, "list_for_session", list_messages)
 
-    async def fake_check_agent_access(_user, _agent_id):
-        return agent, "manage"
+    with pytest.raises(HTTPException) as denied:
+        await chat_sessions_api.get_session_messages(
+            agent_id=agent_id, session_id=session_id, limit=20, before=cast("Any", None), current_user=current_user
+        )
 
-    async def fake_get_session(_sid, _aid):
-        return session
-
-    async def fake_list_messages(*, conversation_id, limit, before=None):
-        return [message]
-
-    monkeypatch.setattr(chat_sessions_api, "check_agent_access", fake_check_agent_access)
-    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent_or_peer", fake_get_session)
-    monkeypatch.setattr(chat_sessions_api.chat_message_dao, "list_for_session", fake_list_messages)
-
-    messages = await chat_sessions_api.get_session_messages(
-        agent_id=agent_id,
-        session_id=session_id,
-        limit=20,
-        before=cast("Any", None),
-        current_user=current_user,
-    )
-
-    assert messages == [
-        {
-            "message_id": str(message.id),
-            "entry_id": str(message.id),
-            "role": "user",
-            "content": "hello",
-            "created_at": now.isoformat(),
-            "client_submission_id": None,
-        }
-    ]
+    assert denied.value.status_code == 403
+    list_messages.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_create_session_returns_shared_session_shape(monkeypatch):
+async def test_create_session_resumes_the_callers_own_conversation(monkeypatch):
     user_id = uuid.uuid4()
     agent_id = uuid.uuid4()
-    now = datetime.now(UTC)
     current_user: Any = SimpleNamespace(id=user_id, role="member", tenant_id=uuid.uuid4())
-    created = ChatSessionRecord(
-        id=shared_session_id(agent_id),
+    canonical = ChatSessionRecord(
+        id=uuid.uuid4(),
         agent_id=agent_id,
         user_id=user_id,
-        source_channel="shared",
+        source_channel="web",
         is_primary=True,
         title="Session 01-01 00:00",
-        created_at=now,
+        created_at=datetime.now(UTC),
     )
-
-    async def fake_check_agent_access(_user, _agent_id):
-        return SimpleNamespace(id=agent_id), "use"
-
-    async def fake_create(_agent_id):
-        return created
-
-    monkeypatch.setattr(chat_sessions_api, "check_agent_access", fake_check_agent_access)
-    monkeypatch.setattr(chat_sessions_api, "ensure_shared_session", fake_create)
+    ensure = AsyncMock(return_value=canonical)
+    monkeypatch.setattr(
+        chat_sessions_api, "check_agent_access", AsyncMock(return_value=(SimpleNamespace(id=agent_id), "use"))
+    )
+    monkeypatch.setattr(chat_sessions_api, "ensure_canonical_session", ensure)
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "message_counts", AsyncMock(return_value={}))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "unread_counts_for_user", AsyncMock(return_value={}))
 
-    result = await chat_sessions_api.create_session(
-        agent_id=agent_id,
-        body=chat_sessions_api.CreateSessionIn(),
-        current_user=current_user,
+    first = await chat_sessions_api.create_session(
+        agent_id=agent_id, body=chat_sessions_api.CreateSessionIn(title="ignored"), current_user=current_user
+    )
+    second = await chat_sessions_api.create_session(
+        agent_id=agent_id, body=chat_sessions_api.CreateSessionIn(), current_user=current_user
     )
 
-    assert result.agent_id == str(agent_id)
-    assert result.user_id == str(user_id)
-    assert result.source_channel == "shared"
-    assert result.is_primary is True
-    assert result.message_count == 0
+    assert first == second
+    assert ensure.await_count == 2
+    ensure.assert_awaited_with(agent_id, user_id)
+    assert (first.id, first.agent_id, first.user_id) == (str(canonical.id), str(agent_id), str(user_id))
+    assert (first.source_channel, first.is_primary, first.writable, first.message_count) == ("web", True, True, 0)
 
 
 @pytest.mark.parametrize("source_channel", ["web", "agent"])
@@ -496,22 +404,15 @@ def _order_key(session: ChatSessionRecord) -> tuple[bool, datetime, datetime, uu
 
 
 class _SessionStore:
-    """In-memory model of chat_dao.list_page: scope rules, EXISTS filter, shared exclusion and keyset order."""
+    """In-memory model of chat_dao.list_page: scope rules, EXISTS filter, canonical exclusion and keyset order."""
 
     def __init__(self, agent_id: uuid.UUID, viewer_id: uuid.UUID) -> None:
         self.agent_id = agent_id
         self.viewer_id = viewer_id
-        self.shared = ChatSessionRecord(
-            id=shared_session_id(agent_id),
-            agent_id=agent_id,
-            user_id=uuid.uuid4(),
-            source_channel="shared",
-            is_primary=True,
-            created_at=EPOCH,
-        )
-        self.sessions: dict[uuid.UUID, ChatSessionRecord] = {self.shared.id: self.shared}
-        self.counts: dict[str, int] = {str(self.shared.id): 0}
+        self.sessions: dict[uuid.UUID, ChatSessionRecord] = {}
+        self.counts: dict[str, int] = {}
         self.page_calls: list[dict[str, Any]] = []
+        self.canonical = self.add(minutes=None, created=0, messages=0, primary=True)
 
     def add(
         self,
@@ -524,6 +425,7 @@ class _SessionStore:
         peer_agent_id: uuid.UUID | None = None,
         is_group: bool = False,
         key: int | None = None,
+        primary: bool = False,
     ) -> ChatSessionRecord:
         record = ChatSessionRecord(
             id=uuid.UUID(int=key) if key is not None else uuid.uuid4(),
@@ -533,6 +435,7 @@ class _SessionStore:
             source_channel=channel,
             peer_agent_id=peer_agent_id,
             is_group=is_group,
+            is_primary=primary,
             created_at=EPOCH + timedelta(seconds=created),
             last_message_at=None if minutes is None else EPOCH + timedelta(minutes=minutes),
         )
@@ -542,7 +445,7 @@ class _SessionStore:
 
     def scoped(self, scope: str) -> list[ChatSessionRecord]:
         """Rows matching the scope rules, empty sessions included, newest activity first."""
-        rows = [row for row in self.sessions.values() if row.id != self.shared.id]
+        rows = list(self.sessions.values())
         if scope == "mine":
             rows = [
                 row
@@ -552,7 +455,7 @@ class _SessionStore:
         return sorted(rows, key=_order_key, reverse=True)
 
     def visible(self, scope: str) -> list[ChatSessionRecord]:
-        return [row for row in self.scoped(scope) if self.counts[str(row.id)] > 0]
+        return [row for row in self.scoped(scope) if row.id != self.canonical.id and self.counts[str(row.id)] > 0]
 
     async def list_page(
         self,
@@ -565,7 +468,7 @@ class _SessionStore:
         after: SessionPosition | None = None,
     ) -> list[ChatSessionRecord]:
         self.page_calls.append({"scope": scope, "exclude_id": exclude_id, "limit": limit, "after": after})
-        assert (agent_id, user_id, exclude_id) == (self.agent_id, self.viewer_id, self.shared.id)
+        assert (agent_id, user_id, exclude_id) == (self.agent_id, self.viewer_id, self.canonical.id)
         rows = self.visible(scope)
         if after is not None:
             boundary = (after.last_message_at is not None, after.last_message_at or EPOCH, after.created_at, after.id)
@@ -604,10 +507,10 @@ def _wire(monkeypatch: pytest.MonkeyPatch, store: _SessionStore, agent: Any) -> 
         async def __aexit__(self, *_a: object) -> Literal[False]:
             return False
 
-    ensure = AsyncMock(return_value=store.shared)
+    ensure = AsyncMock(return_value=store.canonical)
     monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(chat_sessions_api.agent_dao, "get", AsyncMock(return_value=agent))
-    monkeypatch.setattr(chat_sessions_api, "ensure_shared_session", ensure)
+    monkeypatch.setattr(chat_sessions_api, "ensure_canonical_session", ensure)
     monkeypatch.setattr(chat_sessions_api, "connection_ctx", lambda: _Ctx())
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "list_page", store.list_page)
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "list_all_for_agent", store.legacy_all)
@@ -643,7 +546,7 @@ async def _walk(store: _SessionStore, viewer: Any, *, scope: Literal["mine", "al
 
 
 def _store(monkeypatch: pytest.MonkeyPatch, *, creator: bool = True) -> tuple[_SessionStore, Any]:
-    viewer, agent = _viewer("member", creator=creator)
+    viewer, agent = _viewer("org_admin", creator=creator)
     store = _SessionStore(agent.id, viewer.id)
     _ = _wire(monkeypatch, store, agent)
     return store, viewer
@@ -659,9 +562,9 @@ async def test_pages_have_stable_boundaries_and_concatenate_to_the_whole_ordered
 
     flat = [sid for page in pages for sid in page]
     expected = [str(row.id) for row in store.visible(scope)]
-    assert flat == [str(store.shared.id), *expected]
+    assert flat == [str(store.canonical.id), *expected]
     assert len(set(flat)) == len(flat)
-    # The shared row rides on top of the first page; later pages hold at most `limit` rows, full until the last.
+    # The caller's canonical row rides on top of the first page; later pages hold at most `limit` rows, full until the last.
     assert len(pages[0]) == min(limit, len(expected)) + 1
     assert all(len(page) == limit for page in pages[1:-1])
     assert len(pages) == max(1, -(-len(expected) // limit))
@@ -711,20 +614,20 @@ async def test_empty_sessions_never_shorten_or_split_a_page(monkeypatch):
     assert all(call["limit"] == 4 for call in store.page_calls)
 
 
-async def test_shared_session_is_returned_once_on_the_first_page_only(monkeypatch):
+async def test_the_callers_canonical_conversation_is_returned_once_on_the_first_page_only(monkeypatch):
     store, viewer = _store(monkeypatch)
-    viewer_agent_calls = _wire(monkeypatch, store, SimpleNamespace(id=store.agent_id, creator_id=viewer.id))
+    ensure = _wire(monkeypatch, store, SimpleNamespace(id=store.agent_id, creator_id=viewer.id))["ensure"]
     _ = [store.add(minutes=i, created=i) for i in range(5)]
     pages = await _walk(store, viewer, scope="all", limit=2)
 
-    shared_id = str(store.shared.id)
-    assert pages[0][0] == shared_id
-    assert [page for page in pages if shared_id in page] == [pages[0]]
-    assert all(call["exclude_id"] == store.shared.id for call in store.page_calls)
-    viewer_agent_calls["ensure"].assert_awaited_once()
+    canonical_id = str(store.canonical.id)
+    assert pages[0][0] == canonical_id
+    assert [page for page in pages if canonical_id in page] == [pages[0]]
+    assert all(call["exclude_id"] == store.canonical.id for call in store.page_calls)
+    ensure.assert_awaited_with(store.agent_id, viewer.id)
     first = await _page(store, viewer, limit=2)
-    shared_row = first.items[0]
-    assert (shared_row.source_channel, shared_row.is_primary, shared_row.unread_count) == ("shared", True, 0)
+    row = first.items[0]
+    assert (row.source_channel, row.is_primary, row.writable, row.user_id) == ("web", True, True, str(viewer.id))
 
 
 async def test_mine_scope_keeps_peer_and_group_rules_while_all_scope_lists_peer_agent_sessions(monkeypatch):
@@ -791,17 +694,19 @@ async def test_row_moving_up_mid_scroll_is_never_repeated(monkeypatch):
 
 
 @pytest.mark.parametrize("scope", ["mine", "all"])
-async def test_scope_all_still_requires_session_viewing_rights(monkeypatch, scope):
-    store, viewer = _store(monkeypatch, creator=False)
-    if scope == "all":
+async def test_scope_all_is_for_company_admins_only(monkeypatch, scope):
+    store, viewer = _store(monkeypatch, creator=True)
+    if scope == "mine":
+        assert (await _page(store, viewer, scope="mine")).items[0].id == str(store.canonical.id)
+        return
+    for role in ("member", "agent_admin", "platform_admin"):
+        viewer.role = role  # the agent creator is denied too
         with pytest.raises(HTTPException) as denied:
             _ = await _page(store, viewer, scope="all")
         assert denied.value.status_code == 403
-        assert store.page_calls == []
-    else:
-        assert (await _page(store, viewer, scope="mine")).items[0].id == str(store.shared.id)
-    viewer.role = "agent_admin"
-    assert (await _page(store, viewer, scope="all")).items[0].id == str(store.shared.id)
+    assert store.page_calls == []
+    viewer.role = "org_admin"
+    assert (await _page(store, viewer, scope="all")).items[0].id == str(store.canonical.id)
 
 
 async def test_unknown_agent_is_404_and_agent_access_is_enforced_first(monkeypatch):
@@ -898,7 +803,7 @@ async def test_http_surface_validates_parameters_and_never_500s_on_bad_cursors(m
     assert [response.status_code for response in bad] == [422, 422, 422, 422, 400, 400]
     assert wrong_scope.status_code == 400
     assert set(ok.json()) == {"items", "next_cursor", "has_more"}
-    assert ok.json()["items"][0]["id"] == str(store.shared.id)
+    assert ok.json()["items"][0]["id"] == str(store.canonical.id)
     assert not {item["id"] for item in follow.json()["items"]} & {item["id"] for item in ok.json()["items"]}
 
 
@@ -992,25 +897,25 @@ async def test_session_lookup_serves_url_opened_sessions_with_list_row_shape(mon
 
 
 @pytest.mark.parametrize(
-    ("role", "creator", "owner_is_viewer", "shared", "status"),
+    ("role", "creator", "owner_is_viewer", "canonical", "status"),
     [
         ("member", False, True, False, 200),
-        ("member", False, False, True, 200),
+        ("member", False, True, True, 200),
+        ("member", False, False, True, 403),
         ("member", False, False, False, 403),
         ("org_admin", False, False, False, 200),
-        ("member", True, False, False, 200),
+        ("org_admin", False, False, True, 200),
+        ("member", True, False, False, 403),
+        ("agent_admin", False, False, False, 403),
+        ("platform_admin", False, False, False, 403),
     ],
 )
 async def test_session_lookup_applies_the_history_access_rules(
-    monkeypatch, role, creator, owner_is_viewer, shared, status
+    monkeypatch, role, creator, owner_is_viewer, canonical, status
 ):
     store, viewer = _store(monkeypatch, creator=creator)
     viewer.role = role
-    record = (
-        store.shared
-        if shared
-        else store.add(minutes=1, created=1, owner=viewer.id if owner_is_viewer else uuid.uuid4())
-    )
+    record = store.add(minutes=1, created=1, owner=viewer.id if owner_is_viewer else uuid.uuid4(), primary=canonical)
     monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent_or_peer", AsyncMock(return_value=record))
     if status == 200:
         assert (await chat_sessions_api.get_session(store.agent_id, record.id, viewer)).id == str(record.id)
@@ -1026,3 +931,164 @@ async def test_session_lookup_404s_for_unknown_or_other_agent_sessions(monkeypat
     with pytest.raises(HTTPException) as error:
         _ = await chat_sessions_api.get_session(store.agent_id, uuid.uuid4(), viewer)
     assert error.value.status_code == 404
+
+
+# --- Per-user conversations: writable flag, canonical-first lists, canonical rows are never deleted ------------------
+
+
+async def test_scope_all_marks_everything_but_the_callers_conversation_and_group_or_agent_rows_read_only(monkeypatch):
+    store, viewer = _store(monkeypatch)
+    other = uuid.uuid4()
+    others_canonical = store.add(minutes=9, created=1, owner=other, primary=True)
+    extra_web = store.add(minutes=8, created=2)
+    group = store.add(minutes=7, created=3, is_group=True)
+    peer = store.add(minutes=6, created=4, owner=other, channel="agent", peer_agent_id=uuid.uuid4())
+    trigger = store.add(minutes=5, created=5, channel="trigger")
+    telegram = store.add(minutes=4, created=6, channel="telegram")
+
+    page = await _page(store, viewer, scope="all", limit=50)
+
+    assert {item.id: item.writable for item in page.items} == {
+        str(store.canonical.id): True,
+        str(others_canonical.id): False,
+        str(extra_web.id): False,
+        str(group.id): True,
+        str(peer.id): True,
+        str(trigger.id): False,
+        str(telegram.id): False,
+    }
+
+
+async def test_scope_mine_marks_only_the_callers_canonical_conversation_writable(monkeypatch):
+    store, viewer = _store(monkeypatch)
+    extra_web = store.add(minutes=8, created=2)
+    telegram = store.add(minutes=4, created=6, channel="telegram")
+
+    page = await _page(store, viewer, scope="mine", limit=50)
+    listed = await chat_sessions_api.list_sessions(agent_id=store.agent_id, scope="mine", current_user=viewer)
+
+    expected = {str(store.canonical.id): True, str(extra_web.id): False, str(telegram.id): False}
+    assert {item.id: item.writable for item in page.items} == expected
+    assert {item.id: item.writable for item in listed} == expected
+
+
+@pytest.mark.parametrize(
+    ("role", "owned", "writable"), [("member", True, True), ("org_admin", True, True), ("org_admin", False, False)]
+)
+async def test_session_lookup_reports_whether_the_caller_may_write(monkeypatch, role, owned, writable):
+    store, viewer = _store(monkeypatch)
+    viewer.role = role
+    record = store.add(minutes=1, created=1, owner=viewer.id if owned else uuid.uuid4(), primary=True)
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent_or_peer", AsyncMock(return_value=record))
+
+    row = await chat_sessions_api.get_session(store.agent_id, record.id, viewer)
+
+    assert row.writable is writable
+
+
+@pytest.mark.parametrize("scope", ["mine", "all"])
+async def test_unread_is_computed_for_the_canonical_conversation_like_any_other(monkeypatch, scope):
+    store, viewer = _store(monkeypatch)
+    unread = AsyncMock(return_value={str(store.canonical.id): 4})
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "unread_counts_for_user", unread)
+
+    listed = await chat_sessions_api.list_sessions(agent_id=store.agent_id, scope=scope, current_user=viewer)
+    paged = await _page(store, viewer, scope=scope)
+
+    assert listed[0].id == paged.items[0].id == str(store.canonical.id)
+    assert listed[0].unread_count == paged.items[0].unread_count == 4
+
+
+@pytest.mark.parametrize("scope", ["mine", "all"])
+async def test_list_leads_with_the_callers_conversation_even_when_empty_and_never_repeats_it(monkeypatch, scope):
+    store, viewer = _store(monkeypatch)
+    _ = store.add(minutes=1, created=1)
+    _ = store.add(minutes=3, created=3, owner=uuid.uuid4())
+    _ = store.add(minutes=2, created=2, messages=0)  # empty non-canonical rows are still dropped
+
+    listed = await chat_sessions_api.list_sessions(agent_id=store.agent_id, scope=scope, current_user=viewer)
+
+    assert [row.id for row in listed] == [str(store.canonical.id), *(str(row.id) for row in store.visible(scope))]
+    assert [row.id for row in listed].count(str(store.canonical.id)) == 1
+    assert listed[0].message_count == 0
+
+
+def _delete_surface(
+    monkeypatch: pytest.MonkeyPatch, session: ChatSessionRecord, *, delivery_pending: bool = False
+) -> tuple[AsyncMock, AsyncMock]:
+    @asynccontextmanager
+    async def connection():
+        yield None
+
+    delete_messages, delete_row = AsyncMock(), AsyncMock()
+    agent = SimpleNamespace(id=session.agent_id, creator_id=uuid.uuid4())
+    monkeypatch.setattr(chat_sessions_api, "connection_ctx", connection)
+    monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(return_value=(agent, "use")))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "lock_for_agent", AsyncMock(return_value=session))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "delete", delete_row)
+    monkeypatch.setattr(chat_sessions_api.chat_message_dao, "delete_for_conversation", delete_messages)
+    monkeypatch.setattr(
+        chat_sessions_api.gateway_report_delivery_dao,
+        "has_outstanding_session",
+        AsyncMock(return_value=delivery_pending),
+    )
+    return delete_messages, delete_row
+
+
+def _web_session(owner_id: uuid.UUID, *, primary: bool) -> ChatSessionRecord:
+    return ChatSessionRecord(
+        id=uuid.uuid4(), agent_id=uuid.uuid4(), user_id=owner_id, source_channel="web", is_primary=primary
+    )
+
+
+@pytest.mark.parametrize(("role", "owned"), [("member", True), ("org_admin", True), ("org_admin", False)])
+async def test_canonical_conversations_are_never_deleted(monkeypatch, role, owned):
+    viewer: Any = SimpleNamespace(id=uuid.uuid4(), role=role, tenant_id=uuid.uuid4())
+    session = _web_session(viewer.id if owned else uuid.uuid4(), primary=True)
+    delete_messages, delete_row = _delete_surface(monkeypatch, session)
+
+    with pytest.raises(HTTPException) as refused:
+        await chat_sessions_api.delete_session(agent_id=session.agent_id, session_id=session.id, current_user=viewer)
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail == {"reason": "canonical_session_required", "session_id": str(session.id)}
+    delete_messages.assert_not_awaited()
+    delete_row.assert_not_awaited()
+
+
+async def test_an_extra_conversation_is_deleted_with_its_messages_by_its_owner(monkeypatch):
+    viewer: Any = SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=uuid.uuid4())
+    session = _web_session(viewer.id, primary=False)
+    delete_messages, delete_row = _delete_surface(monkeypatch, session)
+
+    await chat_sessions_api.delete_session(agent_id=session.agent_id, session_id=session.id, current_user=viewer)
+
+    delete_messages.assert_awaited_once_with(str(session.id))
+    delete_row.assert_awaited_once_with(record_id=session.id)
+
+
+async def test_deleting_someone_elses_extra_conversation_is_forbidden_for_members(monkeypatch):
+    viewer: Any = SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=uuid.uuid4())
+    session = _web_session(uuid.uuid4(), primary=False)
+    delete_messages, delete_row = _delete_surface(monkeypatch, session)
+
+    with pytest.raises(HTTPException) as refused:
+        await chat_sessions_api.delete_session(agent_id=session.agent_id, session_id=session.id, current_user=viewer)
+
+    assert refused.value.status_code == 403
+    delete_messages.assert_not_awaited()
+    delete_row.assert_not_awaited()
+
+
+async def test_a_conversation_with_an_outstanding_delivery_is_not_deleted(monkeypatch):
+    viewer: Any = SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=uuid.uuid4())
+    session = _web_session(viewer.id, primary=False)
+    delete_messages, delete_row = _delete_surface(monkeypatch, session, delivery_pending=True)
+
+    with pytest.raises(HTTPException) as refused:
+        await chat_sessions_api.delete_session(agent_id=session.agent_id, session_id=session.id, current_user=viewer)
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail == {"reason": "session_delivery_pending", "session_id": str(session.id)}
+    delete_messages.assert_not_awaited()
+    delete_row.assert_not_awaited()

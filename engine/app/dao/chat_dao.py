@@ -249,7 +249,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         limit: int,
         after: SessionPosition | None = None,
     ) -> Sequence[ChatSessionRecord]:
-        """Keyset page of non-empty sessions, newest activity first, excluding ``exclude_id`` (the shared session).
+        """Keyset page of non-empty sessions, newest activity first, excluding ``exclude_id`` (the caller's canonical session, listed first).
 
         ``mine`` and ``all`` mirror ``list_for_user`` and ``list_all_for_agent``. Empty sessions are dropped
         with EXISTS so a page is never short because of them. ``last_message_at`` is nullable and sorts last,

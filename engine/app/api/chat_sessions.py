@@ -30,7 +30,12 @@ from app.services.chat_history import (
 )
 from app.services.chat_message_projection import ChatMessageEntry, project_messages
 from app.services.chat_session_access import can_access_chat_session, can_view_all_agent_chat_sessions
-from app.services.shared_chat import ensure_shared_session, is_shared_session, shared_session_id
+from app.services.shared_chat import (
+    SessionNotWritableError,
+    ensure_canonical_session,
+    is_canonical,
+    require_writable_session,
+)
 
 router = APIRouter(prefix="/api/agents", tags=["chat-sessions"])
 
@@ -49,6 +54,7 @@ class SessionOut(BaseModel):
     message_count: int = 0
     unread_count: int = 0
     is_primary: bool = False
+    writable: bool = False
     # Agent-to-agent session fields
     peer_agent_id: str | None = None
     peer_agent_name: str | None = None
@@ -114,8 +120,20 @@ class PatchSessionIn(BaseModel):
     title: str
 
 
+def _writable_for(session: ChatSessionRecord, current_user: UserRecord) -> bool:
+    try:
+        require_writable_session(session, current_user.id)
+    except SessionNotWritableError:
+        return False
+    return True
+
+
 async def _all_scope_outs(
-    sessions: Sequence[ChatSessionRecord], current_user: UserRecord, *, drop_empty: bool
+    sessions: Sequence[ChatSessionRecord],
+    current_user: UserRecord,
+    *,
+    drop_empty: bool,
+    canonical_id: uuid.UUID | None,
 ) -> list[SessionOut]:
     out: list[SessionOut] = []
 
@@ -158,7 +176,7 @@ async def _all_scope_outs(
 
     for session in sessions:
         count = message_counts.get(str(session.id), 0)
-        if drop_empty and count == 0 and not is_shared_session(session):
+        if drop_empty and count == 0 and session.id != canonical_id:
             continue
 
         display = None
@@ -189,8 +207,9 @@ async def _all_scope_outs(
                 created_at=session.created_at.isoformat() if session.created_at else "",
                 last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
                 message_count=count,
-                unread_count=0 if is_shared_session(session) else unread_counts.get(str(session.id), 0),
+                unread_count=unread_counts.get(str(session.id), 0),
                 is_primary=bool(session.is_primary),
+                writable=_writable_for(session, current_user),
                 peer_agent_id=peer_agent_id,
                 peer_agent_name=peer_agent_name,
                 participant_type="group" if session.is_group else participant_type,
@@ -202,7 +221,12 @@ async def _all_scope_outs(
 
 
 async def _mine_scope_outs(
-    sessions: Sequence[ChatSessionRecord], current_user: UserRecord, agent_id: uuid.UUID, *, drop_empty: bool
+    sessions: Sequence[ChatSessionRecord],
+    current_user: UserRecord,
+    agent_id: uuid.UUID,
+    *,
+    drop_empty: bool,
+    canonical_id: uuid.UUID | None,
 ) -> list[SessionOut]:
     out: list[SessionOut] = []
     session_ids = [str(s.id) for s in sessions]
@@ -216,7 +240,7 @@ async def _mine_scope_outs(
 
     for session in sessions:
         count = total_counts.get(str(session.id), 0)
-        if drop_empty and count == 0 and not is_shared_session(session):
+        if drop_empty and count == 0 and session.id != canonical_id:
             continue
         out.append(
             SessionOut(
@@ -228,8 +252,9 @@ async def _mine_scope_outs(
                 created_at=session.created_at.isoformat() if session.created_at else "",
                 last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
                 message_count=count,
-                unread_count=0 if is_shared_session(session) else unread_counts.get(str(session.id), 0),
+                unread_count=unread_counts.get(str(session.id), 0),
                 is_primary=bool(session.is_primary),
+                writable=_writable_for(session, current_user),
             )
         )
     return out
@@ -242,10 +267,11 @@ async def _session_outs(
     agent_id: uuid.UUID,
     *,
     drop_empty: bool,
+    canonical_id: uuid.UUID | None = None,
 ) -> list[SessionOut]:
     if scope == "all":
-        return await _all_scope_outs(sessions, current_user, drop_empty=drop_empty)
-    return await _mine_scope_outs(sessions, current_user, agent_id, drop_empty=drop_empty)
+        return await _all_scope_outs(sessions, current_user, drop_empty=drop_empty, canonical_id=canonical_id)
+    return await _mine_scope_outs(sessions, current_user, agent_id, drop_empty=drop_empty, canonical_id=canonical_id)
 
 
 @router.get("/{agent_id}/sessions")
@@ -254,36 +280,35 @@ async def list_sessions(
     scope: str = Query("mine", description="'mine' or 'all'"),
     current_user: UserRecord = Depends(get_current_user),
 ) -> list[SessionOut]:
-    """List chat sessions for an agent. scope=all for org/platform admins and agent_admin."""
+    """List chat sessions for an agent, the caller's own conversation first. scope=all is for org admins."""
     agent = await agent_dao.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     _ = await check_agent_access(current_user, agent_id)
 
-    if scope == "all":
-        if not can_view_all_agent_chat_sessions(current_user, agent):
-            raise HTTPException(status_code=403, detail="Not authorized to view all sessions")
+    resolved: SessionScope = "all" if scope == "all" else "mine"
+    if resolved == "all" and not can_view_all_agent_chat_sessions(current_user, agent):
+        raise HTTPException(status_code=403, detail="Not authorized to view all sessions")
 
-        shared = await ensure_shared_session(agent_id)
-        sessions = [shared, *(s for s in await chat_session_dao.list_all_for_agent(agent_id) if s.id != shared.id)]
-        return await _session_outs(sessions, "all", current_user, agent_id, drop_empty=True)
-
-    # List only the current user's sessions for the remaining scope.
-    shared = await ensure_shared_session(agent_id)
-    legacy = await chat_session_dao.list_for_user(agent_id=agent_id, user_id=current_user.id)
-    sessions = [shared, *(s for s in legacy if s.id != shared.id)]
-    return await _session_outs(sessions, "mine", current_user, agent_id, drop_empty=True)
+    canonical = await ensure_canonical_session(agent_id, current_user.id)
+    rows = (
+        await chat_session_dao.list_all_for_agent(agent_id)
+        if resolved == "all"
+        else await chat_session_dao.list_for_user(agent_id=agent_id, user_id=current_user.id)
+    )
+    sessions = [canonical, *(s for s in rows if s.id != canonical.id)]
+    return await _session_outs(sessions, resolved, current_user, agent_id, drop_empty=True, canonical_id=canonical.id)
 
 
 @router.get("/{agent_id}/sessions/page")
 async def list_sessions_page(
     agent_id: uuid.UUID,
     scope: SessionScope = Query("mine", description="'mine' or 'all'"),
-    limit: int = Query(50, ge=1, le=200, description="Sessions after the shared one; the first page adds the shared"),
+    limit: int = Query(50, ge=1, le=200, description="Sessions after the caller's own; the first page adds it"),
     cursor: str | None = Query(None, max_length=1024),
     current_user: UserRecord = Depends(get_current_user),
 ) -> SessionPageOut:
-    """Keyset page of the same rows as the list route; the shared session leads the first page only."""
+    """Keyset page of the same rows as the list route; the caller's own conversation leads the first page only."""
     agent = await agent_dao.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -292,18 +317,19 @@ async def list_sessions_page(
         raise HTTPException(status_code=403, detail="Not authorized to view all sessions")
     after = _parse_session_cursor(cursor, agent_id, scope)
 
+    canonical = await ensure_canonical_session(agent_id, current_user.id)
     rows = list(
         await chat_session_dao.list_page(
             agent_id=agent_id,
             user_id=current_user.id,
             scope=scope,
-            exclude_id=shared_session_id(agent_id),
+            exclude_id=canonical.id,
             limit=limit + 1,
             after=after,
         )
     )
     selected = rows[:limit]
-    sessions = selected if after is not None else [await ensure_shared_session(agent_id), *selected]
+    sessions = selected if after is not None else [canonical, *selected]
     has_more = len(rows) > limit
     return SessionPageOut(
         items=await _session_outs(sessions, scope, current_user, agent_id, drop_empty=False),
@@ -327,25 +353,12 @@ async def get_session(
 async def create_session(
     agent_id: uuid.UUID, body: CreateSessionIn = CreateSessionIn(), current_user: UserRecord = Depends(get_current_user)
 ) -> SessionOut:
-    """Resume the canonical shared human conversation."""
+    """Resume the caller's own conversation."""
     _ = body
     _ = await check_agent_access(current_user, agent_id)
-    session = await ensure_shared_session(agent_id)
-    counts = await chat_session_dao.message_counts([str(session.id)], agent_id=agent_id)
-    return SessionOut(
-        id=str(session.id),
-        agent_id=str(session.agent_id),
-        user_id=str(session.user_id),
-        source_channel=session.source_channel,
-        title=session.title,
-        created_at=session.created_at.isoformat() if session.created_at else "",
-        last_message_at=session.last_message_at.isoformat() if session.last_message_at else None,
-        message_count=counts.get(str(session.id), 0),
-        unread_count=0,
-        is_primary=True,
-        participant_type="user",
-        is_group=False,
-    )
+    session = await ensure_canonical_session(agent_id, current_user.id)
+    (out,) = await _session_outs([session], "mine", current_user, agent_id, drop_empty=False)
+    return out
 
 
 @router.patch("/{agent_id}/sessions/{session_id}")
@@ -372,18 +385,18 @@ async def rename_session(
 async def delete_session(
     agent_id: uuid.UUID, session_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ):
-    """Delete a chat session and its messages. Owner, agent creator, or admin may delete others' sessions."""
+    """Delete a chat session and its messages. Its owner or an org admin may; a canonical conversation never."""
     agent, _ = await check_agent_access(current_user, agent_id)
     async with connection_ctx():
         session = await chat_session_dao.lock_for_agent(session_id, agent_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        if is_shared_session(session):
-            raise HTTPException(409, {"reason": "shared_session_required", "session_id": str(session.id)})
-
         if str(session.user_id) != str(current_user.id) and not can_view_all_agent_chat_sessions(current_user, agent):
             raise HTTPException(status_code=403, detail="Not authorized")
+
+        if is_canonical(session):
+            raise HTTPException(409, {"reason": "canonical_session_required", "session_id": str(session.id)})
 
         if await gateway_report_delivery_dao.has_outstanding_session(session_id):
             raise HTTPException(409, {"reason": "session_delivery_pending", "session_id": str(session_id)})
@@ -421,7 +434,7 @@ async def get_session_messages(
     if (
         str(session.user_id) == str(current_user.id)
         and not session.is_group
-        and session.source_channel not in ("agent", "trigger", "shared")
+        and session.source_channel not in ("agent", "trigger")
     ):
         _ = await chat_session_dao.update(
             db_obj=session,
@@ -474,7 +487,7 @@ async def get_session_messages_page(
         boundary is None
         and str(session.user_id) == str(current_user.id)
         and not session.is_group
-        and session.source_channel not in ("agent", "trigger", "shared")
+        and session.source_channel not in ("agent", "trigger")
     ):
         _ = await chat_session_dao.update(
             db_obj=session,

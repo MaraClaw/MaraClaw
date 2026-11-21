@@ -3607,46 +3607,6 @@
         "title": "ArchiveSelectedRequest",
         "type": "object"
       },
-      "ArchivedSessionDetail": {
-        "additionalProperties": false,
-        "properties": {
-          "reason": {
-            "const": "session_archived",
-            "title": "Reason",
-            "type": "string"
-          },
-          "session_id": {
-            "format": "uuid",
-            "title": "Session Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "reason",
-          "session_id"
-        ],
-        "title": "ArchivedSessionDetail",
-        "type": "object"
-      },
-      "ArchivedSessionErrorEvent": {
-        "additionalProperties": false,
-        "properties": {
-          "content": {
-            "$ref": "#/components/schemas/ArchivedSessionDetail"
-          },
-          "type": {
-            "const": "error",
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "content"
-        ],
-        "title": "ArchivedSessionErrorEvent",
-        "type": "object"
-      },
       "AssignmentOut": {
         "properties": {
           "department_id": {
@@ -5718,7 +5678,7 @@
                 "$ref": "#/components/schemas/StringErrorEvent"
               },
               {
-                "$ref": "#/components/schemas/ArchivedSessionErrorEvent"
+                "$ref": "#/components/schemas/ReadOnlySessionErrorEvent"
               }
             ]
           },
@@ -15491,6 +15451,46 @@
         "title": "PublishNoticeOut",
         "type": "object"
       },
+      "ReadOnlySessionDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "const": "session_read_only",
+            "title": "Reason",
+            "type": "string"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "session_id"
+        ],
+        "title": "ReadOnlySessionDetail",
+        "type": "object"
+      },
+      "ReadOnlySessionErrorEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/ReadOnlySessionDetail"
+          },
+          "type": {
+            "const": "error",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "content"
+        ],
+        "title": "ReadOnlySessionErrorEvent",
+        "type": "object"
+      },
       "ReadSelectedRequest": {
         "properties": {
           "ids": {
@@ -17297,6 +17297,11 @@
               }
             ],
             "title": "Username"
+          },
+          "writable": {
+            "default": false,
+            "title": "Writable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -31199,7 +31204,7 @@
     },
     "/api/agents/{agent_id}/sessions": {
       "get": {
-        "description": "List chat sessions for an agent. scope=all for org/platform admins and agent_admin.",
+        "description": "List chat sessions for an agent, the caller's own conversation first. scope=all is for org admins.",
         "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f73657373696f6e73",
         "parameters": [
           {
@@ -31262,7 +31267,7 @@
         ]
       },
       "post": {
-        "description": "Resume the canonical shared human conversation.",
+        "description": "Resume the caller's own conversation.",
         "operationId": "post_2f6170692f6167656e74732f7b6167656e745f69647d2f73657373696f6e73",
         "parameters": [
           {
@@ -31321,7 +31326,7 @@
     },
     "/api/agents/{agent_id}/sessions/page": {
       "get": {
-        "description": "Keyset page of the same rows as the list route; the shared session leads the first page only.",
+        "description": "Keyset page of the same rows as the list route; the caller's own conversation leads the first page only.",
         "operationId": "get_2f6170692f6167656e74732f7b6167656e745f69647d2f73657373696f6e732f70616765",
         "parameters": [
           {
@@ -31351,13 +31356,13 @@
             }
           },
           {
-            "description": "Sessions after the shared one; the first page adds the shared",
+            "description": "Sessions after the caller's own; the first page adds it",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
-              "description": "Sessions after the shared one; the first page adds the shared",
+              "description": "Sessions after the caller's own; the first page adds it",
               "maximum": 200,
               "minimum": 1,
               "title": "Limit",
@@ -31417,7 +31422,7 @@
     },
     "/api/agents/{agent_id}/sessions/{session_id}": {
       "delete": {
-        "description": "Delete a chat session and its messages. Owner, agent creator, or admin may delete others' sessions.",
+        "description": "Delete a chat session and its messages. Its owner or an org admin may; a canonical conversation never.",
         "operationId": "delete_2f6170692f6167656e74732f7b6167656e745f69647d2f73657373696f6e732f7b73657373696f6e5f69647d",
         "parameters": [
           {
@@ -50448,8 +50453,6 @@
       "ApprovalDecisionRequest",
       "ApprovalStatus",
       "ArchiveSelectedRequest",
-      "ArchivedSessionDetail",
-      "ArchivedSessionErrorEvent",
       "AssignmentOut",
       "AssignmentsOut",
       "AtlassianTestResponse",
@@ -50706,6 +50709,8 @@
       "PressureKind",
       "PressureResource",
       "ProgressUpdate",
+      "ReadOnlySessionDetail",
+      "ReadOnlySessionErrorEvent",
       "ReadSelectedRequest",
       "RegisterInitRequest",
       "RegisterInitResponse",

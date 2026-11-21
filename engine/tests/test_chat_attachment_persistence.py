@@ -66,7 +66,7 @@ async def test_dao_jsonb_receipt_roundtrips_through_http_history_reload(monkeypa
     monkeypatch.setattr(session, "get_pool", lambda: _FakePool(raw))
     user = UserRecord(id=uuid4())
     agent = AgentRecord(id=uuid4(), name="Agent", creator_id=user.id)
-    chat = ChatSessionRecord(id=uuid4(), agent_id=agent.id, user_id=user.id, source_channel="shared")
+    chat = ChatSessionRecord(id=uuid4(), agent_id=agent.id, user_id=user.id, source_channel="web", is_primary=True)
     submission = ChatSubmission.model_validate(
         {"client_submission_id": str(uuid4()), "content": "hello", "attachments": REFS}
     )
@@ -83,6 +83,8 @@ async def test_dao_jsonb_receipt_roundtrips_through_http_history_reload(monkeypa
     )
     monkeypatch.setattr(chat_sessions, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(chat_sessions.chat_session_dao, "get_for_agent_or_peer", AsyncMock(return_value=chat))
+    # The owner's reload marks the conversation read; this receipt cursor only serves attachment reads.
+    monkeypatch.setattr(chat_sessions.chat_session_dao, "update", AsyncMock())
     app = FastAPI()
     app.include_router(chat_sessions.router)
     app.dependency_overrides[get_current_user] = lambda: user
