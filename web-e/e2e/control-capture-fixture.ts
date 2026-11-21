@@ -1,5 +1,5 @@
 import { expect, type Page } from '@playwright/test'
-import { originalAgent, originalToken, originalUser, prepareWorkspace } from './session-fencing-fixture'
+import { originalAgent, originalToken, originalUser, prepareWorkspace, replacementToken, replacementUser } from './session-fencing-fixture'
 
 export const controlPath = `/api/agents/${originalAgent.id}/control/`
 export const controlPage = `/app/agents/${originalAgent.id}/control`
@@ -19,9 +19,11 @@ export async function prepareCapture(page: Page, access: 'use' | 'manage' = 'man
   await prepareWorkspace(page)
   await page.route(`**/api/agents/${originalAgent.id}`, (route) => route.fulfill({ json: { ...originalAgent, access_level: access } }))
   await page.route(`**/api/agents/${originalAgent.id}/metrics`, (route) => route.fulfill({ json: {} }))
+  // Like the engine, the list leads with the caller's own conversation, so a replacement owner gets theirs.
   await page.route(`**/api/agents/${originalAgent.id}/sessions/page?**`, (route) => route.fulfill({ json: {
-    items: [{ id: 'control-session', agent_id: originalAgent.id, user_id: originalUser.id, title: 'Control thread',
-      source_channel: 'shared', created_at: '2030-01-01T00:00:00Z' }],
+    items: [{ id: 'control-session', agent_id: originalAgent.id, title: 'Control thread',
+      user_id: route.request().headers().authorization === `Bearer ${replacementToken}` ? replacementUser.id : originalUser.id,
+      source_channel: 'web', is_primary: true, writable: true, created_at: '2030-01-01T00:00:00Z' }],
     next_cursor: null, has_more: false,
   } }))
   let credentialReads = 0

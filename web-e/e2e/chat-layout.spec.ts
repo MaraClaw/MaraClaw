@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test'
-import { archivedSession, chatPath, message, prepareChat } from './chat-identity-fixture'
+import { readOnlySession, chatPath, message, prepareChat } from './chat-identity-fixture'
 import { originalAgent } from './session-fencing-fixture'
 
-const sharedPath = `/app/agents/${originalAgent.id}/chat`
+const ownPath = `/app/agents/${originalAgent.id}/chat`
 
 for (const width of [390, 1440, 1920]) {
   for (const colorScheme of ['light', 'dark'] as const) {
@@ -125,20 +125,21 @@ for (const width of [390, 1440, 1920]) {
         await page.screenshot({ path: testInfo.outputPath('chat-bubbles.png'), fullPage: true })
       })
 
-      for (const [path, reason] of [sharedPath, chatPath(), chatPath(archivedSession)].flatMap((path) =>
+      for (const [path, reason] of [ownPath, chatPath(), chatPath(readOnlySession)].flatMap((path) =>
         [[path, undefined], [path, null]] as const)) {
         test(`chat fills the workspace without session navigation at ${path} (${reason === null ? 'null' : 'omitted'} access explanation)`, async ({ page }, testInfo) => {
-          // Given: archives exist, and a long shared history needs its own scroll container.
+          // Given: a colleague's read-only conversation exists, and a long history of your own needs its own scroll container.
           const chat = await prepareChat(page, Array.from({ length: 35 }, (_, index) =>
-            message(`layout-${index}`, `History message ${index + 1}: a longer reply that wraps on a phone.`)))
+            message(`layout-${index}`, `History message ${index + 1}: a longer reply that wraps on a phone.`)),
+          { role: path === chatPath(readOnlySession) ? 'org_admin' : 'member' })
           await page.route(`**/api/agents/${originalAgent.id}`, (route) =>
             route.fulfill({ json: { ...originalAgent, access_reason: reason } }))
           const errors: string[] = []
           page.on('pageerror', (error) => errors.push(error.message))
           // When
           await page.goto(path)
-          if (path !== chatPath(archivedSession)) await chat.socket()
-          else await expect(page.getByText('Authorized archived history', { exact: true })).toBeVisible()
+          if (path !== chatPath(readOnlySession)) await chat.socket()
+          else await expect(page.getByText('Peer member history', { exact: true })).toBeVisible()
           // Then: retain both rails, but reclaim all chat header/sidebar space.
           const main = page.getByRole('main')
           const rail = page.getByRole('navigation', { name: 'Agent sections', exact: true })
@@ -148,7 +149,7 @@ for (const width of [390, 1440, 1920]) {
           await expect(page.getByText('Conversations', { exact: true })).toHaveCount(0)
           await expect(page.getByText('Everyone with access to this agent shares this conversation, including messages from connected channels.')).toHaveCount(0)
           await expect(main.getByRole('complementary')).toHaveCount(0)
-          await expect(main.getByRole('button', { name: /^(Shared conversation|Archived private thread|Identity thread 2|Edit|Del)$/ })).toHaveCount(0)
+          await expect(main.getByRole('button', { name: /^(Your conversation|Peer member|Identity thread 2|Edit|Del)$/ })).toHaveCount(0)
           const panel = main.locator('section').filter({ has: page.locator('[aria-busy]') })
           const bounds = await panel.boundingBox()
           const mainBounds = await main.boundingBox()
@@ -158,9 +159,8 @@ for (const width of [390, 1440, 1920]) {
           expect(Math.abs(bounds.y - (width < 768 ? railBounds.y + railBounds.height : mainBounds.y))).toBeLessThanOrEqual(1)
           expect(Math.abs(bounds.x + bounds.width - mainBounds.x - mainBounds.width)).toBeLessThanOrEqual(1)
           expect(Math.abs(bounds.y + bounds.height - mainBounds.y - mainBounds.height)).toBeLessThanOrEqual(1)
-          if (path === chatPath(archivedSession)) {
-            await expect(page.getByText('Archived conversation. Read-only history.', { exact: true })).toBeVisible()
-            await expect(page.getByRole('link', { name: 'Return to shared conversation', exact: true })).toHaveAttribute('href', sharedPath)
+          if (path === chatPath(readOnlySession)) {
+            await expect(page.getByRole('link', { name: 'Return to your conversation', exact: true })).toHaveAttribute('href', ownPath)
             await expect(page.getByRole('textbox')).toHaveCount(0)
             expect(chat.sockets).toEqual([])
           } else {
@@ -204,7 +204,7 @@ test('loading and unavailable chat retain rails and Agents recovery without Back
     await route.fulfill({ status: 403, json: { detail: 'Agent access denied' } })
   })
   // When
-  await page.goto(sharedPath)
+  await page.goto(ownPath)
   await requested.promise
   try {
     // Then

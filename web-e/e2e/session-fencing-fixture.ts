@@ -52,7 +52,7 @@ export async function prepareWorkspace(page: Page, nextUser = replacementUser, s
   let tickets = 0
   const delayedSession = {
     id: '31bccbda-b487-4da0-bb4f-7ab6800a9433', agent_id: delayedAgent.id, user_id: originalUser.id,
-    title: 'Shared conversation', source_channel: 'shared', is_primary: true,
+    title: 'Delayed agent conversation', source_channel: 'web', is_primary: true, writable: true,
     created_at: '2030-01-01T00:00:00Z', message_count: 0,
   }
   await page.addInitScript(({ tokenKey, originalToken }) => {
