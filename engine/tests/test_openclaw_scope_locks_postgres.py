@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Literal
@@ -23,6 +23,8 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.records.user import UserRecord
 from app.services import chat_submissions, openclaw_gateway_delivery as delivery
+from app.services.channels.whatsapp_personal_access import personal_owner
+from app.services.channels.zalo_personal_access import zalo_owner
 from app.services.openclaw_native_claims import claim_ordinary_turn
 from app.services.openclaw_shared_dispatch import claim_ready_shared
 from app.services.shared_chat import ensure_canonical_session, read_only_detail
@@ -33,13 +35,15 @@ pooled_database = shared_fixtures.pooled_database
 
 type Operation = Literal["claim", "settle"]
 type Table = Literal["tenants", "users", "agents", "chat_sessions"]
-type RowLock = Literal["SHARE", "UPDATE"]
+type RowLock = Literal["SHARE", "NO KEY UPDATE", "UPDATE"]
+type OwnerLocks = Callable[..., Awaitable[tuple[AgentRecord, UserRecord]]]
 
 FINISHED: dict[Operation, str] = {"claim": "delivered", "settle": "completed"}
 LOCK_SQL: dict[tuple[Table, RowLock], str] = {
     ("tenants", "SHARE"): "SELECT id FROM tenants WHERE id = %(id)s FOR SHARE NOWAIT",
     ("tenants", "UPDATE"): "SELECT id FROM tenants WHERE id = %(id)s FOR UPDATE NOWAIT",
     ("users", "SHARE"): "SELECT id FROM users WHERE id = %(id)s FOR SHARE NOWAIT",
+    ("users", "NO KEY UPDATE"): "SELECT id FROM users WHERE id = %(id)s FOR NO KEY UPDATE NOWAIT",
     ("users", "UPDATE"): "SELECT id FROM users WHERE id = %(id)s FOR UPDATE NOWAIT",
     ("agents", "SHARE"): "SELECT id FROM agents WHERE id = %(id)s FOR SHARE NOWAIT",
     ("agents", "UPDATE"): "SELECT id FROM agents WHERE id = %(id)s FOR UPDATE NOWAIT",
@@ -195,6 +199,18 @@ async def test_lock_helpers_are_exclusive_by_default_and_shared_on_request(world
                 await lock_user(holder, world.owner.id, world.tenant_id, shared=shared)
             assert await can_lock(world, table, row_id, "SHARE") is other_share_allowed
             assert not await can_lock(world, table, row_id, "UPDATE")
+
+
+@pytest.mark.parametrize("owner_locks", [personal_owner, zalo_owner], ids=["whatsapp", "zalo"])
+async def test_authorization_only_owner_locks_admit_the_quota_update_but_not_acl_mutators(
+    world: ScopeWorld, owner_locks: OwnerLocks
+) -> None:
+    # Given a transaction holding a personal channel's authorization-only locks on the creator.
+    async with transaction(world.db.first):
+        await owner_locks(world.held.id, authorization_only=True)
+        # Then the creator's quota UPDATE can take its row lock, while an ACL mutator's FOR UPDATE still cannot.
+        assert await can_lock(world, "users", world.owner.id, "NO KEY UPDATE")
+        assert not await can_lock(world, "users", world.owner.id, "UPDATE")
 
 
 @pytest.mark.parametrize("operation", ["claim", "settle"])

@@ -11,11 +11,22 @@ from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.user_dao import user_dao
 from app.db.errors import DbError, LockNotAvailableError
 from app.db.session import transaction
+from app.records.gateway_message import GatewayMessageRecord
 from app.records.user import UserRecord
 from app.services import chat_submissions, quota_guard
 from app.services.chat_submissions import AcceptedSubmission, ChatSubmission
 from app.services.openclaw_native_claims import claim_ordinary_turn
-from test_openclaw_scope_locks_postgres import FINISHED, Gate, Operation, ScopeWorld, finish, seed_message, waiters_of
+from test_openclaw_scope_locks_postgres import (
+    FINISHED,
+    Gate,
+    Operation,
+    ScopeWorld,
+    canonical_turn,
+    claim_lane,
+    finish,
+    seed_message,
+    waiters_of,
+)
 
 receipt_database = scope_fixtures.receipt_database
 pooled_database = scope_fixtures.pooled_database
@@ -90,6 +101,68 @@ async def test_submission_quota_and_native_scope_locks_complete_without_a_cycle(
         {"user": world.owner.id, "message": message_id},
     )
     assert counts == {"receipts": 1, "queued": 1, "charged": 1, "native_status": FINISHED[operation]}
+
+
+async def test_owner_submission_and_human_lane_claim_complete_without_a_cycle(
+    world: ScopeWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given the creator's submission into their canonical session, paused after it locked that session.
+    session_id, message_id = await canonical_turn(world, "claim")
+    reserved, charge = anyio.Event(), anyio.Event()
+    original_charge = chat_submissions.charge_conversation_quota
+    accepted: list[AcceptedSubmission] = []
+    claimed: list[GatewayMessageRecord | None] = []
+    failures: list[DbError] = []
+    submitter_pid = world.db.second.raw.info.backend_pid
+
+    async def paused_charge(user: UserRecord) -> None:
+        reserved.set()
+        await charge.wait()
+        await original_charge(user)
+
+    async def submit() -> None:
+        try:
+            async with transaction(world.db.second):
+                accepted.append(
+                    await chat_submissions.accept_submission(
+                        ChatSubmission(client_submission_id=uuid4(), content="owner submission"),
+                        user=world.owner,
+                        agent=world.held,
+                        session_id=session_id,
+                        history=[],
+                    )
+                )
+        except DbError as error:
+            failures.append(error)
+
+    async def claim() -> None:
+        try:
+            await claim_lane(world, session_id, claimed)
+        except DbError as error:
+            failures.append(error)
+
+    monkeypatch.setattr(chat_submissions, "charge_conversation_quota", paused_charge)
+    # The stored per-user allowance is the quota UPDATE under test; inside an organization the daily cap replaces it.
+    monkeypatch.setattr(quota_guard, "tier_for_tenant", AsyncMock(return_value=None))
+    # When a claim of that human lane takes its tenant, creator and agent locks and queues behind the session lock.
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(submit)
+            await reserved.wait()
+            tasks.start_soon(claim)
+            waiting = await waiters_of(world, submitter_pid)
+            assert len(waiting) == 1
+            assert "FROM chat_sessions" in str(waiting[0]["query"])
+            charge.set()
+
+    # Then the quota UPDATE did not wait on the claim's creator lock: both committed, the claim took the queued head.
+    assert not failures, [str(error) for error in failures]
+    assert len(accepted) == 1
+    assert [row.id if row is not None else None for row in claimed] == [message_id]
+    charged = await world.monitor.fetchval(
+        "SELECT quota_messages_used FROM users WHERE id = %(id)s", {"id": world.owner.id}
+    )
+    assert charged == 1
 
 
 @pytest.mark.parametrize("operation", ["claim", "settle"])
