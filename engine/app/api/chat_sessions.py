@@ -34,6 +34,7 @@ from app.services.shared_chat import (
     SessionNotWritableError,
     ensure_canonical_session,
     is_canonical,
+    read_only_refusal,
     require_writable_session,
 )
 
@@ -368,7 +369,7 @@ async def rename_session(
     body: PatchSessionIn,
     current_user: UserRecord = Depends(get_current_user),
 ):
-    """Rename a session. Owner, agent creator, or admin may rename others' sessions."""
+    """Rename a session. Its owner or an org admin may; someone's canonical conversation only its owner."""
     agent, _ = await check_agent_access(current_user, agent_id)
     session = await chat_session_dao.get_for_agent(session_id, agent_id)
     if not session:
@@ -376,6 +377,9 @@ async def rename_session(
 
     if str(session.user_id) != str(current_user.id) and not can_view_all_agent_chat_sessions(current_user, agent):
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    if is_canonical(session) and session.user_id != current_user.id:
+        raise await read_only_refusal(SessionNotWritableError(agent_id, current_user.id))
 
     session = await chat_session_dao.update(db_obj=session, obj_in={"title": body.title})
     return {"id": str(session.id), "title": session.title}

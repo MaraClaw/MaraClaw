@@ -31529,7 +31529,7 @@
         ]
       },
       "patch": {
-        "description": "Rename a session. Owner, agent creator, or admin may rename others' sessions.",
+        "description": "Rename a session. Its owner or an org admin may; someone's canonical conversation only its owner.",
         "operationId": "patch_2f6170692f6167656e74732f7b6167656e745f69647d2f73657373696f6e732f7b73657373696f6e5f69647d",
         "parameters": [
           {

@@ -18,6 +18,7 @@ from app.dao.chat_dao import SessionPosition, chat_session_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
+from app.services import shared_chat
 
 pytest_plugins = ["tests.chat_history_fakes"]
 
@@ -1054,6 +1055,46 @@ async def test_canonical_conversations_are_never_deleted(monkeypatch, role, owne
     assert refused.value.detail == {"reason": "canonical_session_required", "session_id": str(session.id)}
     delete_messages.assert_not_awaited()
     delete_row.assert_not_awaited()
+
+
+def _rename_surface(monkeypatch: pytest.MonkeyPatch, session: ChatSessionRecord, own: ChatSessionRecord) -> AsyncMock:
+    agent = SimpleNamespace(id=session.agent_id, creator_id=uuid.uuid4())
+    update = AsyncMock(return_value=SimpleNamespace(id=session.id, title="Renamed"))
+    monkeypatch.setattr(chat_sessions_api, "check_agent_access", AsyncMock(return_value=(agent, "use")))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "get_for_agent", AsyncMock(return_value=session))
+    monkeypatch.setattr(chat_sessions_api.chat_session_dao, "update", update)
+    monkeypatch.setattr(shared_chat, "ensure_canonical_session", AsyncMock(return_value=own))
+    return update
+
+
+@pytest.mark.parametrize("role", ["member", "org_admin"])
+async def test_the_owner_renames_their_canonical_conversation(monkeypatch, role):
+    viewer: Any = SimpleNamespace(id=uuid.uuid4(), role=role, tenant_id=uuid.uuid4())
+    session = _web_session(viewer.id, primary=True)
+    update = _rename_surface(monkeypatch, session, session)
+
+    renamed = await chat_sessions_api.rename_session(
+        session.agent_id, session.id, chat_sessions_api.PatchSessionIn(title="Renamed"), viewer
+    )
+
+    assert renamed == {"id": str(session.id), "title": "Renamed"}
+    update.assert_awaited_once_with(db_obj=session, obj_in={"title": "Renamed"})
+
+
+async def test_a_company_admin_cannot_rename_someone_elses_canonical_conversation(monkeypatch):
+    viewer: Any = SimpleNamespace(id=uuid.uuid4(), role="org_admin", tenant_id=uuid.uuid4())
+    session = _web_session(uuid.uuid4(), primary=True)
+    own = _web_session(viewer.id, primary=True)
+    update = _rename_surface(monkeypatch, session, own)
+
+    with pytest.raises(HTTPException) as refused:
+        await chat_sessions_api.rename_session(
+            session.agent_id, session.id, chat_sessions_api.PatchSessionIn(title="Renamed"), viewer
+        )
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail == {"reason": "session_read_only", "session_id": str(own.id)}
+    update.assert_not_awaited()
 
 
 async def test_an_extra_conversation_is_deleted_with_its_messages_by_its_owner(monkeypatch):
