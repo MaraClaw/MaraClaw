@@ -20,10 +20,10 @@ FROM (SELECT 1) AS one LEFT JOIN LATERAL (
     WHERE g.agent_id = md5('a' || :n)::uuid AND g.conversation_id = md5('s' || :n || '-' || :k)::uuid::text
       AND g.status = 'pending' ORDER BY g.created_at, g.id LIMIT 1) AS h ON true \gset
 \if :ready
--- openclaw_shared_scope.authorize_lane takes shared tenant, owner and agent locks; then
+-- openclaw_shared_scope.authorize_lane takes shared tenant, owner and agent locks (the owner FOR KEY SHARE); then
 -- gateway_message_dao.lock_human_lane locks the canonical session and the head is read again under it.
 SELECT id FROM tenants WHERE id = md5('t' || :t)::uuid FOR SHARE;
-SELECT id FROM users WHERE id = md5('u' || :n)::uuid FOR SHARE;
+SELECT id FROM users WHERE id = md5('u' || :n)::uuid FOR KEY SHARE;
 SELECT id FROM agents WHERE id = md5('a' || :n)::uuid FOR SHARE;
 SELECT id FROM chat_sessions WHERE id = md5('s' || :n || '-' || :k)::uuid AND agent_id = md5('a' || :n)::uuid
   AND source_channel = 'web' AND is_primary IS TRUE AND is_group IS FALSE FOR UPDATE;
