@@ -40,7 +40,7 @@ class PersonalOriginal:
     receipt: ReceiptKey
     text: str
     route: PersonalRoute
-    shared_session_id: UUID
+    transcript_session_id: UUID
     reply_session_id: UUID
     attachments: tuple[ChatAttachment, ...] = ()
     saved_content: str | None = None
@@ -61,7 +61,7 @@ class PersonalOriginal:
         return PersonalBurstScope(
             agent_id=self.agent.id,
             tenant_id=self.agent.tenant_id,
-            shared_session_id=self.shared_session_id,
+            transcript_session_id=self.transcript_session_id,
             reply_session_id=self.reply_session_id,
             sender_user_id=self.sender.id,
             config_id=self.route.config_id,

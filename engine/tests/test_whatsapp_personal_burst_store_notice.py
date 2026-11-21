@@ -53,7 +53,7 @@ async def test_notice_source_must_be_the_static_completed_null_conversation_mach
     async with transaction(f.db.first):
         for source in (
             await static_source(f, content="not empty"),
-            await static_source(f, conversation=str(f.scope.shared_session_id)),
+            await static_source(f, conversation=str(f.scope.transcript_session_id)),
             uuid4(),
         ):
             with pytest.raises(PersonalBurstAnchorError):
@@ -101,7 +101,7 @@ async def test_accepted_outcomes_cannot_carry_a_notice(burst_db):
         await f.db.first.execute(
             "INSERT INTO gateway_messages (id, agent_id, sender_user_id, conversation_id, content, status) "
             "VALUES (%(g)s, %(a)s, %(u)s, %(c)s, '', 'pending')",
-            {"g": gw, "a": f.scope.agent_id, "u": f.db.user.id, "c": str(f.scope.shared_session_id)},
+            {"g": gw, "a": f.scope.agent_id, "u": f.db.user.id, "c": str(f.scope.transcript_session_id)},
         )
         await personal_burst_dao.create_batch(gw, f.scope, member, f.limits)
     with pytest.raises(CheckViolationError):

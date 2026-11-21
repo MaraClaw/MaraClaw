@@ -9,7 +9,7 @@ from app.records.personal_burst_errors import PersonalBurstParentUnavailableErro
 SCOPE_COLUMNS = (
     "agent_id",
     "tenant_id",
-    "shared_session_id",
+    "transcript_session_id",
     "reply_session_id",
     "sender_user_id",
     "config_id",
@@ -54,16 +54,16 @@ def require_transaction(operation: str) -> DbConnection:
     return db
 
 
-async def lock_parent(db: DbConnection, agent_id: UUID, shared_session_id: UUID) -> bool:
+async def lock_parent(db: DbConnection, agent_id: UUID, transcript_session_id: UUID) -> bool:
     """Take (or re-take, idempotently) the shared chat-session lock used by claiming. Always first."""
     row = await db.fetchone(
         "SELECT id FROM chat_sessions WHERE id = %(session)s AND agent_id = %(agent)s "
         "AND source_channel = 'shared' FOR UPDATE",
-        {"session": shared_session_id, "agent": agent_id},
+        {"session": transcript_session_id, "agent": agent_id},
     )
     return row is not None
 
 
-async def require_parent_lock(db: DbConnection, agent_id: UUID, shared_session_id: UUID) -> None:
-    if not await lock_parent(db, agent_id, shared_session_id):
-        raise PersonalBurstParentUnavailableError(agent_id, shared_session_id)
+async def require_parent_lock(db: DbConnection, agent_id: UUID, transcript_session_id: UUID) -> None:
+    if not await lock_parent(db, agent_id, transcript_session_id):
+        raise PersonalBurstParentUnavailableError(agent_id, transcript_session_id)

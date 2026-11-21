@@ -2069,7 +2069,7 @@ CREATE TABLE IF NOT EXISTS personal_burst_batches (
     gateway_id UUID PRIMARY KEY REFERENCES gateway_messages(id) ON DELETE CASCADE,
     agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     tenant_id UUID NOT NULL,
-    shared_session_id UUID NOT NULL,
+    transcript_session_id UUID NOT NULL,
     reply_session_id UUID NOT NULL,
     sender_user_id UUID NOT NULL,
     config_id UUID NOT NULL,
@@ -2098,16 +2098,16 @@ CREATE TABLE IF NOT EXISTS personal_burst_batches (
     CHECK (state NOT IN ('completed','cancelled') OR finished_at IS NOT NULL)
 );
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_personal_burst_batches_open
-    ON personal_burst_batches (agent_id, shared_session_id) WHERE state IN ('pending','sealed')$ddl$);
+    ON personal_burst_batches (agent_id, transcript_session_id) WHERE state IN ('pending','sealed')$ddl$);
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_personal_burst_batches_due
     ON personal_burst_batches (ready_at, gateway_id) WHERE state IN ('pending','sealed')$ddl$);
 
 CREATE OR REPLACE FUNCTION protect_personal_burst_batch() RETURNS trigger AS $$
 BEGIN
-    IF ROW(NEW.gateway_id, NEW.agent_id, NEW.tenant_id, NEW.shared_session_id, NEW.reply_session_id,
+    IF ROW(NEW.gateway_id, NEW.agent_id, NEW.tenant_id, NEW.transcript_session_id, NEW.reply_session_id,
            NEW.sender_user_id, NEW.config_id, NEW.provider, NEW.account_id, NEW.auth_epoch, NEW.generation,
            NEW.peer_id, NEW.created_at) IS DISTINCT FROM
-       ROW(OLD.gateway_id, OLD.agent_id, OLD.tenant_id, OLD.shared_session_id, OLD.reply_session_id,
+       ROW(OLD.gateway_id, OLD.agent_id, OLD.tenant_id, OLD.transcript_session_id, OLD.reply_session_id,
            OLD.sender_user_id, OLD.config_id, OLD.provider, OLD.account_id, OLD.auth_epoch, OLD.generation,
            OLD.peer_id, OLD.created_at) THEN
         RAISE EXCEPTION 'Personal burst scope is immutable' USING ERRCODE = '23514';
@@ -2137,7 +2137,7 @@ CREATE TABLE IF NOT EXISTS personal_busy_notices (
     gateway_id UUID NOT NULL UNIQUE REFERENCES gateway_messages(id) ON DELETE CASCADE,
     agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     tenant_id UUID NOT NULL,
-    shared_session_id UUID NOT NULL,
+    transcript_session_id UUID NOT NULL,
     reply_session_id UUID NOT NULL,
     sender_user_id UUID NOT NULL,
     config_id UUID NOT NULL,
@@ -2150,7 +2150,7 @@ CREATE TABLE IF NOT EXISTS personal_busy_notices (
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_personal_busy_notices_cooldown
-    ON personal_busy_notices (shared_session_id, config_id, created_at DESC)$ddl$);
+    ON personal_busy_notices (transcript_session_id, config_id, created_at DESC)$ddl$);
 
 -- One row per native receipt outcome. The identity is the EXISTING composite receipt key (no second dedupe
 -- authority). Accepted members keep their original text and transcript link; rejections retain no body.

@@ -240,7 +240,7 @@ async def accept_channel_event(
                 receipt=ReceiptKey(event.config_id, event.provider, event.event_key),
                 text=event.text,
                 route=route,
-                shared_session_id=session.id,
+                transcript_session_id=session.id,
                 reply_session_id=reply.id,
                 attachments=event.attachments,
                 saved_content=saved_content,

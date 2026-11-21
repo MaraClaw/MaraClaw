@@ -1,6 +1,6 @@
 """Dispatch-side Personal burst persistence: head/readiness, seal, claim/complete states, cancellation.
 
-State changes require the caller's owning transaction and lock the shared chat session before any batch or
+State changes require the caller's owning transaction and lock the transcript chat session before any batch or
 gateway row (the order claiming uses). Cancellation retains the header and originals; only the queue row leaves.
 """
 
@@ -33,7 +33,7 @@ ORDER BY g.created_at, g.id LIMIT 1
 """
 _OPEN = f"""
 SELECT {columns_of("b")} FROM personal_burst_batches b JOIN gateway_messages g ON g.id = b.gateway_id
-WHERE b.agent_id = %(agent)s AND b.shared_session_id = %(session)s AND b.state IN ('pending', 'sealed')
+WHERE b.agent_id = %(agent)s AND b.transcript_session_id = %(session)s AND b.state IN ('pending', 'sealed')
   AND (%(config)s::uuid IS NULL OR b.config_id = %(config)s::uuid)
 ORDER BY g.created_at, g.id
 """
@@ -58,10 +58,10 @@ class PersonalBurstDispatchDAO(BaseDAO[PersonalBurstBatch]):
     columns: ClassVar[tuple[str, ...]] = BATCH_COLUMNS
     record_factory = staticmethod(PersonalBurstBatch.from_row)
 
-    async def head(self, agent_id: UUID, shared_session_id: UUID) -> PersonalBurstHead | None:
-        """The ACTUAL oldest pending shared row. Readiness is reported, never used to skip an unready head."""
+    async def head(self, agent_id: UUID, transcript_session_id: UUID) -> PersonalBurstHead | None:
+        """The ACTUAL oldest pending row of the transcript lane. Readiness is reported, never used to skip an unready head."""
         async with self.session() as db:
-            row = await db.fetchone(_HEAD, {"agent": agent_id, "conv": str(shared_session_id)})
+            row = await db.fetchone(_HEAD, {"agent": agent_id, "conv": str(transcript_session_id)})
         if row is None:
             return None
         gateway_id = uuid_from_row(row["id"])
@@ -74,11 +74,11 @@ class PersonalBurstDispatchDAO(BaseDAO[PersonalBurstBatch]):
         )
 
     async def list_open(
-        self, agent_id: UUID, shared_session_id: UUID, *, config_id: UUID | None = None
+        self, agent_id: UUID, transcript_session_id: UUID, *, config_id: UUID | None = None
     ) -> list[PersonalBurstBatch]:
         """Pending and sealed (not yet claimed) batches in gateway FIFO order."""
         async with self.session() as db:
-            rows = await db.fetchall(_OPEN, {"agent": agent_id, "session": shared_session_id, "config": config_id})
+            rows = await db.fetchall(_OPEN, {"agent": agent_id, "session": transcript_session_id, "config": config_id})
         return [self.record_factory(row) for row in rows]
 
     async def seal(self, gateway_id: UUID) -> PersonalBurstBatch | None:
@@ -110,12 +110,12 @@ class PersonalBurstDispatchDAO(BaseDAO[PersonalBurstBatch]):
         return await self._lock_and_cancel(require_transaction("cancel"), gateway_id, reason)
 
     async def cancel_open(
-        self, agent_id: UUID, shared_session_id: UUID, reason: BurstCancelReason, *, config_id: UUID | None = None
+        self, agent_id: UUID, transcript_session_id: UUID, reason: BurstCancelReason, *, config_id: UUID | None = None
     ) -> list[UUID]:
         """Cancel every pending/sealed batch of a lane (optionally one connector). Parent lock comes first."""
         db = require_transaction("cancel")
-        _ = await lock_parent(db, agent_id, shared_session_id)
-        batches = await self.list_open(agent_id, shared_session_id, config_id=config_id)
+        _ = await lock_parent(db, agent_id, transcript_session_id)
+        batches = await self.list_open(agent_id, transcript_session_id, config_id=config_id)
         return [b.gateway_id for b in batches if await self._lock_and_cancel(db, b.gateway_id, reason) is not None]
 
     async def _lock_and_cancel(
@@ -127,11 +127,11 @@ class PersonalBurstDispatchDAO(BaseDAO[PersonalBurstBatch]):
 
     async def _lock(self, db: DbConnection, gateway_id: UUID) -> PersonalBurstBatch | None:
         owner = await db.fetchone(
-            f"SELECT agent_id, shared_session_id FROM {self.table} WHERE gateway_id = %(id)s", {"id": gateway_id}
+            f"SELECT agent_id, transcript_session_id FROM {self.table} WHERE gateway_id = %(id)s", {"id": gateway_id}
         )
         if owner is None:
             return None
-        _ = await lock_parent(db, uuid_from_row(owner["agent_id"]), uuid_from_row(owner["shared_session_id"]))
+        _ = await lock_parent(db, uuid_from_row(owner["agent_id"]), uuid_from_row(owner["transcript_session_id"]))
         row = await db.fetchone(
             f"SELECT {self._select_list()} FROM {self.table} WHERE gateway_id = %(id)s FOR UPDATE", {"id": gateway_id}
         )

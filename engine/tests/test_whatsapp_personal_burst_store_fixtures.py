@@ -40,7 +40,7 @@ class BurstDatabase:
 async def burst_db(receipt_db: ReceiptDatabase) -> BurstDatabase:
     db = receipt_db
     tenant, config, reply, epoch, generation = (uuid4() for _ in range(5))
-    shared = shared_session_id(db.agent.id)
+    transcript = shared_session_id(db.agent.id)
     route = PersonalRoute(
         config_id=config, auth_epoch=epoch, generation=generation, account_id="acct", self_jid="15550001@s.net"
     )
@@ -57,7 +57,7 @@ async def burst_db(receipt_db: ReceiptDatabase) -> BurstDatabase:
         await db.first.execute(
             "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, is_primary) "
             "VALUES (%(id)s, %(agent)s, %(user)s, 'Shared', 'shared', TRUE)",
-            {"id": shared, "agent": db.agent.id, "user": db.user.id},
+            {"id": transcript, "agent": db.agent.id, "user": db.user.id},
         )
         await db.first.execute(
             "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, external_conv_id) "
@@ -67,7 +67,7 @@ async def burst_db(receipt_db: ReceiptDatabase) -> BurstDatabase:
     scope = PersonalBurstScope(
         agent_id=db.agent.id,
         tenant_id=tenant,
-        shared_session_id=shared,
+        transcript_session_id=transcript,
         reply_session_id=reply,
         sender_user_id=db.user.id,
         config_id=config,
@@ -83,7 +83,7 @@ async def anchor(
     f: BurstDatabase, *, sender: UUID | None = None, content: str = "", at: datetime | None = None
 ) -> UUID:
     """Insert one pending shared gateway row at the guarded FIFO position (or an explicit time)."""
-    created = at or await personal_burst_dao.next_created_at(f.scope.agent_id, f.scope.shared_session_id)
+    created = at or await personal_burst_dao.next_created_at(f.scope.agent_id, f.scope.transcript_session_id)
     gateway_id = uuid4()
     async with connection_ctx() as db:
         await db.execute(
@@ -93,7 +93,7 @@ async def anchor(
                 "id": gateway_id,
                 "agent": f.scope.agent_id,
                 "sender": sender or f.scope.sender_user_id,
-                "conv": str(f.scope.shared_session_id),
+                "conv": str(f.scope.transcript_session_id),
                 "content": content,
                 "at": created,
             },
@@ -123,7 +123,7 @@ async def receive(f: BurstDatabase, key: str, text: str) -> NewBurstMember:
                 "agent": f.scope.agent_id,
                 "user": f.scope.sender_user_id,
                 "text": text,
-                "conv": str(f.scope.shared_session_id),
+                "conv": str(f.scope.transcript_session_id),
             },
         )
     return NewBurstMember(ReceiptKey(f.scope.config_id, "whatsapp", key), text, message_id)
@@ -165,7 +165,7 @@ def present[T](value: T | None) -> T:
 
 async def usage_of(f: BurstDatabase) -> PendingUsage:
     async with transaction(f.db.second):
-        return await personal_burst_dao.pending_usage(f.scope.agent_id, f.scope.shared_session_id)
+        return await personal_burst_dao.pending_usage(f.scope.agent_id, f.scope.transcript_session_id)
 
 
 async def age(f: BurstDatabase, gateway_id: UUID, seconds: float) -> None:

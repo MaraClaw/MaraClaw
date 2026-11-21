@@ -106,7 +106,7 @@ async def hold_in_burst(db: ReceiptDatabase, gateway: UUID, *, ready: datetime, 
     """Attach a Personal burst header to a pending row: pending until ``ready``, or already cancelled."""
     async with transaction(db.first):
         await db.first.execute(
-            "INSERT INTO personal_burst_batches (gateway_id, agent_id, tenant_id, shared_session_id, reply_session_id, "
+            "INSERT INTO personal_burst_batches (gateway_id, agent_id, tenant_id, transcript_session_id, reply_session_id, "
             "sender_user_id, config_id, provider, account_id, auth_epoch, generation, peer_id, first_at, last_at, "
             "ready_at, member_count, member_bytes, state, cancel_reason, finished_at) VALUES (%(gateway)s, %(agent)s, "
             "%(any)s, %(any)s, %(any)s, %(any)s, %(any)s, 'whatsapp', 'acct', %(any)s, %(any)s, 'peer', %(at)s, %(at)s, "

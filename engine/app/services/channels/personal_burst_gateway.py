@@ -35,14 +35,14 @@ async def _pin_reply_intent(gateway: GatewayMessageRecord, original: PersonalOri
 async def create_burst_anchor(original: PersonalOriginal) -> GatewayMessageRecord:
     """Pending FIFO-tail row for a new batch. Routing is deferred to dispatch, so no model is chosen here.
 
-    Needs the caller's transaction and shared-session lock (``next_created_at`` enforces both).
+    Needs the caller's transaction and transcript-session lock (``next_created_at`` enforces both).
     """
-    created_at = await personal_burst_dao.next_created_at(original.agent.id, original.shared_session_id)
+    created_at = await personal_burst_dao.next_created_at(original.agent.id, original.transcript_session_id)
     gateway = await gateway_message_dao.create(
         obj_in={
             "agent_id": original.agent.id,
             "sender_user_id": original.sender.id,
-            "conversation_id": str(original.shared_session_id),
+            "conversation_id": str(original.transcript_session_id),
             "content": original.text,
             "status": "pending",
             "routing_reason": BURST_ROUTING_REASON,

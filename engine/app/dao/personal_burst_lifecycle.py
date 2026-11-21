@@ -8,10 +8,10 @@ from app.db.session import connection_ctx
 from app.records.personal_burst import BurstCancelReason
 
 _OPEN_LANES = (
-    "SELECT DISTINCT b.shared_session_id, b.config_id FROM personal_burst_batches b "
+    "SELECT DISTINCT b.transcript_session_id, b.config_id FROM personal_burst_batches b "
     "WHERE b.agent_id = %(agent)s AND b.state IN ('pending', 'sealed') AND b.config_id IN "
     "(SELECT config_id FROM whatsapp_personal_connections WHERE agent_id = %(agent)s) "
-    "ORDER BY b.shared_session_id, b.config_id"
+    "ORDER BY b.transcript_session_id, b.config_id"
 )
 
 
@@ -27,6 +27,9 @@ async def cancel_open_for_agent(agent_id: UUID, reason: BurstCancelReason) -> li
             gateway_id
             for lane in lanes
             for gateway_id in await personal_burst_dispatch_dao.cancel_open(
-                agent_id, uuid_from_row(lane["shared_session_id"]), reason, config_id=uuid_from_row(lane["config_id"])
+                agent_id,
+                uuid_from_row(lane["transcript_session_id"]),
+                reason,
+                config_id=uuid_from_row(lane["config_id"]),
             )
         ]

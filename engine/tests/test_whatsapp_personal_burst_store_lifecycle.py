@@ -28,11 +28,11 @@ async def test_side_row_deletion_never_turns_a_batched_gateway_into_a_legacy_rea
     batch = await admit(f, "n1", "a")
     async with transaction(f.db.first):
         await f.db.first.execute(
-            "DELETE FROM chat_messages WHERE conversation_id = %(c)s", {"c": str(f.scope.shared_session_id)}
+            "DELETE FROM chat_messages WHERE conversation_id = %(c)s", {"c": str(f.scope.transcript_session_id)}
         )
         await f.db.first.execute("DELETE FROM channel_configs WHERE id = %(c)s", {"c": f.scope.config_id})
         await f.db.first.execute("DELETE FROM chat_sessions WHERE id = %(r)s", {"r": f.scope.reply_session_id})
-        head = await dispatch.head(f.scope.agent_id, f.scope.shared_session_id)
+        head = await dispatch.head(f.scope.agent_id, f.scope.transcript_session_id)
     # Then the header is retained and not due; the transcript link and receipt-bound member rows are gone.
     assert head is not None
     assert (head.gateway_id, head.batch is not None, head.due) == (batch.gateway_id, True, False)
@@ -44,7 +44,7 @@ async def test_transcript_deletion_keeps_the_accepted_original(burst_db):
     batch = await admit(f, "n1", "a")
     async with transaction(f.db.first):
         await f.db.first.execute(
-            "DELETE FROM chat_messages WHERE conversation_id = %(c)s", {"c": str(f.scope.shared_session_id)}
+            "DELETE FROM chat_messages WHERE conversation_id = %(c)s", {"c": str(f.scope.transcript_session_id)}
         )
     [member] = await members_of(f, batch.gateway_id)
     assert (member.text, member.chat_message_id) == ("a", None)

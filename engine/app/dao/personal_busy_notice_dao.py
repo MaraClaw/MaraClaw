@@ -41,7 +41,7 @@ class PersonalBusyNoticeDAO(BaseDAO[PersonalBusyNotice]):
     ) -> PersonalBusyNotice:
         """Record cooldown metadata for a static source row (completed, no conversation/senders/content)."""
         db = require_transaction("notice create")
-        await require_parent_lock(db, scope.agent_id, scope.shared_session_id)
+        await require_parent_lock(db, scope.agent_id, scope.transcript_session_id)
         row = await db.fetchone(
             f"INSERT INTO {self.table} (id, gateway_id, {', '.join(SCOPE_COLUMNS)}, reason) "
             f"SELECT %(id)s, g.id, {_SCOPE_PARAMS}, %(reason)s FROM gateway_messages g "

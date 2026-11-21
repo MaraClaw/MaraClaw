@@ -151,7 +151,7 @@ async def test_next_created_at_is_strictly_after_the_tail_even_in_the_future(bur
             "UPDATE gateway_messages SET status = %(status)s WHERE id = %(id)s",
             {"status": status, "id": gateway_id},
         )
-        assert await personal_burst_dao.next_created_at(f.scope.agent_id, f.scope.shared_session_id) == (
+        assert await personal_burst_dao.next_created_at(f.scope.agent_id, f.scope.transcript_session_id) == (
             future + timedelta(microseconds=1)
         )
 
@@ -225,7 +225,7 @@ async def test_mutations_require_owning_transaction_and_existing_anchor(burst_db
     with pytest.raises(PersonalBurstTransactionRequiredError):
         await personal_burst_dao.create_batch(uuid4(), f.scope, member, f.limits)
     with pytest.raises(PersonalBurstTransactionRequiredError):
-        await personal_burst_dao.next_created_at(f.scope.agent_id, f.scope.shared_session_id)
+        await personal_burst_dao.next_created_at(f.scope.agent_id, f.scope.transcript_session_id)
     # And a batch cannot be anchored on a missing or non-tail gateway row.
     async with transaction(f.db.first):
         received = await receive(f, "n", "a")
