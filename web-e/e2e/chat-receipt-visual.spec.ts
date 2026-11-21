@@ -30,6 +30,7 @@ for (const width of [390, 1440, 1920]) {
         await expect(row.getByRole('img', { name: 'Accepted', exact: true })).toHaveCount(0)
         await page.screenshot({ path: testInfo.outputPath('unknown.png'), fullPage: true })
         const retry = page.getByRole('button', { name: 'Retry this message', exact: true })
+        expect((await retry.boundingBox())?.height).toBeGreaterThanOrEqual(44)
         await page.keyboard.press('Shift+Tab')
         await expect(retry).toBeFocused()
         expect(await retry.evaluate((button) => button.matches(':focus-visible'))).toBe(true)

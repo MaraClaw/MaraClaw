@@ -33,7 +33,7 @@ const TranscriptRow = memo(function TranscriptRow({ agentId, line, entry, slow, 
     <div data-chat-content><ChatMessageContent agentId={agentId} message={line} /></div>
     {line.delivery === 'rejected' || (line.delivery === 'unknown' && slow) ? <div className="mt-2 space-y-2">
       <p className="text-xs" role="status">{line.delivery === 'rejected' ? line.rejectionNotice : translate('Acceptance not confirmed.')}</p>
-      {line.retryable !== false ? <Button type="button" size="sm" variant="outline" disabled={socketStopped} onClick={() => onRetry(line)}>
+      {line.retryable !== false ? <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={socketStopped} onClick={() => onRetry(line)}>
         {translate('Retry this message')}</Button> : null}
     </div> : null}
     {(line.role === 'user' || line.role === 'assistant') && (hasTime || accepted) ? <div data-chat-metadata className="chat-message-metadata">
