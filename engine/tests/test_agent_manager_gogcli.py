@@ -41,6 +41,7 @@ class RecordingDockerClient:
         self.execute_output = "Open https://accounts.google.com/o/oauth2/v2/auth?client_id=public-client to continue"
         self.container = _RecordingContainerAPI()
         self.image = _RecordingImageAPI()
+        self.system = SimpleNamespace(info=lambda: SimpleNamespace(logging_driver="json-file"))
 
     def run(self, *args, **kwargs):
         self.run_args = args

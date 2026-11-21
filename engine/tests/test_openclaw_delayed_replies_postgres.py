@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from sqlite3 import Connection
 from uuid import uuid4
@@ -200,6 +201,48 @@ async def test_historical_unbound_transcript_and_model_refs(recovery_case: Recov
     append(case.sqlite, "physical", 3, text="I use provider/secret-model-v3")
     assert await DelayedReplyRecovery().scan_once() == 2
     assert all("secret-model-v3" not in str(event) and "Ambiguous history" not in str(event) for event in case.events)
+
+
+async def test_reclaimed_native_run_stays_native_and_its_model_ref_stays_redacted(recovery_case: RecoveryCase) -> None:
+    # Given the native turn completed long ago, and a later background reply naming the model it ran on.
+    case, db = recovery_case, recovery_case.db
+    binding_id = case.native.reply_binding_id
+    assert binding_id is not None
+    async with transaction(db.first):
+        await db.first.execute(
+            "UPDATE gateway_messages SET completed_at = clock_timestamp() - interval '30 days' WHERE id = %(id)s",
+            {"id": case.native.id},
+        )
+    append(case.sqlite, "physical", 3, text="I use provider/secret-model-v3")
+    # When the retention batch reclaims it.
+    reclaimed = await gateway_message_dao.reclaim_completed_before(
+        completed_before=datetime.now(UTC) - timedelta(days=7), limit=10
+    )
+    async with transaction(db.first):
+        row = await db.first.fetchone(
+            "SELECT content, result, status, guest_model_ref, reply_binding_id FROM gateway_messages WHERE id = %(id)s",
+            {"id": case.native.id},
+        )
+    # Then only its payload went: the row still marks the run native and still lists the binding's model ref.
+    assert reclaimed == 1
+    assert row == {
+        "content": "",
+        "result": None,
+        "status": "completed",
+        "guest_model_ref": "provider/secret-model-v3",
+        "reply_binding_id": binding_id,
+    }
+    assert await openclaw_reply_dao.is_native_run(db.agent.id, str(case.native.id))
+    assert await openclaw_reply_dao.model_refs(binding_id) == ["provider/secret-model-v3"]
+    # And the scan publishes the two background replies, never the native run's own, with the model ref redacted.
+    assert await DelayedReplyRecovery().scan_once() == 2
+    async with transaction(db.first):
+        messages = await chat_message_dao.list_recent(
+            agent_id=db.agent.id, conversation_id=str(db.session_id), limit=10
+        )
+    assert len(messages) == 2
+    assert all("secret-model-v3" not in row.content for row in messages)
+    assert all("secret-model-v3" not in str(event) for event in case.events)
 
 
 async def test_publication_survives_restart_after_chat_commit(

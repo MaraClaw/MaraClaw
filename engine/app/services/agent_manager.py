@@ -15,7 +15,6 @@ from functools import partial
 from pathlib import Path
 from typing import TypedDict
 
-from anyio import to_thread
 from fastapi import HTTPException
 from httpx import HTTPError
 from pywhales import ClientNotFoundError, Container, DockerClient
@@ -34,6 +33,7 @@ from app.services.chatgpt_subscription import (
     AUTH_KIND_CHATGPT_SUBSCRIPTION,
     ensure_fresh_access_token as ensure_chatgpt_token,
 )
+from app.services.docker_capacity import run_docker
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
@@ -48,6 +48,7 @@ from app.services.guest_identity import (
 )
 from app.services.guest_image import ensure_guest_image
 from app.services.guest_limits import resolve_guest_limits
+from app.services.guest_logging import guest_log_options
 from app.services.guest_ports import guest_port_candidates, is_port_bind_conflict
 from app.services.guest_resource_config import preserve_guest_resources
 from app.services.llm import get_model_api_key
@@ -656,7 +657,7 @@ class AgentManager:
             operation_id=operation_id,
         ):
             try:
-                guests = await to_thread.run_sync(owned_guest_containers, client, agent)
+                guests = await run_docker(owned_guest_containers, client, agent, abandon_on_cancel=True)
             except (ClientNotFoundError, DockerException) as exc:
                 raise GuestStartPreflightError("Guest ownership inspection failed") from exc
             if create_only and guests:
@@ -664,8 +665,8 @@ class AgentManager:
 
             try:
                 for guest in guests:
-                    await to_thread.run_sync(partial(client.container.stop, guest.id, time=10))
-                    _ = await to_thread.run_sync(type(client.container).remove, client.container, [guest.id])
+                    await run_docker(partial(client.container.stop, guest.id, time=10))
+                    _ = await run_docker(type(client.container).remove, client.container, [guest.id])
                 guest_resolutions.drop(agent.id)
                 agent.container_id = None
                 try:
@@ -703,6 +704,7 @@ class AgentManager:
                         cpus=limits.cpus,
                         pids_limit=limits.pids_limit,
                         **limits.cpu_shares_option(),
+                        **guest_log_options(client),
                         labels={
                             "maraclaw.agent_id": str(agent.id),
                             "maraclaw.agent_name": agent.name,
@@ -712,9 +714,9 @@ class AgentManager:
 
                 for container_port in ports:
                     try:
-                        container = await to_thread.run_sync(run_container, container_port)
+                        container = await run_docker(run_container, container_port)
                     except DockerException as exc:
-                        _ = await to_thread.run_sync(partial(stop_guest_containers, client, agent, remove=True))
+                        _ = await run_docker(partial(stop_guest_containers, client, agent, remove=True))
                         if is_port_bind_conflict(exc) and container_port != ports[-1]:
                             continue
                         raise
@@ -814,7 +816,7 @@ class AgentManager:
             return True
 
         try:
-            found = await to_thread.run_sync(stop_guest_containers, self.docker_client, agent)
+            found = await run_docker(stop_guest_containers, self.docker_client, agent)
             if not found:
                 agent.container_id = None
             agent.status = AgentStatus.STOPPED
@@ -837,7 +839,7 @@ class AgentManager:
             return True
 
         try:
-            found = await to_thread.run_sync(partial(stop_guest_containers, self.docker_client, agent, remove=True))
+            found = await run_docker(partial(stop_guest_containers, self.docker_client, agent, remove=True))
             agent.container_id = None
             if found:
                 agent.container_port = None

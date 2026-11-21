@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import ClassVar, Final, final
 from uuid import UUID
 
-from app.dao.gateway_message_delivery_dao import GatewayMessageDeliveryDAO
+from app.core.json_types import uuid_from_row
+from app.dao.gateway_message_delivery_dao import _DISPATCH_START, GatewayMessageDeliveryDAO
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.openclaw_dispatch import SharedClaim
-from app.records.personal_burst import BURST_CANCELLED_RESULT
+from app.records.personal_burst import BURST_CANCELLED_RESULT, required_datetime
 
-# Below every row: unlike ``after IS NULL OR``, a row bound stays an index condition when the plan is generic.
-_DISPATCH_START: Final = (datetime.min.replace(tzinfo=UTC), UUID(int=0))
+# A pending page scans at most this many pending rows per head it can return, so once the cursor is past the last
+# lane head a page reads a bounded stretch of the queue instead of every later pending row.
+_PENDING_SCAN_ROWS_PER_HEAD: Final = 20
 
 _COLUMNS = (
     "id",
@@ -212,14 +214,29 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
     async def pending_dispatch_page(
         self, limit: int, *, after: tuple[datetime, UUID] | None = None
     ) -> tuple[list[GatewayMessageRecord], tuple[datetime, UUID] | None]:
-        """Page pending lane heads without replaying any delivered work."""
+        """Page pending lane heads without replaying any delivered work.
+
+        A page scans at most ``limit * _PENDING_SCAN_ROWS_PER_HEAD`` pending rows after ``after``. When those rows hold
+        no more than ``limit`` heads, the cursor moves to the last scanned row, so a page may be empty while the walk
+        goes on; the cursor is ``None`` only once the walk has reached the end of the queue. The scanned rows are a
+        LIMIT rather than an upper bound: a generic plan estimates a two-sided range as tiny and may then sort it.
+        """
         after_time, after_id = after or _DISPATCH_START
+        scan = limit * _PENDING_SCAN_ROWS_PER_HEAD
         async with self.session() as db:
-            rows = await db.fetchall(
-                f"SELECT {self._select_list('g')} FROM gateway_messages g "
-                "LEFT JOIN personal_burst_batches b ON b.gateway_id = g.id "
+            # Read the scan end first: a row claimed before the heads read can only repeat a head on the next page.
+            end = await db.fetchone(
+                "SELECT g.created_at, g.id FROM gateway_messages g "
                 "WHERE g.status = 'pending' AND (g.created_at, g.id) > (%(after_time)s, %(after_id)s) "
-                "AND (b.gateway_id IS NULL OR b.state != 'pending' OR b.ready_at <= clock_timestamp()) "
+                "ORDER BY g.created_at, g.id OFFSET %(skip)s LIMIT 1",
+                {"after_time": after_time, "after_id": after_id, "skip": scan - 1},
+            )
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('g')} FROM (SELECT {self._select_list('s')} FROM gateway_messages s "
+                "WHERE s.status = 'pending' AND (s.created_at, s.id) > (%(after_time)s, %(after_id)s) "
+                "ORDER BY s.created_at, s.id LIMIT %(scan)s) g "
+                "LEFT JOIN personal_burst_batches b ON b.gateway_id = g.id "
+                "WHERE (b.gateway_id IS NULL OR b.state != 'pending' OR b.ready_at <= clock_timestamp()) "
                 "AND (g.conversation_id IS NULL OR g.conversation_id = '' OR ("
                 "NOT EXISTS (SELECT 1 FROM gateway_messages d WHERE d.agent_id = g.agent_id "
                 "AND d.conversation_id = g.conversation_id AND d.status = 'delivered') "
@@ -227,12 +244,15 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
                 "AND p.conversation_id = g.conversation_id AND p.status = 'pending' "
                 "AND (p.created_at, p.id) < (g.created_at, g.id)))) "
                 "ORDER BY g.created_at, g.id LIMIT %(limit)s",
-                {"after_time": after_time, "after_id": after_id, "limit": limit + 1},
+                {"after_time": after_time, "after_id": after_id, "scan": scan, "limit": limit + 1},
             )
         messages = [self.record_factory(row) for row in rows[:limit]]
-        last = messages[-1] if len(rows) > limit else None
-        cursor = (last.created_at, last.id) if last is not None and last.created_at is not None else None
-        return messages, cursor
+        if len(rows) > limit:
+            last = messages[-1]
+            return messages, (last.created_at, last.id) if last.created_at is not None else None
+        if end is None:
+            return messages, None
+        return messages, (required_datetime(end["created_at"]), uuid_from_row(end["id"]))
 
     async def get_for_agent(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
         async with self.session() as db:
@@ -252,6 +272,36 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
                 {"agent_id": agent_id, "limit": limit},
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]
+
+    async def reclaim_completed_before(self, *, completed_before: datetime, limit: int) -> int:
+        """Clear the content and result of up to ``limit`` messages completed before the cutoff, oldest first.
+
+        The row itself stays, with its deliveries, so ``openclaw_reply_dao.is_native_run`` and ``model_refs`` still
+        read its id, agent, reply binding and model ref. A message with a delivery neither delivered nor terminal
+        keeps its result for the relay. Every writer that completes a message sets a result, so ``result IS NOT NULL``
+        marks a payload not yet reclaimed; the predicate is written exactly like ``ix_gateway_messages_completed_at``,
+        which a reclaimed row leaves, so an idle batch reads only rows still inside the window or kept for a relay.
+        Rows another transaction holds are skipped, never waited on. The update goes by ``ctid`` (a TID scan), which
+        the statement's own row locks keep in place.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH due AS (
+                    SELECT m.ctid FROM gateway_messages AS m
+                    WHERE m.status = 'completed' AND m.result IS NOT NULL AND m.completed_at < %(cutoff)s
+                      AND NOT EXISTS (
+                          SELECT 1 FROM gateway_report_deliveries AS d
+                          WHERE d.message_id = m.id AND d.delivered_at IS NULL AND d.terminal_at IS NULL
+                      )
+                    ORDER BY m.completed_at LIMIT %(limit)s FOR UPDATE OF m SKIP LOCKED
+                ) UPDATE gateway_messages SET content = '', result = NULL
+                  WHERE ctid = ANY(ARRAY(SELECT ctid FROM due))
+                  RETURNING id
+                """,
+                {"cutoff": completed_before, "limit": limit},
+            )
+            return len(rows)
 
 
 gateway_message_dao = GatewayMessageDAO()

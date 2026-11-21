@@ -26,6 +26,7 @@ from app.runtime.readiness import Readiness
 from app.runtime.shutdown_budget import SETTLE_FRACTION, ShutdownBudget, abandoned, joins_until
 from app.runtime.tasks import OwnedTasks, loop_progress
 from app.services.channels.outbound_http import shutdown_outbound_client
+from app.services.docker_capacity import shutdown_docker_capacity
 from app.services.heartbeat import close_heartbeat_admission, drain_heartbeat_tasks, open_heartbeat_admission
 from app.services.llm.client_cache import shutdown_llm_clients
 from app.services.mcp_client import shutdown_mcp_sessions
@@ -416,6 +417,8 @@ class Runtime:
         await drain("trigger invocations", drain_trigger_tasks)
         await drain("heartbeats", drain_heartbeat_tasks)
         await drain("inbox wakes", drain_wake_tasks)
+        # Every owner of guest Docker calls has drained: drop queued calls without joining a hung CLI's thread.
+        shutdown_docker_capacity()
         await cleanup("ss-local", self.proxy.stop)
         if self.realtime_attempted:
             await cleanup("realtime", realtime_router.stop)

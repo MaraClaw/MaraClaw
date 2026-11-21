@@ -108,9 +108,10 @@ Ordinary starts and [upgrades](openclaw-updates.md) share a
 [read-only probe runner](../app/services/guest_probe.py). It runs the image helper's
 `check-ready` through a local Docker CLI subprocess, preserving the installed
 client's Docker executable/global arguments and inherited environment; only exit 0
-is ready. Each probe subprocess receives the remaining readiness deadline; sleeps
-are capped to that remainder, and even a second successful probe at or after the
-deadline is rejected.
+is ready. An ordinary start gives each probe subprocess at most 10 seconds, cut to
+the remaining readiness deadline; the upgrade executor gives it the remaining
+deadline. Sleeps are capped to that remainder, and even a second successful probe at
+or after the deadline is rejected.
 
 Readiness is decided only by the guest's own check: two consecutive successful
 probes inside the 120-second deadline. Docker state can only end the wait early; it
@@ -119,9 +120,9 @@ deadline, the engine reads the container's Docker state
 ([readiness loop](../app/services/guest_readiness.py)). That normally
 costs one `docker container inspect`. The SDK's handle caches its inspection for 10
 ms, so a slow read can inspect again, inside the same bound. The observation deadline
-is absolute. It is fixed before the work is handed to a worker thread, at most 5
-seconds ahead and never past the readiness deadline, so a late worker thread cannot
-extend it. If no worker thread is free before the readiness deadline, the inspect is
+is absolute. It is fixed before the work is handed to a lane thread, at most 5
+seconds ahead and never past the readiness deadline, so a late lane thread cannot
+extend it. If no lane thread is free before the readiness deadline, the inspect is
 skipped. The engine also stops waiting for an inspect that is still running at the
 readiness deadline.
 
@@ -133,6 +134,15 @@ probe, so earlier restarts are not counted. If the inspect fails or times out,
 readiness keeps polling. What the caller does on a readiness failure is unchanged: a
 newly created guest is stopped, and an existing resumed guest is left as is. The
 upgrade executor has its own readiness loop and does not use this early exit.
+
+Guest start, stop, admission, the image check, readiness and the metrics container
+status run their Docker CLI calls on the guest Docker lane
+([docker_capacity.py](../app/services/docker_capacity.py)): 16 threads per event loop,
+apart from the thread pool the rest of the engine borrows, so a stalled daemon
+delays only guest Docker work. Each call holds one thread until it returns. When the
+waiting start is cancelled, or its operation is stopped while a probe runs (checked
+every 2 seconds during the probe as well as before it), ordinary readiness returns
+at once and kills the probe's CLI, which its lane thread reaps.
 
 A host timeout terminates and reaps the local CLI process. It does **not** prove
 that the Docker daemon cancelled or rolled back an exec it already accepted.
@@ -218,6 +228,16 @@ Docker creation sets both `memory` and `memory_swap` to the target memory. Since
 additional swap allowance. CPU and PID limits are also passed on creation, and so are
 CPU shares when the target has them. The global defaults are trial limits, not
 measured workload sizing.
+
+A new guest also gets a log bound, `OPENCLAW_GUEST_LOG_MAX_SIZE` (default `10m`) and
+`OPENCLAW_GUEST_LOG_MAX_FILE` (default `3`), because Docker's json-file driver never
+rotates. It is passed only when the daemon's default logging driver is `json-file` or
+`local` (read with `docker system info` inside the creation worker thread, per creation
+attempt); under any other driver, such as journald or awslogs, or when the driver cannot
+be read, no size options are set, since they make `docker run` fail. Resumed and running
+guests are never recreated to pick it up, so they keep the options they were created
+with, and sandbox containers stay unbounded because their tool output is read back from
+their logs.
 
 Limits also apply when a stopped guest resumes. For an `exited` or `created` guest the
 engine resolves the target, passes

@@ -213,6 +213,7 @@ async def test_resume_moves_a_stopped_guest_to_its_tier_limits(
     assert (host_config.pids_limit, host_config.cpu_shares) == (pids, shares)
     assert docker.starts == ["old"]
     assert docker.runs == docker.removed == []
+    assert docker.infos == 0
 
 
 @pytest.mark.parametrize("kind", ["no-tenant", "system-agent"])
@@ -296,9 +297,11 @@ async def test_running_guest_is_reused_without_any_limit_update(env, monkeypatch
     join_organization(monkeypatch, agent, OrganizationPlanId.MAX)
     # When Start reuses it.
     result = await manager.start_container(agent)
-    # Then it is neither updated nor restarted.
+    # Then it is neither updated nor restarted, and never recreated or probed for a log driver.
     assert result == "old"
     assert docker.updates == docker.starts == docker.listings == []
+    assert docker.runs == docker.removed == []
+    assert docker.infos == 0
     assert docker.guests["old"].host_config.memory == 20
 
 

@@ -8,6 +8,7 @@ are not blocked by stdout.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import os
 import queue
 import sys
@@ -23,6 +24,7 @@ from app.core.logging.levels import ERROR, INFO, coerce_level, level_name
 from app.core.logging.record import LogRecord
 
 _SHUTDOWN = object()
+DROP_REPORT_INTERVAL = 256
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -99,10 +101,16 @@ def _build_formatter(fmt: str, *, color: bool) -> Formatter:
 
 
 class LoggingService:
-    """Singleton-style process logger with a bounded async write queue."""
+    """Singleton-style process logger with a bounded async write queue.
+
+    A record rejected by a full queue is counted exactly once under a constant-time guard; producers never wait. Only
+    the writer thread drains the queue and reports the count, at the latest every ``DROP_REPORT_INTERVAL`` written
+    records, whenever the queue empties, and before it exits.
+    """
 
     __slots__: ClassVar[tuple[str, ...]] = (
         "_color",
+        "_drop_lock",
         "_dropped",
         "_enqueue",
         "_formatter",
@@ -111,6 +119,7 @@ class LoggingService:
         "_queue_size",
         "_sink",
         "_started",
+        "_stopping",
         "_thread",
         "_write_lock",
     )
@@ -135,6 +144,8 @@ class LoggingService:
         self._thread: threading.Thread | None = None
         self._started: bool = False
         self._dropped: int = 0
+        self._drop_lock: threading.Lock = threading.Lock()
+        self._stopping: threading.Event = threading.Event()
         self._write_lock: threading.Lock = threading.Lock()
 
     @classmethod
@@ -152,7 +163,8 @@ class LoggingService:
     def start(self) -> None:
         if not self._enqueue or self._started:
             return
-        self._thread = threading.Thread(target=self._run, name="maraclaw-log", daemon=True)
+        self._stopping = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(self._stopping,), name="maraclaw-log", daemon=True)
         self._thread.start()
         self._started = True
 
@@ -244,7 +256,8 @@ class LoggingService:
             try:
                 self._queue.put_nowait(record)
             except queue.Full:
-                self._dropped += 1
+                with self._drop_lock:
+                    self._dropped += 1
             return
         self._write(record)
 
@@ -252,17 +265,22 @@ class LoggingService:
         if not (self._enqueue and self._started):
             return
         deadline = time.monotonic() + timeout
-        while not self._queue.empty() and time.monotonic() < deadline:
-            time.sleep(0.001)
+        done = self._queue.all_tasks_done
+        with done:
+            while self._queue.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                _ = done.wait(remaining)
 
     def stop(self, timeout: float = 2.0) -> None:
         if not self._started:
             self._enqueue = False
             return
-        try:
-            self._queue.put(_SHUTDOWN, timeout=timeout)
-        except queue.Full:
-            self._drain_unlocked()
+        self._stopping.set()
+        # A full queue means the writer is mid-drain and will see the stop flag; only the writer ever drains.
+        with contextlib.suppress(queue.Full):
+            self._queue.put_nowait(_SHUTDOWN)
         thread = self._thread
         if thread is not None:
             thread.join(timeout=timeout)
@@ -270,42 +288,26 @@ class LoggingService:
         self._started = False
         self._enqueue = False
 
-    def _run(self) -> None:
-        get = self._queue.get
-        get_nowait = self._queue.get_nowait
-        empty = queue.Empty
+    def _run(self, stopping: threading.Event) -> None:
+        pending = self._queue
+        since_notice = 0
         while True:
-            item = get()
-            if item is _SHUTDOWN:
-                self._drain_unlocked()
-                return
-            self._write(item)
-            while True:
-                try:
-                    item = get_nowait()
-                except empty:
-                    break
-                if item is _SHUTDOWN:
-                    self._drain_unlocked()
-                    return
-                self._write(item)
-            self._emit_drops()
-
-    def _drain_unlocked(self) -> None:
-        while True:
-            try:
-                item = self._queue.get_nowait()
-            except queue.Empty:
-                break
+            item = pending.get()
             if item is not _SHUTDOWN:
                 self._write(item)
-        self._emit_drops()
+                since_notice += 1
+            if since_notice >= DROP_REPORT_INTERVAL or pending.empty():
+                self._emit_drops()
+                since_notice = 0
+            pending.task_done()
+            if stopping.is_set() and pending.empty():
+                return
 
     def _emit_drops(self) -> None:
-        dropped = self._dropped
+        with self._drop_lock:
+            dropped, self._dropped = self._dropped, 0
         if not dropped:
             return
-        self._dropped = 0
         notice = LogRecord(
             created=time.time(),
             levelno=ERROR,
@@ -315,7 +317,7 @@ class LoggingService:
             lineno=0,
             trace_id="-",
             exc=None,
-            extra=None,
+            extra=(("dropped", dropped),),
         )
         self._write(notice)
 

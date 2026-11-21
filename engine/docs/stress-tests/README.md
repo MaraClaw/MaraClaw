@@ -41,10 +41,10 @@ Each script starts its own container with `--rm` and stops it on exit, Ctrl-C in
 ## What `run-stress.sh` does
 
 1. Starts `maraclaw-stress` with durability off (`fsync`, `full_page_writes` and `synchronous_commit` off, `wal_level=minimal`), copies `container/` and the working tree's `scripts/schema_baseline.sql` into it, and runs `container/stress.sh` there.
-2. Loads the baseline and drops the three indexes the fixes added. That is the pre-fix schema: the fixes changed nothing else in the baseline.
+2. Loads the baseline and drops the four indexes the fixes added. That is the pre-fix schema: the fixes changed nothing else in the baseline.
 3. Seeds 2,000 agents across 20 tenants, each with its own owner, 10 web chat sessions and their reply bindings. Then it adds 5,000 completed turns, 5,000 chat messages and 5,000 history revisions per agent (10 million rows per table), written in time order across agents the way production traffic arrives. In the steady state each agent has two pending turns on each of lanes 1 to 5, and a delivered turn with one queued behind it on lane 6: 22,000 pending and 2,000 delivered rows.
 4. Measures **before**. It records EXPLAIN probes in the steady state and again with 81 more pending turns per agent (184,000 pending). Then it runs a 60-second pgbench workload with the pre-fix intake lock order and the pre-fix pending-page SQL, and restores the steady state.
-5. Reruns the baseline over the seeded database, as `python -m app.scripts.bootstrap_db` does on an existing one. Its `CREATE INDEX IF NOT EXISTS` statements build the three indexes; the report records how long that took and the index sizes.
+5. Reruns the baseline over the seeded database, as `python -m app.scripts.bootstrap_db` does on an existing one. Its `CREATE INDEX IF NOT EXISTS` statements build the four indexes; the report records how long that took and the index sizes.
 6. Measures **after** the same way with the current SQL. It prints the report and copies `report.txt`, `plans.txt` (the full `EXPLAIN (ANALYZE, BUFFERS)` text of every probe) and the pgbench output and logs to `STRESS_OUT_DIR`, or to a new temporary directory. Keep these outputs out of `docs/`.
 
 Options: `--quick` (200 agents), `--keep` (leave the container running), `--help`. Environment overrides:
@@ -102,7 +102,8 @@ The model covers database work only. Authorization and eligibility reads, Redis,
 | pending dispatch pages walk `ix_gateway_messages_pending_order` without a sort | All six after-fix first, mid and generic mid pages (both phases) have an index condition on that index and no `Sort` node |
 | recent chat history walks `ix_chat_messages_agent_conv_created` without a sort | Both after-fix history probes do |
 | agent gateway listing walks `ix_gateway_messages_agent_created` without a scan or sort | Both after-fix gateway-list probes do, with no `Seq Scan` and no `Sort` |
-| every fixed probe reads fewer buffers after the fix | All ten first, mid, generic mid, history and gateway-list pairs do |
+| delivered dispatch pages walk `ix_gateway_messages_delivered_order` without a sort | All four after-fix custom and generic first delivered pages (both phases) have an index condition on that index and no `Sort` node |
+| every fixed probe reads fewer buffers after the fix | All fourteen first, mid, generic mid, delivered, history and gateway-list pairs do |
 | no deadlocks or other failed transactions after the fix | Every after-fix pgbench transaction completed |
 | deadlocks reproduced before the fix | Informational. Deadlocks depend on timing, so a run can see none; the scope-lock test below reproduces the deadlock deterministically |
 
@@ -124,14 +125,15 @@ docker exec -it maraclaw-stress psql -U stress
 |---|---|
 | Intake locks the agent before the session | `tests/test_chat_submission_scope_locks_postgres.py::test_submission_locks_the_agent_before_the_session_native_work_writes` (claim and settle): a submission pauses after its session lock while a claim or settlement takes the agent lock, then both must finish |
 | The intake expiry check no longer escalates to tenant and agent locks | `tests/test_agent_stop_enforcement.py::test_unmarked_expiry_check_refuses_without_the_locking_write` (no database) |
-| Pending dispatch walk | `tests/test_gateway_lane_reads_postgres.py::test_pending_order_index_starts_the_dispatch_walk_at_its_cursor`: a generic plan of the page SQL needs an index condition on `ix_gateway_messages_pending_order` and no `Sort` |
+| Pending dispatch walk | `tests/test_gateway_lane_reads_postgres.py::test_pending_order_index_starts_the_dispatch_walk_at_its_cursor`: a generic plan of the page SQL needs an index condition on `ix_gateway_messages_pending_order` and no `Sort`. `test_pending_page_past_the_last_head_scans_a_bounded_stretch`: past the last lane head, both generic plans of the page read the same 100 rows and buffers with 300 or 3,000 rows queued behind it |
+| Delivered dispatch walk | `tests/test_gateway_lane_reads_postgres.py::test_delivered_page_starts_at_its_cursor_as_reply_bindings_grow`: the generic plan of the page starts with an index condition on `ix_gateway_messages_delivered_order` and reads the same buffers with 500 or 5,000 reply bindings |
 | Agent gateway listing | `tests/test_gateway_lane_reads_postgres.py::test_agent_listing_index_serves_newest_first_without_a_sort` |
 | Recent chat history | `tests/test_chat_history_postgres.py::test_agent_conversation_index_serves_recent_history_in_order` |
 
-To see a test catch a regression, revert its fix in a scratch checkout and run that checkout's copy of the script. Without the `FOR KEY SHARE` statement in `ChatSessionDAO.lock_for_agent`, both scope-lock cases fail with `deadlock detected`, as they did before the fix. Without one of the three indexes in `scripts/schema_baseline.sql`, the plan test that names it fails.
+To see a test catch a regression, revert its fix in a scratch checkout and run that checkout's copy of the script. Without the `FOR KEY SHARE` statement in `ChatSessionDAO.lock_for_agent`, both scope-lock cases fail with `deadlock detected`, as they did before the fix. Without one of the four indexes in `scripts/schema_baseline.sql`, the plan test that names it fails.
 
 The CI `lifecycle-postgres` job runs the scope-lock and lane-read files; `test_chat_history_postgres.py` is not in its list.
 
 ## Keeping the scripts current
 
-The `-after` workloads, `bench-claim-settle.sql`, `bench-history.sql` and the probes in `explain.sql` copy SQL from `app/dao/chat_dao.py`, `gateway_message_dao.py`, `gateway_message_delivery_dao.py` and `user_dao.py`, and the lock sequences of `app/services/chat_submissions.py`, `openclaw_native_claims.py` and `openclaw_gateway_delivery.py`. Update them when that SQL or those lock orders change. The `-before` workloads record the pre-fix code and stay as they are. `stress.sh` and `report.sql` name the three fix indexes, so renaming one in the baseline means renaming it there too.
+The `-after` workloads, `bench-claim-settle.sql`, `bench-history.sql` and the probes in `explain.sql` copy SQL from `app/dao/chat_dao.py`, `gateway_message_dao.py`, `gateway_message_delivery_dao.py` and `user_dao.py`, and the lock sequences of `app/services/chat_submissions.py`, `openclaw_native_claims.py` and `openclaw_gateway_delivery.py`. Update them when that SQL or those lock orders change. The `-before` workloads record the pre-fix code and stay as they are. `stress.sh` and `report.sql` name the four fix indexes, so renaming one in the baseline means renaming it there too.

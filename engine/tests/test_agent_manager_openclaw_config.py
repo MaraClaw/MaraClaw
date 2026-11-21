@@ -86,6 +86,7 @@ class RecordingDockerClient:
             remove_error=remove_error,
         )
         self.image = RecordingImageApi()
+        self.system = SimpleNamespace(info=lambda: SimpleNamespace(logging_driver="json-file"))
         self.run_error = run_error
         self.run_args = None
         self.run_kwargs = None

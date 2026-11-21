@@ -23,9 +23,9 @@ def boot(env, tmp_path, monkeypatch):
     monkeypatch.setattr(docker, "docker_cmd", [str(cli.executable)], raising=False)
     elapsed = 0.0
 
-    def probe_with_modeled_duration(client, reference, _timeout):
+    def probe_with_modeled_duration(client, reference, _timeout, child):
         nonlocal elapsed
-        result = probe_guest(client, reference, 5.0)
+        result = probe_guest(client, reference, 5.0, child)
         elapsed += 1.0
         return result
 

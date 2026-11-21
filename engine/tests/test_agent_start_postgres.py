@@ -210,7 +210,7 @@ def guest_surface(start_db, tmp_path, monkeypatch):
     docker = Docker()
     probes = []
 
-    def probe(_client, reference, _timeout):
+    def probe(_client, reference, _timeout, _child):
         probes.append(reference)
         return True
 

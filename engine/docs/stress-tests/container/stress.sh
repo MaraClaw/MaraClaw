@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs inside the disposable PostgreSQL container that run-stress.sh starts. Never point it at a real database.
 #
-# Loads scripts/schema_baseline.sql without the three fix indexes, seeds it, measures the pre-fix SQL, reruns the
+# Loads scripts/schema_baseline.sql without the four fix indexes, seeds it, measures the pre-fix SQL, reruns the
 # baseline over the seeded data (what bootstrap does to an existing database), measures the fixed SQL and writes
 # report.txt, plans.txt and the pgbench output to /stress/out. Exits non-zero when a report check fails.
 set -eu
@@ -14,7 +14,8 @@ BACKLOG=${STRESS_BACKLOG:-81}
 CLIENTS=${STRESS_CLIENTS:-64}
 THREADS=${STRESS_THREADS:-8}
 DURATION=${STRESS_SECONDS:-60}
-FIX_INDEXES="'ix_gateway_messages_pending_order', 'ix_gateway_messages_agent_created', 'ix_chat_messages_agent_conv_created'"
+FIX_INDEXES="'ix_gateway_messages_pending_order', 'ix_gateway_messages_delivered_order', 'ix_gateway_messages_agent_created',
+    'ix_chat_messages_agent_conv_created'"
 export PGUSER=stress PGDATABASE=stress PGOPTIONS='-c client_min_messages=warning'
 
 log() { printf '[stress %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
@@ -83,10 +84,10 @@ measure() {
 mkdir -p "$OUT"
 started=$(date +%s)
 
-log "schema: scripts/schema_baseline.sql without the three fix indexes"
+log "schema: scripts/schema_baseline.sql without the four fix indexes"
 sql -f "$DIR/schema_baseline.sql"
-sql -c "DROP INDEX ix_gateway_messages_pending_order, ix_gateway_messages_agent_created,
-        ix_chat_messages_agent_conv_created"
+sql -c "DROP INDEX ix_gateway_messages_pending_order, ix_gateway_messages_delivered_order,
+        ix_gateway_messages_agent_created, ix_chat_messages_agent_conv_created"
 sql -f "$DIR/setup.sql"
 meta 'PostgreSQL' "'$(value 'SHOW server_version')'"
 meta 'agents' "'$AGENTS'"
@@ -127,8 +128,8 @@ log "upgrade: rerunning scripts/schema_baseline.sql over the seeded database"
 t0=$(date +%s)
 sql -f "$DIR/schema_baseline.sql"
 meta 'baseline rerun seconds (builds the fix indexes)' "'$(($(date +%s) - t0))'"
-[ "$(value "SELECT count(*) FROM pg_indexes WHERE indexname IN ($FIX_INDEXES)")" = 3 ] || {
-    log "the baseline did not create the three fix indexes"
+[ "$(value "SELECT count(*) FROM pg_indexes WHERE indexname IN ($FIX_INDEXES)")" = 4 ] || {
+    log "the baseline did not create the four fix indexes"
     exit 1
 }
 meta 'fix index sizes' "(SELECT string_agg(format('%s %s', indexname, pg_size_pretty(pg_relation_size(indexname::regclass))),

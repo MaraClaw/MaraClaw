@@ -31,6 +31,14 @@ matched case-insensitively on token boundaries and replaced by `APP_NAME`. Provi
 ids and user messages are untouched, completed rows are not rewritten, and nothing beyond those configured
 identifiers is detected.
 
+Completed rows outlive their payload only when `GATEWAY_MESSAGE_RETENTION_DAYS` is set (default 0 keeps everything;
+1 to 6 are rejected at settings load). The `operational_log_retention` worker then clears `content` to `''` and
+`result` to `NULL` on completed messages whose `completed_at` is older than the window, in batches of at most 5000,
+oldest first, skipping locked rows. The row, its deliveries, its reply binding and its `guest_model_ref` stay, so
+delayed-reply recovery still recognizes the run as native and still redacts the binding's model refs. A message with
+a delivery that is neither delivered nor terminal is never reclaimed, so every claim still reloads its result. A
+reclaimed row is listed with an empty content and no result.
+
 PostgreSQL is the queue. Each batch claims at most 20 due intents using row locks
 and skip-locked selection. Claims increment attempts and issue a new token with a
 60-second lease. The worker holds at most 20 concurrent deliveries and refills

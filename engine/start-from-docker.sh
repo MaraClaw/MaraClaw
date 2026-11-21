@@ -31,6 +31,10 @@
 #                        their sum plus 10 s is the container's --stop-timeout (default: 115)
 #   DETACH=1             run detached (docker -d)
 #   PULL=1               docker pull base image before build
+#   CONTAINER_LOG_MAX_SIZE, CONTAINER_LOG_MAX_FILE
+#                        json-file/local log rotation for this container (default: 10m, 3). Added only when the
+#                        effective driver (an explicit --log-driver in the extra args, else the daemon default) is
+#                        json-file or local; other drivers such as journald or awslogs get no size options.
 
 set -euo pipefail
 
@@ -79,6 +83,13 @@ for key in UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN SHUTDOWN_HTTP_GRACE_SECONDS SHUTDOW
 done
 HTTP_GRACE_SECONDS="${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-${SHUTDOWN_HTTP_GRACE_SECONDS:-30}}"
 STOP_TIMEOUT=$((10#$HTTP_GRACE_SECONDS + 10#${SHUTDOWN_CLEANUP_BUDGET_SECONDS:-75} + 10))
+
+CONTAINER_LOG_MAX_SIZE="${CONTAINER_LOG_MAX_SIZE:-10m}"
+CONTAINER_LOG_MAX_FILE="${CONTAINER_LOG_MAX_FILE:-3}"
+if ! [[ "$CONTAINER_LOG_MAX_SIZE" =~ ^[1-9][0-9]*[kKmMgG]?$ ]] || ! [[ "$CONTAINER_LOG_MAX_FILE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[docker-run] ERROR: CONTAINER_LOG_MAX_SIZE must be a size such as 10m and CONTAINER_LOG_MAX_FILE a positive count" >&2
+    exit 1
+fi
 
 DO_BUILD=1
 DO_RUN=1
@@ -256,6 +267,29 @@ if [ -n "$ENV_KEYS" ]; then
     done <<< "$ENV_KEYS"
     echo "[docker-run] Forwarding $forwarded_count env vars from $ENV_FILE"
 fi
+
+# json-file never rotates, so bound it. Only json-file and local understand max-size; other drivers (journald, awslogs,
+# ...) reject it and `docker run` fails. The effective driver is the last --log-driver in the extra run arguments,
+# else the daemon default; when it cannot be determined, pass no size options. Extra --log-opt arguments still win.
+LOG_DRIVER=""
+previous=""
+if [ "${#EXTRA_RUN_ARGS[@]}" -gt 0 ]; then
+    for arg in "${EXTRA_RUN_ARGS[@]}"; do
+        case "$arg" in
+            --log-driver=*) LOG_DRIVER="${arg#--log-driver=}" ;;
+            *) if [ "$previous" = "--log-driver" ]; then LOG_DRIVER="$arg"; fi ;;
+        esac
+        previous="$arg"
+    done
+fi
+if [ -z "$LOG_DRIVER" ]; then
+    LOG_DRIVER="$("$ENGINE" info --format '{{.LoggingDriver}}' 2>/dev/null || true)"
+fi
+case "$LOG_DRIVER" in
+    json-file|local)
+        RUN_ARGS+=(--log-opt "max-size=$CONTAINER_LOG_MAX_SIZE" --log-opt "max-file=$CONTAINER_LOG_MAX_FILE")
+        ;;
+esac
 
 if [ "${DETACH:-0}" = "1" ]; then
     RUN_ARGS+=(-d --restart unless-stopped)

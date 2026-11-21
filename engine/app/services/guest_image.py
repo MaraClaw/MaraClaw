@@ -6,13 +6,13 @@ A reference with a registry host, a namespace or a digest may be pulled. A bare,
 
 from dataclasses import dataclass, field
 
-from anyio import to_thread
 from pywhales import ClientNotFoundError, DockerClient
 from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException
 
 from app.config import get_settings
 from app.core.logging import logger
+from app.services.docker_capacity import run_docker
 from app.services.guest_admission import GuestStartPreflightError
 
 
@@ -62,7 +62,7 @@ async def ensure_guest_image(client: DockerClient, image: str) -> None:
     become a generic preflight error whose reason is logged here, since callers report only its code.
     """
     try:
-        await to_thread.run_sync(_settle_image, client, image)
+        await run_docker(_settle_image, client, image)
     except GuestImageUnavailableError as exc:
         logger.warning("Guest image {} is unavailable: {}", image, exc)
         raise

@@ -2048,12 +2048,19 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_
 -- Serves the NOT EXISTS delivered-row probes of claim_head, claim_ordinary_head and pending_dispatch_page.
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_lane
     ON gateway_messages (agent_id, conversation_id) WHERE status = 'delivered'$ddl$);
+-- Serves the delivered_dispatch_page keyset walk, so a page reads bound delivered rows instead of every reply binding.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_order
+    ON gateway_messages (created_at, id) WHERE status = 'delivered' AND reply_binding_id IS NOT NULL$ddl$);
 -- Serves the pending_dispatch_page keyset walk, which stops after one page of lane heads.
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_order
     ON gateway_messages (created_at, id) WHERE status = 'pending'$ddl$);
 -- Serves the newest-first agent listing of every status (gateway_message_dao.list_recent).
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_agent_created
     ON gateway_messages (agent_id, created_at DESC NULLS LAST)$ddl$);
+-- Serves gateway_message_dao.reclaim_completed_before. Reclaiming clears result, so a reclaimed row leaves the index
+-- and an idle batch reads only completed rows still inside the window or kept for a pending relay.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_completed_at
+    ON gateway_messages (completed_at) WHERE status = 'completed' AND result IS NOT NULL$ddl$);
 
 -- Personal WhatsApp burst batching. A header is keyed by its gateway anchor and is removed ONLY with that gateway
 -- (or its agent): its other ownership columns are retained logical references, never cascades, so a session,

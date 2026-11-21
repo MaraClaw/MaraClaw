@@ -68,6 +68,36 @@ async def test_recovery_advances_bounded_keyset_pages_then_wraps(monkeypatch: py
     assert ambient == [None, None, None]
 
 
+async def test_page_without_heads_is_a_successful_scan_that_keeps_its_cursor(
+    pacing: Pacing, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a pending page that scanned only queued rows: no head to wake, but a cursor past the rows it read.
+    agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
+    head = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="head")
+    scanned = (datetime(2026, 1, 1, tzinfo=UTC), uuid4())
+    page = AsyncMock(side_effect=[([], scanned), ([head], None)])
+    monkeypatch.setattr(module.gateway_message_dao, "pending_dispatch_page", page)
+    monkeypatch.setattr(module.agent_dao, "get_many", AsyncMock(return_value=[agent]))
+    wake = Mock()
+    monkeypatch.setattr(module, "wake_shared_lane", wake)
+    warning = Mock()
+    monkeypatch.setattr(module.logger, "warning", warning)
+    task = asyncio.create_task(module.OpenClawDispatchReconciler().run())
+    try:
+        # When the loop runs two ticks.
+        assert await asyncio.wait_for(pacing.entered.get(), 1) == 1.0
+        pacing.go.put_nowait(None)
+        assert await asyncio.wait_for(pacing.entered.get(), 1) == 1.0
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    # Then the empty page is no failed scan, and the next tick continues after its cursor instead of wrapping.
+    warning.assert_not_called()
+    assert [call.kwargs["after"] for call in page.await_args_list] == [None, scanned]
+    wake.assert_called_once_with(agent, head.id)
+
+
 async def test_deleted_agent_is_skipped_without_blocking_other_heads(monkeypatch: pytest.MonkeyPatch) -> None:
     kept = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
     missing = GatewayMessageRecord(id=uuid4(), agent_id=uuid4(), content="gone")

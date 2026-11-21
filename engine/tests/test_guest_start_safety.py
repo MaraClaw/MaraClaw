@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import builtins
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Unpack
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import anyio
+import anyio.lowlevel
 import pytest
+from pywhales import ClientNotFoundError
 from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException, NoSuchContainer
 
@@ -17,7 +21,7 @@ from app.core.domain.agents import AgentStatus
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.records.agent import AgentRecord
-from app.services import agent_manager as module, agent_materialize, guest_admission as admission
+from app.services import agent_manager as module, agent_materialize, guest_admission as admission, guest_readiness
 from app.services.agent_manager import AgentManager
 from app.services.agent_start_store import start_store
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
@@ -43,6 +47,16 @@ class Docker:
         self.events: list[str] = []
         self.updates: list[tuple[str, dict[str, object]]] = []
         self.update_failure: DockerException | None = None
+        self.system = self
+        self.logging_driver: str | None = "json-file"
+        self.info_failure: Exception | None = None
+        self.infos = 0
+
+    def info(self) -> SimpleNamespace:
+        self.infos += 1
+        if self.info_failure is not None:
+            raise self.info_failure
+        return SimpleNamespace(logging_driver=self.logging_driver)
 
     def exists(self, _reference: str) -> bool:
         if self.exists_failure is not None:
@@ -121,6 +135,23 @@ class Docker:
         if self.failures:
             raise DockerException(["docker", "run"], 125, stderr=self.failures.pop(0))
         return guest
+
+
+class BlockedProbe:
+    """A readiness probe whose lane thread blocks on a threading.Event and wakes the loop once it is blocked."""
+
+    def __init__(self) -> None:
+        self.entered = anyio.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+        self._token = anyio.lowlevel.current_token()
+
+    def __call__(self, _client: object, _reference: str, _timeout: float, _child: object) -> bool:
+        anyio.from_thread.run_sync(self.entered.set, token=self._token)
+        try:
+            return self.release.wait(10)
+        finally:
+            self.finished.set()
 
 
 @pytest.fixture
@@ -270,6 +301,63 @@ async def test_new_guest_gets_limits_and_preferred_port(env):
     assert docker.listings == []
 
 
+@pytest.mark.parametrize("driver", ["json-file", "local"])
+async def test_new_guest_logs_are_bounded_under_a_size_rotating_driver(env, driver):
+    # Given a daemon whose default logging driver rotates by size.
+    manager, docker, agent = env
+    docker.logging_driver = driver
+    # When the guest is created.
+    await manager.replace_container(agent)
+    # Then Docker gets the default size and file bound and no explicit driver, so the daemon default still applies.
+    run = docker.runs[0]
+    assert run["log_options"] == ["max-size=10m", "max-file=3"]
+    assert "log_driver" not in run
+
+
+async def test_new_guest_log_bound_follows_the_settings(env, monkeypatch):
+    # Given an operator who changed the guest log bound.
+    manager, docker, agent = env
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_LOG_MAX_SIZE", "50m")
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_LOG_MAX_FILE", 5)
+    # When the guest is created.
+    await manager.replace_container(agent)
+    # Then Docker gets the configured bound.
+    assert docker.runs[0]["log_options"] == ["max-size=50m", "max-file=5"]
+
+
+@pytest.mark.parametrize("driver", ["journald", "awslogs", "syslog", "none", None])
+async def test_new_guest_gets_no_log_options_under_any_other_driver(env, driver):
+    # Given a daemon whose default driver rejects max-size, or reports no driver at all.
+    manager, docker, agent = env
+    docker.logging_driver = driver
+    # When the guest is created.
+    result = await manager.replace_container(agent)
+    # Then it still starts, and Docker gets neither log options nor a driver.
+    assert result == agent.container_id
+    assert "log_options" not in docker.runs[0]
+    assert "log_driver" not in docker.runs[0]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DockerException(["docker", "system", "info"], 1, stderr=b"daemon unreachable"),
+        ParsingError("Malformed system info"),
+        ClientNotFoundError("docker"),
+    ],
+    ids=["docker-error", "malformed-info", "no-cli"],
+)
+async def test_new_guest_starts_without_log_options_when_the_daemon_driver_is_unknown(env, failure):
+    # Given a daemon whose driver cannot be read.
+    manager, docker, agent = env
+    docker.info_failure = failure
+    # When the guest is created.
+    result = await manager.replace_container(agent)
+    # Then the start is not failed over logging, and no size option is guessed.
+    assert result == agent.container_id
+    assert "log_options" not in docker.runs[0]
+
+
 @pytest.mark.parametrize(
     ("reference", "present", "failure", "pulls", "replaced"),
     [
@@ -415,6 +503,66 @@ async def test_cleanup_ownership_refusal_after_replacement_clears_stale_runtime(
     assert (agent.status, agent.container_id, agent.container_port) == ("error", None, None)
     assert docker.removed == ["old"]
     assert len(docker.runs) == 1
+
+
+async def test_guest_docker_calls_proceed_while_default_worker_threads_are_exhausted(env, monkeypatch):
+    # Given anyio's default limiter has one token, held by a worker thread blocked on a threading.Event.
+    manager, docker, agent = env
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    entered = anyio.Event()
+    release = threading.Event()
+
+    def hold() -> bool:
+        anyio.from_thread.run_sync(entered.set)
+        return release.wait(10)
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", lambda *_args: True)
+    monkeypatch.setattr(guest_readiness, "READY_INTERVAL_SECONDS", 0)
+    tokens = limiter.total_tokens
+    limiter.total_tokens = 1
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(anyio.to_thread.run_sync, hold)
+                await entered.wait()
+                # When readiness, Stop and removal make their Docker calls.
+                ready = await guest_readiness.guest_ready(docker, "old")
+                stopped = await manager.stop_container(agent)
+                removed = await manager.remove_container(agent)
+                release.set()
+                # Then each completed on the Docker lane without waiting for a default worker thread.
+                assert (ready, stopped, removed) == (True, True, True)
+                assert docker.removed == ["old"]
+    finally:
+        release.set()
+        limiter.total_tokens = tokens
+
+
+async def test_cancelled_start_returns_while_its_readiness_probe_is_still_blocked(env, monkeypatch):
+    # Given Start reuses the running guest, and its readiness probe blocks on a threading.Event in a lane thread.
+    manager, docker, agent = env
+    probe = BlockedProbe()
+    returned: list[bool] = []
+
+    async def start():
+        try:
+            _ = await manager.start_container(agent)
+        finally:
+            returned.append(probe.finished.is_set())
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(start)
+                await probe.entered.wait()
+                # When the start is cancelled while the probe is still blocked.
+                group.cancel_scope.cancel()
+    finally:
+        probe.release.set()
+    # Then Start gave control back before the probe's thread returned, and the guest was left running.
+    assert returned == [False]
+    assert docker.guests["old"].state.status == "running"
 
 
 def mirror_active(

@@ -15,6 +15,7 @@ from app.services.sandbox.config import SandboxConfig, SandboxType
 # Retention settings stop at 100 years, which keeps ``now - timedelta(days=...)`` far from datetime overflow.
 MAX_RETENTION_DAYS: Final = 36500
 MIN_TRIGGER_EXECUTION_RETENTION_DAYS: Final = 7
+MIN_GATEWAY_MESSAGE_RETENTION_DAYS: Final = 7
 # A container stop sends SIGTERM, waits its stop timeout, then SIGKILLs. Fargate allows a stopTimeout of at most 120 s,
 # and the stop timeout must cover the uvicorn window, the cleanup budget and this margin for interpreter exit.
 FARGATE_MAX_STOP_TIMEOUT_SECONDS: Final = 120
@@ -135,6 +136,22 @@ class Settings(BaseSettings):
             )
         return value
 
+    # Days to keep the content and result of completed gateway_messages, counted from completed_at; 0 keeps them
+    # forever. A reclaimed row keeps its id, agent, reply binding and model ref, so delayed replies still classify.
+    GATEWAY_MESSAGE_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+
+    @field_validator("GATEWAY_MESSAGE_RETENTION_DAYS")
+    @classmethod
+    def validate_gateway_message_retention(cls, value: int) -> int:
+        # Agent-to-agent traffic is recorded only in gateway_messages, and the agent's gateway history shows it;
+        # a shorter window blanks exchanges while their conversations are still going.
+        if 0 < value < MIN_GATEWAY_MESSAGE_RETENTION_DAYS:
+            raise ValueError(
+                f"GATEWAY_MESSAGE_RETENTION_DAYS must be 0 (keep everything) or at least "
+                f"{MIN_GATEWAY_MESSAGE_RETENTION_DAYS}: a shorter window blanks gateway history still in use"
+            )
+        return value
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_KEY_PREFIX: str = "mrc"
@@ -237,6 +254,10 @@ class Settings(BaseSettings):
     OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)
     OPENCLAW_GUEST_PIDS_LIMIT: int = Field(default=512, gt=0)
     OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES: int = Field(default=0, ge=0)
+    # Log bound of newly created guests, passed only when the daemon's default logging driver is json-file or local.
+    # Running and resumed guests keep the options they were created with.
+    OPENCLAW_GUEST_LOG_MAX_SIZE: str = Field(default="10m", pattern=r"^[1-9][0-9]*[kKmMgG]?$")
+    OPENCLAW_GUEST_LOG_MAX_FILE: int = Field(default=3, ge=1, le=100)
     # Deadline per Docker CLI launch of the guest-management client; 0 leaves launches unbounded.
     OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS: float = Field(default=120.0, ge=0, le=3600, allow_inf_nan=False)
     # Guest image pulls (ordinary starts and upgrades) get this deadline instead of the per-launch one.

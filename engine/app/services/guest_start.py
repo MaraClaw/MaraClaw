@@ -7,7 +7,6 @@ from functools import partial
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from anyio import to_thread
 from pywhales import ClientNotFoundError
 from pywhales.exceptions import DockerException
 
@@ -18,6 +17,7 @@ from app.records.agent import AgentRecord
 from app.services.agent_mcp_sync import restore_existing_guest
 from app.services.agent_start_store import start_store
 from app.services.agent_workspace_quota import layer_caused_block, remeasure_after_recreation
+from app.services.docker_capacity import run_docker
 from app.services.guest_admission import (
     GuestAdmissionError,
     GuestStartPreflightError,
@@ -40,7 +40,7 @@ settings = get_settings()
 async def _apply_limits(client: DockerClient, agent: AgentRecord, reference: str, limits: GuestLimits) -> None:
     """Bring a stopped guest's limits to the target before it starts; memory and swap must move together."""
     try:
-        await to_thread.run_sync(
+        await run_docker(
             partial(
                 client.container.update,
                 reference,
@@ -60,7 +60,7 @@ async def _quiesce(client: DockerClient, agent: AgentRecord, reference: str, *, 
     guest_resolutions.drop(agent.id)
     if created:
         # A new writer that will not be published is quiesced; its durable operation retains discovery ownership.
-        await to_thread.run_sync(client.container.stop, reference)
+        await run_docker(client.container.stop, reference)
 
 
 async def _await_ready(client: DockerClient, agent: AgentRecord, *, created: bool) -> str:
@@ -97,13 +97,13 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
         agent.last_active_at = datetime.now(UTC)
         return None
     try:
-        guests = await to_thread.run_sync(owned_guest_containers, client, agent)
+        guests = await run_docker(owned_guest_containers, client, agent, abandon_on_cancel=True)
         if len(guests) > 1:
             raise GuestStartPreflightError("Multiple owned guests require operator reconciliation")
         created = not guests
         if guests:
             guest = guests[0]
-            inspected = await to_thread.run_sync(inspect_guest_container, client, guest.id)
+            inspected = await run_docker(inspect_guest_container, client, guest.id, abandon_on_cancel=True)
             if any(mount.destination == "/home/node/.openclaw" for mount in inspected.mounts or []):
                 raise GuestStartPreflightError(
                     "Guest state mount masks image skills; recreate the guest through the OpenClaw update workflow",
@@ -166,7 +166,7 @@ async def start_guest(manager: AgentManager, agent: AgentRecord) -> str | None:
                     raise GuestStartStoppedError("cancelled")
                 if resume:
                     guest_resolutions.drop(agent.id)
-                    await to_thread.run_sync(client.container.start, guest.id)
+                    await run_docker(client.container.start, guest.id)
         else:
             reference = await manager.replace_container(agent, create_only=True, operation_id=start_operation_id.get())
             if reference is None:
