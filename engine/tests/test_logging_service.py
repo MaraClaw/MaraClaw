@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 import threading
 from collections.abc import Iterator
-from typing import override
+from typing import Any, override
 
 import httpx
 import pytest
@@ -22,7 +23,7 @@ from app.core.logging import (
     trace_id_var,
 )
 from app.core.logging.levels import DEBUG, INFO
-from app.core.logging.service import LoggingService
+from app.core.logging.service import DROP_REPORT_INTERVAL, LoggingService
 from app.core.middleware import TraceIdMiddleware
 
 
@@ -167,6 +168,162 @@ def test_queue_overflow_is_dropped() -> None:
     finally:
         release.set()
         service.stop()
+
+
+NOTICE_LOGGER = "app.core.logging"
+
+
+def _emit(service: LoggingService) -> None:
+    service.emit(INFO, "line", (), {}, name="t", depth=1, exc_info=None, extra=None, lineno=1)
+
+
+def _dropped_in(payload: dict[str, Any]) -> int:
+    """The count a drop notice reports; zero for an ordinary record."""
+    return int(payload["extra"]["dropped"]) if payload["logger"] == NOTICE_LOGGER else 0
+
+
+class GatedSink:
+    """JSON sink whose first write parks the writer thread until ``release`` is set."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.notice_seen = threading.Event()
+        self.writers: set[str] = set()
+        self.payloads: list[dict[str, Any]] = []
+
+    def write(self, chunk: str) -> None:
+        payload = json.loads(chunk)
+        self.writers.add(threading.current_thread().name)
+        self.payloads.append(payload)
+        if payload["logger"] == NOTICE_LOGGER:
+            self.notice_seen.set()
+        self.started.set()
+        _ = self.release.wait(timeout=5)
+
+    @property
+    def reported(self) -> int:
+        return sum(_dropped_in(payload) for payload in self.payloads)
+
+    @property
+    def written(self) -> int:
+        return sum(1 for payload in self.payloads if payload["logger"] != NOTICE_LOGGER)
+
+
+def _parked_service(sink: GatedSink, queue_size: int) -> LoggingService:
+    """A started service whose writer holds one record inside the sink, so the queue only fills."""
+    service = LoggingService(level=INFO, fmt="json", enqueue=True, queue_size=queue_size, color=False, sink=sink.write)
+    service.start()
+    _emit(service)
+    assert sink.started.wait(timeout=5)
+    return service
+
+
+def test_concurrent_overflow_counts_every_rejected_record_exactly_once() -> None:
+    # Given a writer parked in its sink and a queue that holds four records.
+    sink = GatedSink()
+    service = _parked_service(sink, queue_size=4)
+    producers, per_producer = 8, 500
+    start = threading.Barrier(producers)
+
+    def produce() -> None:
+        _ = start.wait(timeout=5)
+        for _ in range(per_producer):
+            _emit(service)
+
+    threads = [threading.Thread(target=produce) for _ in range(producers)]
+
+    # When producers race on the full queue with the interpreter switching threads as often as it can.
+    switch_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+    finally:
+        sys.setswitchinterval(switch_interval)
+    sink.release.set()
+    service.stop()
+
+    # Then no producer blocked, and each record is either written once or counted as dropped once.
+    assert not any(thread.is_alive() for thread in threads)
+    assert sink.reported == producers * per_producer - 4
+    assert sink.written + sink.reported == 1 + producers * per_producer
+
+
+def test_drop_notice_arrives_within_the_report_interval_while_the_queue_never_empties() -> None:
+    # Given a sink that queues two records for every one it writes, so the queue stays full and one record drops per write.
+    done = threading.Event()
+    ordinary = 0
+    emitted = 1
+    reported = 0
+    first_notice_after: int | None = None
+
+    def sink(chunk: str) -> None:
+        nonlocal ordinary, emitted, reported, first_notice_after
+        payload = json.loads(chunk)
+        if payload["logger"] == NOTICE_LOGGER:
+            reported += _dropped_in(payload)
+            if first_notice_after is None:
+                first_notice_after = ordinary
+            done.set()
+            return
+        ordinary += 1
+        if done.is_set() or ordinary > 10 * DROP_REPORT_INTERVAL:
+            done.set()
+            return
+        for _ in range(2):
+            emitted += 1
+            _emit(service)
+
+    service = LoggingService(level=INFO, fmt="json", enqueue=True, queue_size=4, color=False, sink=sink)
+    service.start()
+
+    # When one record starts the cycle and the writer reports a drop notice.
+    _emit(service)
+    assert done.wait(timeout=10)
+    service.stop()
+
+    # Then the notice came within one report interval of written records, and the books still balance.
+    assert first_notice_after is not None
+    assert first_notice_after <= DROP_REPORT_INTERVAL
+    assert ordinary + reported == emitted
+
+
+def test_stop_with_a_full_queue_reports_pending_drops_and_never_drains_on_the_caller() -> None:
+    # Given a full queue behind a parked writer, with eight records already rejected.
+    sink = GatedSink()
+    service = _parked_service(sink, queue_size=2)
+    for _ in range(10):
+        _emit(service)
+
+    # When stop gives up waiting for the parked writer, and the writer is then released.
+    service.stop(timeout=0.05)
+    sink.release.set()
+
+    # Then the writer drains the queue and reports all eight drops; the caller thread wrote nothing.
+    assert sink.notice_seen.wait(timeout=5)
+    assert threading.current_thread().name not in sink.writers
+    assert sink.written == 3
+    assert sink.reported == 8
+
+
+def test_flush_returns_only_after_the_pending_drops_are_reported() -> None:
+    # Given three rejected records behind a parked writer with two more queued.
+    sink = GatedSink()
+    service = _parked_service(sink, queue_size=2)
+    for _ in range(5):
+        _emit(service)
+
+    # When the writer is released and the caller flushes.
+    sink.release.set()
+    service.flush(timeout=5)
+
+    # Then every accepted record is written and the notice has already counted the three drops.
+    assert sink.written == 3
+    assert sink.reported == 3
+    service.stop()
 
 
 def test_sandbox_config_import_does_not_cycle() -> None:
