@@ -15,6 +15,7 @@ from app.services.sandbox.config import SandboxConfig, SandboxType
 # Retention settings stop at 100 years, which keeps ``now - timedelta(days=...)`` far from datetime overflow.
 MAX_RETENTION_DAYS: Final = 36500
 MIN_TRIGGER_EXECUTION_RETENTION_DAYS: Final = 7
+MIN_GATEWAY_MESSAGE_RETENTION_DAYS: Final = 7
 # A container stop sends SIGTERM, waits its stop timeout, then SIGKILLs. Fargate allows a stopTimeout of at most 120 s,
 # and the stop timeout must cover the uvicorn window, the cleanup budget and this margin for interpreter exit.
 FARGATE_MAX_STOP_TIMEOUT_SECONDS: Final = 120
@@ -132,6 +133,22 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"TRIGGER_EXECUTION_RETENTION_DAYS must be 0 (keep everything) or at least "
                 f"{MIN_TRIGGER_EXECUTION_RETENTION_DAYS}: a shorter window lets a late webhook redelivery run again"
+            )
+        return value
+
+    # Days to keep the content and result of completed gateway_messages, counted from completed_at; 0 keeps them
+    # forever. A reclaimed row keeps its id, agent, reply binding and model ref, so delayed replies still classify.
+    GATEWAY_MESSAGE_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+
+    @field_validator("GATEWAY_MESSAGE_RETENTION_DAYS")
+    @classmethod
+    def validate_gateway_message_retention(cls, value: int) -> int:
+        # Agent-to-agent traffic is recorded only in gateway_messages, and the agent's gateway history shows it;
+        # a shorter window blanks exchanges while their conversations are still going.
+        if 0 < value < MIN_GATEWAY_MESSAGE_RETENTION_DAYS:
+            raise ValueError(
+                f"GATEWAY_MESSAGE_RETENTION_DAYS must be 0 (keep everything) or at least "
+                f"{MIN_GATEWAY_MESSAGE_RETENTION_DAYS}: a shorter window blanks gateway history still in use"
             )
         return value
 

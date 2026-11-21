@@ -253,5 +253,35 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
             )
             return [GatewayMessageRecord.from_row(row) for row in rows]
 
+    async def reclaim_completed_before(self, *, completed_before: datetime, limit: int) -> int:
+        """Clear the content and result of up to ``limit`` messages completed before the cutoff, oldest first.
+
+        The row itself stays, with its deliveries, so ``openclaw_reply_dao.is_native_run`` and ``model_refs`` still
+        read its id, agent, reply binding and model ref. A message with a delivery neither delivered nor terminal
+        keeps its result for the relay. Every writer that completes a message sets a result, so ``result IS NOT NULL``
+        marks a payload not yet reclaimed; the predicate is written exactly like ``ix_gateway_messages_completed_at``,
+        which a reclaimed row leaves, so an idle batch reads only rows still inside the window or kept for a relay.
+        Rows another transaction holds are skipped, never waited on. The update goes by ``ctid`` (a TID scan), which
+        the statement's own row locks keep in place.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH due AS (
+                    SELECT m.ctid FROM gateway_messages AS m
+                    WHERE m.status = 'completed' AND m.result IS NOT NULL AND m.completed_at < %(cutoff)s
+                      AND NOT EXISTS (
+                          SELECT 1 FROM gateway_report_deliveries AS d
+                          WHERE d.message_id = m.id AND d.delivered_at IS NULL AND d.terminal_at IS NULL
+                      )
+                    ORDER BY m.completed_at LIMIT %(limit)s FOR UPDATE OF m SKIP LOCKED
+                ) UPDATE gateway_messages SET content = '', result = NULL
+                  WHERE ctid = ANY(ARRAY(SELECT ctid FROM due))
+                  RETURNING id
+                """,
+                {"cutoff": completed_before, "limit": limit},
+            )
+            return len(rows)
+
 
 gateway_message_dao = GatewayMessageDAO()

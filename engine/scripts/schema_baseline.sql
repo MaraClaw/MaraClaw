@@ -2054,6 +2054,10 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_
 -- Serves the newest-first agent listing of every status (gateway_message_dao.list_recent).
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_agent_created
     ON gateway_messages (agent_id, created_at DESC NULLS LAST)$ddl$);
+-- Serves gateway_message_dao.reclaim_completed_before. Reclaiming clears result, so a reclaimed row leaves the index
+-- and an idle batch reads only completed rows still inside the window or kept for a pending relay.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_completed_at
+    ON gateway_messages (completed_at) WHERE status = 'completed' AND result IS NOT NULL$ddl$);
 
 -- Personal WhatsApp burst batching. A header is keyed by its gateway anchor and is removed ONLY with that gateway
 -- (or its agent): its other ownership columns are retained logical references, never cascades, so a session,
