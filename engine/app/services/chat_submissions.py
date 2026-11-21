@@ -21,7 +21,12 @@ from app.services.llm.types import OpenAIMessage
 from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message, prepare_openclaw_message
 from app.services.quota_guard import charge_conversation_quota, check_agent_expired
-from app.services.shared_chat import is_shared_session, require_writable_session
+from app.services.shared_chat import (
+    SessionNotWritableError,
+    is_canonical,
+    read_only_refusal,
+    require_writable_session,
+)
 from app.services.storage_runtime.agent_file_refs import is_agent_file
 from app.services.storage_runtime.facade import get_storage_backend
 
@@ -60,12 +65,14 @@ class InvalidChatAttachmentsError(Exception):
 class AcceptedSubmission:
     message: ChatMessageRecord
     replayed: bool
+    # The session is its owner's canonical conversation, which the owner may have open in several tabs.
+    canonical: bool
 
 
-def _replay(existing: ChatMessageRecord, candidate: ChatMessageRecord) -> AcceptedSubmission:
+def _replay(existing: ChatMessageRecord, candidate: ChatMessageRecord, *, canonical: bool) -> AcceptedSubmission:
     if existing.submission_fingerprint != candidate.submission_fingerprint:
         raise SubmissionConflictError
-    return AcceptedSubmission(existing, replayed=True)
+    return AcceptedSubmission(existing, replayed=True, canonical=canonical)
 
 
 async def accept_submission(
@@ -95,49 +102,53 @@ async def accept_submission(
             if not await is_agent_file(storage, agent.id, ref.path):
                 attachments_available = False
                 break
-    async with connection_ctx():
-        session = await chat_session_dao.lock_for_agent(session_id, agent.id)
-        if session is None:
-            raise HTTPException(403, "Session unavailable")
-        if not can_access_chat_session(user, agent, session):
-            raise HTTPException(403, "Not authorized for this session")
-        shared = is_shared_session(session)
-        existing = await chat_message_dao.find_submission(candidate)
-        if existing is not None:
-            return _replay(existing, candidate)
+    try:
+        async with connection_ctx():
+            session = await chat_session_dao.lock_for_agent(session_id, agent.id)
+            if session is None:
+                raise HTTPException(403, "Session unavailable")
+            if not can_access_chat_session(user, agent, session):
+                raise HTTPException(403, "Not authorized for this session")
+            canonical = is_canonical(session)
+            existing = await chat_message_dao.find_submission(candidate)
+            if existing is not None:
+                return _replay(existing, candidate, canonical=canonical)
 
-        require_writable_session(session)
-        if not attachments_available:
-            raise InvalidChatAttachmentsError
-        await check_agent_expired(agent.id, mark=False)
-        current_history = history
-        if shared:
-            current_history = convert_chat_messages_to_llm_format(
-                list(
-                    await chat_message_dao.list_recent(
-                        agent_id=agent.id, conversation_id=str(session.id), limit=agent.context_window_size or 100
+            require_writable_session(session, user.id)
+            if not attachments_available:
+                raise InvalidChatAttachmentsError
+            await check_agent_expired(agent.id, mark=False)
+            current_history = history
+            # Another tab of the owner may have added turns this socket's history has not seen.
+            if canonical:
+                current_history = convert_chat_messages_to_llm_format(
+                    list(
+                        await chat_message_dao.list_recent(
+                            agent_id=agent.id, conversation_id=str(session.id), limit=agent.context_window_size or 100
+                        )
                     )
                 )
+            prepared = await prepare_openclaw_message(agent=agent, content=submission.content, history=current_history)
+            reserved = await chat_message_dao.reserve_submission(candidate)
+            if reserved is None:
+                existing = await chat_message_dao.find_submission(candidate)
+                if existing is None:
+                    raise SubmissionConflictError
+                return _replay(existing, candidate, canonical=canonical)
+            await charge_conversation_quota(user)
+            await ensure_workspace_within_quota(agent)
+            await charge_agent_daily_message(agent)
+            title = (submission.display_content or submission.content).replace("[图片] ", "📷 ")
+            title = title.replace("[image_data:", "").strip()
+            if submission.file_name and not title:
+                title = f"📎 {submission.file_name}"
+            updates: dict[str, object] = {"last_message_at": datetime.now(UTC)}
+            if not current_history and session.title.startswith("Session "):
+                updates["title"] = title[:40] if title else submission.content[:40]
+            _ = await chat_session_dao.update(db_obj=session, obj_in=updates)
+            _ = await enqueue_prepared_openclaw_message(
+                prepared, sender_user_id=user.id, conversation_id=str(session_id), deduplicate=False
             )
-        prepared = await prepare_openclaw_message(agent=agent, content=submission.content, history=current_history)
-        reserved = await chat_message_dao.reserve_submission(candidate)
-        if reserved is None:
-            existing = await chat_message_dao.find_submission(candidate)
-            if existing is None:
-                raise SubmissionConflictError
-            return _replay(existing, candidate)
-        await charge_conversation_quota(user)
-        await ensure_workspace_within_quota(agent)
-        await charge_agent_daily_message(agent)
-        title = (submission.display_content or submission.content).replace("[图片] ", "📷 ")
-        title = title.replace("[image_data:", "").strip()
-        if submission.file_name and not title:
-            title = f"📎 {submission.file_name}"
-        updates: dict[str, object] = {"last_message_at": datetime.now(UTC)}
-        if not current_history and session.title.startswith("Session "):
-            updates["title"] = title[:40] if title else submission.content[:40]
-        _ = await chat_session_dao.update(db_obj=session, obj_in=updates)
-        _ = await enqueue_prepared_openclaw_message(
-            prepared, sender_user_id=user.id, conversation_id=str(session_id), deduplicate=False
-        )
-    return AcceptedSubmission(reserved, replayed=False)
+    except SessionNotWritableError as refused:
+        raise await read_only_refusal(refused) from None
+    return AcceptedSubmission(reserved, replayed=False, canonical=canonical)

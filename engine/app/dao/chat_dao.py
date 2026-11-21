@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, ClassVar, Literal, final
@@ -159,44 +159,32 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             )
             return ChatSessionRecord.from_row(row) if row is not None else None
 
-    async def find_best_web_session(
+    async def insert_primary_platform(
         self,
-        *,
         agent_id: UUID,
         user_id: UUID,
-    ) -> ChatSessionRecord | None:
-        """Pick the most relevant non-group web session for promotion to primary."""
+        *,
+        guard: Callable[[], None] | None = None,
+    ) -> ChatSessionRecord:
+        """Create the (agent, user) canonical web session when absent and return it.
+
+        The conflict target is the partial unique index `uq_chat_sessions_primary_platform`, so concurrent callers for
+        one pair converge on one row: the loser waits for the winner's transaction, then reads its row.
+        """
         async with self.session() as db:
-            row = await db.fetchone(
-                f"""
-                SELECT {self._select_list("cs")}
-                FROM chat_sessions cs
-                LEFT JOIN (
-                    SELECT conversation_id,
-                           SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) AS user_msg_count
-                    FROM chat_messages
-                    WHERE conversation_id IN (
-                        SELECT id::text FROM chat_sessions
-                        WHERE agent_id = %(agent_id)s
-                          AND user_id = %(user_id)s
-                          AND source_channel = 'web'
-                          AND is_group IS FALSE
-                    )
-                    GROUP BY conversation_id
-                ) umc ON umc.conversation_id = cs.id::text
-                WHERE cs.agent_id = %(agent_id)s
-                  AND cs.user_id = %(user_id)s
-                  AND cs.source_channel = 'web'
-                  AND cs.is_group IS FALSE
-                ORDER BY
-                  CASE WHEN COALESCE(umc.user_msg_count, 0) > 0 THEN 0 ELSE 1 END,
-                  cs.last_message_at DESC NULLS LAST,
-                  cs.created_at DESC
-                LIMIT 1
-                """,
-                {"agent_id": agent_id, "user_id": user_id},
+            if guard is not None:
+                guard()
+            await db.execute(
+                "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, is_primary, is_group) "
+                "VALUES (%(id)s, %(agent_id)s, %(user_id)s, 'Conversation', 'web', TRUE, FALSE) "
+                "ON CONFLICT (agent_id, user_id) WHERE is_primary = true AND source_channel = 'web' "
+                "AND is_group = false DO NOTHING",
+                {"id": uuid4(), "agent_id": agent_id, "user_id": user_id},
             )
-            return ChatSessionRecord.from_row(row) if row is not None else None
+            session = await self.get_primary_platform(agent_id=agent_id, user_id=user_id)
+        if session is None:
+            raise RuntimeError("Canonical session disappeared during creation")
+        return session
 
     async def list_for_user(
         self,

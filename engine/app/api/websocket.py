@@ -63,7 +63,12 @@ from app.services.realtime_runtime.router import (
     resolve_authorization_wait,
     resolve_send_timeout,
 )
-from app.services.shared_chat import is_shared_session, require_writable_session
+from app.services.shared_chat import (
+    SessionNotWritableError,
+    is_canonical,
+    read_only_refusal,
+    require_writable_session,
+)
 
 router = APIRouter(tags=["websocket"])
 
@@ -414,7 +419,7 @@ async def maybe_mark_session_read_for_active_viewer(
     except ValueError, TypeError:
         return False
     session = await chat_session_dao.get(sid)
-    if not session or is_shared_session(session):
+    if not session:
         return False
 
     if guard is not None:
@@ -690,8 +695,11 @@ class WebSocketChatHandler:
             session = await chat_session_dao.get_for_agent(self.binding.session_id, self.agent_id)
             if session is None:
                 raise HTTPException(403, "Session unavailable")
-            require_writable_session(session)
-            if is_shared_session(session):
+            try:
+                require_writable_session(session, self.user.id)
+            except SessionNotWritableError as refused:
+                raise await read_only_refusal(refused) from None
+            if is_canonical(session):
                 await self._load_history()
                 self.conversation = self._build_conversation_context()
             content = "Please begin the onboarding."
@@ -735,7 +743,7 @@ class WebSocketChatHandler:
                     session = await chat_session_dao.lock_for_agent(self.binding.session_id, self.agent_id)
                     if session is None:
                         raise HTTPException(403, "Session unavailable")
-                    require_writable_session(session)
+                    require_writable_session(session, self.user.id)
                     if not await try_begin_onboarding_greeting(self.agent_id, self.user.id):
                         await _send_chat_event(
                             self.websocket, {"type": ChatEventType.ONBOARDED, "agent_id": str(self.agent_id)}
@@ -751,6 +759,8 @@ class WebSocketChatHandler:
                     {"type": ChatEventType.TURN_REJECTED, "reason": "quota_exceeded", "content": exc.message},
                 )
                 continue
+            except SessionNotWritableError as refused:
+                raise await read_only_refusal(refused) from None
             except Exception as error:
                 report_exception(error, source="websocket", operation="onboarding-turn")
                 logger.exception("[WS] Turn transaction failed")

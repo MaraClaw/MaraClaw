@@ -154,7 +154,7 @@ async def test_malformed_frame_reports_error_and_next_submission_is_processed(
     message = ChatMessageRecord(
         id=uuid.uuid4(), agent_id=binding.agent_id, user_id=binding.user_id, role="user", content="hello"
     )
-    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True))
+    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True, canonical=False))
     monkeypatch.setattr(websocket, "accept_submission", accept)
     report = Mock()
     monkeypatch.setattr(websocket, "report_exception", report)
@@ -407,7 +407,7 @@ def accept_submissions(binding: chat_tickets.ChatTicketBinding, monkeypatch: pyt
     message = ChatMessageRecord(
         id=uuid.uuid4(), agent_id=binding.agent_id, user_id=binding.user_id, role="user", content="hello"
     )
-    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True))
+    accept = AsyncMock(return_value=AcceptedSubmission(message=message, replayed=True, canonical=False))
     monkeypatch.setattr(websocket, "accept_submission", accept)
     return accept
 

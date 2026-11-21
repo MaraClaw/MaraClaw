@@ -5,111 +5,81 @@ import anyio
 import pytest
 from fastapi import HTTPException
 
-from app.api import chat_sessions
 from app.core.domain.users import UserRole
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
-from app.services import chat_submissions, chat_tickets
-from app.services.chat_session_service import ensure_primary_platform_session
+from app.services import chat_submissions
 from app.services.chat_submissions import ChatSubmission
-from app.services.llm.types import OpenAIMessage
-from app.services.shared_chat import ensure_shared_session, shared_session_id
+from app.services.shared_chat import ensure_canonical_session, is_canonical, read_only_detail
 
 pytest_plugins = ("test_chat_submission_postgres",)
 
 
-async def test_concurrent_resolvers_keep_private_history_and_creator_provenance(receipt_db):
+async def test_concurrent_ensure_for_one_pair_queues_on_the_index_and_returns_one_row(receipt_db):
     db = receipt_db
-    results: list[ChatSessionRecord] = []
+    inserted, release = anyio.Event(), anyio.Event()
+    results: dict[str, ChatSessionRecord] = {}
 
-    async def resolve(connection):
-        async with transaction(connection):
-            results.append(await ensure_shared_session(db.agent.id))
+    async def first():
+        async with transaction(db.first):
+            results["first"] = await ensure_canonical_session(db.agent.id, db.user.id)
+            inserted.set()
+            await release.wait()
+
+    async def second():
+        async with transaction(db.second):
+            results["second"] = await ensure_canonical_session(db.agent.id, db.user.id)
 
     with anyio.fail_after(10):
         async with anyio.create_task_group() as tasks:
-            tasks.start_soon(resolve, db.first)
-            tasks.start_soon(resolve, db.second)
+            tasks.start_soon(first)
+            await inserted.wait()
+            tasks.start_soon(second)
+            while True:
+                blockers = await db.first.fetchone(
+                    "SELECT pg_blocking_pids(%(pid)s) AS blockers", {"pid": db.second.raw.info.backend_pid}
+                )
+                if blockers and blockers["blockers"]:
+                    break
+                await anyio.lowlevel.checkpoint()
+            release.set()
 
-    assert len(results) == 2
-    assert {row.id for row in results} == {shared_session_id(db.agent.id)}
-    assert all(row.user_id == db.agent.creator_id and row.is_primary for row in results)
+    assert results["first"].id == results["second"].id
+    assert results["first"].user_id == db.user.id
     async with transaction(db.first):
-        archived = await chat_session_dao.get(db.session_id)
-        rows = await db.first.fetchall("SELECT id FROM chat_sessions WHERE source_channel = 'shared'")
-    assert archived is not None
-    assert archived.source_channel == "web"
-    assert len(rows) == 1
-
-
-async def test_resume_default_ticket_and_both_lists_resolve_same_empty_session(receipt_db, monkeypatch):
-    db = receipt_db
-    monkeypatch.setattr(chat_sessions.agent_dao, "get", chat_session_agent_get(db.agent))
-    async with transaction(db.first):
-        shared = await ensure_primary_platform_session(db.agent.id, uuid4())
-        resumed = await chat_sessions.create_session(
-            db.agent.id, chat_sessions.CreateSessionIn(title="Ignored"), db.user
+        rows = await db.first.fetchall(
+            "SELECT id FROM chat_sessions WHERE agent_id = %(agent)s AND user_id = %(user)s "
+            "AND source_channel = 'web' AND is_primary AND NOT is_group",
+            {"agent": db.agent.id, "user": db.user.id},
         )
-        resolved = await chat_tickets.resolve_session(chat_tickets.ChatTicketRequest(agent_id=db.agent.id), db.user.id)
-        mine = await chat_sessions.list_sessions(db.agent.id, "mine", db.user)
-        all_sessions = await chat_sessions.list_sessions(db.agent.id, "all", db.user)
-
-    assert resumed.id == str(shared.id) == str(resolved)
-    assert resumed.source_channel == "shared"
-    assert resumed.is_primary
-    for rows in (mine, all_sessions):
-        canonical = [row for row in rows if row.id == str(shared.id)]
-        assert len(canonical) == 1
-        assert canonical[0].message_count == canonical[0].unread_count == 0
+    assert [row["id"] for row in rows] == [results["first"].id]
 
 
-def chat_session_agent_get(agent):
-    async def get(_agent_id):
-        return agent
-
-    return get
-
-
-async def test_shared_history_visible_to_other_human_without_global_read_marker(receipt_db):
+async def test_each_user_gets_a_private_canonical_row_and_repeat_calls_return_it(receipt_db):
     db = receipt_db
-    viewer = UserRecord(id=uuid4(), role=UserRole.MEMBER)
+    other = uuid4()
     async with transaction(db.first):
-        shared = await ensure_shared_session(db.agent.id)
-        await chat_message_dao.create(
-            obj_in={
-                "agent_id": db.agent.id,
-                "user_id": db.user.id,
-                "role": "user",
-                "content": "shared hello",
-                "conversation_id": str(shared.id),
-            }
+        await db.first.execute(
+            "INSERT INTO users (id, display_name, quota_message_limit) VALUES (%(id)s, 'Other human', 1)",
+            {"id": other},
+        )
+        mine = await ensure_canonical_session(db.agent.id, db.user.id)
+        theirs = await ensure_canonical_session(db.agent.id, other)
+        stored = await db.first.fetchall(
+            "SELECT id, user_id FROM chat_sessions WHERE agent_id = %(agent)s AND is_primary", {"agent": db.agent.id}
         )
 
-        messages = await chat_sessions.get_session_messages(db.agent.id, shared.id, 20, None, viewer)
-        stored = await chat_session_dao.get(shared.id)
-
-    assert [message["content"] for message in messages] == ["shared hello"]
-    assert stored is not None
-    assert stored.last_read_at_by_user is None
-
-
-async def test_shared_delete_forbidden_but_legacy_delete_preserved(receipt_db):
-    db = receipt_db
-    async with transaction(db.first):
-        shared = await ensure_shared_session(db.agent.id)
-    with pytest.raises(HTTPException) as rejection:
-        async with transaction(db.first):
-            await chat_sessions.delete_session(db.agent.id, shared.id, db.user)
-    assert rejection.value.status_code == 409
-    async with transaction(db.first):
-        await chat_sessions.delete_session(db.agent.id, db.session_id, db.user)
-        assert await chat_session_dao.get(shared.id) is not None
-        assert await chat_session_dao.get(db.session_id) is None
+    assert mine.id != theirs.id
+    assert (mine.user_id, theirs.user_id) == (db.user.id, other)
+    assert mine.id != db.session_id
+    assert all(is_canonical(row) and row.title == "Conversation" and not row.is_group for row in (mine, theirs))
+    assert {(row["id"], row["user_id"]) for row in stored} == {(mine.id, db.user.id), (theirs.id, other)}
 
 
-async def test_archive_exact_receipt_replays_but_new_turn_is_rejected(receipt_db):
+async def test_new_turn_on_a_read_only_session_is_rejected_after_the_exact_receipt_replays(receipt_db):
     db = receipt_db
     submission = ChatSubmission(client_submission_id=uuid4(), content="old accepted message")
     original = ChatMessageRecord(
@@ -127,10 +97,7 @@ async def test_archive_exact_receipt_replays_but_new_turn_is_rejected(receipt_db
         replay = await chat_submissions.accept_submission(
             submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
         )
-    assert replay.replayed
-    assert replay.message.id == original.id
-    with pytest.raises(HTTPException) as rejection:
-        async with transaction(db.first):
+        with pytest.raises(HTTPException) as rejection:
             await chat_submissions.accept_submission(
                 ChatSubmission(client_submission_id=uuid4(), content="new"),
                 user=db.user,
@@ -138,75 +105,19 @@ async def test_archive_exact_receipt_replays_but_new_turn_is_rejected(receipt_db
                 session_id=db.session_id,
                 history=[],
             )
+        canonical = await chat_session_dao.get_primary_platform(agent_id=db.agent.id, user_id=db.user.id)
+
+    assert replay.replayed
+    assert replay.message.id == original.id
+    assert canonical is not None
+    assert canonical.id != db.session_id
     assert rejection.value.status_code == 409
-    assert rejection.value.detail == {"reason": "session_archived", "session_id": str(shared_session_id(db.agent.id))}
+    assert rejection.value.detail == read_only_detail(canonical.id)
 
 
-async def test_second_human_uses_persisted_shared_context_not_socket_or_archive_history(receipt_db, monkeypatch):
-    db = receipt_db
-    other = UserRecord(id=uuid4(), quota_message_limit=1)
-    prepare = chat_submissions.prepare_openclaw_message
-    contexts: list[list[OpenAIMessage]] = []
-
-    async def capture(*, agent, content, history):
-        contexts.append(history)
-        return await prepare(agent=agent, content=content, history=history)
-
-    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", capture)
-    async with transaction(db.first):
-        await db.first.execute(
-            "INSERT INTO users (id, display_name, quota_message_limit) VALUES (%(id)s, 'Other human', 1)",
-            {"id": other.id},
-        )
-        await chat_message_dao.create(
-            obj_in={
-                "agent_id": db.agent.id,
-                "user_id": db.user.id,
-                "role": "user",
-                "content": "private history",
-                "conversation_id": str(db.session_id),
-            }
-        )
-        shared = await ensure_shared_session(db.agent.id)
-        await chat_submissions.accept_submission(
-            ChatSubmission(client_submission_id=uuid4(), content="first human"),
-            user=db.user,
-            agent=db.agent,
-            session_id=shared.id,
-            history=[{"role": "assistant", "content": "stale socket"}],
-        )
-    async with transaction(db.second):
-        await chat_tickets.authorized_session(
-            chat_tickets.ChatTicketBinding(
-                user_id=other.id,
-                tenant_id=uuid4(),
-                agent_id=db.agent.id,
-                session_id=shared.id,
-                auth_deadline=2_000_000_000,
-                auth_generation=0,
-            ),
-            other,
-            db.agent,
-        )
-        accepted = await chat_submissions.accept_submission(
-            ChatSubmission(client_submission_id=uuid4(), content="second human"),
-            user=other,
-            agent=db.agent,
-            session_id=shared.id,
-            history=[],
-        )
-        messages = await chat_sessions.get_session_messages(db.agent.id, shared.id, 20, None, other)
-        mine = await chat_sessions.list_sessions(db.agent.id, "mine", other)
-
-    assert contexts == [[], [{"role": "user", "content": "first human"}]]
-    assert accepted.message.user_id == other.id
-    assert [message["content"] for message in messages] == ["first human", "second human"]
-    assert [(row.message_count, row.unread_count) for row in mine] == [(2, 0)]
-
-
-async def test_archive_rejection_precedes_preparation_and_quota(receipt_db, monkeypatch):
-    prepare = AsyncMock(side_effect=AssertionError("Archive must not prepare"))
-    charge = AsyncMock(side_effect=AssertionError("Archive must not charge"))
+async def test_read_only_rejection_precedes_preparation_and_quota(receipt_db, monkeypatch):
+    prepare = AsyncMock(side_effect=AssertionError("A read-only session must not prepare"))
+    charge = AsyncMock(side_effect=AssertionError("A read-only session must not charge"))
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
     monkeypatch.setattr(chat_submissions, "charge_conversation_quota", charge)
 
@@ -223,3 +134,39 @@ async def test_archive_rejection_precedes_preparation_and_quota(receipt_db, monk
     assert rejected.value.status_code == 409
     prepare.assert_not_awaited()
     charge.assert_not_awaited()
+
+
+async def test_refusal_names_the_callers_canonical_session_created_on_its_own_connection(receipt_db):
+    db = receipt_db
+    viewer_id = uuid4()
+    async with transaction(db.first):
+        await db.first.execute(
+            "INSERT INTO users (id, display_name, quota_message_limit) VALUES (%(id)s, 'Company admin', 1)",
+            {"id": viewer_id},
+        )
+        owners = await ensure_canonical_session(db.agent.id, db.user.id)
+    viewer = UserRecord(id=viewer_id, role=UserRole.ORG_ADMIN)
+
+    await init_pool(conninfo=db.conninfo, min_size=1, max_size=2)
+    try:
+        with pytest.raises(HTTPException) as refused:
+            await chat_submissions.accept_submission(
+                ChatSubmission(client_submission_id=uuid4(), content="read only"),
+                user=viewer,
+                agent=db.agent,
+                session_id=owners.id,
+                history=[],
+            )
+    finally:
+        await close_pool()
+
+    async with transaction(db.second):
+        canonical = await chat_session_dao.get_primary_platform(agent_id=db.agent.id, user_id=viewer_id)
+        written = await db.second.fetchone(
+            "SELECT (SELECT count(*) FROM chat_messages) AS messages, (SELECT count(*) FROM gateway_messages) AS enqueued"
+        )
+    assert canonical is not None
+    assert canonical.id != owners.id
+    assert refused.value.status_code == 409
+    assert refused.value.detail == read_only_detail(canonical.id)
+    assert written == {"messages": 0, "enqueued": 0}
