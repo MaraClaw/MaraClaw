@@ -1,22 +1,11 @@
 from collections.abc import Callable
-from uuid import UUID, uuid5
+from uuid import UUID
 
 from fastapi import HTTPException
 
 from app.dao import agent_dao
 from app.dao.chat_dao import chat_session_dao
-from app.dao.shared_chat_dao import insert_shared_session
 from app.records.chat import ChatSessionRecord
-
-SHARED_CHAT_NAMESPACE = UUID("7ac3f6c5-693a-49c4-901d-4c1ca0f07ef8")
-
-
-def shared_session_id(agent_id: UUID) -> UUID:
-    return uuid5(SHARED_CHAT_NAMESPACE, f"agent:{agent_id}:shared-human:v1")
-
-
-def is_shared_session(session: ChatSessionRecord) -> bool:
-    return session.source_channel == "shared" and session.id == shared_session_id(session.agent_id)
 
 
 def is_canonical(session: ChatSessionRecord) -> bool:
@@ -38,16 +27,6 @@ async def ensure_canonical_session(
     session = await chat_session_dao.insert_primary_platform(agent_id, user_id, guard=guard)
     if session.agent_id != agent_id or session.user_id != user_id or not is_canonical(session):
         raise HTTPException(409, "Canonical session identity conflict")
-    return session
-
-
-async def ensure_shared_session(agent_id: UUID, *, guard: Callable[[], None] | None = None) -> ChatSessionRecord:
-    agent = await agent_dao.get(agent_id)
-    if agent is None:
-        raise HTTPException(404, "Agent not found")
-    session = await insert_shared_session(shared_session_id(agent_id), agent_id, agent.creator_id, guard=guard)
-    if session.agent_id != agent_id or not is_shared_session(session):
-        raise HTTPException(409, "Canonical shared session identity conflict")
     return session
 
 
