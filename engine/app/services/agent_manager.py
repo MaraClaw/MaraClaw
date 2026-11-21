@@ -428,7 +428,7 @@ class AgentManager:
         primary: LLMModelRecord | None,
         fallback: LLMModelRecord | None,
     ) -> str:
-        parts: list[str] = ["native-gateway-rpc-v1"]
+        parts: list[str] = ["native-gateway-rpc-v2"]
         for row in (primary, fallback):
             ref = guest_model_ref(row) or ""
             expires = getattr(row, "token_expires_at", None) if row is not None else None
@@ -568,6 +568,8 @@ class AgentManager:
                     "enabled": False,
                 },
             },
+            # Agents shared across users keep one private conversation per user: session tools see only their own.
+            "sessions": {"visibility": "self"},
         }
 
         return config
