@@ -23,6 +23,7 @@ from app.schemas.activity_responses import (
     AgentConversationResponse,
     ConversationMessageResponse,
 )
+from app.services.chat_session_access import can_access_chat_session
 
 router = APIRouter(tags=["activity"])
 
@@ -249,7 +250,7 @@ async def get_conversation_messages(
     current_user: UserRecord = Depends(get_current_user),
 ) -> list[ConversationMessageResponse]:
     """Get messages for a specific conversation."""
-    _ = await check_agent_access(current_user, agent_id)
+    agent, _ = await check_agent_access(current_user, agent_id)
 
     messages: list[ConversationMessageResponse] = []
 
@@ -272,8 +273,17 @@ async def get_conversation_messages(
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                 }
             )
-    elif conv_id.startswith("agent_") or len(conv_id) == 36:
-        rows = await chat_message_dao.list_for_session(conversation_id=conv_id, limit=limit)
+    elif len(conv_id) == 36:
+        try:
+            session_id = UUID(conv_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Session not found") from None
+        session = await chat_session_dao.get_for_agent_or_peer(session_id, agent_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not can_access_chat_session(current_user, agent, session):
+            raise HTTPException(status_code=403, detail="Not authorized to view this session")
+        rows = await chat_message_dao.list_for_session(conversation_id=str(session.id), limit=limit)
         name_cache: dict[str, str] = {}
         for m in rows:
             sender_name = "Unknown"
