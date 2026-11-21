@@ -219,6 +219,16 @@ additional swap allowance. CPU and PID limits are also passed on creation, and s
 CPU shares when the target has them. The global defaults are trial limits, not
 measured workload sizing.
 
+A new guest also gets a log bound, `OPENCLAW_GUEST_LOG_MAX_SIZE` (default `10m`) and
+`OPENCLAW_GUEST_LOG_MAX_FILE` (default `3`), because Docker's json-file driver never
+rotates. It is passed only when the daemon's default logging driver is `json-file` or
+`local` (read with `docker system info` inside the creation worker thread, per creation
+attempt); under any other driver, such as journald or awslogs, or when the driver cannot
+be read, no size options are set, since they make `docker run` fail. Resumed and running
+guests are never recreated to pick it up, so they keep the options they were created
+with, and sandbox containers stay unbounded because their tool output is read back from
+their logs.
+
 Limits also apply when a stopped guest resumes. For an `exited` or `created` guest the
 engine resolves the target, passes
 [aggregate admission](#optional-aggregate-memory-admission) for the target memory, and

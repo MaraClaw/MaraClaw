@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pywhales import ClientNotFoundError
 from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException, NoSuchContainer
 
@@ -43,6 +44,16 @@ class Docker:
         self.events: list[str] = []
         self.updates: list[tuple[str, dict[str, object]]] = []
         self.update_failure: DockerException | None = None
+        self.system = self
+        self.logging_driver: str | None = "json-file"
+        self.info_failure: Exception | None = None
+        self.infos = 0
+
+    def info(self) -> SimpleNamespace:
+        self.infos += 1
+        if self.info_failure is not None:
+            raise self.info_failure
+        return SimpleNamespace(logging_driver=self.logging_driver)
 
     def exists(self, _reference: str) -> bool:
         if self.exists_failure is not None:
@@ -268,6 +279,63 @@ async def test_new_guest_gets_limits_and_preferred_port(env):
     assert "cpu_shares" not in run
     assert run["publish"] == [("127.0.0.1:18888", module.settings.OPENCLAW_GATEWAY_PORT)]
     assert docker.listings == []
+
+
+@pytest.mark.parametrize("driver", ["json-file", "local"])
+async def test_new_guest_logs_are_bounded_under_a_size_rotating_driver(env, driver):
+    # Given a daemon whose default logging driver rotates by size.
+    manager, docker, agent = env
+    docker.logging_driver = driver
+    # When the guest is created.
+    await manager.replace_container(agent)
+    # Then Docker gets the default size and file bound and no explicit driver, so the daemon default still applies.
+    run = docker.runs[0]
+    assert run["log_options"] == ["max-size=10m", "max-file=3"]
+    assert "log_driver" not in run
+
+
+async def test_new_guest_log_bound_follows_the_settings(env, monkeypatch):
+    # Given an operator who changed the guest log bound.
+    manager, docker, agent = env
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_LOG_MAX_SIZE", "50m")
+    monkeypatch.setattr(module.settings, "OPENCLAW_GUEST_LOG_MAX_FILE", 5)
+    # When the guest is created.
+    await manager.replace_container(agent)
+    # Then Docker gets the configured bound.
+    assert docker.runs[0]["log_options"] == ["max-size=50m", "max-file=5"]
+
+
+@pytest.mark.parametrize("driver", ["journald", "awslogs", "syslog", "none", None])
+async def test_new_guest_gets_no_log_options_under_any_other_driver(env, driver):
+    # Given a daemon whose default driver rejects max-size, or reports no driver at all.
+    manager, docker, agent = env
+    docker.logging_driver = driver
+    # When the guest is created.
+    result = await manager.replace_container(agent)
+    # Then it still starts, and Docker gets neither log options nor a driver.
+    assert result == agent.container_id
+    assert "log_options" not in docker.runs[0]
+    assert "log_driver" not in docker.runs[0]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DockerException(["docker", "system", "info"], 1, stderr=b"daemon unreachable"),
+        ParsingError("Malformed system info"),
+        ClientNotFoundError("docker"),
+    ],
+    ids=["docker-error", "malformed-info", "no-cli"],
+)
+async def test_new_guest_starts_without_log_options_when_the_daemon_driver_is_unknown(env, failure):
+    # Given a daemon whose driver cannot be read.
+    manager, docker, agent = env
+    docker.info_failure = failure
+    # When the guest is created.
+    result = await manager.replace_container(agent)
+    # Then the start is not failed over logging, and no size option is guessed.
+    assert result == agent.container_id
+    assert "log_options" not in docker.runs[0]
 
 
 @pytest.mark.parametrize(

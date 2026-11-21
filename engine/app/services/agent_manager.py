@@ -48,6 +48,7 @@ from app.services.guest_identity import (
 )
 from app.services.guest_image import ensure_guest_image
 from app.services.guest_limits import resolve_guest_limits
+from app.services.guest_logging import guest_log_options
 from app.services.guest_ports import guest_port_candidates, is_port_bind_conflict
 from app.services.guest_resource_config import preserve_guest_resources
 from app.services.llm import get_model_api_key
@@ -703,6 +704,7 @@ class AgentManager:
                         cpus=limits.cpus,
                         pids_limit=limits.pids_limit,
                         **limits.cpu_shares_option(),
+                        **guest_log_options(client),
                         labels={
                             "maraclaw.agent_id": str(agent.id),
                             "maraclaw.agent_name": agent.name,

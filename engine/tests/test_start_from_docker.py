@@ -16,11 +16,18 @@ DEFAULT_STOP_TIMEOUT = str(
 )
 
 
-def _launcher_with(tmp_path: Path, fake_docker: str) -> Path:
+LAUNCHERS = {
+    "engine": SCRIPT,
+    "web-e": SCRIPT.parents[1] / "web-e" / SCRIPT.name,
+    "web-a": SCRIPT.parents[1] / "web-a" / SCRIPT.name,
+}
+
+
+def _launcher_with(tmp_path: Path, fake_docker: str, source: Path = SCRIPT) -> Path:
     directory = tmp_path / "engine checkout"
     directory.mkdir()
-    script = directory / SCRIPT.name
-    script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    script = directory / source.name
+    script.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     bin_dir = directory / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -42,20 +49,23 @@ def launcher(tmp_path: Path) -> Path:
     )
 
 
+RECORDING_DOCKER = (
+    "#!/bin/bash\n"
+    "set -eu\n"
+    'printf \'%s\\x1f\' "$@" >> "$QA_OUTPUT/calls"\n'
+    "printf '\\n' >> \"$QA_OUTPUT/calls\"\n"
+    'case "$1" in\n'
+    '    create) for image; do :; done; printf "%s" "$image" > "$QA_OUTPUT/created" ;;\n'
+    '    cp) cp "$QA_OUTPUT/created" "$3" ;;\n'
+    '    info) [ -z "${QA_INFO_FAILS-}" ] || exit 1; printf "%s\\n" "${QA_LOG_DRIVER-}" ;;\n'
+    "esac\n"
+)
+
+
 @pytest.fixture
 def run_launcher(tmp_path: Path) -> Path:
     """A launcher whose fake engine records every call and ``cp``s out a file naming the image given to ``create``."""
-    return _launcher_with(
-        tmp_path,
-        "#!/bin/bash\n"
-        "set -eu\n"
-        'printf \'%s\\x1f\' "$@" >> "$QA_OUTPUT/calls"\n'
-        "printf '\\n' >> \"$QA_OUTPUT/calls\"\n"
-        'case "$1" in\n'
-        '    create) for image; do :; done; printf "%s" "$image" > "$QA_OUTPUT/created" ;;\n'
-        '    cp) cp "$QA_OUTPUT/created" "$3" ;;\n'
-        "esac\n",
-    )
+    return _launcher_with(tmp_path, RECORDING_DOCKER)
 
 
 def _launch(launcher: Path, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
@@ -252,3 +262,114 @@ def test_run_refuses_a_shutdown_setting_that_is_not_whole_seconds(run_launcher: 
     assert result.returncode != 0
     assert "SHUTDOWN_CLEANUP_BUDGET_SECONDS" in result.stderr
     assert _calls(run_launcher) == []
+
+
+ALL_LAUNCHERS = pytest.mark.parametrize("app", LAUNCHERS)
+BOUND = ["max-size=10m", "max-file=3"]
+
+
+@pytest.fixture
+def log_launcher(tmp_path: Path, app: str) -> Path:
+    return _launcher_with(tmp_path, RECORDING_DOCKER, LAUNCHERS[app])
+
+
+def _docker_run(launcher: Path, *args: str, **env: str) -> list[str]:
+    result = _launch(launcher, "--no-build", *args, **env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    runs = [call for call in _calls(launcher) if call[0] == "run"]
+    assert len(runs) == 1
+    return runs[0]
+
+
+def _log_opts(run: list[str]) -> list[str]:
+    return [run[index + 1] for index, arg in enumerate(run) if arg == "--log-opt"]
+
+
+@ALL_LAUNCHERS
+@pytest.mark.parametrize("driver", ["json-file", "local"])
+def test_run_bounds_logs_under_json_file_and_local(log_launcher: Path, driver: str) -> None:
+    # Given a daemon whose default logging driver rotates by size.
+    # When the launcher starts the container.
+    run = _docker_run(log_launcher, QA_LOG_DRIVER=driver)
+
+    # Then docker run carries the default size and file bound.
+    assert _log_opts(run) == BOUND
+
+
+@ALL_LAUNCHERS
+@pytest.mark.parametrize("driver", ["journald", "awslogs", "syslog", "none", ""], ids=repr)
+def test_run_passes_no_size_options_under_other_drivers(log_launcher: Path, driver: str) -> None:
+    # Given a daemon whose driver rejects or ignores max-size, or reports no driver at all.
+    # When the launcher starts the container.
+    run = _docker_run(log_launcher, QA_LOG_DRIVER=driver)
+
+    # Then docker run gets no log options.
+    assert "--log-opt" not in run
+    assert not any(arg.startswith(("max-size", "max-file")) for arg in run)
+
+
+@ALL_LAUNCHERS
+def test_run_passes_no_size_options_when_the_daemon_driver_cannot_be_read(log_launcher: Path) -> None:
+    # Given an engine whose info command fails.
+    # When the launcher starts the container.
+    run = _docker_run(log_launcher, QA_INFO_FAILS="1")
+
+    # Then an unknown driver is never given size options.
+    assert "--log-opt" not in run
+
+
+@ALL_LAUNCHERS
+@pytest.mark.parametrize(
+    ("daemon", "extra", "bounded"),
+    [
+        ("json-file", ["--log-driver", "journald"], False),
+        ("json-file", ["--log-driver=awslogs"], False),
+        ("json-file", ["--", "--log-driver", "journald"], False),
+        ("json-file", ["--log-driver", "local", "--log-driver", "journald"], False),
+        ("journald", ["--log-driver", "json-file"], True),
+        ("journald", ["--log-driver=local"], True),
+    ],
+    ids=["separate", "joined", "after-separator", "last-wins", "json-file-over-journald", "local-over-journald"],
+)
+def test_run_follows_an_explicit_log_driver_over_the_daemon_default(
+    log_launcher: Path, daemon: str, extra: list[str], bounded: bool
+) -> None:
+    # Given a daemon default and an operator who passes --log-driver through to docker run.
+    # When the launcher starts the container.
+    run = _docker_run(log_launcher, *extra, QA_LOG_DRIVER=daemon)
+
+    # Then the explicit driver decides the bound and still reaches docker run, just before the image.
+    passed = [arg for arg in extra if arg != "--"]
+    assert run[-1 - len(passed) : -1] == passed
+    assert _log_opts(run) == (BOUND if bounded else [])
+
+
+@ALL_LAUNCHERS
+def test_run_honors_the_log_bound_overrides(log_launcher: Path) -> None:
+    # Given a size and a file count set in the environment.
+    # When the launcher starts the container under json-file.
+    run = _docker_run(log_launcher, QA_LOG_DRIVER="json-file", CONTAINER_LOG_MAX_SIZE="50m", CONTAINER_LOG_MAX_FILE="5")
+
+    # Then docker run carries them in place of the defaults.
+    assert _log_opts(run) == ["max-size=50m", "max-file=5"]
+
+
+@ALL_LAUNCHERS
+@pytest.mark.parametrize(("size", "count"), [("ten", "3"), ("0", "3"), ("10m", "0"), ("10m", "many")])
+def test_run_refuses_an_unusable_log_bound_before_touching_any_container(
+    log_launcher: Path, size: str, count: str
+) -> None:
+    # Given a size or a file count docker run would reject.
+    # When the launcher starts.
+    result = _launch(
+        log_launcher,
+        "--no-build",
+        QA_LOG_DRIVER="json-file",
+        CONTAINER_LOG_MAX_SIZE=size,
+        CONTAINER_LOG_MAX_FILE=count,
+    )
+
+    # Then it fails before any container is removed or created.
+    assert result.returncode != 0
+    assert "CONTAINER_LOG_MAX_SIZE" in result.stderr
+    assert _calls(log_launcher) == []

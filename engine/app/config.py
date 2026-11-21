@@ -237,6 +237,10 @@ class Settings(BaseSettings):
     OPENCLAW_GUEST_CPUS: float = Field(default=1.0, gt=0)
     OPENCLAW_GUEST_PIDS_LIMIT: int = Field(default=512, gt=0)
     OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES: int = Field(default=0, ge=0)
+    # Log bound of newly created guests, passed only when the daemon's default logging driver is json-file or local.
+    # Running and resumed guests keep the options they were created with.
+    OPENCLAW_GUEST_LOG_MAX_SIZE: str = Field(default="10m", pattern=r"^[1-9][0-9]*[kKmMgG]?$")
+    OPENCLAW_GUEST_LOG_MAX_FILE: int = Field(default=3, ge=1, le=100)
     # Deadline per Docker CLI launch of the guest-management client; 0 leaves launches unbounded.
     OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS: float = Field(default=120.0, ge=0, le=3600, allow_inf_nan=False)
     # Guest image pulls (ordinary starts and upgrades) get this deadline instead of the per-launch one.

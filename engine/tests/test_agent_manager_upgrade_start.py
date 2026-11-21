@@ -37,6 +37,7 @@ class _Docker:
     def __init__(self) -> None:
         self.container = _Containers()
         self.image = _Images()
+        self.system = SimpleNamespace(info=lambda: SimpleNamespace(logging_driver="json-file"))
         self.images: list[str] = []
         self.mounts: list[tuple[str, str, str]] = []
 
