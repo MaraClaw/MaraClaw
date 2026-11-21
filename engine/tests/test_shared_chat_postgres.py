@@ -12,6 +12,7 @@ from app.db.session import transaction
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
 from app.services import chat_submissions
+from app.services.chat_session_service import ensure_primary_platform_session
 from app.services.chat_submissions import ChatSubmission
 from app.services.shared_chat import ensure_canonical_session, is_canonical, read_only_detail
 
@@ -68,11 +69,14 @@ async def test_each_user_gets_a_private_canonical_row_and_repeat_calls_return_it
         )
         mine = await ensure_canonical_session(db.agent.id, db.user.id)
         theirs = await ensure_canonical_session(db.agent.id, other)
+        again = await ensure_primary_platform_session(db.agent.id, db.user.id)
+        theirs_again = await ensure_primary_platform_session(db.agent.id, other)
         stored = await db.first.fetchall(
             "SELECT id, user_id FROM chat_sessions WHERE agent_id = %(agent)s AND is_primary", {"agent": db.agent.id}
         )
 
     assert mine.id != theirs.id
+    assert (again.id, theirs_again.id) == (mine.id, theirs.id)
     assert (mine.user_id, theirs.user_id) == (db.user.id, other)
     assert mine.id != db.session_id
     assert all(is_canonical(row) and row.title == "Conversation" and not row.is_group for row in (mine, theirs))

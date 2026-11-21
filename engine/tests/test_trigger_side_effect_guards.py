@@ -9,7 +9,9 @@ import pytest
 from tests.test_background_llm import background_case, tool_response
 
 from app.dao.agent_dao import agent_dao
+from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
+from app.records.trigger import AgentTriggerRecord
 from app.services.llm import caller
 from app.services.llm.background_guard import ScheduleLeaseLostError
 from app.services.llm.types import LLMResponse
@@ -130,13 +132,11 @@ async def test_lease_loss_raised_by_done_callback_is_not_swallowed(monkeypatch):
 @pytest.mark.parametrize("phase", ["agent_read", "connection_checkout"])
 @pytest.mark.parametrize("guarded", [False, True], ids=["default", "expired"])
 async def test_primary_session_checks_guard_after_read_before_mutation(monkeypatch, phase, guarded):
-    from app.dao import shared_chat_dao
+    from app.dao import base as dao_base
     from app.services import chat_session_service as service, shared_chat
 
     agent_id, user_id = uuid4(), uuid4()
-    row = ChatSessionRecord(
-        id=shared_chat.shared_session_id(agent_id), agent_id=agent_id, user_id=user_id, source_channel="shared"
-    )
+    row = ChatSessionRecord(id=uuid4(), agent_id=agent_id, user_id=user_id, source_channel="web", is_primary=True)
     connection = SimpleNamespace(execute=AsyncMock(), fetchone=AsyncMock(return_value=asdict(row)))
     expired = False
 
@@ -156,13 +156,70 @@ async def test_primary_session_checks_guard_after_read_before_mutation(monkeypat
             lost()
 
     monkeypatch.setattr(shared_chat.agent_dao, "get", get_agent)
-    monkeypatch.setattr(shared_chat_dao, "connection_ctx", checkout)
+    monkeypatch.setattr(dao_base, "connection_ctx", checkout)
     if guarded:
         with pytest.raises(ExecutionLeaseLostError):
             await service.ensure_primary_platform_session(agent_id, user_id, guard=guard)
     else:
         assert await service.ensure_primary_platform_session(agent_id, user_id) == row
     assert connection.execute.await_count == (0 if guarded else 1)
+
+
+def origin_trigger(agent: AgentRecord, **config: str) -> AgentTriggerRecord:
+    return AgentTriggerRecord(id=uuid4(), agent_id=agent.id, type="on_message", config=config)
+
+
+@pytest.mark.asyncio
+async def test_trigger_delivery_targets_the_origin_users_own_canonical_session(monkeypatch):
+    from app.services import chat_session_service
+    from app.services.trigger_runtime import invoker
+
+    # Given a trigger set up by a user over an IM channel.
+    agent = AgentRecord(id=uuid4(), creator_id=uuid4(), tenant_id=uuid4(), name="Bot")
+    origin = uuid4()
+    canonical = ChatSessionRecord(id=uuid4(), agent_id=agent.id, user_id=origin, source_channel="web", is_primary=True)
+    ensure = AsyncMock(return_value=canonical)
+    monkeypatch.setattr(chat_session_service, "ensure_primary_platform_session", ensure)
+
+    def guard() -> None:
+        return None
+
+    # When the delivery target is resolved.
+    target = await invoker.resolve_trigger_delivery_target(
+        agent, [origin_trigger(agent, _origin_user_id=str(origin), _origin_source_channel="slack")], guard=guard
+    )
+
+    # Then it is the origin user's canonical session, not the agent creator's.
+    ensure.assert_awaited_once_with(agent.id, origin, guard=guard)
+    assert target == {
+        "kind": "primary_user_session",
+        "session_id": str(canonical.id),
+        "owner_user_id": str(origin),
+        "source_channel": "web",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config",
+    [{}, {"_origin_source_channel": "web"}, {"_origin_user_id": str(uuid4()), "_origin_source_channel": "trigger"}],
+    ids=["no-origin", "origin-channel-only", "trigger-origin"],
+)
+async def test_trigger_without_a_human_origin_opens_no_session(monkeypatch, config):
+    from app.services import chat_session_service
+    from app.services.trigger_runtime import invoker
+
+    # Given a trigger with no human origin.
+    agent = AgentRecord(id=uuid4(), creator_id=uuid4(), tenant_id=uuid4(), name="Bot")
+    ensure = AsyncMock()
+    monkeypatch.setattr(chat_session_service, "ensure_primary_platform_session", ensure)
+
+    # When the delivery target is resolved.
+    target = await invoker.resolve_trigger_delivery_target(agent, [origin_trigger(agent, **config)])
+
+    # Then nothing is created and the trigger keeps running in its own session.
+    assert target is None
+    ensure.assert_not_awaited()
 
 
 @pytest.mark.asyncio
