@@ -144,7 +144,8 @@ local Docker CLI. This is not an exactly-once execution guarantee.
 Claim (`openclaw_shared_dispatch.claim_shared_turn`): the guest-write flock, then
 one short transaction that takes the shared tenant, owner and agent locks
 (`openclaw_shared_scope.authorize_lane`), checks the work gate, and calls
-`gateway_message_dao.lock_human_lane`. That is `personal_burst_sql.lock_parent`:
+`gateway_message_dao.lock_human_lane`. The owner lock is `FOR KEY SHARE`, so an
+intake that holds the session lock can still charge the owner's quota. That is `personal_burst_sql.lock_parent`:
 `SELECT id FROM chat_sessions WHERE id AND agent_id AND source_channel = 'web'
 AND is_primary IS TRUE AND is_group IS FALSE FOR UPDATE`. An ID that fails the
 predicate is never locked and the claim blocks with `lane_missing`. Only then
