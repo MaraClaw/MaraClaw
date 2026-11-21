@@ -6,6 +6,7 @@ from dataclasses import replace
 from uuid import uuid4
 
 import anyio
+import anyio.lowlevel
 import pytest
 
 from app.services import guest_admission
@@ -99,12 +100,13 @@ async def test_creation_waits_for_resume_and_counts_its_limit(env, monkeypatch):
     monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 20)
     entered, blocked = anyio.Event(), anyio.Event()
     release = threading.Event()
+    token = anyio.lowlevel.current_token()
     flock = fcntl.flock
     start = docker.start
     refusals = []
 
     def wait_start(reference):
-        anyio.from_thread.run_sync(entered.set)
+        anyio.from_thread.run_sync(entered.set, token=token)
         assert release.wait(5)
         start(reference)
 
@@ -149,10 +151,11 @@ async def test_cancelled_resume_drains_mutation_before_releasing_flocks(env, mon
     monkeypatch.setattr(guest_admission.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 20)
     entered = anyio.Event()
     release, finished = threading.Event(), threading.Event()
+    token = anyio.lowlevel.current_token()
     start = docker.start
 
     def wait_start(reference):
-        anyio.from_thread.run_sync(entered.set)
+        anyio.from_thread.run_sync(entered.set, token=token)
         assert release.wait(5)
         start(reference)
         finished.set()

@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Final, Literal, override
 from uuid import UUID
 
-from anyio import to_thread
 from pywhales import ClientNotFoundError, DockerClient
 from pywhales.client_config import ParsingError
 from pywhales.exceptions import DockerException
@@ -15,6 +14,7 @@ from app.records.agent import AgentRecord
 from app.records.agent_start import StartHalt
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from app.services.agent_start_store import start_store
+from app.services.docker_capacity import run_docker
 from app.services.guest_identity import AGENT_LABEL
 
 settings = get_settings()
@@ -118,7 +118,7 @@ async def guest_admission(
                     break
                 except WorkspaceLockTimeoutError:
                     await assert_start_active(operation_id)
-            await to_thread.run_sync(_check_capacity, client, agent, memory_limit)
+            await run_docker(_check_capacity, client, agent, memory_limit, abandon_on_cancel=True)
         except (DockerException, ParsingError) as exc:
             raise GuestStartPreflightError("Could not establish guest memory capacity", code="runtime_failed") from exc
         except (OSError, ClientNotFoundError) as exc:

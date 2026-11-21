@@ -64,7 +64,7 @@ class _Env:
         monkeypatch.setattr(self.manager, "_agent_dir", lambda _id: self.agent_dir)
         monkeypatch.setattr(agent_manager_module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
         monkeypatch.setattr(agent_manager_module.settings, "GOGCLI_ENABLED", True)
-        monkeypatch.setattr(guest_readiness, "probe_guest", lambda _client, _reference, _timeout: True)
+        monkeypatch.setattr(guest_readiness, "probe_guest", lambda _client, _reference, _timeout, _child: True)
         monkeypatch.setattr(guest_readiness, "READY_INTERVAL_SECONDS", 0)
 
         async def materialize(agent_id: uuid.UUID):

@@ -5,19 +5,22 @@ import os
 import sys
 import threading
 import time
+from contextlib import suppress
 from types import SimpleNamespace
 
 import anyio
+import anyio.lowlevel
 import pytest
 from pydantic import TypeAdapter
 from pywhales import DockerClient, client_config
 from pywhales.components.container import cli_wrapper as container_cli
 
 from app.services import guest_readiness, openclaw_update_executor
+from app.services.docker_capacity import docker_capacity, shutdown_docker_capacity
 from app.services.guest_admission import GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_probe import probe_guest
 from app.services.openclaw_update_docker import UpgradeDocker
-from test_guest_start_safety import env
+from test_guest_start_safety import BlockedProbe, env
 from test_openclaw_update_executor import Harness
 
 __all__ = ["env"]
@@ -62,10 +65,10 @@ async def test_ordinary_rejects_second_pass_at_or_after_deadline(monkeypatch, co
     now = 0.0
     calls = []
 
-    def ready(_client, reference, timeout):
+    def ready(_client, reference, timeout, _child):
         nonlocal now
         calls.append((reference, timeout))
-        now = 1.0 if len(calls) == 1 else completion
+        now = 115.0 if len(calls) == 1 else completion
         return True
 
     async def sleep(_delay):
@@ -76,9 +79,9 @@ async def test_ordinary_rejects_second_pass_at_or_after_deadline(monkeypatch, co
     monkeypatch.setattr(guest_readiness, "sleep", sleep)
     # When readiness completes its second successful command.
     result = await guest_readiness.guest_ready(client, "guest-id")
-    # Then the probe receives only the remaining budget and late success is refused.
+    # Then each probe gets its own timeout, cut to the remaining budget, and late success is refused.
     assert result is False
-    assert calls == [("guest-id", 120.0), ("guest-id", 119.0)]
+    assert calls == [("guest-id", guest_readiness.PROBE_TIMEOUT_SECONDS), ("guest-id", 5.0)]
 
 
 @pytest.mark.parametrize("upgrade", [False, True])
@@ -129,7 +132,7 @@ async def test_readiness_ends_early_only_when_docker_rules_the_guest_out(env, mo
     now = 0.0
     calls = []
 
-    def probe(_client, reference, _timeout):
+    def probe(_client, reference, _timeout, _child):
         nonlocal now
         now += 1.0
         calls.append(reference)
@@ -158,14 +161,13 @@ async def test_readiness_ends_early_only_when_docker_rules_the_guest_out(env, mo
 async def test_readiness_reports_a_stop_at_its_next_poll_apart_from_failure(monkeypatch):
     # Given a guest that is not ready, and an agent that stops qualifying after the first poll.
     probes = []
-    reasons = iter((None, "ineligible"))
 
-    def probe(_client, reference, _timeout):
+    def probe(_client, reference, _timeout, _child):
         probes.append(reference)
         return False
 
     async def halted():
-        return next(reasons)
+        return "ineligible" if probes else None
 
     monkeypatch.setattr(guest_readiness, "probe_guest", probe)
     monkeypatch.setattr(
@@ -184,14 +186,14 @@ async def test_readiness_stops_waiting_for_a_worker_thread_at_the_deadline(monke
     # Given a guest whose probe fails at once and an observation that never gets a worker thread.
     dispatched = []
 
-    async def run_sync(function, *arguments, abandon_on_cancel=False):
+    async def run_docker(function, *arguments, abandon_on_cancel=False):
         if function is guest_readiness.observe_guest:
             dispatched.append(arguments)
             await anyio.sleep_forever()
         return False
 
     monkeypatch.setattr(guest_readiness, "READY_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setattr(guest_readiness, "to_thread", SimpleNamespace(run_sync=run_sync))
+    monkeypatch.setattr(guest_readiness, "run_docker", run_docker)
     # When readiness runs against a short real deadline.
     started = time.monotonic()
     with anyio.fail_after(5):
@@ -250,7 +252,7 @@ async def test_observation_deadline_never_outlives_the_readiness_deadline(monkey
         reading, now = now, now + 0.02
         return reading
 
-    async def run_sync(function, *arguments, abandon_on_cancel=False):
+    async def run_docker(function, *arguments, abandon_on_cancel=False):
         return function(*arguments)
 
     async def sleep(_delay):
@@ -264,7 +266,7 @@ async def test_observation_deadline_never_outlives_the_readiness_deadline(monkey
     monkeypatch.setattr(guest_readiness, "READY_TIMEOUT_SECONDS", timeout)
     monkeypatch.setattr(guest_readiness, "monotonic", clock)
     monkeypatch.setattr(guest_readiness, "time", SimpleNamespace(monotonic=clock))
-    monkeypatch.setattr(guest_readiness, "to_thread", SimpleNamespace(run_sync=run_sync))
+    monkeypatch.setattr(guest_readiness, "run_docker", run_docker)
     monkeypatch.setattr(guest_readiness, "probe_guest", lambda *_args: False)
     monkeypatch.setattr(guest_readiness, "observe_guest", observe)
     monkeypatch.setattr(guest_readiness, "sleep", sleep)
@@ -369,7 +371,10 @@ def test_probe_timeout_kills_and_reaps_real_cli(tmp_path, upgrade):
     result = UpgradeDocker(client).ready("owned-guest", 1.0) if upgrade else probe_guest(client, "owned-guest", 1.0)
     # Then the timeout is failure and the direct child has already been waited for, not left a zombie.
     assert result is False
-    pid = int(pid_file.read_text(encoding="utf-8"))
+    assert_reaped(int(pid_file.read_text(encoding="utf-8")))
+
+
+def assert_reaped(pid: int) -> None:
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
     with pytest.raises(ChildProcessError):
@@ -384,3 +389,108 @@ def test_probe_reports_cli_exit_status(returncode):
     result = probe_guest(client, "owned-guest", 5.0)
     # Then only an exit-zero probe reports readiness.
     assert result is (returncode == 0)
+
+
+async def test_cancelled_readiness_returns_while_its_probe_is_still_blocked(monkeypatch):
+    # Given a probe whose lane thread stays blocked on a threading.Event until the test releases it.
+    probe = BlockedProbe()
+    returned: list[bool] = []
+
+    async def readiness():
+        try:
+            await guest_readiness.guest_ready(DockerClient(), "guest")
+        finally:
+            returned.append(probe.finished.is_set())
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(readiness)
+                await probe.entered.wait()
+                # When the start waiting for readiness is cancelled.
+                group.cancel_scope.cancel()
+    finally:
+        probe.release.set()
+    # Then readiness gave control back before the probe's thread returned.
+    assert returned == [False]
+
+
+async def test_readiness_ends_at_a_stop_reported_while_its_probe_is_still_blocked(monkeypatch):
+    # Given a blocked probe, and a stop that the first poll made while it runs reports.
+    probe = BlockedProbe()
+    polls = 0
+
+    async def halted():
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            return None
+        await probe.entered.wait()
+        return "cancelled"
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
+    monkeypatch.setattr(guest_readiness, "HALT_POLL_SECONDS", 0)
+    try:
+        # When readiness polls under that checkpoint.
+        with anyio.fail_after(5), pytest.raises(GuestStartStoppedError) as stop:
+            await guest_readiness.guest_ready(DockerClient(), "guest", halted=halted)
+        # Then the stop ends readiness with its reason while the probe's thread is still blocked.
+        assert stop.value.reason == "cancelled"
+        assert not probe.finished.is_set()
+        assert polls == 2
+    finally:
+        probe.release.set()
+
+
+@pytest.mark.parametrize("ending", ["cancelled", "halted"])
+async def test_ended_readiness_kills_and_reaps_the_probe_cli(tmp_path, monkeypatch, ending):
+    # Given a real CLI that reports its pid through a FIFO, then sleeps far past the probe timeout.
+    fifo = tmp_path / "probe.fifo"
+    os.mkfifo(fifo)
+    executable = tmp_path / "hung-docker"
+    executable.write_text(
+        f"#!{sys.executable}\nimport os, pathlib, time\n"
+        f"pathlib.Path({json.dumps(str(fifo))}).write_text(str(os.getpid()))\ntime.sleep(60)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    client = DockerClient(client_call=[str(executable)])
+    pids: list[int] = []
+    polls = 0
+
+    async def spawned():
+        pids.append(int(await anyio.to_thread.run_sync(fifo.read_text, abandon_on_cancel=True)))
+
+    async def halted():
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            return None
+        await spawned()
+        return "cancelled"
+
+    monkeypatch.setattr(guest_readiness, "PROBE_TIMEOUT_SECONDS", 60.0)
+    monkeypatch.setattr(guest_readiness, "HALT_POLL_SECONDS", 0)
+    try:
+        # When readiness is cancelled, or a stop is reported, while that CLI runs.
+        with anyio.fail_after(10):
+            if ending == "cancelled":
+                async with anyio.create_task_group() as group:
+                    group.start_soon(guest_readiness.guest_ready, client, "guest")
+                    await spawned()
+                    group.cancel_scope.cancel()
+            else:
+                with pytest.raises(GuestStartStoppedError):
+                    await guest_readiness.guest_ready(client, "guest", halted=halted)
+        executor = docker_capacity().executor
+        assert executor is not None
+        shutdown_docker_capacity()
+        with anyio.fail_after(5):
+            await anyio.to_thread.run_sync(executor.shutdown, abandon_on_cancel=True)
+    finally:
+        # A reader still waiting for a CLI that never started gets end-of-file instead of blocking forever.
+        with suppress(OSError):
+            os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+    # Then the probe's lane thread killed and reaped the CLI long before its 60-second timeout.
+    assert_reaped(pids[0])

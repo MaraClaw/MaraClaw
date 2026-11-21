@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 from functools import partial
 from uuid import UUID
 
-from anyio import to_thread
 from pywhales import ClientNotFoundError, Container, DockerClient
 from pywhales.client_config import ParsingError
 from pywhales.components.container.cli_wrapper import ContainerListFilter
@@ -14,6 +13,7 @@ from app.core.row_memo import memo_drop
 from app.dao.agent_dao import agent_dao
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.docker_capacity import run_docker
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_resolutions, require_guest_owner
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
 
@@ -26,8 +26,8 @@ def _inspect_container(client: DockerClient, reference: str) -> Container:
 
 async def _remove_orphan(client: DockerClient, container_id: str, agent_id: UUID) -> None:
     guest_resolutions.drop(agent_id)
-    await to_thread.run_sync(partial(client.container.stop, container_id, time=10))
-    await to_thread.run_sync(partial(type(client.container).remove, client.container, [container_id]))
+    await run_docker(partial(client.container.stop, container_id, time=10))
+    await run_docker(partial(type(client.container).remove, client.container, [container_id]))
     logger.info("Removed orphan container container_id=%s agent_id=%s", container_id, agent_id)
 
 
@@ -38,7 +38,9 @@ async def sweep_orphan_containers(now: datetime) -> None:
         return
     try:
         filters: list[ContainerListFilter] = [("label", AGENT_LABEL), ("network", network)]
-        containers = await to_thread.run_sync(partial(client.container.list, all=True, filters=filters, hydrate=True))
+        containers = await run_docker(
+            partial(client.container.list, all=True, filters=filters, hydrate=True), abandon_on_cancel=True
+        )
         candidates: dict[str, UUID] = {}
         for container in containers:
             config = container.config
@@ -71,7 +73,7 @@ async def sweep_orphan_containers(now: datetime) -> None:
                     if current is None or current.container_id in (None, "", container_id):
                         continue
                     await assert_no_active_run(agent_id)
-                    candidate = await to_thread.run_sync(_inspect_container, client, container_id)
+                    candidate = await run_docker(_inspect_container, client, container_id, abandon_on_cancel=True)
                     config = candidate.config
                     network_settings = candidate.network_settings
                     created = candidate.created
@@ -86,7 +88,9 @@ async def sweep_orphan_containers(now: datetime) -> None:
                         or now - created < ORPHAN_GRACE
                     ):
                         continue
-                    recorded = await to_thread.run_sync(_inspect_container, client, current.container_id)
+                    recorded = await run_docker(
+                        _inspect_container, client, current.container_id, abandon_on_cancel=True
+                    )
                     config = recorded.config
                     require_guest_owner(
                         agent_id, current.container_id, (config.labels or {}).get(AGENT_LABEL) if config else None

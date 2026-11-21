@@ -87,7 +87,7 @@ async def test_database_restores_all_transports_on_real_lifecycle_paths(
     monkeypatch.setattr(manager_module.settings, "OPENCLAW_GUEST_AGGREGATE_MEMORY_LIMIT_BYTES", 0)
     monkeypatch.setattr(guest_readiness, "READY_INTERVAL_SECONDS", 0)
 
-    def ready(_client: object, _reference: str, _timeout: float) -> bool:
+    def ready(_client: object, _reference: str, _timeout: float, _child: object) -> bool:
         assert mcp.servers() == expected
         return True
 

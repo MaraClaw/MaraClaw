@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import builtins
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Unpack
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import anyio
+import anyio.lowlevel
 import pytest
 from pywhales import ClientNotFoundError
 from pywhales.client_config import ParsingError
@@ -18,7 +21,7 @@ from app.core.domain.agents import AgentStatus
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.records.agent import AgentRecord
-from app.services import agent_manager as module, agent_materialize, guest_admission as admission
+from app.services import agent_manager as module, agent_materialize, guest_admission as admission, guest_readiness
 from app.services.agent_manager import AgentManager
 from app.services.agent_start_store import start_store
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
@@ -132,6 +135,23 @@ class Docker:
         if self.failures:
             raise DockerException(["docker", "run"], 125, stderr=self.failures.pop(0))
         return guest
+
+
+class BlockedProbe:
+    """A readiness probe whose lane thread blocks on a threading.Event and wakes the loop once it is blocked."""
+
+    def __init__(self) -> None:
+        self.entered = anyio.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+        self._token = anyio.lowlevel.current_token()
+
+    def __call__(self, _client: object, _reference: str, _timeout: float, _child: object) -> bool:
+        anyio.from_thread.run_sync(self.entered.set, token=self._token)
+        try:
+            return self.release.wait(10)
+        finally:
+            self.finished.set()
 
 
 @pytest.fixture
@@ -483,6 +503,66 @@ async def test_cleanup_ownership_refusal_after_replacement_clears_stale_runtime(
     assert (agent.status, agent.container_id, agent.container_port) == ("error", None, None)
     assert docker.removed == ["old"]
     assert len(docker.runs) == 1
+
+
+async def test_guest_docker_calls_proceed_while_default_worker_threads_are_exhausted(env, monkeypatch):
+    # Given anyio's default limiter has one token, held by a worker thread blocked on a threading.Event.
+    manager, docker, agent = env
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    entered = anyio.Event()
+    release = threading.Event()
+
+    def hold() -> bool:
+        anyio.from_thread.run_sync(entered.set)
+        return release.wait(10)
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", lambda *_args: True)
+    monkeypatch.setattr(guest_readiness, "READY_INTERVAL_SECONDS", 0)
+    tokens = limiter.total_tokens
+    limiter.total_tokens = 1
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(anyio.to_thread.run_sync, hold)
+                await entered.wait()
+                # When readiness, Stop and removal make their Docker calls.
+                ready = await guest_readiness.guest_ready(docker, "old")
+                stopped = await manager.stop_container(agent)
+                removed = await manager.remove_container(agent)
+                release.set()
+                # Then each completed on the Docker lane without waiting for a default worker thread.
+                assert (ready, stopped, removed) == (True, True, True)
+                assert docker.removed == ["old"]
+    finally:
+        release.set()
+        limiter.total_tokens = tokens
+
+
+async def test_cancelled_start_returns_while_its_readiness_probe_is_still_blocked(env, monkeypatch):
+    # Given Start reuses the running guest, and its readiness probe blocks on a threading.Event in a lane thread.
+    manager, docker, agent = env
+    probe = BlockedProbe()
+    returned: list[bool] = []
+
+    async def start():
+        try:
+            _ = await manager.start_container(agent)
+        finally:
+            returned.append(probe.finished.is_set())
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(start)
+                await probe.entered.wait()
+                # When the start is cancelled while the probe is still blocked.
+                group.cancel_scope.cancel()
+    finally:
+        probe.release.set()
+    # Then Start gave control back before the probe's thread returned, and the guest was left running.
+    assert returned == [False]
+    assert docker.guests["old"].state.status == "running"
 
 
 def mirror_active(

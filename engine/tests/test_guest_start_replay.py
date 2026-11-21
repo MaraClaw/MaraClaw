@@ -22,7 +22,7 @@ def ready_guest(env, monkeypatch):
     docker.starts = []
     monkeypatch.setattr(guest_readiness, "READY_INTERVAL_SECONDS", 0)
 
-    def probe(_client, reference, timeout):
+    def probe(_client, reference, timeout, _child):
         docker.probes.append(reference)
         assert timeout > 0
         return True
@@ -172,7 +172,7 @@ async def test_ready_passes_must_be_consecutive(env, monkeypatch):
     outcomes = iter((True, False, True, True))
     probes = []
 
-    def probe(_client, reference, timeout):
+    def probe(_client, reference, timeout, _child):
         probes.append(reference)
         assert timeout > 0
         return next(outcomes)
@@ -217,7 +217,7 @@ async def test_stop_during_readiness_ends_the_start_and_quiesces_only_its_new_wr
     operation = uuid4()
     stopped = False
 
-    def probe(_client, reference, _timeout):
+    def probe(_client, reference, _timeout, _child):
         nonlocal stopped
         docker.probes.append(reference)
         # The stop commits while this probe is in flight.
