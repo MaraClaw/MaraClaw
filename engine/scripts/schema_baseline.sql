@@ -2048,6 +2048,9 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_
 -- Serves the NOT EXISTS delivered-row probes of claim_head, claim_ordinary_head and pending_dispatch_page.
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_lane
     ON gateway_messages (agent_id, conversation_id) WHERE status = 'delivered'$ddl$);
+-- Serves the delivered_dispatch_page keyset walk, so a page reads bound delivered rows instead of every reply binding.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_order
+    ON gateway_messages (created_at, id) WHERE status = 'delivered' AND reply_binding_id IS NOT NULL$ddl$);
 -- Serves the pending_dispatch_page keyset walk, which stops after one page of lane heads.
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_order
     ON gateway_messages (created_at, id) WHERE status = 'pending'$ddl$);

@@ -43,9 +43,14 @@ Guest resource limits apply only when creating a new or replacement guest.
 The required worker loop
 `openclaw_dispatch_reconciler` wakes pending lane heads in keyset pages of 50, with a
 one-second scan interval. A page walks the partial `ix_gateway_messages_pending_order`
-index from its cursor, so a tick reads pending rows only up to its page of heads. On a
-large existing `gateway_messages`, build that index and `ix_gateway_messages_agent_created`
-(the newest-first agent listing) with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` and the
+index from its cursor and reads at most 20 pending rows per head it can return (1,000), so
+a tick costs the same however much is queued behind the last head: such a page can hold no
+head and still moves its cursor past the rows it read. The delivered page walks the partial
+`ix_gateway_messages_delivered_order` index from its cursor, whatever the number of reply
+bindings. On a large existing `gateway_messages`, build those two indexes,
+`ix_gateway_messages_agent_created`
+(the newest-first agent listing) and `ix_gateway_messages_completed_at` (the retention reclaim, see
+[`gateway-report-delivery.md`](gateway-report-delivery.md)) with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` and the
 baseline definitions before rerunning bootstrap: the baseline's plain `CREATE INDEX`
 blocks writes to the table while it builds. A second, independent delivered-page cursor completes a
 delivered turn with a fixed interruption notice (through `settle_native_report`, so

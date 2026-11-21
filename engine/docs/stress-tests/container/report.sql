@@ -47,7 +47,8 @@ SELECT phase, label AS probe, coalesce(b.pending, a.pending) AS pending,
 FROM (SELECT * FROM stress_plan_summary WHERE variant = 'before') AS b
 FULL JOIN (SELECT * FROM stress_plan_summary WHERE variant = 'after') AS a USING (phase, label)
 ORDER BY phase DESC, array_position(ARRAY['pending-page-1', 'pending-page-mid', 'pending-page-tail',
-    'pending-page-mid-generic', 'pending-page-mid-generic-old-sql', 'history', 'gateway-list'], label);
+    'pending-scan-end-tail', 'pending-page-mid-generic', 'pending-page-tail-generic', 'pending-page-mid-generic-old-sql',
+    'delivered-page-1', 'delivered-page-1-generic', 'history', 'gateway-list'], label);
 
 \echo
 \echo '== Mixed workload: ms per pgbench transaction (the reconciler tick includes its schedule lag)'
@@ -88,20 +89,27 @@ SELECT 3, 'agent gateway listing walks ix_gateway_messages_agent_created without
        count(*) || ' after-fix probes'
 FROM stress_plan WHERE variant = 'after' AND label = 'gateway-list'
 UNION ALL
-SELECT 4, 'every fixed probe reads fewer buffers after the fix',
-       CASE WHEN count(*) = 10 AND bool_and(a.buffers < b.buffers) THEN 'PASS' ELSE 'FAIL' END,
+SELECT 4, 'delivered dispatch pages walk ix_gateway_messages_delivered_order without a sort',
+       CASE WHEN count(*) = 4 AND bool_and(stress_walks(plan, 'ix_gateway_messages_delivered_order')
+                                           AND NOT stress_has(plan, 'Sort')) THEN 'PASS' ELSE 'FAIL' END,
+       count(*) || ' after-fix probes: custom and generic first page in both phases'
+FROM stress_plan WHERE variant = 'after' AND label IN ('delivered-page-1', 'delivered-page-1-generic')
+UNION ALL
+SELECT 5, 'every fixed probe reads fewer buffers after the fix',
+       CASE WHEN count(*) = 14 AND bool_and(a.buffers < b.buffers) THEN 'PASS' ELSE 'FAIL' END,
        string_agg(format('%s %s: %s -> %s', phase, label, b.buffers, a.buffers), '; ' ORDER BY phase DESC, label)
 FROM stress_plan_summary AS b
 JOIN stress_plan_summary AS a USING (phase, label)
 WHERE b.variant = 'before' AND a.variant = 'after'
-  AND label IN ('pending-page-1', 'pending-page-mid', 'pending-page-mid-generic', 'history', 'gateway-list')
+  AND label IN ('pending-page-1', 'pending-page-mid', 'pending-page-mid-generic', 'delivered-page-1',
+                'delivered-page-1-generic', 'history', 'gateway-list')
 UNION ALL
-SELECT 5, 'no deadlocks or other failed transactions after the fix',
+SELECT 6, 'no deadlocks or other failed transactions after the fix',
        CASE WHEN count(us) > 0 AND count(*) = count(us) THEN 'PASS' ELSE 'FAIL' END,
        format('%s completed, %s failed', count(us), count(*) - count(us))
 FROM stress_tx_parsed WHERE variant = 'after'
 UNION ALL
-SELECT 6, 'deadlocks reproduced before the fix', 'INFO',
+SELECT 7, 'deadlocks reproduced before the fix', 'INFO',
        format('%s of %s transactions deadlocked', count(*) FILTER (WHERE t = 'deadlock'), count(*))
 FROM stress_tx_parsed WHERE variant = 'before';
 
