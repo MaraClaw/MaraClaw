@@ -41,6 +41,12 @@ def stopped_clear(monkeypatch):
     return cleared
 
 
+@pytest.fixture(autouse=True)
+def no_channel_media(monkeypatch):
+    monkeypatch.setattr(channel_event_media_dao, "for_message", AsyncMock(return_value=()))
+    monkeypatch.setattr(channel_event_media_dao, "is_zalo_turn", AsyncMock(return_value=False))
+
+
 def running_client():
     return SimpleNamespace(
         container=SimpleNamespace(inspect=lambda _id: SimpleNamespace(state=SimpleNamespace(running=True)))
@@ -437,14 +443,6 @@ class _Turn:
         async def lookup(user_id):
             return self.users.get(user_id)
 
-        async def no_media(_message_id, _agent_id):
-            return ()
-
-        async def no_zalo_origin(_message_id, _agent_id):
-            return False
-
-        monkeypatch.setattr(channel_event_media_dao, "for_message", no_media)
-        monkeypatch.setattr(channel_event_media_dao, "is_zalo_turn", no_zalo_origin)
         monkeypatch.setattr(onboarding_greeting, "get_storage_backend", lambda: self.storage)
         monkeypatch.setattr(user_dao, "get", lookup)
 

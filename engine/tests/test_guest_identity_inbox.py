@@ -10,6 +10,9 @@ from app.services import openclaw_gateway_config, openclaw_gateway_rpc
 from app.services.agent_manager import agent_manager
 from app.services.guest_identity import guest_container_name
 from guest_identity_fakes import Docker, Guest
+from test_openclaw_gateway_rpc import no_channel_media
+
+__all__ = ["no_channel_media"]
 
 FIRST = UUID("deadbeef-0000-4000-8000-000000000001")
 SECOND = UUID("deadbeef-0000-4000-8000-000000000002")

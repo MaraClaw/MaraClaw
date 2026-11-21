@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -7,6 +8,8 @@ from pydantic import ValidationError
 from app.records.agent import AgentRecord
 from app.records.channel_media import StoredFile
 from app.records.chat_attachment import ChatAttachment
+from app.records.gateway_message import GatewayMessageRecord
+from app.services import openclaw_channel_media
 from app.services.agent_manager import agent_manager
 from app.services.channels import channel_media as media
 from app.services.openclaw_transcript import ReplyMediaError
@@ -140,3 +143,38 @@ def test_stored_file_boundary_rejects_noncanonical_paths():
             sha256="a" * 64,
             kind="file",
         )
+
+
+@pytest.mark.parametrize("conversation", ["canonical", "group", "none"])
+async def test_channel_input_attaches_event_files_for_every_conversation(monkeypatch, conversation):
+    agent = AgentRecord(id=uuid4(), name="Media", creator_id=uuid4())
+    message = GatewayMessageRecord(
+        id=uuid4(),
+        agent_id=agent.id,
+        content="see file",
+        conversation_id=None if conversation == "none" else str(uuid4()),
+    )
+    stored = object()
+    lookups = []
+
+    async def for_message(message_id, agent_id):
+        lookups.append((message_id, agent_id))
+        return [stored]
+
+    async def materialize(owner, file):
+        assert (owner, file) == (agent, stored)
+        return SimpleNamespace(path="workspace/inbound/report.pdf")
+
+    async def not_zalo(_message_id, _agent_id):
+        return False
+
+    monkeypatch.setattr(openclaw_channel_media.channel_event_media_dao, "for_message", for_message)
+    monkeypatch.setattr(openclaw_channel_media.channel_event_media_dao, "is_zalo_turn", not_zalo)
+    monkeypatch.setattr(openclaw_channel_media, "materialize_for_guest", materialize)
+    content, instruction = await openclaw_channel_media.channel_input(agent, message)
+    assert lookups == [(message.id, agent.id)]
+    assert content == (
+        "see file\n\nAttached files available to ordinary file tools:\n"
+        "/home/node/custom-state/workspace/inbound/report.pdf"
+    )
+    assert instruction == ""
