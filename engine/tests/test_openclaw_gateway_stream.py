@@ -11,6 +11,7 @@ from pywhales import DockerClient
 
 from app.api.websocket import manager
 from app.config import get_settings
+from app.dao.chat_dao import chat_session_dao
 from app.records.chat import ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.services import (
@@ -19,26 +20,27 @@ from app.services import (
     openclaw_gateway_stream as streaming,
 )
 from app.services.realtime_runtime.contracts import RoutingOutcome
-from app.services.shared_chat import shared_session_id
 from app.services.turn_timing import TurnTimeline
 from test_openclaw_gateway_coalescing import IngestProbe, delta_line
-from test_openclaw_gateway_rpc import _Turn, wire_terminal
+from test_openclaw_gateway_rpc import _Turn, no_channel_media, wire_terminal
+
+__all__ = ["no_channel_media"]
 
 REF = "openrouter/nvidia/nemotron-3.5-super-vl:free"
 BRAND = get_settings().APP_NAME
 
 
-@pytest.mark.parametrize("shared", [False, True])
-async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch, tmp_path, shared):
+@pytest.mark.parametrize("canonical", [False, True])
+async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch, tmp_path, canonical):
     turn = _Turn(monkeypatch, tmp_path)
     turn.message.sender_user_id = turn.agent.creator_id
-    turn.message.conversation_id = str(shared_session_id(turn.agent.id) if shared else uuid4())
-    session = ChatSessionRecord(uuid4(), turn.agent.id, turn.agent.creator_id)
+    session = ChatSessionRecord(uuid4(), turn.agent.id, turn.agent.creator_id, is_primary=canonical)
+    turn.message.conversation_id = str(session.id)
     timeline = TurnTimeline(turn.message.id, turn.agent.id, None)
     events = []
     release = Event()
 
-    async def get_session(_id):
+    async def get_session(_id, _agent_id):
         return session
 
     async def absent(_id):
@@ -52,7 +54,7 @@ async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch,
             assert send_timeout == delivery.CHUNK_SEND_TIMEOUT_SECONDS
         assert agent_id == str(turn.agent.id)
         assert conversation_id == turn.message.conversation_id
-        assert user_id == (None if shared else str(turn.agent.creator_id))
+        assert user_id == str(turn.agent.creator_id)
         events.append(event)
         if event["type"] == "chunk" and event["content"] == "replacement":
             release.set()
@@ -80,7 +82,7 @@ async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch,
 
         yield chunks()
 
-    monkeypatch.setattr(streaming.chat_session_dao, "get", get_session)
+    monkeypatch.setattr(chat_session_dao, "get_for_agent", get_session)
     monkeypatch.setattr(streaming.personal_burst_dispatch_dao, "get", absent)
     monkeypatch.setattr(streaming.gateway_report_delivery_dao, "has_im_origin", has_im)
     monkeypatch.setattr(manager, "send_to_session", send)
@@ -114,50 +116,54 @@ async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch,
     assert "first_delta" in timeline.marks
 
 
-@pytest.mark.parametrize("origin", ["slack", "whatsapp", "agent", "missing", "burst", "shared_im"])
+@pytest.mark.parametrize("origin", ["slack", "whatsapp", "agent", "missing", "burst", "canonical_im"])
 async def test_im_and_nonweb_turns_use_final_only_exec(monkeypatch, tmp_path, origin):
     turn = _Turn(monkeypatch, tmp_path)
-    shared = origin in {"burst", "shared_im"}
-    turn.message.conversation_id = str(shared_session_id(turn.agent.id) if shared else uuid4())
+    canonical = origin in {"burst", "canonical_im"}
+    session = (
+        ChatSessionRecord(uuid4(), turn.agent.id, turn.agent.creator_id, is_primary=True)
+        if canonical
+        else ChatSessionRecord(uuid4(), turn.agent.id, turn.agent.creator_id, source_channel=origin)
+    )
+    turn.message.conversation_id = str(session.id)
     turn.message.routing_reason = "selected_model"
     reads = []
 
-    async def get_session(_id):
-        return (
-            None
-            if origin == "missing"
-            else ChatSessionRecord(uuid4(), turn.agent.id, turn.agent.creator_id, source_channel=origin)
-        )
+    async def get_session(_id, _agent_id):
+        return None if origin == "missing" else session
 
     async def batch(message_id):
         reads.append(message_id)
         return SimpleNamespace(gateway_id=message_id) if origin == "burst" else None
 
     async def has_im(_id):
-        return origin == "shared_im"
+        return origin == "canonical_im"
 
-    monkeypatch.setattr(streaming.chat_session_dao, "get", get_session)
+    monkeypatch.setattr(chat_session_dao, "get_for_agent", get_session)
     monkeypatch.setattr(streaming.personal_burst_dispatch_dao, "get", batch)
     monkeypatch.setattr(streaming.gateway_report_delivery_dao, "has_im_origin", has_im)
     outcome = await turn.run()
     assert isinstance(outcome, rpc.TerminalOutcome)
     assert turn.executed == 1
-    assert reads == ([turn.message.id] if shared else [])
+    assert reads == ([turn.message.id] if canonical else [])
 
 
 @pytest.mark.parametrize("read", ["session", "batch", "intent"])
 async def test_origin_read_failure_prevents_dispatch(monkeypatch, tmp_path, read):
     turn = _Turn(monkeypatch, tmp_path)
-    shared = read != "session"
-    turn.message.conversation_id = str(shared_session_id(turn.agent.id) if shared else uuid4())
+    canonical = ChatSessionRecord(uuid4(), turn.agent.id, turn.agent.creator_id, is_primary=True)
+    turn.message.conversation_id = str(canonical.id)
 
-    async def failed(_id):
+    async def failed(*_ids):
         raise RuntimeError("classification read failed")
 
     async def absent(_id):
         return None
 
-    monkeypatch.setattr(streaming.chat_session_dao, "get", failed)
+    async def get_session(_id, _agent_id):
+        return canonical
+
+    monkeypatch.setattr(chat_session_dao, "get_for_agent", failed if read == "session" else get_session)
     monkeypatch.setattr(streaming.personal_burst_dispatch_dao, "get", absent if read == "intent" else failed)
     monkeypatch.setattr(streaming.gateway_report_delivery_dao, "has_im_origin", failed)
     outcome = await turn.run()
@@ -281,7 +287,7 @@ async def test_configured_model_id_split_across_deltas_never_reaches_the_socket(
     delivered = Event()
     pieces = ["Running on openrouter/nv", "idia/nemotron-3.5-su", "per-vl:fr", "ee, ok."]
 
-    async def get_session(_id):
+    async def get_session(_id, _agent_id):
         return ChatSessionRecord(uuid4(), turn.agent.id, turn.agent.creator_id)
 
     async def send(_agent_id, _conversation_id, event, *, user_id, send_timeout=None):
@@ -305,7 +311,7 @@ async def test_configured_model_id_split_across_deltas_never_reaches_the_socket(
 
         yield chunks()
 
-    monkeypatch.setattr(streaming.chat_session_dao, "get", get_session)
+    monkeypatch.setattr(chat_session_dao, "get_for_agent", get_session)
     monkeypatch.setattr(manager, "send_to_session", send)
     monkeypatch.setattr(rpc, "_policy", streaming.EXEC_POLICY)
     monkeypatch.setattr(

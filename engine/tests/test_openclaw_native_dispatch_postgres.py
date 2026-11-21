@@ -10,7 +10,6 @@ from app.db.connection import DbConnection
 from app.db.errors import LockNotAvailableError
 from app.db.session import get_connection, transaction
 from app.records.agent import AgentRecord
-from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.services import openclaw_gateway_delivery as delivery
 from app.services.openclaw_shared_dispatch import claim_ready_shared
 from test_chat_submission_postgres import ReceiptDatabase
@@ -23,7 +22,7 @@ async def test_shared_claim_and_native_settlement_finish_in_lock_order(
     pooled_database: ReceiptDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = pooled_database
-    messages = await shared_fixtures.seed_shared(db)
+    messages = await shared_fixtures.seed_human_lane(db)
     claim_holds_lane, settlement_attempts_agent, release_claim = anyio.Event(), anyio.Event(), anyio.Event()
     original_claim = gateway_message_dao.claim_head
     original_lock_agent = delivery.lock_agent
@@ -46,7 +45,7 @@ async def test_shared_claim_and_native_settlement_finish_in_lock_order(
     monkeypatch.setattr(delivery, "lock_agent", observed_lock_agent)
 
     async def claim() -> None:
-        claimed.append(await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC))))
+        claimed.append(await claim_ready_shared(shared_fixtures.human_request(messages)))
 
     async def settle() -> None:
         reports.append(await delivery.settle_native_report(db.agent, messages[0].id, "answer"))
@@ -122,8 +121,8 @@ async def test_native_settlement_holds_agent_lock_before_report_and_blocks_compe
     pooled_database: ReceiptDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = pooled_database
-    messages = await shared_fixtures.seed_shared(db)
-    first = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    messages = await shared_fixtures.seed_human_lane(db)
+    first = await claim_ready_shared(shared_fixtures.human_request(messages))
     assert first is not None
     assert first.id == messages[0].id
     entered, release = anyio.Event(), anyio.Event()
@@ -149,20 +148,59 @@ async def test_native_settlement_holds_agent_lock_before_report_and_blocks_compe
                     await db.second.execute(
                         "SELECT id FROM agents WHERE id = %(id)s FOR UPDATE NOWAIT", {"id": db.agent.id}
                     )
-            assert await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC))) is None
+            assert await claim_ready_shared(shared_fixtures.human_request(messages)) is None
             release.set()
 
     assert len(reports) == 1
     assert reports[0] is not None
-    next_message = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    next_message = await claim_ready_shared(shared_fixtures.human_request(messages))
     assert next_message is not None
     assert next_message.id == messages[1].id
 
 
+async def test_two_users_canonical_lanes_run_together_and_each_stays_fifo(pooled_database: ReceiptDatabase) -> None:
+    # Given two users' canonical lanes of one agent, three pending turns each.
+    db = pooled_database
+    member = uuid4()
+    async with transaction(db.first):
+        await db.first.execute(
+            "INSERT INTO users (id, display_name, tenant_id) VALUES (%(id)s, 'Member', %(tenant)s)",
+            {"id": member, "tenant": db.agent.tenant_id},
+        )
+    owner_lane = await shared_fixtures.seed_human_lane(db)
+    member_lane = await shared_fixtures.seed_human_lane(db, member)
+    # When each lane is claimed before either settles.
+    owner_head = await claim_ready_shared(shared_fixtures.human_request(owner_lane))
+    member_head = await claim_ready_shared(shared_fixtures.human_request(member_lane))
+    # Then both heads are delivered at once, each bound to its own user's session,
+    assert owner_head is not None
+    assert member_head is not None
+    assert (owner_head.id, member_head.id) == (owner_lane[0].id, member_lane[0].id)
+    async with transaction(db.second):
+        bindings = await db.second.fetchall(
+            "SELECT g.id, b.session_id, b.user_id FROM gateway_messages g "
+            "JOIN openclaw_reply_bindings b ON b.id = g.reply_binding_id "
+            "WHERE g.agent_id = %(agent)s AND g.status = 'delivered' ORDER BY b.user_id = %(owner)s DESC",
+            {"agent": db.agent.id, "owner": db.user.id},
+        )
+    assert bindings == [
+        {"id": owner_head.id, "session_id": shared_fixtures.lane_of(owner_lane), "user_id": db.user.id},
+        {"id": member_head.id, "session_id": shared_fixtures.lane_of(member_lane), "user_id": member},
+    ]
+    # while neither lane runs its next turn until its own head settles.
+    assert await claim_ready_shared(shared_fixtures.human_request(owner_lane)) is None
+    assert await claim_ready_shared(shared_fixtures.human_request(member_lane)) is None
+    assert await delivery.settle_native_report(db.agent, owner_head.id, "owner answer") is not None
+    owner_next = await claim_ready_shared(shared_fixtures.human_request(owner_lane))
+    assert owner_next is not None
+    assert owner_next.id == owner_lane[1].id
+    assert await claim_ready_shared(shared_fixtures.human_request(member_lane)) is None
+
+
 async def test_native_settlement_refuses_result_after_owner_changes(pooled_database: ReceiptDatabase) -> None:
     db = pooled_database
-    messages = await shared_fixtures.seed_shared(db)
-    first = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    messages = await shared_fixtures.seed_human_lane(db)
+    first = await claim_ready_shared(shared_fixtures.human_request(messages))
     assert first is not None
     assert first.id == messages[0].id
     new_owner = uuid4()

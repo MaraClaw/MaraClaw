@@ -16,6 +16,7 @@ from tests.burst_dispatch_fixtures import (
     model_named,
     receipt_db,
     report,
+    transcript,
 )
 from tests.personal_burst_fixtures import age_batch, only_batch, scalar, submit
 
@@ -74,15 +75,15 @@ async def test_an_unready_head_blocks_every_younger_row_and_changes_nothing(lane
 async def test_wakes_and_claims_use_the_same_gate_and_race_to_one_winner(lane: Lane) -> None:
     # Given one due batch and independent callers: two wakes and two direct claims.
     gateway_id = await due_batch(lane, "a", "b")
-    now = datetime.now(UTC)
+    request = SharedDispatchRequest(lane.agent_id, datetime.now(UTC), await transcript(lane))
     agent = await agent_dao.get(lane.agent_id)
     assert agent is not None
     # When they all race.
     outcomes = await asyncio.gather(
         openclaw_routing._claim_wake(agent, gateway_id),
         openclaw_routing._claim_wake(agent, gateway_id),
-        claim_ready_shared(SharedDispatchRequest(lane.agent_id, now)),
-        claim_ready_shared(SharedDispatchRequest(lane.agent_id, now)),
+        claim_ready_shared(request),
+        claim_ready_shared(request),
     )
     # Then exactly one claimed the turn and the guest model was written once.
     claimed = [row for out in outcomes for row in (out if isinstance(out, list) else [out]) if row is not None]

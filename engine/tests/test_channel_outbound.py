@@ -96,6 +96,9 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
     async def get_session(_sid):
         return session
 
+    async def get_session_for_agent(sid: uuid.UUID, agent_id: uuid.UUID) -> ChatSessionRecord | None:
+        return session if (sid, agent_id) == (session.id, agent.id) else None
+
     async def get_participant(_type, _ref):
         return None
 
@@ -123,6 +126,7 @@ async def test_report_result_scopes_ws_and_queues_im(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(gateway, "lock_user", AsyncMock())
     monkeypatch.setattr(gateway, "lock_agent", AsyncMock())
     monkeypatch.setattr(delivery.chat_session_dao, "get", get_session)
+    monkeypatch.setattr(delivery.chat_session_dao, "get_for_agent", get_session_for_agent)
     monkeypatch.setattr(delivery.participant_dao, "get_by_type_ref", get_participant)
     monkeypatch.setattr(delivery.gateway_report_delivery_dao, "create_intent", create_intent)
     monkeypatch.setattr("app.api.websocket.manager", _Manager())

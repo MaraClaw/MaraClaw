@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.core.json_types import uuid_from_row
 from app.dao.gateway_message_delivery_dao import _DISPATCH_START, GatewayMessageDeliveryDAO
+from app.dao.personal_burst_sql import lock_parent
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.openclaw_dispatch import SharedClaim
 from app.records.personal_burst import BURST_CANCELLED_RESULT, required_datetime
@@ -130,20 +131,18 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
             )
             return self.record_factory(row) if row is not None else None
 
-    async def lock_shared_lane(self, agent_id: UUID, session_id: UUID) -> bool:
-        """Take (or re-take) the shared chat-session lock that serializes claims, appends and settlements."""
+    async def lock_human_lane(self, agent_id: UUID, session_id: UUID) -> bool:
+        """Take (or re-take) the canonical session lock that serializes one human lane's claims, appends, settlements.
+
+        ``False`` when ``session_id`` is not a canonical session of ``agent_id`` (the lock re-checks the predicate).
+        """
         async with self.session() as db:
-            parent = await db.fetchone(
-                "SELECT id FROM chat_sessions WHERE id = %(session)s AND agent_id = %(agent)s "
-                "AND source_channel = 'shared' FOR UPDATE",
-                {"session": session_id, "agent": agent_id},
-            )
-            return parent is not None
+            return await lock_parent(db, agent_id, session_id)
 
     async def claim_head(self, claim: SharedClaim) -> GatewayMessageRecord | None:
         """Write the final body/routing and deliver ``claim.message_id`` iff it is still the actual lane head.
 
-        Needs the shared-session lock (the dispatch service holds it). No delivered row may exist in the lane and no
+        Needs the human-lane lock (the dispatch service holds it). No delivered row may exist in the lane and no
         older pending row may precede it; otherwise nothing changes.
         """
         async with self.session() as db:
@@ -172,7 +171,7 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
             return self.record_factory(row) if row is not None else None
 
     async def cancel_anchor(self, message_id: UUID, agent_id: UUID) -> bool:
-        """Fail-closed end of a pending anchor whose header is missing or already terminal (shared lock held).
+        """Fail-closed end of a pending anchor whose header is missing or already terminal (lane lock held).
 
         Same effect as a batch cancellation on the queue row: completed, conversation-less, fixed result, and only
         undelivered nonterminal report intents removed.

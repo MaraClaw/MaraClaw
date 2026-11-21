@@ -1968,7 +1968,7 @@ BEGIN
     -- Production claims already hold the scope/agent lock, before the session lock.
     SELECT * INTO execution_owner FROM agents WHERE id = aid;
     SELECT * INTO destination FROM chat_sessions
-    WHERE id = conversation::uuid AND agent_id = aid AND source_channel IN ('web', 'shared') FOR UPDATE;
+    WHERE id = conversation::uuid AND agent_id = aid AND source_channel = 'web' FOR UPDATE;
     IF NOT FOUND THEN RETURN NULL; END IF;
     INSERT INTO openclaw_reply_bindings (id, session_id, agent_id, tenant_id, owner_id, user_id)
     VALUES (gen_random_uuid(), destination.id, aid, execution_owner.tenant_id, execution_owner.creator_id, destination.user_id)

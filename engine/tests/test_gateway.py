@@ -488,6 +488,9 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
     async def get_session(_id):
         return session
 
+    async def get_session_for_agent(session_id, agent_id):
+        return session if (session_id, agent_id) == (session.id, agent.id) else None
+
     async def get_sender(_id):
         return sender
 
@@ -502,6 +505,7 @@ def report_env(monkeypatch: pytest.MonkeyPatch, delivery_store: _DeliveryStore) 
     monkeypatch.setattr(delivery.agent_dao, "get", get_sender)
     monkeypatch.setattr(delivery.participant_dao, "get_by_type_ref", participant)
     monkeypatch.setattr(delivery.chat_session_dao, "get", get_session)
+    monkeypatch.setattr(delivery.chat_session_dao, "get_for_agent", get_session_for_agent)
     monkeypatch.setattr(delivery.gateway_report_delivery_dao, "create_intent", delivery_store.create_intent)
     monkeypatch.setattr("app.api.websocket.manager", SimpleNamespace(send_to_session=ws))
     monkeypatch.setattr("app.services.channels.outbound.deliver_session_reply", direct_delivery)

@@ -42,13 +42,13 @@ async def test_group_webhook_keeps_provider_conversation(webhook_pipeline, monke
     # Then
     assert history.await_args.kwargs["conversation_id"] == str(route.id)
     assert persist.await_args.kwargs["conversation_id"] == str(route.id)
-    assert isinstance(binding.ensure_shared_session, AsyncMock)
-    binding.ensure_shared_session.assert_not_awaited()
+    assert isinstance(binding.ensure_canonical_session, AsyncMock)
+    binding.ensure_canonical_session.assert_not_awaited()
 
 
 @pytest.mark.parametrize("webhook", WEBHOOKS)
 @pytest.mark.parametrize("rejection", ["unbound", "unauthorized"])
-async def test_rejected_webhook_cannot_access_shared_transcript(webhook_pipeline, monkeypatch, webhook, rejection):
+async def test_rejected_webhook_cannot_access_canonical_transcript(webhook_pipeline, monkeypatch, webhook, rejection):
     # Given
     pipeline, _ = webhook_pipeline
     *_, history, persist, enqueue = pipeline

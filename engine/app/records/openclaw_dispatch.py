@@ -47,8 +47,11 @@ class PreparedOpenClawMessage:
 
 @dataclass(frozen=True, slots=True)
 class SharedDispatchRequest:
+    """Claim the FIFO head of one human lane: ``session_id`` is that user's canonical session of ``agent_id``."""
+
     agent_id: UUID
     now: datetime
+    session_id: UUID
 
 
 @dataclass(frozen=True, slots=True)

@@ -22,7 +22,7 @@ db = fixtures.db
 async def test_mandatory_notice_refuses_claim_without_delivering_the_head(
     db: DbConnection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, claim_kind: str
 ) -> None:
-    agent_id, _session = await fixtures.shared_queue(db)
+    agent_id, session_id = await fixtures.canonical_queue(db)
     agent = await agent_dao.get(agent_id)
     assert agent is not None
     ordinary = await gateway_message_dao.create(
@@ -35,7 +35,7 @@ async def test_mandatory_notice_refuses_claim_without_delivering_the_head(
         return tmp_path / str(value)
 
     monkeypatch.setattr(openclaw_update_exclusion.agent_manager, "_agent_dir", directory)
-    request = SharedDispatchRequest(agent_id, datetime.now(UTC))
+    request = SharedDispatchRequest(agent_id, datetime.now(UTC), session_id)
     match claim_kind:
         case "ordinary":
             attempt = claim_ordinary_turn(agent, ordinary.id)

@@ -454,3 +454,16 @@ async def test_guest_and_delivery_failures_still_beat(
         await worker_http.ready(expected=True)
     assert broken.call_count == 5
     assert not task.done()
+
+
+@pytest.mark.parametrize(("channel", "authorized"), [("web", True), ("shared", False), ("agent", False)])
+async def test_reply_binding_is_authorized_only_for_web_sessions(
+    sweep: Sweep, monkeypatch: pytest.MonkeyPatch, channel: str, authorized: bool
+) -> None:
+    binding = sweep.add_binding()
+
+    async def session_row(_session: UUID, _agent: UUID) -> SimpleNamespace:
+        return SimpleNamespace(user_id=USER, source_channel=channel)
+
+    monkeypatch.setattr(authorization.chat_session_dao, "lock_for_agent", session_row)
+    assert (await authorization.authorize_reply_binding(binding) is not None) is authorized

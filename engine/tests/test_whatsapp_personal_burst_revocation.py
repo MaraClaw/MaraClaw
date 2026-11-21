@@ -80,7 +80,7 @@ async def test_revoke_cancels_pending_batch_with_fence_and_intent_cleanup_but_ke
         await linked.f.db.first.execute(
             "INSERT INTO gateway_messages (id, agent_id, sender_user_id, conversation_id, content, status) "
             "VALUES (%(id)s, %(agent)s, %(user)s, %(conv)s, 'web', 'pending')",
-            {"id": web, "agent": linked.owner.agent_id, "user": linked.f.db.user.id, "conv": str(linked.shared)},
+            {"id": web, "agent": linked.owner.agent_id, "user": linked.f.db.user.id, "conv": str(linked.transcript)},
         )
 
     # When the connection is revoked and the transaction commits.
@@ -138,7 +138,7 @@ async def test_revoke_rollback_restores_both_the_link_and_the_batch(linked: Link
     # Then neither the link invalidation nor the cancellation survives.
     after = (await rows(linked, "SELECT desired, generation FROM whatsapp_personal_connections"))[0]
     assert (after["desired"], after["generation"]) == (before["desired"], before["generation"])
-    assert await _state(linked, gateway_id) == ("pending", None, "pending", str(linked.shared))
+    assert await _state(linked, gateway_id) == ("pending", None, "pending", str(linked.transcript))
 
 
 async def test_revoke_leaves_a_claimed_uncertain_turn_untouched(linked: LinkedBurst):
@@ -157,7 +157,7 @@ async def test_revoke_leaves_a_claimed_uncertain_turn_untouched(linked: LinkedBu
     await _revoke(linked, purge=True)
 
     # Then the claimed batch and delivered turn are not reset, requeued or cancelled.
-    assert await _state(linked, gateway_id) == ("claimed", None, "delivered", str(linked.shared))
+    assert await _state(linked, gateway_id) == ("claimed", None, "delivered", str(linked.transcript))
 
 
 async def test_fresh_generation_accepts_a_new_batch_after_revocation(linked: LinkedBurst):

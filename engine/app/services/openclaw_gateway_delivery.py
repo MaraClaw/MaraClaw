@@ -28,10 +28,10 @@ from app.services.agent_manager import agent_manager
 from app.services.channels.types import normalize_channel_type
 from app.services.gateway_report_wake import wake_gateway_report_relay
 from app.services.openclaw_gateway_stream import GatewayDelta
+from app.services.openclaw_human_lane import human_lane_session
 from app.services.openclaw_transcript import ReplyMediaError, recover_media
 from app.services.realtime_runtime.contracts import RoutingOutcome
 from app.services.response_identity import response_guard
-from app.services.shared_chat import shared_session_id
 
 CHUNK_SEND_TIMEOUT_SECONDS = 1.0
 
@@ -51,7 +51,7 @@ def _utcnow() -> datetime:
 async def settle_native_report(
     agent: AgentRecord, message_id: UUID, result: str, *, binding_id: UUID | None = None
 ) -> RecordedReport | None:
-    """Take scope locks before the Shared session lock and reject a stale execution owner.
+    """Take scope locks before the human-lane session lock and reject a stale execution owner.
 
     ``binding_id`` additionally requires the row to still carry that reply binding: revocation nulls it.
     """
@@ -84,7 +84,6 @@ async def record_report(
 ) -> RecordedReport | None:
     """Commit the winning completion, chat, last-seen touch, and delivery intents."""
     at = now or _utcnow()
-    shared_id = shared_session_id(agent.id)
     attachments: tuple[ChatAttachment, ...] = ()
     if "MEDIA:" in result:
         try:
@@ -98,10 +97,11 @@ async def record_report(
         display_text = result
     async with connection_ctx():
         candidate = await gateway_message_dao.get_for_agent(message_id, agent.id)
-        if candidate is not None and candidate.conversation_id == str(shared_id):
+        lane = await human_lane_session(agent.id, candidate.conversation_id) if candidate is not None else None
+        if lane is not None:
             # Settlement joins claims, appends and cancellations under the lane lock, and marks the burst batch
             # completed before the gateway row moves, so no path ever takes the batch and the lane in reverse.
-            _ = await gateway_message_dao.lock_shared_lane(agent.id, shared_id)
+            _ = await gateway_message_dao.lock_human_lane(agent.id, lane.id)
             candidate = await gateway_message_dao.get_for_agent(message_id, agent.id)
             if candidate is None or candidate.status != "delivered":
                 return None
@@ -152,8 +152,9 @@ async def adopt_recovered_report(
     """Adopt an authorized published assistant under the caller's session/binding locks; never insert chat."""
     at = _utcnow()
     async with connection_ctx():
-        if claimed.conversation_id == str(shared_session_id(agent.id)):
-            _ = await gateway_message_dao.lock_shared_lane(agent.id, shared_session_id(agent.id))
+        lane = await human_lane_session(agent.id, claimed.conversation_id)
+        if lane is not None:
+            _ = await gateway_message_dao.lock_human_lane(agent.id, lane.id)
             _ = await personal_burst_dispatch_dao.mark_completed(claimed.id)
         won = await gateway_message_dao.complete_recovered(claimed, assistant.content, at)
         if won is None:
@@ -174,7 +175,7 @@ async def _finalize_report(agent: AgentRecord, won: GatewayMessageRecord, at: da
             if (
                 session is not None
                 and session.agent_id == agent.id
-                and normalize_channel_type(session.source_channel) not in (None, "", "web", "agent", "shared")
+                and normalize_channel_type(session.source_channel) not in (None, "", "web", "agent")
             ):
                 _ = await gateway_report_delivery_dao.create_intent(
                     message_id=won.id,
@@ -220,11 +221,7 @@ async def publish_report(agent: AgentRecord, report: RecordedReport) -> None:
                 str(agent.id),
                 message.conversation_id,
                 event,
-                user_id=(
-                    str(message.sender_user_id)
-                    if message.sender_user_id and message.conversation_id != str(shared_session_id(agent.id))
-                    else None
-                ),
+                user_id=str(message.sender_user_id) if message.sender_user_id else None,
             )
             logger.info("[Gateway] pushed reply to session {} agent={}", message.conversation_id, agent.id)
         except Exception as error:
@@ -251,11 +248,7 @@ async def publish_chunk(message: GatewayMessageRecord, delta: GatewayDelta) -> R
                 "seq": delta.seq,
                 "replace": delta.replace,
             },
-            user_id=(
-                str(message.sender_user_id)
-                if message.sender_user_id and message.conversation_id != str(shared_session_id(message.agent_id))
-                else None
-            ),
+            user_id=str(message.sender_user_id) if message.sender_user_id else None,
             send_timeout=CHUNK_SEND_TIMEOUT_SECONDS,
         )
     except Exception as error:

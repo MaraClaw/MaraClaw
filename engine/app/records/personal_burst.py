@@ -175,7 +175,7 @@ class PersonalBurstHead:
     """The actual oldest pending gateway row of the transcript lane, gated by DB-time readiness (never filtered out).
 
     ``due`` is True for legacy rows (no header), sealed batches and collecting batches past ``ready_at``.
-    ``active`` is True while a delivered shared turn is still unreported (shared lane is single-flight).
+    ``active`` is True while a delivered turn of this lane is still unreported (each human lane is single-flight).
     """
 
     gateway_id: UUID

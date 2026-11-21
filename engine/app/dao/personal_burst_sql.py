@@ -55,10 +55,13 @@ def require_transaction(operation: str) -> DbConnection:
 
 
 async def lock_parent(db: DbConnection, agent_id: UUID, transcript_session_id: UUID) -> bool:
-    """Take (or re-take, idempotently) the shared chat-session lock used by claiming. Always first."""
+    """Take (or re-take, idempotently) the human-lane lock: the canonical transcript row FOR UPDATE. Always first.
+
+    The predicate repeats the canonical unique-index terms, so an id that is not a canonical session never locks.
+    """
     row = await db.fetchone(
         "SELECT id FROM chat_sessions WHERE id = %(session)s AND agent_id = %(agent)s "
-        "AND source_channel = 'shared' FOR UPDATE",
+        "AND source_channel = 'web' AND is_primary IS TRUE AND is_group IS FALSE FOR UPDATE",
         {"session": transcript_session_id, "agent": agent_id},
     )
     return row is not None

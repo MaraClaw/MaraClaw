@@ -13,7 +13,7 @@ from app.dao.personal_burst_dao import personal_burst_dao
 from app.records.gateway_message import GatewayMessageRecord
 from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.channels.types import CHANNEL_TYPES, normalize_channel_type
-from app.services.shared_chat import shared_session_id
+from app.services.openclaw_human_lane import human_lane_session
 
 if TYPE_CHECKING:
     from app.records.openclaw_dispatch import PreparedOpenClawMessage
@@ -32,12 +32,15 @@ async def insert_prepared_message(
     if agent.tenant_id != prepared.agent.tenant_id:
         raise HTTPException(403, "Agent tenant changed during preparation")
     content = prepared.content
-    shared = conversation_id == str(shared_session_id(agent.id))
+    lane = await human_lane_session(agent.id, conversation_id)
+    if lane is not None and sender_user_id != lane.user_id:
+        # Canonical deliveries are user-filtered by sender, so only the owner may queue a turn on their own lane.
+        raise ValueError("Only the owner of a canonical session may queue a turn on its human lane")
     duplicate = (
         await gateway_message_dao.earliest_pending_duplicate(
             PendingDuplicateProbe(agent.id, sender_user_id, conversation_id, content)
         )
-        if deduplicate and not shared and sender_user_id is not None
+        if deduplicate and lane is None and sender_user_id is not None
         else None
     )
     if duplicate is not None:
@@ -54,9 +57,9 @@ async def insert_prepared_message(
         "guest_model_ref": prepared.guest_model_ref,
         "routing_reason": prepared.routing_reason,
     }
-    if shared:
-        # Every Shared INSERT takes the lane lock first and lands strictly after the current tail (all statuses).
-        row["created_at"] = await personal_burst_dao.next_created_at(agent.id, shared_session_id(agent.id))
+    if lane is not None:
+        # Every human-lane INSERT takes the lane lock first and lands strictly after the current tail (all statuses).
+        row["created_at"] = await personal_burst_dao.next_created_at(agent.id, lane.id)
     created = await gateway_message_dao.create(obj_in=row)
     if reply_session_id is not None:
         destination = await chat_session_dao.lock_for_agent(reply_session_id, agent.id)

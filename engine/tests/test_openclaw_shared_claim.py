@@ -9,8 +9,10 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.dao.chat_dao import chat_session_dao
 from app.db.session import get_connection
 from app.records.agent import AgentRecord
+from app.records.chat import ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.services import (
@@ -20,36 +22,55 @@ from app.services import (
     turn_timing,
 )
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError
-from app.services.shared_chat import shared_session_id
 from app.services.turn_timing import AdapterTiming, TurnTimeline
+
+type Conversation = Literal["thread", "canonical", "group"]
 
 
 class NativeQueue:
-    def __init__(self, shared: bool) -> None:
+    def __init__(self, conversation: Conversation) -> None:
         self.agent = AgentRecord(id=uuid4(), name="QA", creator_id=uuid4())
+        self.session = ChatSessionRecord(
+            uuid4(),
+            self.agent.id,
+            uuid4(),
+            source_channel="web" if conversation == "canonical" else "telegram",
+            is_primary=conversation == "canonical",
+            is_group=conversation == "group",
+        )
+        self.lane = "human" if conversation == "canonical" else "ordinary"
         self.row = GatewayMessageRecord(
             id=uuid4(),
             agent_id=self.agent.id,
             content="human",
-            conversation_id=str(shared_session_id(self.agent.id)) if shared else "ordinary-thread",
+            conversation_id="ordinary-thread" if conversation == "thread" else str(self.session.id),
         )
         self.claims: list[GatewayMessageRecord] = []
         self.releases: list[GatewayMessageRecord] = []
+        self.lanes: list[str] = []
 
     async def get_for_agent(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
         return self.row if (self.row.id, self.row.agent_id) == (message_id, agent_id) else None
 
-    async def ordinary_claim(self, agent: AgentRecord, message_id: UUID) -> GatewayMessageRecord | None:
-        assert (agent.id, message_id) == (self.row.agent_id, self.row.id)
+    async def get_session(self, session_id: UUID, agent_id: UUID) -> ChatSessionRecord | None:
+        return self.session if (self.session.id, self.session.agent_id) == (session_id, agent_id) else None
+
+    def _claim(self) -> GatewayMessageRecord | None:
         if self.row.status != "pending":
             return None
         self.row = replace(self.row, status="delivered", delivered_at=datetime.now(UTC))
         self.claims.append(self.row)
         return self.row
 
+    async def ordinary_claim(self, agent: AgentRecord, message_id: UUID) -> GatewayMessageRecord | None:
+        assert (agent.id, message_id) == (self.row.agent_id, self.row.id)
+        self.lanes.append("ordinary")
+        return self._claim()
+
     async def shared_claim(self, request: SharedDispatchRequest) -> GatewayMessageRecord | None:
-        assert request.agent_id == self.agent.id
-        return await self.ordinary_claim(self.agent, self.row.id)
+        assert (request.agent_id, request.session_id) == (self.agent.id, self.session.id)
+        self.lanes.append("human")
+        return self._claim()
 
     async def release(self, claimed: GatewayMessageRecord) -> GatewayMessageRecord | None:
         self.releases.append(claimed)
@@ -62,17 +83,28 @@ class NativeQueue:
         await routing._run_inbox_wake(self.agent, self.row.content, self.row.id)
 
 
-@pytest.fixture(params=[False, True], ids=["ordinary", "shared"])
+@pytest.fixture(params=["thread", "canonical", "group"])
 def queue(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> NativeQueue:
-    value = NativeQueue(request.param is True)
+    value = NativeQueue(request.param)
     monkeypatch.setattr(routing, "assert_work_allowed", AsyncMock())
     monkeypatch.setattr(routing, "load_agent_for_new_work", AsyncMock(return_value=value.agent))
     monkeypatch.setattr(routing.gateway_message_dao, "get_for_agent", value.get_for_agent)
+    monkeypatch.setattr(chat_session_dao, "get_for_agent", value.get_session)
     monkeypatch.setattr(routing.gateway_message_dao, "release_delivery", value.release)
     monkeypatch.setattr(routing, "claim_ordinary_turn", value.ordinary_claim)
     monkeypatch.setattr(routing, "claim_ready_shared", value.shared_claim)
     monkeypatch.setattr(delivery, "settle_native_report", AsyncMock(return_value=None))
     return value
+
+
+async def test_only_a_canonical_conversation_is_claimed_on_its_human_lane(
+    queue: NativeQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    uncertain = rpc.UncertainOutcome(str(queue.row.id), "unknown", None, "disconnect")
+    monkeypatch.setattr(rpc, "execute_gateway_turn", AsyncMock(return_value=uncertain))
+    await queue.run()
+    assert queue.lanes == [queue.lane]
+    assert [claim.id for claim in queue.claims] == [queue.row.id]
 
 
 @pytest.mark.parametrize("admission", ["not_submitted", "rejected"])

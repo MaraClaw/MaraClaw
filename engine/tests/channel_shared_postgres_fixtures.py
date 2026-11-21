@@ -87,7 +87,7 @@ async def live_channel(schema_db, monkeypatch):
     monkeypatch.setattr(openclaw_routing, "_schedule_inbox_wake", lambda *args: None)
     monkeypatch.setattr(llm_bridge, "_load_agent_and_model", AsyncMock(return_value=(agent, None, None)))
     published = AsyncMock()
-    monkeypatch.setattr(binding, "_publish_shared_user_message", published)
+    monkeypatch.setattr(binding, "_publish_user_message", published)
     app = FastAPI()
     app.include_router(slack.router, prefix="/api")
     background_tasks.start_background_tasks()
@@ -98,6 +98,17 @@ async def live_channel(schema_db, monkeypatch):
             yield LiveChannel(schema_db, agent, identities, users, client, published)
         finally:
             await background_tasks.drain_background_tasks()
+            background_tasks.start_background_tasks()
+
+
+async def canonical_sessions(live: LiveChannel) -> dict[UUID, str]:
+    """Every private canonical conversation of the agent, by owning user."""
+    rows = await live.db.fetchall(
+        "SELECT user_id, id FROM chat_sessions "
+        "WHERE agent_id = %(agent)s AND source_channel = 'web' AND is_primary AND NOT is_group",
+        {"agent": live.agent.id},
+    )
+    return {UUID(str(row["user_id"])): str(row["id"]) for row in rows}
 
 
 async def post_slack(live: LiveChannel, *, sender="U0", text="hello", channel="D0", valid_signature=True):

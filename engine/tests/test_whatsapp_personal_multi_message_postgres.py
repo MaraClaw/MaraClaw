@@ -39,7 +39,11 @@ async def exchange(lane: Lane, native: str) -> str:
     await age_pending(lane, 10)
     turn = (await claim(lane)).message
     assert turn is not None
-    assert (turn.status, turn.content, turn.conversation_id) == ("delivered", "self message", str(lane.linked.shared))
+    assert (turn.status, turn.content, turn.conversation_id) == (
+        "delivered",
+        "self message",
+        str(lane.linked.transcript),
+    )
     accepted = await rows(
         lane.linked,
         "SELECT batch_id, ordinal, outcome FROM personal_burst_inputs WHERE event_key = %(key)s",

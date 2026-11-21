@@ -22,7 +22,7 @@ from app.services.agent_manager import guest_model_ref
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_gateway_delivery import RecordedReport, record_report
 from app.services.openclaw_shared_dispatch import claim_shared_turn
-from app.services.shared_chat import ensure_shared_session
+from app.services.shared_chat import ensure_canonical_session
 
 __all__ = ["channel_db", "linked", "receipt_db"]
 
@@ -72,20 +72,26 @@ async def lane(linked: LinkedBurst, monkeypatch: pytest.MonkeyPatch, tmp_path: P
         await close_pool()
 
 
+async def transcript(lane: Lane) -> UUID:
+    """The linked owner's canonical session: the human lane their web and Personal turns share."""
+    async with connection_ctx():
+        return (await ensure_canonical_session(lane.agent_id, lane.linked.f.db.user.id)).id
+
+
 async def claim(lane: Lane) -> SharedClaimResult:
-    return await claim_shared_turn(SharedDispatchRequest(lane.agent_id, datetime.now(UTC)))
+    return await claim_shared_turn(SharedDispatchRequest(lane.agent_id, datetime.now(UTC), await transcript(lane)))
 
 
 async def legacy_row(lane: Lane, content: str, *, model_ref: str | None = None) -> UUID:
-    """A web/other-entry Shared row with its selection already stored, queued at the guarded FIFO tail."""
+    """A web/other-entry human-lane row with its selection already stored, queued at the guarded FIFO tail."""
+    session_id = await transcript(lane)
     async with connection_ctx():
-        _ = await ensure_shared_session(lane.agent_id)
-        created = await personal_burst_dao.next_created_at(lane.agent_id, lane.linked.shared)
+        created = await personal_burst_dao.next_created_at(lane.agent_id, session_id)
         row = await gateway_message_dao.create(
             obj_in={
                 "agent_id": lane.agent_id,
                 "sender_user_id": lane.linked.f.db.user.id,
-                "conversation_id": str(lane.linked.shared),
+                "conversation_id": str(session_id),
                 "content": content,
                 "status": "pending",
                 "selected_slot": "primary",

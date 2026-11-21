@@ -14,7 +14,6 @@ from app.records.channel_event_receipt import ChannelEventReceiptRecord
 from app.records.personal_burst import PendingUsage, PersonalBurstBatch, PersonalBurstLimits, PersonalBurstScope
 from app.records.personal_burst_input import NewBurstMember, PersonalBurstInput, ReceiptKey
 from app.records.whatsapp_personal import PersonalRoute
-from app.services.shared_chat import shared_session_id
 
 __all__ = ["receipt_db"]
 
@@ -40,7 +39,7 @@ class BurstDatabase:
 async def burst_db(receipt_db: ReceiptDatabase) -> BurstDatabase:
     db = receipt_db
     tenant, config, reply, epoch, generation = (uuid4() for _ in range(5))
-    transcript = shared_session_id(db.agent.id)
+    transcript = uuid4()
     route = PersonalRoute(
         config_id=config, auth_epoch=epoch, generation=generation, account_id="acct", self_jid="15550001@s.net"
     )
@@ -56,7 +55,7 @@ async def burst_db(receipt_db: ReceiptDatabase) -> BurstDatabase:
         )
         await db.first.execute(
             "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, is_primary) "
-            "VALUES (%(id)s, %(agent)s, %(user)s, 'Shared', 'shared', TRUE)",
+            "VALUES (%(id)s, %(agent)s, %(user)s, 'Conversation', 'web', TRUE)",
             {"id": transcript, "agent": db.agent.id, "user": db.user.id},
         )
         await db.first.execute(

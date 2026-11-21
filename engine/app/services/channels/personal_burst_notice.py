@@ -27,7 +27,7 @@ _NOTICE: Final[dict[BusyNoticeReason, str]] = {
 async def reject_personal_original(
     original: PersonalOriginal, outcome: RejectedOutcome, limits: PersonalBurstLimits
 ) -> PersonalRejected:
-    """Persist the rejection (no body kept). Runs in the caller's transaction under the shared-session lock."""
+    """Persist the rejection (no body kept). Runs in the caller's transaction under the human-lane lock."""
     covering = await personal_busy_notice_dao.find_recent(original.scope, limits.notice_cooldown_seconds)
     if covering is not None:
         _ = await personal_burst_input_dao.record_rejection(original.receipt, outcome, notice_id=covering.id)

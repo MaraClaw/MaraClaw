@@ -31,6 +31,7 @@ from app.services.channels import (
 from app.services.channels.whatsapp_personal_events import handle_frame, interrupted
 from app.services.channels.whatsapp_personal_journal import PersonalSendPendingError
 from app.services.channels.whatsapp_personal_protocol import Identity
+from app.services.shared_chat import ensure_canonical_session
 
 __all__ = ["channel_db", "receipt_db"]
 
@@ -103,10 +104,11 @@ async def test_hot_owner_guards_allow_concurrent_relay_identity(channel_db, monk
 
 
 async def test_personal_inputs_serialize_one_remaining_quota_slot(channel_db, monkeypatch):
-    # Given two distinct native inputs and exactly one owner quota slot.
+    # Given two distinct native inputs and exactly one owner quota slot, the owner's canonical session already committed.
     f = channel_db
     async with transaction(f.db.first):
         owner = await connected(f)
+        await ensure_canonical_session(owner.agent_id, owner.owner_id)
     held, competing, release = anyio.Event(), anyio.Event(), anyio.Event()
     original = intake.personal_owner
     results = []
