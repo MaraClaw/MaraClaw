@@ -9,6 +9,11 @@ import { build, preview } from 'vite'
 export const expect = playwrightExpect.configure({ timeout: 15_000 })
 export const companyId = 'a8122022-c233-4f10-91df-91e2d065d2cb'
 export const otherCompanyId = '66dccce3-bcfb-40ef-b334-49c2b47d614d'
+// The archived company is never on the browse page: only its by-id lookup names it. The unknown id answers 404.
+export const offPageCompanyId = '0ff9a6e0-5c1d-4b8e-9a37-2d6f1e4c8b10'
+export const unknownCompanyId = '0ff9a6e0-5c1d-4b8e-9a37-2d6f1e4c8b11'
+const tenants = { [companyId]: 'Selected company', [otherCompanyId]: 'Global leader', [offPageCompanyId]: 'Archived customer' }
+const companyOption = (id) => ({ id, name: tenants[id], slug: id.slice(0, 8), is_active: true, can_disable: true, tier: 'pro' })
 const admin = {
   id: otherCompanyId, identity_id: otherCompanyId, email: 'analytics@example.test', display_name: 'Analytics operator',
   avatar_url: null, role: 'platform_admin', is_platform_admin: true, tenant_id: companyId, title: null,
@@ -91,7 +96,12 @@ export async function createHarness() {
         if (path === '/api/auth/me') body = state.user
         else if (path === '/api/auth/login') body = { access_token: state.token, token_type: 'bearer', user: state.user }
         else if (path === '/api/notifications/unread-count') body = { unread_count: 0 }
-        else if (path === '/api/admin/companies/options') body = [{ id: companyId, name: 'Selected company' }, { id: otherCompanyId, name: 'Global leader' }]
+        else if (path === '/api/admin/companies/options') body = { items: params.q ? Object.keys(tenants).filter((id) => tenants[id].toLowerCase().includes(params.q.toLowerCase())).map(companyOption) : [companyId, otherCompanyId].map(companyOption), next_cursor: null }
+        else if (path.startsWith('/api/tenants/')) {
+          const id = path.split('/').at(-1)
+          if (tenants[id]) body = companyOption(id)
+          else { status = 404; body = { detail: 'Tenant not found' } }
+        }
         else if (path === '/api/admin/tavily-keys') body = []
         else if (path === '/api/admin/search-analytics/export-status') body = { capture_enabled: true, export_enabled: false, include_raw: false, bucket: null, prefix: 'search/', pending: 3, exporting: 0, exported: 0, skipped: 0, last_exported_at: null }
         else if (path.startsWith('/api/admin/search-analytics/')) {

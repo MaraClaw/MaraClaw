@@ -1,7 +1,7 @@
 // Standalone synthetic QA: node tests/search-analytics.browser.mjs
 // SEARCH_ANALYTICS_BASELINE=1 captures the unchanged legacy dashboard before implementation.
 import assert from 'node:assert/strict'
-import { createHarness, expect, companyId, otherCompanyId, flush } from './search-analytics-browser-harness.mjs'
+import { createHarness, expect, companyId, otherCompanyId, offPageCompanyId, unknownCompanyId, flush } from './search-analytics-browser-harness.mjs'
 
 const baseline = process.env.SEARCH_ANALYTICS_BASELINE === '1'
 const harness = await createHarness()
@@ -115,6 +115,29 @@ try {
       state.status = 200; state.overrides = {}
       await page.getByLabel('Analytics scope').selectOption(otherCompanyId)
       await expect(page.getByText('company query', { exact: true })).toBeVisible()
+    })
+
+    const lookups = (state) => state.exchanges.filter(({ path }) => path.startsWith('/api/tenants/')).map(({ path }) => path)
+    await harness.scenario({ name: 'off-page company deep link resolves by id and names the company', path: `search-engine?tab=analytics&company=${offPageCompanyId}` }, async (page, state) => {
+      await expect(page.getByRole('heading', { name: 'Archived customer', exact: true })).toBeVisible()
+      await expect(page.getByText('Archived customer accounts for', { exact: false })).toBeVisible()
+      await expect(page.getByLabel('Analytics scope')).toHaveValue(offPageCompanyId)
+      await expect(page.getByLabel('Analytics scope').locator('option')).toHaveText(['Entire system', 'Archived customer', 'Selected company', 'Global leader'])
+      assert.deepEqual(lookups(state), [`/api/tenants/${offPageCompanyId}`])
+      assert.equal(state.exchanges.filter(({ path }) => path.endsWith('/dashboard')).at(-1).params.tenant_id, offPageCompanyId)
+      await page.getByLabel('Search companies by name', { exact: true }).fill('archived')
+      await expect(page.getByLabel('Analytics scope').locator('option')).toHaveText(['Entire system', 'Archived customer'])
+      await harness.capture(page, 'off-page-company')
+    })
+    for (const value of [unknownCompanyId, 'not-a-company']) await harness.scenario({ name: `unknown company ${value === unknownCompanyId ? 'id' : 'value'} is labelled unknown without inventing a name`, path: `search-engine?tab=analytics&company=${value}` }, async (page, state) => {
+      await expect(page.getByRole('heading', { name: 'Unknown company', exact: true })).toBeVisible()
+      await expect(page.getByLabel('Analytics scope').locator('option:checked')).toHaveText('Unknown company')
+      await expect(page.getByLabel('Analytics scope')).toHaveValue(value)
+      await expect(page.getByText('This company accounts for', { exact: false })).toBeVisible()
+      assert.deepEqual(lookups(state), value === unknownCompanyId ? [`/api/tenants/${unknownCompanyId}`] : [])
+      await page.getByLabel('Analytics scope').selectOption('')
+      await expect(page.getByRole('heading', { name: 'Entire system', exact: true })).toBeVisible()
+      assert.equal(new URL(page.url()).searchParams.has('company'), false)
     })
 
     await harness.scenario({ name: 'Overview retains legacy reads and tab navigation preserves URL rules', path: '' }, async (page, state) => {

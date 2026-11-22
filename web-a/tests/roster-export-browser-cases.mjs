@@ -20,6 +20,7 @@ export function installRosterProbe() {
 
 const exportButton = (page) => page.getByRole('button', { name: 'Export company CSV', exact: true })
 const pendingButton = (page) => page.getByRole('button', { name: 'Exporting company CSV…', exact: true })
+const errorToast = (page) => page.locator('[data-sonner-toast][data-type="error"]')
 const csv = 'id,email,display_name,role,is_active,agents_count,created_at,source\r\nserver-only,off-page@example.test,Off-page member,member,true,2,,local\r\n'
 const header = csv.split('\r\n')[0] + '\r\n'
 const settle = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
@@ -44,11 +45,11 @@ export async function exerciseRosterExports(scenario, h) {
   const actions = []
   for (const role of ['platform_admin', 'org_admin']) await scenario(`${role} exports complete server CSV for the current company and literal search`, async (page, state) => {
     state.downloadCsv = csv
-    await h.openUsers(page, 'company=beta&q=%20%25_Case%2B%3F%20')
+    await h.openUsers(page, `company=${h.companies.beta}&q=%20%25_Case%2B%3F%20`)
     await expect(exportButton(page)).toBeEnabled()
     const { file, result, resources } = await download(page, state)
     assert.equal(result, csv)
-    assert.deepEqual(state.exports, [{ tenant: role === 'platform_admin' ? 'beta' : h.admin.tenant_id, search: ' %_Case+? ' }])
+    assert.deepEqual(state.exports, [{ tenant: role === 'platform_admin' ? h.companies.beta : h.admin.tenant_id, search: ' %_Case+? ' }])
     assert.equal(state.calls.every((call) => call.cursor === null), true)
     assert.equal(result.includes('Hidden supervisor'), false)
     await file.saveAs(join(h.output, `company-roster-${role}.csv`))
@@ -59,7 +60,7 @@ export async function exerciseRosterExports(scenario, h) {
   await scenario('header-only CSV is a successful download with visible outcome', async (page, state) => {
     state.downloadCsv = header
     state.answer = async () => ({ items: [], next_cursor: null })
-    await h.openUsers(page, 'company=alpha&q=missing')
+    await h.openUsers(page, `company=${h.companies.alpha}&q=missing`)
     const { result } = await download(page, state)
     assert.equal(result, header)
     await expect(page.getByRole('status').filter({ hasText: 'download started' })).toBeVisible()
@@ -72,18 +73,19 @@ export async function exerciseRosterExports(scenario, h) {
     await h.openUsers(page)
     await page.evaluate((fail) => { window.__roster.fail = fail }, failure === 'download')
     await exportButton(page).click()
-    await expect(page.getByRole('alert')).toBeVisible()
+    await expect(errorToast(page)).toBeVisible()
     await expect(exportButton(page)).toBeEnabled()
     const resources = await probe(page)
     assert.deepEqual(resources.created, resources.revoked)
     assert.equal(resources.anchors, 0)
     await h.ownedBrowser.capture(page, join(h.output, `roster-${failure}-error.png`))
+    await errorToast(page).locator('[data-close-button]').click()
     state.exportAnswer = async () => ({ ticket: `issued-${state.exports.length}`, expires_in: 60 })
     await page.evaluate(() => { window.__roster.fail = false })
     if (failure === 'download') state.downloads.push({ syntheticFailedClick: true })
     const { result } = await download(page, state)
     assert.equal(result, csv)
-    await expect(page.getByRole('alert')).toHaveCount(0)
+    await expect(errorToast(page)).toHaveCount(0)
   })
 
   for (const transition of ['company A-B-A', 'search A-B-A', 'session', 'unmount']) for (const status of [200, 403]) await scenario(`retired export ${status} cannot affect ${transition} or a new pending export`, async (page, state) => {
@@ -103,10 +105,10 @@ export async function exerciseRosterExports(scenario, h) {
     await expect(pendingButton(page)).toHaveAttribute('aria-busy', 'true')
     if (transition === 'company A-B-A' && status === 200) await h.ownedBrowser.capture(page, join(h.output, 'roster-pending.png'))
     if (transition === 'company A-B-A') {
-      await page.getByRole('combobox').selectOption('beta')
+      await page.getByRole('combobox').selectOption(h.companies.beta)
       await expect(h.openUser(page, 'beta member')).toBeVisible()
       await expect(exportButton(page)).toBeEnabled()
-      await page.getByRole('combobox').selectOption('alpha')
+      await page.getByRole('combobox').selectOption(h.companies.alpha)
       await expect(h.openUser(page, 'alpha member')).toBeVisible()
     } else if (transition === 'search A-B-A') {
       await page.getByLabel('Search', { exact: true }).fill('other')
@@ -136,7 +138,7 @@ export async function exerciseRosterExports(scenario, h) {
     await settle(page)
     assert.equal(state.downloads.length, 0)
     assert.deepEqual((await probe(page)).created, [])
-    await expect(page.getByRole('alert')).toHaveCount(0)
+    await expect(errorToast(page)).toHaveCount(0)
     await expect(page.getByText('Retired export error', { exact: true })).toHaveCount(0)
     if (currentView) {
       await expect(pendingButton(page)).toBeDisabled()

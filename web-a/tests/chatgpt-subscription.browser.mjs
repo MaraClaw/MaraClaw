@@ -17,8 +17,11 @@ await mkdir(output, { recursive: true })
 const base = '/api/enterprise/llm-models/chatgpt-subscription'
 const tenantA = 'a8122022-c233-4f10-91df-91e2d065d2cb', tenantB = 'b8122022-c233-4f10-91df-91e2d065d2cb'
 const callback = 'http://localhost:1455/auth/callback?code=synthetic-private-code&state=synthetic-state'
-const admin = { id: 'operator', identity_id: 'identity', email: 'synthetic@example.test', display_name: 'Synthetic Operator', role: 'org_admin', is_platform_admin: false, tenant_id: tenantA, is_active: true, email_verified: true, must_change_password: false, avatar_url: null, created_at: '2026-10-23T00:00:00Z' }
-const companies = [tenantA, tenantB].map((id, i) => ({ id, name: `Synthetic ${i ? 'Beta' : 'Alpha'}`, slug: `synthetic-${i}`, is_active: true, created_at: admin.created_at }))
+// AuthUserSchema requires UUID ids; any other value fails the session parse and signs out.
+const admin = { id: 'c1a7e5d0-3b6f-4a2e-9d41-7f0c8e2b5a91', identity_id: 'c1a7e5d0-3b6f-4a2e-9d41-7f0c8e2b5a92', email: 'synthetic@example.test', display_name: 'Synthetic Operator', role: 'org_admin', is_platform_admin: false, tenant_id: tenantA, is_active: true, email_verified: true, must_change_password: false, avatar_url: null, created_at: '2026-10-23T00:00:00Z' }
+// Gamma is never on the browse page: only the by-id lookup reaches it. The unknown id answers 404.
+const tenantC = '28122022-c233-4f10-91df-91e2d065d2cb', unknownTenant = '38122022-c233-4f10-91df-91e2d065d2cb'
+const companies = [tenantA, tenantB, tenantC].map((id, i) => ({ id, name: `Synthetic ${['Alpha', 'Beta', 'Gamma'][i]}`, slug: `synthetic-${i}`, is_active: true, can_disable: true, tier: 'pro', created_at: admin.created_at }))
 const receipt = { status: 'running', output, scenarios: [], screenshots: [], controlFrames: [], violations: [], cleanup: { tabs: 0, closedTabs: 0, barriers: 0, released: 0 } }
 const inFlight = new Set()
 let browser, server, profile, current
@@ -26,6 +29,9 @@ const wait = (locator, state = 'visible') => locator.waitFor({ state, timeout: 1
 const button = (page, text) => page.locator('button').filter({ hasText: new RegExp(`^${text}$`, 'u') }).last()
 const card = (page) => page.locator('[data-slot="card"]').filter({ has: page.locator('h3').filter({ hasText: /^Connect ChatGPT subscription$/u }) })
 const field = (page) => page.getByLabel('Full callback URL', { exact: true })
+const connect = (page) => page.locator('button:not(:disabled)').filter({ hasText: /^Connect ChatGPT subscription$/u }).last()
+const picker = (page) => page.getByLabel('Company', { exact: true })
+const selectedCompany = (page) => picker(page).evaluate((select) => ({ value: select.value, label: select.selectedOptions[0]?.textContent, options: [...select.options].map((option) => option.textContent) }))
 async function bounded(promise) {
   let timer
   try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Synthetic barrier timed out')), 12_000) })]) }
@@ -67,11 +73,16 @@ async function api(state, request, response) {
       body = { session_id: 'synthetic-grok', verification_url: 'https://auth.example.test/grok', user_code: 'SYNTHETIC', interval: 5, expires_in: 600 }
     } else if (path.endsWith('/grok-subscription/status')) {
       body = { status: state.outcome, detail: '<html>unsafe provider detail</html>' }
+    } else if (path.startsWith('/api/tenants/')) {
+      assert.equal(request.method, 'GET')
+      const company = companies.find((item) => path === `/api/tenants/${item.id}`)
+      if (company) body = company
+      else { status = 404; body = { detail: 'Tenant not found' } }
     } else {
       assert.equal(request.method, 'GET')
       switch (path) {
-        case '/api/auth/me': body = { ...admin, ...(state.platform ? { role: 'platform_admin', is_platform_admin: true } : {}) }; break
-        case '/api/admin/companies/options': body = companies; break
+        case '/api/auth/me': body = { ...admin, tenant_id: state.ownTenant ?? admin.tenant_id, ...(state.platform ? { role: 'platform_admin', is_platform_admin: true } : {}) }; break
+        case '/api/admin/companies/options': body = { items: companies.slice(0, 2), next_cursor: null }; break
         case '/api/notifications/unread-count': body = { unread_count: 0 }; break
         case '/api/enterprise/llm-models': case '/api/enterprise/llm-providers': case '/api/admin/search-analytics/orgs': body = []; break
         case '/api/admin/search-analytics/summary': body = { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' }; break
@@ -133,10 +144,11 @@ async function scenario(options, exercise) {
   try {
     const session = await page.resolveSessionId()
     await page.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('maraclaw-admin-token','synthetic-chatgpt-token');localStorage.setItem('maraclaw-admin-theme',${JSON.stringify(state.theme)});` }, session)
-    await page.goto(`${server.resolvedUrls.local[0]}models${state.platform ? `?company=${tenantA}` : ''}`)
+    await page.goto(`${server.resolvedUrls.local[0]}${state.path ?? `models${state.platform ? `?company=${tenantA}` : ''}`}`)
     await tabs.repin(tab.targetId, viewport)
     if (state.width === 390) await omowright.emulate(page, 'iphone-14')
-    await wait(button(page, 'Connect ChatGPT subscription')); await page.snapshot()
+    // A platform admin's company unlocks the card only after its by-id lookup resolves.
+    await (state.ready ? state.ready(page) : wait(connect(page))); await page.snapshot()
     await exercise(page, state)
     assert.deepEqual(pageErrors, [])
     assert.deepEqual(receipt.violations, [])
@@ -221,13 +233,38 @@ try {
     else { await field(page).fill(callback); await button(page, 'Complete ChatGPT sign-in').click() }
     await bounded(barrier.entered)
     state.scope = tenantB
-    await page.locator('main label').filter({ hasText: 'Company' }).locator('select').selectOption(tenantB)
-    await wait(button(page, 'Connect ChatGPT subscription'))
+    await picker(page).selectOption(tenantB)
+    await wait(connect(page))
     barrier.release(); await bounded(barrier.done)
     await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame) })
     await button(page, 'Connect ChatGPT subscription').focus(); await page.keyboard.press('Tab')
     assert.equal(await field(page).count(), 0); assert.equal(await card(page).locator('[role="status"]').count(), 0)
     assert.equal(state.calls.filter((call) => call.path === '/api/enterprise/llm-models' && call.scope === tenantB).length, 1)
+  })
+  const lookups = (state) => [...new Set(state.calls.filter((call) => call.path.startsWith('/api/tenants/')).map((call) => call.path))]
+  const modelScopes = (state) => [...new Set(state.calls.filter((call) => call.path === '/api/enterprise/llm-models').map((call) => call.scope))]
+  const companyParam = (page) => page.evaluate(() => new URL(location.href).searchParams.get('company'))
+  for (const [name, ownTenant, expected] of [['pa-own-company-preselect', tenantC, tenantC], ['pa-own-company-lookup-fallback', unknownTenant, tenantA]]) {
+    await scenario({ name, platform: true, ownTenant, scope: expected, path: 'models' }, async (page, state) => {
+      assert.deepEqual(await selectedCompany(page), { value: expected, label: expected === tenantC ? 'Synthetic Gamma' : 'Synthetic Alpha', options: expected === tenantC ? ['Synthetic Gamma', 'Synthetic Alpha', 'Synthetic Beta'] : ['Synthetic Alpha', 'Synthetic Beta'] })
+      assert.equal(await companyParam(page), expected)
+      assert.deepEqual(modelScopes(state), [expected])
+      assert.equal(lookups(state).includes(`/api/tenants/${ownTenant}`), true)
+      await begin(page)
+    })
+  }
+  await scenario({ name: 'pa-off-page-deep-link', platform: true, scope: tenantC, path: `models?company=${tenantC}` }, async (page, state) => {
+    assert.deepEqual(await selectedCompany(page), { value: tenantC, label: 'Synthetic Gamma', options: ['Synthetic Gamma', 'Synthetic Alpha', 'Synthetic Beta'] })
+    assert.deepEqual(lookups(state), [`/api/tenants/${tenantC}`])
+    assert.deepEqual(modelScopes(state), [tenantC])
+    await begin(page)
+  })
+  await scenario({ name: 'pa-unknown-deep-link', platform: true, scope: unknownTenant, path: `models?company=${unknownTenant}`, ready: (page) => wait(page.locator('option').filter({ hasText: /^Unknown company$/u }), 'attached') }, async (page, state) => {
+    assert.deepEqual(await selectedCompany(page), { value: unknownTenant, label: 'Unknown company', options: ['Unknown company', 'Synthetic Alpha', 'Synthetic Beta'] })
+    assert.equal(await companyParam(page), unknownTenant)
+    assert.equal(await button(page, 'Connect ChatGPT subscription').isDisabled(), true)
+    assert.deepEqual(modelScopes(state), [])
+    assert.equal(state.calls.some((call) => call.method !== 'GET'), false)
   })
   receipt.status = 'passed'
 } catch (error) { receipt.status = 'failed'; receipt.error = String(error); process.exitCode = 1 }
