@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { canRequestAgentDeletion, isAgentExpired } from '../src/lib/agent-lifecycle-policy.ts'
+import { canRequestAgentDeletion, isAgentExpired, lifecycleStartBlock } from '../src/lib/agent-lifecycle-policy.ts'
+import { lifecycle } from './agent-lifecycle-fixture.ts'
 
 for (const offset of [-1, 0, 1]) {
   test(`timestamp expiry includes equality at offset ${offset}`, () => {
@@ -35,5 +36,20 @@ for (const rights of [
     // When / Then
     assert.equal(canRequestAgentDeletion(agent, user), rights.allowed)
     assert.equal(canRequestAgentDeletion(agent, null), false)
+  })
+}
+
+const blocked = { availability: { ...lifecycle.availability, can_start: false } }
+for (const [label, input, expected] of [
+  ['an expired agent during an upgrade', { expired: true, upgrading: true, confirmed: true, lifecycle }, 'expired'],
+  ['an upgrade with a confirmed start', { expired: false, upgrading: true, confirmed: true, lifecycle }, 'upgrading'],
+  ['an unconfirmed lifecycle', { expired: false, upgrading: false, confirmed: false, lifecycle }, 'unconfirmed'],
+  ['no lifecycle result', { expired: false, upgrading: false, confirmed: true, lifecycle: undefined }, 'unconfirmed'],
+  ['a confirmed lifecycle that cannot start', { expired: false, upgrading: false, confirmed: true, lifecycle: blocked }, 'unavailable'],
+  ['a confirmed lifecycle that can start', { expired: false, upgrading: false, confirmed: true, lifecycle }, null],
+] as const) {
+  test(`start block for ${label} is ${expected}`, () => {
+    // Given / When / Then
+    assert.equal(lifecycleStartBlock(input), expected)
   })
 }

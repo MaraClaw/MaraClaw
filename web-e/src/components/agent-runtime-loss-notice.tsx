@@ -1,26 +1,32 @@
 import * as Dialog from '@radix-ui/react-dialog'
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { agentLifecycleKey } from '@/hooks/agent-lifecycle-options'
 import { agentUpdateKey } from '@/hooks/openclaw-update-options'
 import { useMutation, useWorkspaceSession } from '@/hooks/session-workspace'
+import { useAgentExpiry } from '@/hooks/use-agent-expiry'
+import { useAgentLifecycle } from '@/hooks/use-agent-lifecycle'
 import { useAuth } from '@/hooks/use-auth'
+import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
 import { useTranslation } from '@/hooks/use-translation'
-import { canManageAgent, runtimeLossRecovery, runtimeLossSummary, type RuntimeLossReason } from '@/lib/agent-runtime-loss'
+import { lifecycleBlockMessage, lifecycleStartBlock, type LifecycleStartBlock } from '@/lib/agent-lifecycle-policy'
+import {
+  canManageAgent, runtimeLossRecovery, runtimeLossSummary, startNewContainerFailureMessage, type RuntimeLossReason,
+} from '@/lib/agent-runtime-loss'
 import { cn } from '@/lib/utils'
 import type { AgentOut } from '@/lib/workspace-api'
+
+type RuntimeLoss = NonNullable<AgentOut['runtime_loss']>
+type RecoveryGate = { readonly blocked: boolean; readonly reasons: readonly string[] }
 
 export function AgentRuntimeLossNotice({ agent, className }: {
   readonly agent: AgentOut
   readonly className?: string
 }) {
-  const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const { user } = useAuth()
-  // Dismissal is per recorded loss and per visit: leaving the page and coming back asks again.
-  const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   // Each visit re-checks the agent first, so the cached copy can't reopen a loss that's already resolved.
   const [checkedAgent, setCheckedAgent] = useState<string | null>(null)
   useEffect(() => {
@@ -29,6 +35,55 @@ export function AgentRuntimeLossNotice({ agent, className }: {
       .finally(() => { if (live) setCheckedAgent(agent.id) })
     return () => { live = false }
   }, [scope.client, agent.id])
+  const loss = agent.runtime_loss
+  if (!loss || checkedAgent !== agent.id) return null
+  // The lifecycle projection answers members 403, so only a manager mounts the hooks that gate recovery.
+  return canManageAgent(agent, user?.id)
+    ? <ManagerRuntimeLossNotice agent={agent} loss={loss} className={className} />
+    : <RuntimeLossDialog agent={agent} loss={loss} className={className} gate={null} />
+}
+
+function ManagerRuntimeLossNotice({ agent, loss, className }: {
+  readonly agent: AgentOut
+  readonly loss: RuntimeLoss
+  readonly className: string | undefined
+}) {
+  const { t: translate, owned } = useTranslation()
+  const lifecycle = useAgentLifecycle(agent.id, true)
+  const upgrading = useOpenClawUpdate(agent.id).gate === 'upgrading'
+  const expired = useAgentExpiry(agent)
+  const block = lifecycleStartBlock({ expired, upgrading, confirmed: lifecycle.confirmed, lifecycle: lifecycle.data })
+  const reasons = (blocked: LifecycleStartBlock | null): readonly string[] => {
+    switch (blocked) {
+      case null: return []
+      case 'expired': return [owned(lifecycleBlockMessage.expired)]
+      case 'upgrading': return [owned(lifecycleBlockMessage.upgrade_in_progress)]
+      case 'unconfirmed': return [!lifecycle.online || lifecycle.isPaused
+        ? translate("You’re offline. Recovery will be available when you reconnect.")
+        : lifecycle.isError ? translate("Unable to check whether this agent can start. It will be checked again shortly.")
+          : translate("Checking whether this agent can start…")]
+      case 'unavailable': {
+        const codes = lifecycle.data?.availability.blocking_codes
+          .filter((code) => code !== 'runtime_stopped' && code !== 'runtime_not_running') ?? []
+        return codes.length ? codes.map((code) => owned(lifecycleBlockMessage[code]))
+          : [translate(startNewContainerFailureMessage.start_ineligible)]
+      }
+    }
+  }
+  return <RuntimeLossDialog agent={agent} loss={loss} className={className} gate={{ blocked: block !== null, reasons: reasons(block) }} />
+}
+
+function RuntimeLossDialog({ agent, loss, className, gate }: {
+  readonly agent: AgentOut
+  readonly loss: RuntimeLoss
+  readonly className: string | undefined
+  readonly gate: RecoveryGate | null
+}) {
+  const { t: translate } = useTranslation()
+  const scope = useWorkspaceSession()
+  const reasonId = useId()
+  // Dismissal is per recorded loss and per visit: leaving the page and coming back asks again.
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   const start = useMutation({
     mutationFn: (reason: RuntimeLossReason) => runtimeLossRecovery[reason].start(agent.id),
     onSuccess(_agent, reason) {
@@ -41,9 +96,7 @@ export function AgentRuntimeLossNotice({ agent, className }: {
       void scope.client.invalidateQueries({ queryKey: agentLifecycleKey(agent.id), exact: true })
     },
   })
-  const loss = agent.runtime_loss
-  if (!loss || checkedAgent !== agent.id) return null
-  const manager = canManageAgent(agent, user?.id)
+  const manager = gate !== null
   const recovery = runtimeLossRecovery[loss.reason]
   const open = dismissedAt !== loss.detected_at
   const busy = start.isPending
@@ -69,6 +122,11 @@ export function AgentRuntimeLossNotice({ agent, className }: {
               <div className="space-y-2 text-sm leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
                 <p>{translate(runtimeLossSummary[loss.reason])}</p>
                 <p>{translate(manager ? recovery.managerMessage : recovery.memberMessage)}</p>
+                {gate?.reasons.length ? (
+                  <div id={reasonId} className="space-y-1 text-foreground">
+                    {gate.reasons.map((reason) => <p key={reason}>{reason}</p>)}
+                  </div>
+                ) : null}
               </div>
             </Dialog.Description>
             {start.isError ? (
@@ -79,8 +137,10 @@ export function AgentRuntimeLossNotice({ agent, className }: {
                 <Button type="button" variant="outline" className="min-h-11" disabled={busy}>
                   {manager ? translate("Not now") : translate("Close")}</Button>
               </Dialog.Close>
-              {manager ? (
-                <Button type="button" className="h-auto min-h-11 whitespace-normal" disabled={busy} onClick={() => start.mutate(loss.reason)}>
+              {gate ? (
+                <Button type="button" className="h-auto min-h-11 whitespace-normal" disabled={busy || gate.blocked}
+                  aria-describedby={gate.blocked && gate.reasons.length ? reasonId : undefined}
+                  onClick={() => start.mutate(loss.reason)}>
                   {translate(busy ? recovery.pending : recovery.label)}</Button>
               ) : null}
             </div>

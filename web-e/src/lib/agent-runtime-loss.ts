@@ -20,7 +20,8 @@ export function canManageAgent(
 
 export type StartNewContainerFailure =
   | 'forbidden' | 'setup_incomplete' | 'container_present' | 'image_unavailable' | 'start_ineligible'
-  | 'start_cancelled' | 'capacity_exceeded' | 'runtime_attention' | 'start_failed' | 'unknown'
+  | 'start_cancelled' | 'capacity_exceeded' | 'runtime_attention' | 'start_failed' | 'update_required' | 'update_in_progress'
+  | 'unknown'
 
 export const startNewContainerFailureMessage = {
   forbidden: 'Only this agent’s managers can start a new container.',
@@ -32,6 +33,8 @@ export const startNewContainerFailureMessage = {
   capacity_exceeded: 'There isn’t enough capacity to start a new container right now. Try again in a few minutes.',
   runtime_attention: 'This agent’s runtime needs attention before it can start. Contact your company admin.',
   start_failed: 'The new container couldn’t be started. Try again in a moment.',
+  update_required: 'This agent must be upgraded before a new container can start. Contact your company admin.',
+  update_in_progress: 'This agent is being upgraded. Start a new container once the upgrade finishes.',
   unknown: 'Unable to start a new container. Try again, or contact your company admin if it keeps happening.',
 } as const satisfies Record<StartNewContainerFailure, TranslationKey>
 
@@ -47,6 +50,8 @@ const failureByStatusAndCode = new Map<string, StartNewContainerFailure>([
   ['409:guest_memory_unbounded', 'runtime_attention'],
   ['409:guest_recreation_required', 'runtime_attention'],
   ['502:guest_start_failed', 'start_failed'],
+  ['423:openclaw_update_required', 'update_required'],
+  ['409:openclaw_update_in_progress', 'update_in_progress'],
 ])
 
 function detailCode(detail: unknown): string | null {
@@ -73,6 +78,8 @@ const startStoppedFailureMessage = {
   start_cancelled: 'This agent was stopped before it finished starting.',
   capacity_exceeded: 'There isn’t enough capacity to start this agent right now. Try again in a few minutes.',
   start_failed: 'This agent couldn’t be started. Try again in a moment.',
+  update_required: 'This agent must be upgraded before it can start. Contact your company admin.',
+  update_in_progress: 'This agent is being upgraded. Start it again once the upgrade finishes.',
   unknown: 'Unable to start this agent. Try again, or contact your company admin if it keeps happening.',
 } as const satisfies Record<StartNewContainerFailure, TranslationKey>
 

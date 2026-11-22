@@ -43,6 +43,20 @@ export function isAgentExpired(agent: { readonly is_expired?: boolean; readonly 
   return Boolean(agent.is_expired || (agent.expires_at && Date.parse(agent.expires_at) <= now))
 }
 
+export type LifecycleStartBlock = 'expired' | 'upgrading' | 'unconfirmed' | 'unavailable'
+
+export function lifecycleStartBlock(input: {
+  readonly expired: boolean
+  readonly upgrading: boolean
+  readonly confirmed: boolean
+  readonly lifecycle: Pick<AgentLifecycle, 'availability'> | undefined
+}): LifecycleStartBlock | null {
+  if (input.expired) return 'expired'
+  if (input.upgrading) return 'upgrading'
+  if (!input.confirmed || !input.lifecycle) return 'unconfirmed'
+  return input.lifecycle.availability.can_start ? null : 'unavailable'
+}
+
 export function canRequestAgentDeletion(agent: {
   readonly creator_id: string; readonly is_system?: boolean; readonly access_level?: string | null
 }, user: { readonly id: string; readonly role: string } | null) {

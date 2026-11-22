@@ -1,8 +1,29 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
+import type { AgentLifecycle } from '../src/lib/agent-lifecycle-api'
+import type { AgentOut } from '../src/lib/workspace-api'
 import { lifecycleReady, warningLifecycle } from './agent-lifecycle-data'
 import { deferMCPRetry, lifecyclePath, prepareLifecycle, settingsPath } from './agent-lifecycle-fixture'
-import { originalAgent } from './session-fencing-fixture'
+import { originalAgent, replacementUser } from './session-fencing-fixture'
+
+const loss = { reason: 'container_missing', detected_at: '2030-01-01T00:10:00Z' } as const
+const healthyAgent: AgentOut = { ...originalAgent, status: 'running', runtime_loss: null }
+const lostAgent: AgentOut = { ...healthyAgent, runtime_loss: loss }
+const healthyLifecycle: AgentLifecycle = {
+  ...lifecycleReady, runtime: { recorded_status: 'running', recorded_container_id: 'guest-container' },
+  availability: { ...lifecycleReady.availability, blocking_codes: [] },
+}
+// Dispatch records a loss only for a running agent and leaves its recorded status, so availability is unchanged.
+const lostLifecycle: AgentLifecycle = { ...healthyLifecycle, runtime: { ...healthyLifecycle.runtime, loss } }
+const upgradeInProgress = {
+  notice: null, run: { id: '0b6f4c4e-2d1a-4c8e-9a3b-5f6d7e8f9a0b', state: 'cutover', failure_code: null },
+  required: false, can_upgrade: false,
+}
+
+// TanStack's focus manager listens for visibilitychange on window; it refetches stale focus-refetching queries.
+async function returnToPage(page: Page) {
+  await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')))
+}
 
 for (const width of [390, 1440]) {
   test(`integration recovery preserves following controls at ${width}px`, async ({ page }) => {
@@ -108,3 +129,47 @@ for (const blocked of ['expired', 'setup_pending', 'upgrade_in_progress'] as con
     await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeDisabled()
   })
 }
+
+for (const upgrading of [false, true]) {
+  test(`a container loss found while Settings is open shows a${upgrading ? ' disabled' : 'n enabled'} recovery without a reload${upgrading ? ' during an upgrade' : ''}`, async ({ page }) => {
+    // Given
+    const api = await prepareLifecycle(page, healthyLifecycle, healthyAgent)
+    if (upgrading) await page.route(`**/api/agents/${originalAgent.id}/openclaw-update`, (route) => route.fulfill({ json: upgradeInProgress }))
+    await page.goto(settingsPath)
+    await expect(page.getByRole('region', { name: 'Agent lifecycle', exact: true })).toContainText('Recorded runtime: Running')
+    await page.evaluate(() => { document.documentElement.dataset.sameDocument = 'yes' })
+    const reads = api.reads()
+    // When
+    api.setAgent(lostAgent)
+    api.set(lostLifecycle)
+    await returnToPage(page)
+    // Then
+    const dialog = page.getByRole('alertdialog', { name: 'This agent’s workspace stopped running', exact: true })
+    const recover = dialog.getByRole('button', { name: 'Start a new container', exact: true })
+    await expect(dialog).toContainText('The container this agent runs in is no longer available')
+    if (upgrading) {
+      await expect(recover).toBeDisabled()
+      await expect(recover).toHaveAccessibleDescription('An upgrade is in progress. Wait for it to finish.')
+    } else {
+      await expect(recover).toBeEnabled()
+    }
+    expect(api.reads()).toBeGreaterThan(reads)
+    await expect(page.locator('html')).toHaveAttribute('data-same-document', 'yes')
+  })
+}
+
+test('a member sees the read-only loss dialog and never requests the manage-only lifecycle', async ({ page }) => {
+  // Given
+  const api = await prepareLifecycle(page, lostLifecycle, { ...lostAgent, access_level: 'use', creator_id: replacementUser.id })
+  await page.goto(settingsPath)
+  const dialog = page.getByRole('alertdialog', { name: 'This agent’s workspace stopped running', exact: true })
+  await expect(dialog).toContainText('Ask the agent’s manager to start a new container.')
+  const update = page.waitForResponse(`**/api/agents/${originalAgent.id}/openclaw-update`)
+  // When
+  await returnToPage(page)
+  await update
+  // Then
+  await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toBeEnabled()
+  await expect(dialog.getByRole('button', { name: 'Start a new container' })).toHaveCount(0)
+  expect(api.reads() + api.replacementReads()).toBe(0)
+})

@@ -10,8 +10,10 @@ export function agentLifecycleOptions(scope: SessionQueryScope, agentId: string,
   const queryFn = async ({ signal }: QueryFunctionContext<ReturnType<typeof agentLifecycleKey>>) => {
     const lifecycle = await scope.run(() => getAgentLifecycle(agentId, { owner: scope.owner, signal }))
     const previous = scope.client.getQueryData<AgentLifecycle>(agentLifecycleKey(agentId))
+    // A loss lives on the agent record but changes neither start nor recorded status.
     if (previous && ((previous.start?.state === 'pending' && lifecycle.start?.state !== 'pending') ||
-      previous.runtime.recorded_status !== lifecycle.runtime.recorded_status)) {
+      previous.runtime.recorded_status !== lifecycle.runtime.recorded_status ||
+      (previous.runtime.loss?.detected_at ?? null) !== (lifecycle.runtime.loss?.detected_at ?? null))) {
       refreshAgent(scope, agentId)
     }
     return lifecycle

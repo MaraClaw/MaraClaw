@@ -49,6 +49,8 @@ const known: ReadonlyArray<readonly [string, number, unknown, StartNewContainerF
   ['an unbounded memory limit', 409, { code: 'guest_memory_unbounded', message: engineText }, 'runtime_attention'],
   ['a required recreation', 409, { code: 'guest_recreation_required', message: engineText }, 'runtime_attention'],
   ['a failed start', 502, { code: 'guest_start_failed', message: engineText }, 'start_failed'],
+  ['an outstanding OpenClaw upgrade', 423, { code: 'openclaw_update_required', notice_id: id }, 'update_required'],
+  ['an OpenClaw upgrade in progress', 409, { code: 'openclaw_update_in_progress' }, 'update_in_progress'],
 ]
 
 for (const [label, status, detail, expected] of known) {
@@ -63,6 +65,7 @@ for (const [label, status, detail, expected] of known) {
 const unrecognised: ReadonlyArray<readonly [string, unknown]> = [
   ['an unknown code on 409', new ApiError(409, { code: 'guest_unheard_of', message: engineText })],
   ['a known code on the wrong status', new ApiError(500, { code: 'guest_start_failed', message: engineText })],
+  ['an upgrade code on the wrong status', new ApiError(409, { code: 'openclaw_update_required' })],
   ['a plain 409 detail', new ApiError(409, 'Something else is wrong')],
   ['a 502 without a code', new ApiError(502, null)],
   ['a 404', new ApiError(404, 'Agent not found')],
@@ -105,6 +108,30 @@ test('Given a start that Stop ended, When each recovery maps the refusal, Then S
   assert.equal(replacement, 'The new container was stopped before it finished starting.')
   assert.equal(startNewContainerErrorMessage(stopped), replacement)
   for (const message of [plain, replacement]) assert.notEqual(vietnamese[message], message)
+})
+
+test('Given an OpenClaw update gate refusal, When each recovery maps it, Then Start and a new container each name the upgrade', () => {
+  // Given
+  const required = new ApiError(423, { code: 'openclaw_update_required', notice_id: id })
+  const inProgress = new ApiError(409, { code: 'openclaw_update_in_progress' })
+  // When
+  const messages = [
+    runtimeLossRecovery.container_stopped.errorMessage(required), runtimeLossRecovery.container_missing.errorMessage(required),
+    runtimeLossRecovery.container_stopped.errorMessage(inProgress), runtimeLossRecovery.container_missing.errorMessage(inProgress),
+  ]
+  // Then
+  assert.deepEqual(messages, [
+    'This agent must be upgraded before it can start. Contact your company admin.',
+    'This agent must be upgraded before a new container can start. Contact your company admin.',
+    'This agent is being upgraded. Start it again once the upgrade finishes.',
+    'This agent is being upgraded. Start a new container once the upgrade finishes.',
+  ])
+  assert.equal(startNewContainerErrorMessage(required), messages[1])
+  const fallbacks: readonly string[] = [startNewContainerFailureMessage.unknown, runtimeLossRecovery.container_stopped.errorMessage(null)]
+  for (const message of messages) {
+    assert.notEqual(vietnamese[message], message)
+    assert.equal(fallbacks.includes(message), false)
+  }
 })
 
 test('Given every failure kind, When the messages are compared, Then each is distinct and translated', () => {
