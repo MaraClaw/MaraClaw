@@ -67,10 +67,12 @@ class OpenAICompatibleClient(LLMClient):
         timeout: float = 120.0,
         supports_tool_choice: bool = True,
         supports_cache_control: bool = False,
+        stream_only: bool = False,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
         self.supports_tool_choice: bool = supports_tool_choice
         self.supports_cache_control: bool = supports_cache_control
+        self.stream_only: bool = stream_only
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -367,7 +369,11 @@ class OpenAICompatibleClient(LLMClient):
         max_tokens: int | None = None,
         **kwargs: object,
     ) -> LLMResponse:
-        """Non-streaming completion."""
+        """Non-streaming completion. A ``stream_only`` backend is read through its event stream instead."""
+        if self.stream_only:
+            return await self.stream(
+                messages, tools, temperature, max_tokens, on_chunk=None, on_tool_delta=None, on_thinking=None, **kwargs
+            )
         url = f"{self._normalize_base_url()}/chat/completions"
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=False, **kwargs)
 

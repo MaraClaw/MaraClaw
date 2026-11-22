@@ -214,7 +214,7 @@ async def test_status_rejects_member_and_other_tenant_org_admin():
 @pytest.mark.asyncio
 async def test_subscription_model_can_fill_primary_then_distinct_fallback(monkeypatch):
     primary = _model(label="Grok SuperGrok")
-    fallback = _model(provider="openai", model="gpt-6.1-sol", label="GPT", auth_kind="api_key")
+    fallback = _model(provider="openai", model="gpt-6.2-sol", label="GPT", auth_kind="api_key")
     tenant = SimpleNamespace(
         id=_TENANT,
         default_model_id=None,
@@ -317,14 +317,11 @@ async def test_probe_uses_stored_subscription_secret(monkeypatch):
 
     captured: dict[str, Any] = {}
 
-    def fake_create(*, provider, model, api_key, base_url=None):
-        captured["provider"] = provider
-        captured["model"] = model
-        captured["api_key"] = api_key
-        captured["base_url"] = base_url
+    def fake_create(model_row):
+        captured["row"] = model_row
         return FakeClient()
 
-    monkeypatch.setattr(enterprise_api, "create_llm_client", fake_create)
+    monkeypatch.setattr(enterprise_api, "create_llm_client_from_model", fake_create)
     result = await enterprise_api.probe_llm_model(
         enterprise_api.LLMTestRequest(
             provider="grok",
@@ -336,8 +333,23 @@ async def test_probe_uses_stored_subscription_secret(monkeypatch):
     assert result["success"] is True
     assert "reply" in result
     assert result["reply"] == "ok"
-    assert captured["api_key"] == "xai-access-LIVE"
-    assert captured["provider"] == "grok"
+    assert captured["row"] is existing
+
+
+def test_subscription_client_reads_the_stored_secret_through_a_stream():
+    from app.config import get_settings
+    from app.core.security import encrypt_data
+    from app.services.llm.providers import OpenAICompatibleClient
+    from app.services.llm.utils import create_llm_client_from_model
+
+    # Given
+    row = _model(api_key_encrypted=encrypt_data("xai-access-LIVE", get_settings().SECRET_KEY))
+    # When
+    client = create_llm_client_from_model(row, timeout=9)
+    # Then
+    assert type(client) is OpenAICompatibleClient
+    assert client.stream_only is True
+    assert client.api_key == "xai-access-LIVE"
 
 
 @pytest.mark.asyncio

@@ -326,6 +326,84 @@ async def test_openai_responses_stream_delegates_to_complete_and_forwards_callba
     assert complete_calls[0]["max_tokens"] == 32
 
 
+async def test_openai_responses_stream_only_streams_events_and_complete_reads_the_same_stream(monkeypatch):
+    # Given a backend that rejects non-streaming requests and returns an empty `output` in its final event.
+    lines = [
+        "event: response.output_text.delta",
+        'data: {"type":"response.output_text.delta","delta":"Hel"}',
+        'data: {"type":"response.output_text.delta","delta":"lo"}',
+        'data: {"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"Hello"}]}}',
+        'data: {"type":"response.completed","response":{"model":"gpt-codex","output":[],"usage":{"input_tokens":1,"output_tokens":2}}}',
+    ]
+    http_client = FakeStreamingHttpClient(FakeStreamResponse(lines))
+    llm_client = OpenAIResponsesClient("secret", model="gpt-codex", stream_only=True)
+
+    async def fake_get_client():
+        return http_client
+
+    monkeypatch.setattr(llm_client, "_get_client", fake_get_client)
+    chunks: list[str] = []
+
+    async def on_chunk(text: str) -> None:
+        chunks.append(text)
+
+    # When it is read through both entry points.
+    streamed = await llm_client.stream(messages=[LLMMessage(role="user", content="hi")], on_chunk=on_chunk)
+    http_client.response = FakeStreamResponse(lines)
+    completed = await llm_client.complete(messages=[LLMMessage(role="user", content="hi")])
+
+    # Then both requests asked for a stream and aggregated the same answer.
+    assert [request["kwargs"]["json"]["stream"] for request in http_client.requests] == [True, True]
+    assert streamed.content == completed.content == "Hello"
+    assert chunks == ["Hel", "lo"]
+    assert streamed.model == "gpt-codex"
+
+
+async def test_openai_responses_stream_only_raises_on_error_event(monkeypatch):
+    # Given a stream whose terminal event reports a failure.
+    http_client = FakeStreamingHttpClient(
+        FakeStreamResponse(
+            ['data: {"type":"response.failed","response":{"status":"failed","error":{"message":"boom"}}}']
+        )
+    )
+    llm_client = OpenAIResponsesClient("secret", model="gpt-codex", stream_only=True)
+
+    async def fake_get_client():
+        return http_client
+
+    monkeypatch.setattr(llm_client, "_get_client", fake_get_client)
+
+    # When / Then
+    with pytest.raises(LLMError, match="boom"):
+        await llm_client.complete(messages=[LLMMessage(role="user", content="hi")])
+
+
+async def test_openai_compatible_stream_only_complete_sends_a_streaming_request(monkeypatch):
+    # Given
+    http_client = FakeStreamingHttpClient(
+        FakeStreamResponse(
+            [
+                'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
+    llm_client = OpenAICompatibleClient("secret", model="grok-test", stream_only=True)
+
+    async def fake_get_client():
+        return http_client
+
+    monkeypatch.setattr(llm_client, "_get_client", fake_get_client)
+
+    # When
+    response = await llm_client.complete(messages=[LLMMessage(role="user", content="hi")])
+
+    # Then
+    assert response.content == "ok"
+    assert http_client.requests[0]["kwargs"]["json"]["stream"] is True
+
+
 @pytest.fixture
 def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     return install_retry_policy(monkeypatch)

@@ -53,8 +53,12 @@ def create_llm_client(
     model: str,
     base_url: str | None = None,
     timeout: float = 120.0,
+    stream_only: bool = False,
 ) -> LLMClient:
     """Create an LLM client for the given provider.
+
+    ``stream_only`` is for subscription backends that reject non-streaming requests: ``complete`` then reads the
+    event stream. Anthropic and Gemini clients ignore it.
 
     Wrappers with the same provider, model, endpoint, timeout, and key are
     reused. HTTP connections live in a process-wide pool, so ``close()`` on a
@@ -71,6 +75,7 @@ def create_llm_client(
         model,
         final_base_url or "",
         timeout,
+        stream_only,
         fingerprint_secret(api_key),
     )
     cached = cache_get(cache_key)
@@ -93,6 +98,7 @@ def create_llm_client(
                 model=model,
                 timeout=timeout,
                 supports_tool_choice=spec.supports_tool_choice,
+                stream_only=stream_only,
             )
         case "gemini":
             built = GeminiClient(
@@ -110,6 +116,7 @@ def create_llm_client(
                 timeout=timeout,
                 supports_tool_choice=spec.supports_tool_choice,
                 supports_cache_control=normalized_provider == "qwen",
+                stream_only=stream_only,
             )
         case _:
             assert_never(spec.protocol)

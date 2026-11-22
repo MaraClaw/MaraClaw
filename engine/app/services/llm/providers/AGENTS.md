@@ -19,7 +19,7 @@ Provider-specific LLM clients live here. They translate external protocols into 
 - Normalize finish reasons consistently: tool calls become tool-call completion, while stop/length/content-filter cases map to shared finish fields.
 - Preserve usage normalization, including provider-specific cache/read/write token fields when available.
 - Respect registry feature flags such as `supports_tool_choice`; OpenAI-compatible does not mean every endpoint supports every OpenAI option.
-- Retries: wrap each request attempt in `retry_policy.call_with_retry` (`complete` posts through `raise_for_status`; `stream` is a thin wrapper holding a `StreamDelivery` around `_stream_once`, whose accumulators are local so a retry starts clean, and which raises `stream_http_error` for an error status). OpenAI Responses `stream` delegates to `complete`, so it inherits the retries. Pass every callback the stream can fire to `StreamDelivery`.
+- Retries: wrap each request attempt in `retry_policy.call_with_retry` (`complete` posts through `raise_for_status`; `stream` is a thin wrapper holding a `StreamDelivery` around `_stream_once`, whose accumulators are local so a retry starts clean, and which raises `stream_http_error` for an error status). OpenAI Responses `stream` delegates to `complete`, so it inherits the retries, except with `stream_only` (subscription backends), where `stream` parses SSE in `_stream_once` under `StreamDelivery` and `complete` delegates to it. Pass every callback the stream can fire to `StreamDelivery`.
 
 ## Provider-Specific Gotchas
 
