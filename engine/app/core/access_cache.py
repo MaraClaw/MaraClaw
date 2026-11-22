@@ -77,7 +77,7 @@ def memo_get(user_id: uuid.UUID, agent_id: uuid.UUID) -> tuple[AgentRecord, Perm
 def memo_set(user_id: uuid.UUID, agent_id: uuid.UUID, agent: AgentRecord, level: PermissionAccessLevel) -> None:
     memo = _request_memo.get()
     if memo is None:
-        memo = {}
+        memo = dict[tuple[uuid.UUID, uuid.UUID], tuple[AgentRecord, PermissionAccessLevel]]()
         _ = _request_memo.set(memo)
     memo[(user_id, agent_id)] = (agent, level)
 

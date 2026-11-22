@@ -14,7 +14,6 @@ from app.core.json_types import (
     json_as_str,
     json_as_str_or,
     json_object_from,
-    mapping_from_row,
 )
 from app.core.redis_cache import (
     bump_version,
@@ -117,7 +116,7 @@ def _load(data: object) -> TenantRecord | None:
         slug=slug,
         tier=tier,
         im_provider=json_as_str_or(payload.get("im_provider"), "web_only") or "web_only",
-        im_config=mapping_from_row(im_raw) if is_json_object(im_raw) else None,
+        im_config=im_raw if is_json_object(im_raw) else None,
         is_active=json_as_bool(payload.get("is_active"), True),
         created_at=_parse_dt(payload.get("created_at")),
         default_message_limit=json_as_int(payload.get("default_message_limit"), 50),
