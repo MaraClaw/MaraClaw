@@ -179,6 +179,9 @@ async def test_status_persists_encrypted_pool_row_and_hides_tokens(monkeypatch):
     assert obj_in["auth_kind"] == "grok_subscription"
     assert obj_in["tenant_id"] == _TENANT
     assert obj_in["provider"] == "grok"
+    assert obj_in["model"] == "grok-4.7"
+    assert obj_in["reasoning_effort"] == "xhigh"
+    assert obj_in["supports_vision"] is True
 
     with patch.object(pool, "get_model_api_key", return_value="xai-access-LIVE"):
         admin = pool.serialize_llm_model(created, is_admin=True, default_model_id=None)
@@ -256,6 +259,8 @@ async def test_refresh_updates_encrypted_access_without_returning_tokens(monkeyp
     existing = _model(
         token_expires_at=_NOW - timedelta(minutes=1),
         refresh_token_encrypted="enc-refresh-old",
+        reasoning_effort="low",
+        supports_vision=False,
     )
     updated = _model(api_key_encrypted="enc:xai-access-REFRESHED")
     monkeypatch.setattr(handoff.llm_model_dao, "get", AsyncMock(return_value=existing))
@@ -273,6 +278,7 @@ async def test_refresh_updates_encrypted_access_without_returning_tokens(monkeyp
     assert persist.await_args is not None
     obj_in = persist.await_args.kwargs["obj_in"]
     assert obj_in["api_key_encrypted"] == "enc:xai-access-REFRESHED"
+    assert {"model", "reasoning_effort", "supports_vision"}.isdisjoint(obj_in)
     refresh_calls = [
         call for call in transport.calls if call[0] == XAI_TOKEN_URL and call[1].get("grant_type") == "refresh_token"
     ]
