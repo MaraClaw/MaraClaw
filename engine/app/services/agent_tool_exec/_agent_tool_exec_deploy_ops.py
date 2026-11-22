@@ -6,7 +6,7 @@ from typing import cast
 
 from httpx import Response
 
-from app.core.json_types import JsonObject, json_as_str, json_object_from_response
+from app.core.json_types import JsonObject, json_as_str, json_object_from_response, object_list_from_row
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
@@ -30,12 +30,6 @@ def _nested_mapping(value: object) -> Mapping[object, object]:
     return cast("Mapping[object, object]", value) if isinstance(value, dict) else {}
 
 
-def _object_items(value: object) -> list[JsonObject]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
-
-
 async def _get_vercel_token(agent_id: uuid.UUID, tool_name: str) -> str | None:
     config = await agent_tools._get_tool_config(agent_id, tool_name)
     token = json_as_str((config or {}).get("vercel_token"))
@@ -51,7 +45,7 @@ async def _get_vercel_quota_summary(vercel_token: str) -> str:
         try:
             proj_res = await client.get("https://api.vercel.com/v9/projects", headers=headers)
             if proj_res.status_code == 200:
-                projects = _object_items(_response_mapping(proj_res).get("projects"))
+                projects = object_list_from_row(_response_mapping(proj_res).get("projects"))
                 project_count = len(projects)
                 user_res = await client.get("https://api.vercel.com/v2/user", headers=headers)
                 username = "User"
@@ -72,7 +66,7 @@ async def _check_neon_quota_limit(api_key: str) -> tuple[bool, str]:
         try:
             res = await client.get("https://console.neon.tech/api/v2/projects", headers=headers)
             if res.status_code == 200:
-                projects = _object_items(_response_mapping(res).get("projects"))
+                projects = object_list_from_row(_response_mapping(res).get("projects"))
                 project_count = len(projects)
                 if project_count >= 1:
                     return (
@@ -129,7 +123,7 @@ async def _vercel_set_env(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
             ):
                 list_res = await client.get(f"https://api.vercel.com/v9/projects/{project_name}/env", headers=headers)
                 if list_res.status_code == 200:
-                    envs = _object_items(_response_mapping(list_res).get("envs"))
+                    envs = object_list_from_row(_response_mapping(list_res).get("envs"))
                     env_id = None
                     for env in envs:
                         if env.get("key") == key:
@@ -226,7 +220,7 @@ async def _neon_create_database(agent_id: uuid.UUID, arguments: ToolArguments) -
             try:
                 org_res = await client.get("https://console.neon.tech/api/v2/users/me/organizations", headers=headers)
                 if org_res.status_code == 200:
-                    orgs = _object_items(_response_mapping(org_res).get("organizations"))
+                    orgs = object_list_from_row(_response_mapping(org_res).get("organizations"))
                     if len(orgs) == 1:
                         org_id = json_as_str(orgs[0].get("id")) or ""
                         logger.info(f"[Neon] Automatically resolved single org_id: {org_id}")

@@ -10,6 +10,7 @@ import httpx
 from app.core.json_types import (
     JsonObject,
     JsonValue,
+    is_any_list,
     json_as_bool,
     json_as_str,
     json_as_str_or,
@@ -42,7 +43,7 @@ def _raw_handle_list(value: object) -> list[str]:
     if isinstance(value, str):
         handles.extend(part.strip().lstrip("@") for part in value.split(",") if part.strip())
         return handles
-    if isinstance(value, list):
+    if is_any_list(value):
         handles.extend(item.strip().lstrip("@") for item in value if isinstance(item, str) and item.strip())
     return handles
 

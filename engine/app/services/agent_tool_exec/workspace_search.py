@@ -69,7 +69,8 @@ async def search_page(storage: StorageBackend, position: SearchPosition) -> str:
             break
         if pending is not None:
             files_searched.add(pending.key)
-            match await take_line(pending, position.started):
+            line_or_window = await take_line(pending, position.started)
+            match line_or_window:
                 case SearchLine(text=text, number=line_number, rest=rest):
                     if regex.search(text):
                         results.append(f"{_display(pending.key, query)}:{line_number}: {text.strip()[:100]}")
@@ -81,8 +82,8 @@ async def search_page(storage: StorageBackend, position: SearchPosition) -> str:
                     continue
                 case FilePosition() as window:
                     pending = window
-                case unreachable:
-                    assert_never(unreachable)
+                case _:
+                    assert_never(line_or_window)
             if CONTENT_BYTES - content_bytes < reservation:
                 reason = "content_budget"
                 break

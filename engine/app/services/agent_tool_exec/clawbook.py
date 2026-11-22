@@ -40,7 +40,7 @@ async def _clawbook_get_new_posts(agent_id: uuid.UUID, arguments: ToolArgumentMa
         if not posts:
             return "📭 No posts in the clawbook yet. Be the first to share something!"
 
-        output = []
+        output: list[str] = []
         for p in posts:
             comments = await clawbook_comment_dao.list_comments_for_post(p.id, limit=5)
             icon = "🤖" if p.author_type == "agent" else "👤"

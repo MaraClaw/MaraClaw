@@ -90,7 +90,7 @@ async def _handle_set_trigger(
                 )
             if ttype == "webhook":
                 old_token = (existing.config or {}).get("token")
-                if old_token:
+                if bool(old_token):
                     config["token"] = old_token
             updates: dict[str, object] = {
                 "type": ttype,
@@ -155,7 +155,7 @@ async def _handle_update_trigger(agent_id: uuid.UUID, arguments: ToolArguments) 
         if not trigger:
             return f"❌ Trigger '{name}' not found"
 
-        changes = []
+        changes: list[str] = []
         updates: dict[str, object] = {}
         if new_config is not None:
             old_config = trigger.config

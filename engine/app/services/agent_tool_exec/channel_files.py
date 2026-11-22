@@ -180,7 +180,7 @@ async def _send_file_via_feishu(
             relative_path = str((await _resolve_path(file_path)).relative_to(base_abs))
         except ValueError:
             relative_path = file_path.name
-        parts = []
+        parts: list[str] = []
         if message:
             parts.append(message)
         if base_url:
