@@ -15,11 +15,6 @@ const input = { tenantId: department.tenant_id, departmentId: department.id }
 const queryKey = ['admin-departments', input.tenantId]
 const directory: DepartmentsResponse = {
   departments: [department, { ...department, id: 'engineering', name: 'Engineering' }],
-  assignments: [
-    { tenant_id: input.tenantId, user_id: 'member-a', department_id: department.id },
-    { tenant_id: input.tenantId, user_id: 'member-b', department_id: department.id },
-    { tenant_id: input.tenantId, user_id: 'member-a', department_id: 'engineering' },
-  ],
 }
 
 const mergeSelection = { tenantId: '86b8142b-31e6-44ab-a35e-e10998037030', sourceId: department.id, destinationId: '64c0b6ca-0312-42aa-996d-ff606043337a' }
@@ -144,12 +139,16 @@ test('delete sends the encoded tenant-scoped DELETE and accepts an empty 204', a
   assert.equal(result, undefined)
 })
 
-test('successful deletion prunes only the owned directory and refreshes paged users and affected details', async (t) => {
+test('successful deletion prunes the owned directory and invalidates even inactive assignment pages and user details', async (t) => {
   // Given
   const client = new QueryClient()
   t.after(() => client.clear())
-  const ownedKeys = [queryKey, ['admin-users', input.tenantId], ['admin-users', input.tenantId, 'page', 'search', 1, 0], ['admin-user', 'member-a'], ['admin-user', 'member-b']]
-  const unrelatedKeys = [['admin-departments', 'tenant-b'], [...queryKey, 'detail'], ['admin-users', 'tenant-b', 'page'], ['admin-user', 'member-c']]
+  const ownedKeys = [
+    queryKey, [...queryKey, 'assignments', ['member-a']], [...queryKey, 'assignments', ['member-b']],
+    ['admin-users', input.tenantId], ['admin-users', input.tenantId, 'page', 'search', 1, 0],
+    ['admin-user', 'member-a'], ['admin-user', 'member-c'],
+  ]
+  const unrelatedKeys = [['admin-departments', 'tenant-b', 'assignments', ['member-b']], ['admin-users', 'tenant-b', 'page']]
   for (const key of [...ownedKeys, ...unrelatedKeys]) client.setQueryData(key, directory)
   t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 204 }))
   const { policy } = createFixture()
@@ -157,7 +156,7 @@ test('successful deletion prunes only the owned directory and refreshes paged us
   // When
   await observer.mutate(input)
   // Then
-  assert.deepEqual(client.getQueryData(queryKey), { departments: [directory.departments[1]], assignments: [directory.assignments[2]] })
+  assert.deepEqual(client.getQueryData(queryKey), { departments: [directory.departments[1]] })
   for (const key of ownedKeys) assert.equal(client.getQueryState(key)?.isInvalidated, true)
   for (const key of unrelatedKeys) {
     assert.deepEqual(client.getQueryData(key), directory)

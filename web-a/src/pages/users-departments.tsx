@@ -16,7 +16,6 @@ import { useSessionCurrent } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
 import { fenceCallback } from '@/hooks/session-mutation'
 import { ApiError } from '@/lib/http'
-import { groupDepartmentAssignments } from '@/lib/departments-api'
 import { isEndUserRole, type AdminUser } from '@/lib/users-api'
 import { useDepartments } from '@/pages/users-department-queries'
 import { DepartmentCard } from '@/pages/users-department-card'
@@ -31,13 +30,13 @@ type FormValues = z.infer<typeof schema>
 
 export function TenantUsers({
   tenantId,
-  rows,
+  pages,
   canToggle,
   pending,
   onToggle,
 }: {
   readonly tenantId: string
-  readonly rows: readonly AdminUser[]
+  readonly pages: readonly { readonly items: readonly AdminUser[] }[]
   readonly canToggle: (row: AdminUser) => boolean
   readonly pending: boolean
   readonly onToggle: (row: AdminUser) => void
@@ -45,7 +44,10 @@ export function TenantUsers({
   const { t, owned } = useTranslation()
   const formId = useId()
   const isCurrent = useSessionCurrent()
-  const { departments, create, assign } = useDepartments(tenantId)
+  const { departments, assignments, create, assign } = useDepartments(
+    tenantId,
+    pages.map((page) => page.items.map((row) => row.id)),
+  )
   const {
     register,
     handleSubmit,
@@ -57,7 +59,7 @@ export function TenantUsers({
     resolver: zodResolver(schema),
     defaultValues: { name: '', description: '' },
   })
-  const assignments = groupDepartmentAssignments(departments.data?.assignments ?? [])
+  const assignmentError = assignments.find((page) => page.isError)
   const savingAssignment = assign.isPending ? assign.variables : undefined
 
 
@@ -161,9 +163,18 @@ export function TenantUsers({
         </CardContent>
       </Card>
       <div className="grid gap-4">
-        {rows.map((row) => {
+        {assignmentError ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <ErrorToast error={assignmentError.error} message={assignmentError.error instanceof ApiError ? assignmentError.error.message : t('Failed to load departments')} />
+            <Button type="button" variant="ghost" size="sm" disabled={assignmentError.isFetching} onClick={() => void assignmentError.refetch()}>
+              {t('Retry')}
+            </Button>
+          </div>
+        ) : null}
+        {pages.flatMap((page, index) => page.items.map((row) => {
+          const pageAssignments = assignments[index]
           const isSaving = savingAssignment?.tenantId === tenantId && savingAssignment.userId === row.id
-          const departmentIds = isSaving ? savingAssignment.departmentIds : assignments.get(row.id) ?? []
+          const departmentIds = isSaving ? savingAssignment.departmentIds : pageAssignments?.data?.get(row.id) ?? []
           const error = assign.variables?.tenantId === tenantId && assign.variables.userId === row.id ? assign.error : null
           const name = row.display_name || row.email || t('user')
           return (
@@ -180,8 +191,8 @@ export function TenantUsers({
                   name={name}
                   departments={departments.data?.departments ?? []}
                   departmentIds={departmentIds}
-                  available={departments.isSuccess}
-                  loading={departments.isLoading}
+                  available={departments.isSuccess && pageAssignments?.isSuccess === true && !pageAssignments.isFetching}
+                  loading={departments.isLoading || pageAssignments?.isFetching === true}
                   pending={assign.isPending}
                   saving={isSaving}
                   error={error}
@@ -193,7 +204,7 @@ export function TenantUsers({
               ) : null}
             </UserCard>
           )
-        })}
+        }))}
       </div>
     </>
   )
