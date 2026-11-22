@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, ClassVar, final, override
+from typing import ClassVar, final, override
 from uuid import UUID, uuid4
 
 from app.core.domain.tasks import TaskStatus, TaskType
@@ -86,7 +86,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
         task_type: TaskType | None = None,
         ascending: bool = False,
     ) -> Sequence[TaskRecord]:
-        params: dict[str, Any] = {"agent_id": agent_id}
+        params: dict[str, object] = {"agent_id": agent_id}
         clauses = ["agent_id = %(agent_id)s"]
         if status is not None:
             clauses.append("status = %(status)s")
@@ -113,7 +113,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
         before: tuple[datetime, UUID] | None = None,
     ) -> list[TaskRecord]:
         """Newest-first keyset page after ``before``; returns up to ``limit + 1`` rows so the caller sees a next page."""
-        params: dict[str, Any] = {"agent_id": agent_id, "lookahead": limit + 1}
+        params: dict[str, object] = {"agent_id": agent_id, "lookahead": limit + 1}
         clauses = ["agent_id = %(agent_id)s"]
         if status is not None:
             clauses.append("status = %(status)s")
@@ -141,7 +141,7 @@ class TaskDAO(BaseDAO[TaskRecord]):
             return TaskRecord.from_row(row) if row is not None else None
 
     async def count_for_agent(self, agent_id: UUID, *, status: TaskStatus | None = None) -> int:
-        params: dict[str, Any] = {"agent_id": agent_id}
+        params: dict[str, object] = {"agent_id": agent_id}
         status_sql = ""
         if status is not None:
             status_sql = " AND status = %(status)s"
@@ -320,7 +320,7 @@ class TaskLogDAO(BaseDAO[TaskLogRecord]):
         self, task_id: UUID, *, limit: int, after: tuple[datetime, UUID] | None = None
     ) -> list[TaskLogRecord]:
         """Oldest-first keyset page after ``after``; returns up to ``limit + 1`` rows so the caller sees a next page."""
-        params: dict[str, Any] = {"task_id": task_id, "lookahead": limit + 1}
+        params: dict[str, object] = {"task_id": task_id, "lookahead": limit + 1}
         position_filter = ""
         if after is not None:
             position_filter = " AND (created_at, id) > (%(after_created_at)s, %(after_id)s)"

@@ -25,7 +25,7 @@ async def candidates() -> list[ZaloConnection]:
             "SELECT * FROM zalo_personal_connections WHERE desired AND claim_token IS NULL "
             "AND state IN ('pending','reconnecting') ORDER BY created_at,config_id"
         )
-        due = []
+        due: list[ZaloConnection] = []
         for row in rows:
             candidate = ZaloConnection.from_row(row)
             runtime = await runtime_for(candidate.config_id)

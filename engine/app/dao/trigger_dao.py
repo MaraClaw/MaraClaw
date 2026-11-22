@@ -9,7 +9,7 @@ from typing import ClassVar, final, override
 from uuid import UUID
 
 from app.core.domain.triggers import TriggerExecutionStatus
-from app.core.json_types import int_from_row, uuid_from_row
+from app.core.json_types import int_from_row, is_str_dict, uuid_from_row
 from app.dao.base import BaseDAO
 from app.db.errors import LockNotAvailableError, UniqueViolationError
 from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
@@ -431,7 +431,7 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         for col in cols:
             value: object = data[col]
             params[col] = (
-                as_jsonb(value) if isinstance(value, dict) else value.value if isinstance(value, StrEnum) else value
+                as_jsonb(value) if is_str_dict(value) else value.value if isinstance(value, StrEnum) else value
             )
         col_sql = ", ".join(cols)
         val_sql = ", ".join(f"%({c})s" for c in cols)

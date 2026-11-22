@@ -165,6 +165,6 @@ async def observe(
                 if runtime.last_activity_at is not None and (now - runtime.last_activity_at).total_seconds() < 30:
                     return
                 updated = runtime.model_copy(update={"last_activity_at": now})
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(event)
         await _save(current.config_id, updated)

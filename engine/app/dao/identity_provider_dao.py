@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -91,7 +91,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
         *,
         is_active: bool | None,
     ) -> IdentityProviderRecord | None:
-        params: dict[str, Any] = {"provider_type": provider_type}
+        params: dict[str, object] = {"provider_type": provider_type}
         clauses = ["provider_type = %(provider_type)s"]
         if tenant_id is None:
             clauses.append("tenant_id IS NULL")
@@ -112,7 +112,7 @@ class IdentityProviderDAO(BaseDAO[IdentityProviderRecord]):
 
     async def list_active_sso_for_tenant(self, tenant_id: UUID | None) -> Sequence[IdentityProviderRecord]:
         """Active providers with SSO login enabled, scoped to tenant or global."""
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         if tenant_id is not None:
             tenant_sql = " AND tenant_id = %(tenant_id)s"
             params["tenant_id"] = tenant_id

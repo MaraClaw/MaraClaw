@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, ClassVar, final
+from collections.abc import Mapping, Sequence
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -122,10 +122,10 @@ class AgentAgentRelationshipDAO(BaseDAO[AgentAgentRelationshipRecord]):
             return AgentAgentRelationshipRecord.from_row(row) if row is not None else None
 
 
-def _relationship_with_target(row: dict[str, Any], agent_columns: Sequence[str]) -> AgentAgentRelationshipRecord:
+def _relationship_with_target(row: Mapping[str, object], agent_columns: Sequence[str]) -> AgentAgentRelationshipRecord:
     target: AgentRecord | None = None
     if row.get("a_id") is not None:
-        agent_row: dict[str, Any] = {col: row.get(f"a_{col}") for col in agent_columns}
+        agent_row = {col: row.get(f"a_{col}") for col in agent_columns}
         target = AgentRecord.from_row(agent_row)
     record = AgentAgentRelationshipRecord.from_row(row)
     record.target_agent = target

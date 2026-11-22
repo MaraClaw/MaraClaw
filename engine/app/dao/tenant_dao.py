@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, ClassVar, TypedDict, final, override
+from typing import ClassVar, TypedDict, final, override
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_findall, str_from_row, str_from_row_opt, uuid_from_row
@@ -148,7 +148,7 @@ class TenantDAO(BaseDAO[TenantRecord]):
         return tenant
 
     @override
-    async def update(self, *, db_obj: TenantRecord, obj_in: Mapping[str, Any]) -> TenantRecord:
+    async def update(self, *, db_obj: TenantRecord, obj_in: Mapping[str, object]) -> TenantRecord:
         from app.core.acl_locks import invalidate_tenant_agents, lock_tenants
         from app.db.session import optional_connection_ctx
 

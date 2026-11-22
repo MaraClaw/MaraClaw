@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
-from app.core.json_types import int_from_row, str_from_row, uuid_list_from_rows
+from app.core.json_types import JsonObject, int_from_row, str_from_row, uuid_list_from_rows
 from app.dao.base import BaseDAO
 from app.dao.tool_assignment_metadata import ToolAssignmentMetadata
 from app.records.tool import AgentToolRecord, ToolRecord
@@ -130,7 +130,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
         assigned_tool_ids: Sequence[UUID],
     ) -> Sequence[ToolRecord]:
         """Tools visible in the LLM catalog for an agent."""
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         clauses = [
             "enabled IS TRUE",
             "("
@@ -173,7 +173,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
             return int_from_row(result["cnt"] if result is not None else 0)
 
     async def list_platform_for_tenant(self, tenant_id: UUID | None) -> Sequence[ToolRecord]:
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s)"
@@ -212,7 +212,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
         agent_tenant_id: UUID | None,
         assigned_tool_ids: Sequence[UUID],
     ) -> Sequence[ToolRecord]:
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         clauses = [
             "enabled IS TRUE",
             "("
@@ -263,7 +263,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
             filtered.sort(key=lambda t: t.name)
         return filtered
 
-    async def top_enabled_categories(self, *, limit: int = 10) -> Sequence[dict[str, Any]]:
+    async def top_enabled_categories(self, *, limit: int = 10) -> Sequence[dict[str, object]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT t.category, COUNT(*) AS count "
@@ -306,7 +306,7 @@ class ToolDAO(BaseDAO[ToolRecord]):
             return None
         return await self.update(db_obj=tool, obj_in={"mcp_server_url": mcp_server_url})
 
-    async def update_config_for_mcp_server(self, server_name: str, config: dict[str, Any]) -> int:
+    async def update_config_for_mcp_server(self, server_name: str, config: JsonObject) -> int:
         from app.db.types import as_jsonb
 
         async with self.session() as db:
@@ -405,7 +405,7 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
         agent_id: UUID,
         tool_id: UUID,
         *,
-        config: dict[str, Any] | None = None,
+        config: JsonObject | None = None,
         source: str = "user_installed",
         installed_by_agent_id: UUID | None = None,
         merge_config: bool = True,
@@ -452,8 +452,8 @@ class AgentToolDAO(BaseDAO[AgentToolRecord]):
         async with self.session() as db:
             await db.execute("DELETE FROM agent_tools WHERE tool_id = %(tool_id)s", {"tool_id": tool_id})
 
-    async def list_agent_installed(self, tenant_id: str | UUID | None) -> Sequence[dict[str, Any]]:
-        params: dict[str, Any] = {}
+    async def list_agent_installed(self, tenant_id: str | UUID | None) -> Sequence[dict[str, object]]:
+        params: dict[str, object] = {}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND owner.tenant_id::text = %(tenant_id)s"

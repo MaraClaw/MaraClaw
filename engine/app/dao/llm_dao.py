@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any, ClassVar, final, override
+from typing import ClassVar, final, override
 from uuid import UUID, uuid4
 
 from app.core.json_types import str_from_row, uuid_from_row, uuid_from_row_opt
@@ -102,7 +102,7 @@ class LLMModelDAO(BaseDAO[LLMModelRecord]):
             return [self._deleted_row(row) for row in rows]
 
     async def list_enabled(self, *, tenant_id: UUID | None = None) -> Sequence[LLMModelRecord]:
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         clauses = ["enabled = TRUE"]
         if tenant_id is not None:
             clauses.append("tenant_id = %(tenant_id)s")

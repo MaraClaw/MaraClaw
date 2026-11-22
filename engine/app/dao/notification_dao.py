@@ -38,8 +38,8 @@ def _user_list_clauses(
             clauses.append("archived_at IS NULL")
         case "archived":
             clauses.append("archived_at IS NOT NULL")
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(view)
     if unread_only:
         clauses.append("is_read IS FALSE")
     if types is not None:

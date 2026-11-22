@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.domain.activity import ActivityAction
@@ -59,7 +59,7 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
         action_types: Sequence[ActivityAction] | None = None,
         limit: int = 50,
     ) -> Sequence[AgentActivityLogRecord]:
-        params: dict[str, Any] = {"agent_id": agent_id, "limit": limit}
+        params: dict[str, object] = {"agent_id": agent_id, "limit": limit}
         clauses = ["agent_id = %(agent_id)s"]
         if action_type is not None:
             clauses.append("action_type = %(action_type)s")

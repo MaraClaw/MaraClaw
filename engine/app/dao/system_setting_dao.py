@@ -46,13 +46,13 @@ class SystemSettingDAO(BaseDAO[SystemSettingRecord]):
 
     async def is_invitation_code_enabled(self) -> bool:
         value = await self.get_value("invitation_code_enabled", {})
-        if not isinstance(value, dict):
+        if not is_str_dict(value):
             return False
         return bool(value.get("enabled", False))
 
     async def is_sso_custom_domain_redirect_enabled(self) -> bool:
         value = await self.get_value("sso_custom_domain_redirect_enabled", {})
-        if not isinstance(value, dict):
+        if not is_str_dict(value):
             return True
         return bool(value.get("enabled", True))
 

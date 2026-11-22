@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import uuid_from_row
@@ -45,7 +45,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         tenant_id: UUID | None = None,
         tenant_scoped: bool = False,
     ) -> SkillRecord | None:
-        params: dict[str, Any] = {"folder_name": folder_name}
+        params: dict[str, object] = {"folder_name": folder_name}
         tenant_sql = ""
         if tenant_scoped:
             if tenant_id is not None:
@@ -81,7 +81,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         with_files: bool = False,
         for_update: bool = False,
     ) -> SkillRecord | None:
-        params: dict[str, Any] = {"skill_id": skill_id}
+        params: dict[str, object] = {"skill_id": skill_id}
         scope_sql = ""
         if role != "platform_admin" and tenant_id is not None:
             scope_sql = " AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s)"
@@ -106,7 +106,7 @@ class SkillDAO(BaseDAO[SkillRecord]):
         with_files: bool = False,
         for_update: bool = False,
     ) -> SkillRecord | None:
-        params: dict[str, Any] = {"folder_name": folder_name}
+        params: dict[str, object] = {"folder_name": folder_name}
         scope_sql = ""
         if role != "platform_admin" and tenant_id is not None:
             scope_sql = " AND (tenant_id IS NULL OR tenant_id = %(tenant_id)s)"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
@@ -20,7 +20,7 @@ class AuditLogRecord:
     action: str
     user_id: UUID | None = None
     agent_id: UUID | None = None
-    details: dict[str, Any] = field(default_factory=dict[str, Any])
+    details: dict[str, object] = field(default_factory=dict[str, object])
     ip_address: str | None = None
     created_at: datetime | None = None
 
@@ -54,7 +54,7 @@ class AuditLogDAO(BaseDAO[AuditLogRecord]):
         agent_id: UUID | None = None,
         limit: int = 50,
     ) -> Sequence[AuditLogRecord]:
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, object] = {"limit": limit}
         clauses: list[str] = []
         if tenant_id is not None:
             clauses.append("agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tenant_id)s)")

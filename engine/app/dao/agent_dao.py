@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, final, override
+from typing import ClassVar, final, override
 from uuid import UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
@@ -233,7 +233,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             return AgentRecord.from_row(row) if row is not None else None
 
     async def list_system_by_name(self, name: str, *, exclude_stopped: bool = True) -> Sequence[AgentRecord]:
-        params: dict[str, Any] = {"name": name}
+        params: dict[str, object] = {"name": name}
         status_sql = " AND status <> 'stopped'" if exclude_stopped else ""
         async with self.session() as db:
             rows = await db.fetchall(
@@ -245,7 +245,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             return [AgentRecord.from_row(row) for row in rows]
 
     async def list_by_name_any(self, name: str, *, exclude_stopped: bool = True) -> Sequence[AgentRecord]:
-        params: dict[str, Any] = {"name": name}
+        params: dict[str, object] = {"name": name}
         status_sql = " AND status <> 'stopped'" if exclude_stopped else ""
         async with self.session() as db:
             rows = await db.fetchall(
@@ -271,7 +271,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             empty: list[AgentRecord] = []
             return empty
 
-        params: dict[str, Any] = {"tenant_id": tenant_id, "user_id": user_id}
+        params: dict[str, object] = {"tenant_id": tenant_id, "user_id": user_id}
         exclude_sql = ""
         if exclude_agent_id is not None:
             exclude_sql = " AND a.id <> %(exclude_agent_id)s"
@@ -441,7 +441,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             "creator_id = %(creator_id)s",
             "tenant_id IS NOT DISTINCT FROM (SELECT tenant_id FROM users WHERE id=%(creator_id)s)",
         ]
-        params: dict[str, Any] = {"creator_id": creator_id}
+        params: dict[str, object] = {"creator_id": creator_id}
         if tenant_id is not None:
             clauses.append("tenant_id = %(tenant_id)s")
             params["tenant_id"] = tenant_id
@@ -459,7 +459,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         from datetime import UTC, datetime
 
         now = datetime.now(UTC)
-        updates: dict[str, Any] = {}
+        updates: dict[str, object] = {}
 
         last_daily = agent.last_daily_reset
         if last_daily is None or last_daily.date() < now.date():
@@ -699,7 +699,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         exclude_id: UUID | None = None,
         company_only: bool = False,
     ) -> Sequence[AgentRecord]:
-        params: dict[str, Any] = {
+        params: dict[str, object] = {
             "tenant_id": tenant_id,
             "exclude_statuses": ["stopped", "error"],
         }
@@ -748,7 +748,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         if not names:
             empty: list[AgentRecord] = []
             return empty
-        params: dict[str, Any] = {"tenant_id": tenant_id, "names": list(names)}
+        params: dict[str, object] = {"tenant_id": tenant_id, "names": list(names)}
         clauses = ["tenant_id = %(tenant_id)s", "name = ANY(%(names)s)"]
         if agent_type is not None:
             clauses.append("agent_type = %(agent_type)s")
@@ -774,7 +774,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def list_by_statuses(
         self, statuses: Sequence[AgentStatus], *, exclude_id: UUID | None = None
     ) -> Sequence[AgentRecord]:
-        params: dict[str, Any] = {"statuses": [status.value for status in statuses]}
+        params: dict[str, object] = {"statuses": [status.value for status in statuses]}
         exclude_sql = ""
         if exclude_id is not None:
             exclude_sql = " AND id <> %(exclude_id)s"
@@ -854,7 +854,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
             return agent
 
     async def count_for_tenant(self, tenant_id: UUID, *, status: AgentStatus | None = None) -> int:
-        params: dict[str, Any] = {"tenant_id": tenant_id}
+        params: dict[str, object] = {"tenant_id": tenant_id}
         status_sql = ""
         if status is not None:
             status_sql = " AND status = %(status)s"
@@ -923,7 +923,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
     async def disable_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> Sequence[AgentRecord]:
         """Stop agents created by this user (optionally limited to one tenant)."""
         clauses = ["creator_id = %(creator_id)s"]
-        params: dict[str, Any] = {"creator_id": creator_id}
+        params: dict[str, object] = {"creator_id": creator_id}
         if tenant_id is not None:
             clauses.append("tenant_id = %(tenant_id)s")
             params["tenant_id"] = tenant_id
@@ -994,7 +994,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 return 0, 0
             return int_from_row(row.get("total")), int_from_row(row.get("cache_read"))
 
-    async def top_token_companies(self, *, limit: int = 20) -> Sequence[dict[str, Any]]:
+    async def top_token_companies(self, *, limit: int = 20) -> Sequence[dict[str, object]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT t.name, "
@@ -1015,7 +1015,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 for row in rows
             ]
 
-    async def top_token_agents(self, *, limit: int = 20) -> Sequence[dict[str, Any]]:
+    async def top_token_agents(self, *, limit: int = 20) -> Sequence[dict[str, object]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT a.name, t.name AS tenant_name, a.tokens_used_total, a.cache_read_tokens_total "
@@ -1180,7 +1180,7 @@ class AgentPermissionDAO(BaseDAO[AgentPermissionRecord]):
             return created
 
     @override
-    async def update(self, *, db_obj: AgentPermissionRecord, obj_in: Mapping[str, Any]) -> AgentPermissionRecord:
+    async def update(self, *, db_obj: AgentPermissionRecord, obj_in: Mapping[str, object]) -> AgentPermissionRecord:
         from app.core.acl_locks import agent_acl_mutation
 
         async with agent_acl_mutation(db_obj.agent_id):

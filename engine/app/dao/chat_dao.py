@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, ClassVar, Literal, final
+from typing import ClassVar, Literal, final
 from uuid import UUID, uuid4
 
 from app.core.json_types import (
@@ -255,7 +255,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
         with EXISTS so a page is never short because of them. ``last_message_at`` is nullable and sorts last,
         so the cursor predicate needs a separate branch for a NULL boundary.
         """
-        params: dict[str, Any] = {"agent_id": agent_id, "exclude_id": exclude_id, "limit": limit}
+        params: dict[str, object] = {"agent_id": agent_id, "exclude_id": exclude_id, "limit": limit}
         if scope == "all":
             scope_sql = (
                 "(cs.agent_id = %(agent_id)s OR (cs.peer_agent_id = %(agent_id)s AND cs.source_channel = 'agent'))"
@@ -333,7 +333,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
     ) -> dict[str, int]:
         if not conversation_ids:
             return {}
-        params: dict[str, Any] = {"ids": list(conversation_ids)}
+        params: dict[str, object] = {"ids": list(conversation_ids)}
         agent_clause = ""
         if agent_id is not None:
             agent_clause = " AND agent_id = %(agent_id)s"
@@ -416,7 +416,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
             )
             return int_from_row(value)
 
-    async def channel_distribution_since(self, since: datetime) -> Sequence[dict[str, Any]]:
+    async def channel_distribution_since(self, since: datetime) -> Sequence[dict[str, object]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT source_channel, COUNT(*) AS count FROM chat_sessions "
@@ -502,7 +502,7 @@ class ChatSessionDAO(BaseDAO[ChatSessionRecord]):
                 return 0, 0
             return int_from_row(row.get("last_week_total")), int_from_row(row.get("retained"))
 
-    async def churn_warnings(self) -> Sequence[dict[str, Any]]:
+    async def churn_warnings(self) -> Sequence[dict[str, object]]:
         async with self.session() as db:
             rows = await db.fetchall(
                 """
@@ -741,7 +741,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         limit: int,
         before: datetime | None = None,
     ) -> Sequence[ChatMessageRecord]:
-        params: dict[str, Any] = {"conversation_id": conversation_id, "limit": limit}
+        params: dict[str, object] = {"conversation_id": conversation_id, "limit": limit}
         before_sql = ""
         if before is not None:
             before_sql = " AND created_at < %(before)s"
@@ -841,7 +841,7 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         group_by_user: bool = False,
     ) -> list[dict[str, object]]:
         """Aggregate conversation stats for activity history listing."""
-        params: dict[str, Any] = {"agent_id": agent_id}
+        params: dict[str, object] = {"agent_id": agent_id}
         if group_by_user:
             group_expr = "user_id"
             prefix_sql = " AND conversation_id LIKE %(prefix)s"
@@ -935,8 +935,8 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         role: str | None = None,
         ascending: bool = False,
     ) -> str | None:
-        clauses = []
-        params: dict[str, Any] = {}
+        clauses: list[str] = []
+        params: dict[str, object] = {}
         if agent_id is not None:
             clauses.append("agent_id = %(agent_id)s")
             params["agent_id"] = agent_id

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -78,7 +78,7 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
             return InvitationCodeRecord.from_row(row) if row is not None else None
 
     async def count_for_tenant(self, tenant_id: UUID, *, search: str | None = None) -> int:
-        params: dict[str, Any] = {"tenant_id": tenant_id}
+        params: dict[str, object] = {"tenant_id": tenant_id}
         search_sql = ""
         if search not in (None, ""):
             params["search"] = f"%{search}%"
@@ -98,7 +98,7 @@ class InvitationCodeDAO(BaseDAO[InvitationCodeRecord]):
         offset: int = 0,
         limit: int = 20,
     ) -> Sequence[InvitationCodeRecord]:
-        params: dict[str, Any] = {
+        params: dict[str, object] = {
             "tenant_id": tenant_id,
             "offset": offset,
             "limit": limit,
