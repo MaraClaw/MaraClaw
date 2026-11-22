@@ -5307,29 +5307,6 @@
           "HEARTBEAT"
         ]
       },
-      "ChatGPTSubscriptionCompleteIn": {
-        "additionalProperties": false,
-        "properties": {
-          "attempt_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Attempt Id",
-            "type": "string"
-          },
-          "callback_url": {
-            "maxLength": 8192,
-            "minLength": 1,
-            "title": "Callback Url",
-            "type": "string"
-          }
-        },
-        "required": [
-          "attempt_id",
-          "callback_url"
-        ],
-        "title": "ChatGPTSubscriptionCompleteIn",
-        "type": "object"
-      },
       "ChatGPTSubscriptionStartOut": {
         "additionalProperties": false,
         "properties": {
@@ -5344,16 +5321,11 @@
           "expires_in": {
             "title": "Expires In",
             "type": "integer"
-          },
-          "redirect_uri": {
-            "title": "Redirect Uri",
-            "type": "string"
           }
         },
         "required": [
           "attempt_id",
           "authorization_url",
-          "redirect_uri",
           "expires_in"
         ],
         "title": "ChatGPTSubscriptionStartOut",
@@ -40471,55 +40443,9 @@
         ]
       }
     },
-    "/api/enterprise/llm-models/chatgpt-subscription/complete": {
-      "post": {
-        "operationId": "post_2f6170692f656e74657270726973652f6c6c6d2d6d6f64656c732f636861746770742d737562736372697074696f6e2f636f6d706c657465",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatGPTSubscriptionCompleteIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatGPTSubscriptionStatusOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Complete Chatgpt Subscription",
-        "tags": [
-          "enterprise"
-        ]
-      }
-    },
     "/api/enterprise/llm-models/chatgpt-subscription/start": {
       "post": {
-        "description": "Start browser OAuth PKCE. Tokens and the verifier stay on the server.",
+        "description": "Start browser OAuth PKCE; the engine-hosted callback finishes it. Tokens and the verifier stay on the server.",
         "operationId": "post_2f6170692f656e74657270726973652f6c6c6d2d6d6f64656c732f636861746770742d737562736372697074696f6e2f7374617274",
         "parameters": [
           {

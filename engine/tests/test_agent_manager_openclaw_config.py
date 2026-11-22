@@ -1,6 +1,8 @@
 import json
+import sqlite3
 import sys
 import uuid
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import monotonic
@@ -17,12 +19,14 @@ from app.config import Settings, get_settings
 from app.core.domain.agents import AgentStatus
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.records.agent import AgentRecord
-from app.services import agent_manager as agent_manager_module
+from app.records.llm import LLMModelRecord
+from app.services import agent_manager as agent_manager_module, enterprise_llm
 from app.services.agent_manager import (
     OPENAI_OAUTH_PROFILE_ID,
     XAI_OAUTH_PROFILE_ID,
     AgentManager,
 )
+from app.services.guest_limits import GuestLimits
 from app.services.tavily.tokens import parse_proxy_token
 
 
@@ -90,13 +94,16 @@ class RecordingDockerClient:
         self.run_error = run_error
         self.run_args = None
         self.run_kwargs = None
+        self.run_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def run(self, *args, **kwargs):
-        self.run_args = args
-        self.run_kwargs = kwargs
+        self.run_calls.append((args, kwargs))
+        if kwargs.get("detach"):
+            self.run_args = args
+            self.run_kwargs = kwargs
         if self.run_error is not None:
             raise self.run_error
-        return SimpleNamespace(id="container-1234567890")
+        return SimpleNamespace(id="container-1234567890") if kwargs.get("detach") else ""
 
 
 class GuestSettings:
@@ -421,7 +428,7 @@ def test_generate_openclaw_config_maps_chatgpt_subscription_to_openai_oauth(monk
     fallback: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="openai",
-        model="gpt-6.1-sol",
+        model="gpt-6.2-sol",
         api_key_encrypted="sk-openai-key",
         auth_kind="api_key",
         label="GPT API",
@@ -479,6 +486,84 @@ def test_write_guest_config_stores_openai_oauth_profile(monkeypatch, tmp_path) -
     legacy = json.loads((agent_dir / "credentials" / "oauth.json").read_text(encoding="utf-8"))
     assert legacy["openai"]["access"] == access
     assert legacy["openai"]["accountId"] == "acct-from-row"
+
+
+def _grok_subscription_model(tenant_id: uuid.UUID | None = None) -> LLMModelRecord:
+    return LLMModelRecord(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        provider="grok",
+        model="grok-4.8",
+        label="SuperGrok",
+        api_key_encrypted="engine-test-access",
+        refresh_token_encrypted="engine-test-refresh",
+        token_expires_at=datetime.now(UTC) + timedelta(hours=2),
+        auth_kind="grok_subscription",
+    )
+
+
+def test_write_guest_config_does_not_recreate_migrated_oauth_files(monkeypatch, tmp_path) -> None:
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
+    monkeypatch.setattr(agent_manager_module, "decrypt_data", lambda raw, _key: raw)
+    manager = AgentManager.__new__(AgentManager)
+    agent = AgentRecord(id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4())
+    agent_dir = tmp_path / str(agent.id)
+    db_path = agent_dir / "state" / "openclaw.sqlite"
+    db_path.parent.mkdir(parents=True)
+    store = {"version": 1, "profiles": {XAI_OAUTH_PROFILE_ID: {"type": "oauth", "provider": "xai"}}}
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute("CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        conn.execute("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?)", (json.dumps(store),))
+    original_db = db_path.read_bytes()
+
+    assert manager.write_guest_config(agent, primary=_grok_subscription_model()) == agent_dir / "openclaw.json"
+
+    assert not (agent_dir / "agents/main/agent/auth-profiles.json").exists()
+    assert not (agent_dir / "credentials/oauth.json").exists()
+    assert db_path.read_bytes() == original_db
+
+
+async def test_replace_container_migrates_xai_oauth_before_gateway(monkeypatch, tmp_path) -> None:
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module, "get_model_api_key", lambda row: row.api_key_encrypted)
+    monkeypatch.setattr(agent_manager_module, "decrypt_data", lambda raw, _key: raw)
+    manager = AgentManager.__new__(AgentManager)
+    docker_client = RecordingDockerClient()
+    monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
+    tenant_id = uuid.uuid4()
+    primary = _grok_subscription_model(tenant_id)
+    agent = AgentRecord(
+        id=uuid.uuid4(), name="Grok Agent", creator_id=uuid.uuid4(), tenant_id=tenant_id, primary_model_id=primary.id
+    )
+    agent_dir = tmp_path / str(agent.id)
+    agent_dir.mkdir()
+    monkeypatch.setattr(manager, "_materialize_agent_dir", AsyncMock(return_value=agent_dir))
+    monkeypatch.setattr(enterprise_llm, "ensure_agent_company_models", AsyncMock(return_value=agent))
+    monkeypatch.setattr(agent_manager_module.llm_model_dao, "get_many", AsyncMock(return_value=[primary]))
+    monkeypatch.setattr(agent_manager_module, "ensure_fresh_access_token", AsyncMock(return_value=primary))
+    limits = GuestLimits(memory_bytes=5 * 1024**3, cpus=2.5, cpu_shares=None, pids_limit=512, tier=None)
+    monkeypatch.setattr(agent_manager_module, "resolve_guest_limits", AsyncMock(return_value=limits))
+
+    assert await manager.replace_container(agent) == "container-1234567890"
+
+    (doctor_args, doctor_kwargs), (gateway_args, gateway_kwargs) = docker_client.run_calls
+    assert doctor_args == (settings.MARACLAW_OPENCLAW_IMAGE, ["openclaw", "doctor", "--fix", "--non-interactive"])
+    assert gateway_args == (settings.MARACLAW_OPENCLAW_IMAGE, ["openclaw", "gateway"])
+    assert doctor_kwargs == {
+        "pull": "never",
+        "remove": True,
+        "volumes": gateway_kwargs["volumes"],
+        "envs": gateway_kwargs["envs"],
+        "memory": limits.memory_bytes,
+        "memory_swap": limits.memory_bytes,
+        "cpus": limits.cpus,
+        "pids_limit": limits.pids_limit,
+    }
+    assert not (agent_dir / "state/openclaw.sqlite").exists()
+    assert not (agent_dir / "agents/main/agent/openclaw-agent.sqlite").exists()
 
 
 @pytest.mark.parametrize(
@@ -549,6 +634,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
         settings.MARACLAW_OPENCLAW_IMAGE,
         ["openclaw", "gateway"],
     )
+    assert len(docker_client.run_calls) == 1
     assert "entrypoint" not in run_kwargs
     assert docker_client.container.stop_calls
     assert docker_client.container.remove_calls

@@ -1,6 +1,11 @@
-"""Browser PKCE orchestration with single-use claims and short DB transactions."""
+"""Browser PKCE orchestration with single-use claims and short DB transactions.
+
+The admin starts an attempt and polls ``status``; the provider redirects the browser to the engine-hosted callback
+(``app/api/chatgpt_oauth_callback.py``), which carries no session, so the claimed ticket's binding names the owner.
+"""
 
 from datetime import UTC, datetime
+from typing import Literal
 
 import anyio
 import httpx
@@ -13,20 +18,22 @@ from app.dao.llm_dao import llm_model_dao
 from app.db.session import get_connection, optional_connection_ctx
 from app.records.user import UserRecord
 from app.services import chatgpt_subscription_store as store
-from app.services.chatgpt_oauth import OPENAI_REDIRECT_URI, exchange_authorization_code
-from app.services.chatgpt_pkce import BrowserCallback, new_browser_authorization, parse_browser_callback
+from app.services.chatgpt_oauth import exchange_authorization_code
+from app.services.chatgpt_pkce import BrowserCallback, new_browser_authorization, parse_callback_query
 from app.services.chatgpt_subscription import AUTH_KIND_CHATGPT_SUBSCRIPTION, persist_subscription_tokens
-from app.services.chatgpt_subscription_types import (
-    ChatGPTSubscriptionCompleteIn,
-    ChatGPTSubscriptionStartOut,
-    ChatGPTSubscriptionStatusOut,
-)
+from app.services.chatgpt_subscription_types import ChatGPTSubscriptionStartOut, ChatGPTSubscriptionStatusOut
 from app.services.enterprise_llm import require_llm_pool_tenant_id
 from app.services.subscription_boundaries import (
     active_subscription_tenant,
     fresh_subscription_actor,
+    fresh_subscription_owner,
     unchanged_subscription_model,
 )
+
+CallbackOutcome = Literal["authorized", "rejected", "unavailable"]
+
+_NOT_COMPLETED = "ChatGPT sign-in did not complete; connect again"
+_SUBSCRIPTION_CHANGED = "Subscription changed during sign-in; connect again"
 
 
 def _require_unbound() -> None:
@@ -34,8 +41,12 @@ def _require_unbound() -> None:
         raise RuntimeError("ChatGPT browser handoff must own its transaction boundary")
 
 
-async def _authorize(user: UserRecord, binding: store.AttemptBinding) -> None:
-    fresh = await fresh_subscription_actor(user)
+async def _authorize(binding: store.AttemptBinding, user: UserRecord | None = None) -> None:
+    """Fresh authority of the attempt owner: the session user, or the recorded actor on the browser callback."""
+    if user is None:
+        fresh = await fresh_subscription_owner(binding.actor_id, binding.identity_id, binding.actor_tenant_id)
+    else:
+        fresh = await fresh_subscription_actor(user)
     binding.require_owner(fresh)
     if not fresh.is_active or fresh.identity is None or not fresh.identity.is_active:
         raise HTTPException(status_code=403, detail="Administrator identity is inactive")
@@ -50,6 +61,8 @@ def _expired(attempt_id: str) -> ChatGPTSubscriptionStatusOut:
 
 async def start_chatgpt_subscription_handoff(user: UserRecord, tenant_id: str | None) -> ChatGPTSubscriptionStartOut:
     _require_unbound()
+    if not get_settings().CHATGPT_OAUTH_REDIRECT_URI:
+        raise HTTPException(status_code=503, detail="ChatGPT sign-in is not configured")
     async with optional_connection_ctx():
         fresh = await fresh_subscription_actor(user)
         if not fresh.is_active or fresh.identity is None or not fresh.identity.is_active:
@@ -61,10 +74,7 @@ async def start_chatgpt_subscription_handoff(user: UserRecord, tenant_id: str | 
     authorization = new_browser_authorization()
     attempt_id = await store.issue(binding, authorization)
     return ChatGPTSubscriptionStartOut(
-        attempt_id=attempt_id,
-        authorization_url=authorization.authorization_url,
-        redirect_uri=OPENAI_REDIRECT_URI,
-        expires_in=store.ATTEMPT_TTL,
+        attempt_id=attempt_id, authorization_url=authorization.authorization_url, expires_in=store.ATTEMPT_TTL
     )
 
 
@@ -74,7 +84,7 @@ async def chatgpt_subscription_status(user: UserRecord, attempt_id: str) -> Chat
     if view is None:
         return _expired(attempt_id)
     async with optional_connection_ctx():
-        await _authorize(user, view.binding)
+        await _authorize(view.binding, user)
     if view.result is not None:
         return view.result
     remaining = max(int((view.binding.expires_at - datetime.now(UTC)).total_seconds()), 0)
@@ -83,58 +93,62 @@ async def chatgpt_subscription_status(user: UserRecord, attempt_id: str) -> Chat
     return ChatGPTSubscriptionStatusOut(status="pending", attempt_id=attempt_id, expires_in=remaining)
 
 
-async def complete_chatgpt_subscription_handoff(
-    user: UserRecord, data: ChatGPTSubscriptionCompleteIn
-) -> ChatGPTSubscriptionStatusOut:
+async def complete_chatgpt_subscription_callback(query: str) -> CallbackOutcome:
+    """Settle the attempt named by the raw redirect query; the owner reads the stored result through status.
+
+    A malformed query or an unknown, expired or used state is ``rejected`` without consuming anything. Every
+    terminal result other than ``authorized`` is also ``rejected``, so the page never tells whether a state was valid.
+    """
     _require_unbound()
-    view = await store.read_attempt(data.attempt_id, user)
-    if view is None:
-        return _expired(data.attempt_id)
-    async with optional_connection_ctx():
-        await _authorize(user, view.binding)
-    if view.result is not None:
-        raise HTTPException(status_code=409, detail="ChatGPT attempt already consumed; check status")
-    if view.binding.expires_at <= datetime.now(UTC):
-        return _expired(data.attempt_id)
-    pending = await store.pending_ticket(data.attempt_id)
-    if pending is None:
-        raise HTTPException(status_code=409, detail="ChatGPT attempt already consumed; check status")
-    if pending.binding != view.binding:
-        raise store.unavailable()
-    callback = parse_browser_callback(data.callback_url, pending.state)
-    claimed = await store.claim(data.attempt_id, view.binding)
-    if claimed is None:
-        raise HTTPException(status_code=409, detail="ChatGPT attempt already consumed; check status")
-    result = ChatGPTSubscriptionStatusOut(
-        status="error", attempt_id=data.attempt_id, detail="ChatGPT sign-in did not complete; connect again"
-    )
+    callback = parse_callback_query(query)
+    if callback is None:
+        return "rejected"
     try:
-        if view.binding.expires_at <= datetime.now(UTC):
-            result = _expired(data.attempt_id)
-        else:
-            result = await _exchange_and_persist(claimed, callback, user)
+        result = await _consume(callback)
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            return "unavailable"
+        raise
+    return "authorized" if result is not None and result.status == "authorized" else "rejected"
+
+
+async def _consume(callback: BrowserCallback) -> ChatGPTSubscriptionStatusOut | None:
+    ticket = await store.claim_by_state(callback.state)
+    if ticket is None:
+        return None
+    result = ChatGPTSubscriptionStatusOut(status="error", attempt_id=ticket.attempt_id, detail=_NOT_COMPLETED)
+    try:
+        result = await _settle(ticket, callback)
         return result
     finally:
         with anyio.CancelScope(shield=True):
-            await store.finish(view.binding, result)
+            await store.finish(ticket.binding, result)
 
 
-async def _exchange_and_persist(
-    ticket: store.PendingTicket, callback: BrowserCallback, user: UserRecord
-) -> ChatGPTSubscriptionStatusOut:
+async def _settle(ticket: store.PendingTicket, callback: BrowserCallback) -> ChatGPTSubscriptionStatusOut:
+    if ticket.binding.expires_at <= datetime.now(UTC):
+        return _expired(ticket.attempt_id)
+    try:
+        return await _exchange_and_persist(ticket, callback)
+    except HTTPException as exc:
+        # Authority or the stored subscription changed after start; nothing was persisted.
+        logger.warning("ChatGPT browser callback refused: status_code={}", exc.status_code)
+        detail = _SUBSCRIPTION_CHANGED if exc.status_code in {404, 409} else _NOT_COMPLETED
+        return ChatGPTSubscriptionStatusOut(status="error", attempt_id=ticket.attempt_id, detail=detail)
+
+
+async def _exchange_and_persist(ticket: store.PendingTicket, callback: BrowserCallback) -> ChatGPTSubscriptionStatusOut:
     attempt_id = ticket.attempt_id
-    if callback.error is not None:
+    async with optional_connection_ctx():
+        await _authorize(ticket.binding)
+        snapshot = await llm_model_dao.get_subscription_for_tenant(
+            ticket.binding.tenant_id, auth_kind=AUTH_KIND_CHATGPT_SUBSCRIPTION
+        )
+    if callback.code is None:
         return ChatGPTSubscriptionStatusOut(
             status="denied" if callback.error == "access_denied" else "error",
             attempt_id=attempt_id,
             detail="ChatGPT authorization was not approved; connect again",
-        )
-    if callback.code is None:
-        raise ValueError("Missing authorization code")
-    async with optional_connection_ctx():
-        await _authorize(user, ticket.binding)
-        snapshot = await llm_model_dao.get_subscription_for_tenant(
-            ticket.binding.tenant_id, auth_kind=AUTH_KIND_CHATGPT_SUBSCRIPTION
         )
     try:
         verifier = decrypt_data(ticket.verifier_encrypted, get_settings().SECRET_KEY)
@@ -151,7 +165,7 @@ async def _exchange_and_persist(
             detail=token_result.error or "ChatGPT token exchange failed",
         )
     async with optional_connection_ctx():
-        await _authorize(user, ticket.binding)
+        await _authorize(ticket.binding)
         if ticket.binding.expires_at <= datetime.now(UTC):
             return _expired(attempt_id)
         if snapshot is not None:

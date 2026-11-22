@@ -79,11 +79,9 @@ from app.services.chatgpt_subscription import (
 )
 from app.services.chatgpt_subscription_handoff import (
     chatgpt_subscription_status,
-    complete_chatgpt_subscription_handoff,
     start_chatgpt_subscription_handoff,
 )
 from app.services.chatgpt_subscription_types import (
-    ChatGPTSubscriptionCompleteIn,
     ChatGPTSubscriptionStartOut,
     ChatGPTSubscriptionStatusOut,
 )
@@ -245,7 +243,10 @@ async def probe_llm_model(
 
     start = time.time()
     try:
-        if existing is not None and getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
+        if existing is not None and getattr(existing, "auth_kind", "") in {
+            AUTH_KIND_CHATGPT_SUBSCRIPTION,
+            "grok_subscription",
+        }:
             client = create_llm_client_from_model(existing)
         else:
             client = create_llm_client(
@@ -297,7 +298,7 @@ async def start_chatgpt_subscription(
     tenant_id: str | None = None,
     current_user: UserRecord = Depends(get_current_admin),
 ) -> ChatGPTSubscriptionStartOut:
-    """Start browser OAuth PKCE. Tokens and the verifier stay on the server."""
+    """Start browser OAuth PKCE; the engine-hosted callback finishes it. Tokens and the verifier stay on the server."""
     assert_llm_pool_admin(current_user)
     return await start_chatgpt_subscription_handoff(current_user, tenant_id)
 
@@ -309,14 +310,6 @@ async def get_chatgpt_subscription_status(
 ) -> ChatGPTSubscriptionStatusOut:
     """Read an owner-bound result without contacting the provider."""
     return await chatgpt_subscription_status(current_user, attempt_id)
-
-
-@router.post("/llm-models/chatgpt-subscription/complete", response_model=ChatGPTSubscriptionStatusOut)
-async def complete_chatgpt_subscription(
-    data: ChatGPTSubscriptionCompleteIn,
-    current_user: UserRecord = Depends(get_current_admin),
-) -> ChatGPTSubscriptionStatusOut:
-    return await complete_chatgpt_subscription_handoff(current_user, data)
 
 
 @router.post("/llm-models/{model_id}/refresh-subscription", response_model=GrokSubscriptionRefreshOut)

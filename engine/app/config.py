@@ -1,11 +1,13 @@
 """Application configuration."""
 
 import os
+import re
 import socket
 import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, ClassVar, Final, Literal
+from urllib.parse import unquote, urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -336,6 +338,43 @@ class Settings(BaseSettings):
     EMBEDDING_DIMS: str = ""
     EMBEDDING_PROVIDER_URL: str = ""
     EMBEDDING_API_KEY: str = ""
+
+    # ChatGPT browser OAuth. The engine serves the redirect URI's path itself (app/api/chatgpt_oauth_callback.py),
+    # read once at startup; empty disables ChatGPT sign-in.
+    CHATGPT_OAUTH_CLIENT_ID: str = "app_EMoamEEZ73f0CkXaXp7hrann"
+    CHATGPT_OAUTH_REDIRECT_URI: str = ""
+
+    @field_validator("CHATGPT_OAUTH_CLIENT_ID")
+    @classmethod
+    def validate_chatgpt_oauth_client_id(cls, value: str) -> str:
+        if not value or any(char.isspace() or not char.isprintable() for char in value):
+            raise ValueError("CHATGPT_OAUTH_CLIENT_ID must be a non-blank OAuth client ID without whitespace")
+        return value
+
+    @field_validator("CHATGPT_OAUTH_REDIRECT_URI")
+    @classmethod
+    def validate_chatgpt_oauth_redirect_uri(cls, value: str) -> str:
+        if not value:
+            return value
+        try:
+            url = urlsplit(value)
+            _ = url.port  # urlsplit does not validate the port until it is accessed.
+            if (
+                url.scheme not in {"http", "https"}
+                or url.hostname in (None, "")
+                or url.username is not None
+                or url.path in {"", "/"}
+                or re.search(r"[\s\x00-\x1f\x7f\\?#]|%(?![0-9a-fA-F]{2})", value)
+                # The decoded path becomes a literal engine route: braces would turn into path parameters.
+                or re.search(r"[{}\x00-\x1f\x7f]", unquote(url.path))
+            ):
+                raise ValueError
+        except ValueError:
+            raise ValueError(
+                "CHATGPT_OAUTH_REDIRECT_URI must be empty or an absolute HTTP or HTTPS URL with a host and a path "
+                "other than /, without userinfo, query, fragment, or braces"
+            ) from None
+        return value
 
     # Feishu OAuth
     FEISHU_APP_ID: str = ""

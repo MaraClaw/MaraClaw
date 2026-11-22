@@ -76,6 +76,13 @@ Preparation is no guarantee that Docker creation succeeds; the guest image is
 checked separately, [before admission](#guest-image-before-admission).
 Replacement is not atomic; failure after removal can leave no guest.
 
+For OAuth subscription models (SuperGrok and ChatGPT), the engine hands off
+credentials for profiles not already in the guest's canonical store through
+the retired `auth-profiles.json` and `oauth.json` files. If either file exists
+at creation, a one-shot `openclaw doctor --fix --non-interactive` migrates the
+credentials before `openclaw gateway` starts. The canonical store in
+`state/openclaw.sqlite` is OpenClaw-owned; the engine never writes it.
+
 ### Guest Image Before Admission
 
 After preparation succeeds, and before aggregate admission, the ownership check and

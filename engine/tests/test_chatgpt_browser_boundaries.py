@@ -5,7 +5,7 @@ import anyio
 import httpx
 import pytest
 from fastapi import HTTPException
-from tests.chatgpt_subscription_fakes import callback, oauth_store
+from tests.chatgpt_subscription_fakes import callback_query, oauth_store
 from tests.test_chatgpt_subscription import _ACCESS, _model, _user
 from tests.test_enterprise_transaction_boundaries import owned_pool
 
@@ -26,7 +26,7 @@ from app.services import (
     "outcome",
     ["success", "revoked", "identity", "password", "tenant", "stale", "cancel", "failure", "commit", "expiry"],
 )
-async def test_completion_releases_pool_and_revalidates_before_committed_result(
+async def test_callback_releases_pool_and_revalidates_before_committed_result(
     monkeypatch, oauth_store, owned_pool, outcome, has_model
 ):
     # Given
@@ -93,24 +93,20 @@ async def test_completion_releases_pool_and_revalidates_before_committed_result(
     # When
     if outcome == "cancel":
         with pytest.raises(anyio.get_cancelled_exc_class()):
-            await browser.complete_chatgpt_subscription_handoff(user, callback(start))
+            await browser.complete_chatgpt_subscription_callback(callback_query(start))
     elif outcome == "commit":
         with pytest.raises(RuntimeError, match="commit failed"):
-            await browser.complete_chatgpt_subscription_handoff(user, callback(start))
-    elif outcome in {"revoked", "identity", "password", "tenant", "stale"}:
-        with pytest.raises(HTTPException) as exc:
-            await browser.complete_chatgpt_subscription_handoff(user, callback(start))
-        assert exc.value.status_code == (409 if outcome == "stale" else 403)
+            await browser.complete_chatgpt_subscription_callback(callback_query(start))
     else:
-        result = await browser.complete_chatgpt_subscription_handoff(user, callback(start))
-        assert result.status == {"success": "authorized", "failure": "error", "expiry": "expired"}[outcome]
+        settled = await browser.complete_chatgpt_subscription_callback(callback_query(start))
+        assert settled == ("authorized" if outcome == "success" else "rejected")
     # Then
     assert len(published) == 1
-    assert (published[0].status == "authorized") == (outcome == "success")
+    assert published[0].status == {"success": "authorized", "expiry": "expired"}.get(outcome, "error")
     assert "secret prose" not in published[0].model_dump_json()
     if outcome not in {"success", "commit"}:
         save.assert_not_awaited()
-    assert await store.pending_ticket(start.attempt_id) is None
+    assert oauth_store.pending(start.attempt_id) is None
     assert owned_pool.active == 0
 
 
@@ -153,13 +149,11 @@ async def test_actual_cancellation_consumes_ticket_and_shields_terminal_result(m
     # When
     with anyio.fail_after(3):
         async with anyio.create_task_group() as group:
-            group.start_soon(browser.complete_chatgpt_subscription_handoff, user, callback(start))
+            group.start_soon(browser.complete_chatgpt_subscription_callback, callback_query(start))
             await entered.wait()
             group.cancel_scope.cancel()
     # Then
     result = await browser.chatgpt_subscription_status(user, start.attempt_id)
     assert result.status == "error"
     save.assert_not_awaited()
-    with pytest.raises(HTTPException) as exc:
-        await browser.complete_chatgpt_subscription_handoff(user, callback(start))
-    assert exc.value.status_code == 409
+    assert await browser.complete_chatgpt_subscription_callback(callback_query(start)) == "rejected"
