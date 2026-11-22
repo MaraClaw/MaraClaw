@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
-from typing import Any, cast
+from typing import cast
 
 from app.core.json_types import JsonObject
 from app.core.logging import logger
@@ -39,7 +39,7 @@ async def save_tool_call_log(
     if not conversation_id:
         return
 
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "name": tool_name,
         "args": arguments or {},
         "status": status,

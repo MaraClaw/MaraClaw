@@ -22,7 +22,7 @@ from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
 from app.core.domain.agents import AgentStatus
-from app.core.json_types import JsonObject, json_object_from
+from app.core.json_types import JsonObject, is_str_dict, json_object_from
 from app.core.logging import logger
 from app.core.security import decrypt_data
 from app.dao import llm_model_dao
@@ -887,7 +887,7 @@ class AgentManager:
             status: InspectedContainerStatus = {
                 "running": bool(getattr(state, "running", False)),
                 "status": str(getattr(state, "status", None) or agent.status),
-                "ports": json_object_from(ports) if isinstance(ports, dict) else None,
+                "ports": json_object_from(ports) if is_str_dict(ports) else None,
                 "created": created_value,
             }
             return status

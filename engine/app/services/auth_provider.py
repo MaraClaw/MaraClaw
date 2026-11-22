@@ -13,6 +13,8 @@ import httpx
 
 from app.core.json_types import (
     JsonObject,
+    JsonValue,
+    is_any_list,
     is_json_object,
     json_as_str,
     json_loads_value,
@@ -31,9 +33,7 @@ from app.services.auth_audience import (
 )
 from app.services.google_workspace_oauth import GOOGLE_HTTP_PROXY
 
-type AuthProviderPayloadValue = (
-    str | int | float | bool | list[AuthProviderPayloadValue] | dict[str, AuthProviderPayloadValue] | None
-)
+type AuthProviderPayloadValue = JsonValue
 type AuthProviderPayload = dict[str, AuthProviderPayloadValue]
 
 
@@ -891,7 +891,7 @@ class GitHubAuthProvider(BaseAuthProvider):
             if not email:
                 emails_resp = await client.get(self.GITHUB_EMAILS_URL, headers=headers)
                 emails_raw = json_value_from_response(emails_resp)
-                if emails_resp.status_code == 200 and isinstance(emails_raw, list):
+                if emails_resp.status_code == 200 and is_any_list(emails_raw):
                     emails: list[AuthProviderPayload] = [item for item in list[object](emails_raw) if _is_payload(item)]
                     primary = next(
                         (item for item in emails if (flag := item.get("primary")) is not None and flag), None

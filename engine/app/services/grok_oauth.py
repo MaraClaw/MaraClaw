@@ -12,7 +12,14 @@ from typing import Protocol
 
 import httpx
 
-from app.core.json_types import JsonObject, json_as_int, json_as_str, json_object_from, json_value_from_response
+from app.core.json_types import (
+    JsonObject,
+    is_str_dict,
+    json_as_int,
+    json_as_str,
+    json_object_from,
+    json_value_from_response,
+)
 
 # Shared Grok CLI / OpenClaw public client. xAI decides which subscriptions
 # can receive OAuth API tokens; ineligible accounts get 403 after login.
@@ -83,7 +90,7 @@ class HttpxGrokOAuthTransport:
                 parsed = json_value_from_response(response)
             except ValueError:
                 parsed = None
-            if isinstance(parsed, dict):
+            if is_str_dict(parsed):
                 body = json_object_from(parsed)
             elif response.text:
                 body = {"error": response.text[:300]}

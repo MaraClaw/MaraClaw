@@ -220,7 +220,7 @@ async def set_company_agent_sections(company_id: uuid.UUID, requested: Sequence[
     if tenant is None:
         return None
     previous = tenant.hidden_agent_sections
-    config = dict(tenant.im_config or {})
+    config: dict[str, object] = dict(tenant.im_config or {})
     config["hidden_agent_sections"] = hidden
     updated = await tenant_dao.update(db_obj=tenant, obj_in={"im_config": config})
     return AgentSectionsUpdate(previous=previous, current=_agent_sections(updated.hidden_agent_sections))

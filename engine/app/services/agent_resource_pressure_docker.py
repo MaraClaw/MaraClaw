@@ -15,7 +15,7 @@ from typing import Final
 
 from pywhales import ClientNotFoundError, DockerClient
 
-from app.core.json_types import json_loads_value, object_mapping_from
+from app.core.json_types import is_str_dict, json_loads_value, object_mapping_from
 from app.services.guest_identity import AGENT_LABEL
 
 DOCKER_TIMEOUT_SECONDS: Final = 60.0
@@ -117,7 +117,7 @@ def _json_lines(output: str) -> list[dict[str, object]]:
             parsed = json_loads_value(line)
         except ValueError:
             continue
-        if isinstance(parsed, dict):
+        if is_str_dict(parsed):
             objects.append(object_mapping_from(parsed))
     return objects
 

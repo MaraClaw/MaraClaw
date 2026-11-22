@@ -11,7 +11,6 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any
 
 from app.config import get_settings
 from app.core.json_types import json_loads_value, mapping_from_row
@@ -347,7 +346,7 @@ async def _launch_reserved(now: datetime, reservation: SlotReservation) -> None:
                 trigger = await agent_trigger_dao.get(t.id)
                 if trigger:
                     fire_count = trigger.fire_count + 1
-                    updates: dict[str, Any] = {
+                    updates: dict[str, datetime | int | bool] = {
                         "last_fired_at": now,
                         "fire_count": fire_count,
                     }

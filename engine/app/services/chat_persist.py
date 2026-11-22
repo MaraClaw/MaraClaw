@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
 
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -21,7 +21,7 @@ async def persist_chat_message(
     content: str,
     thinking: str | None = None,
     participant_id: uuid.UUID | None = None,
-    session_updates: dict[str, Any] | None = None,
+    session_updates: Mapping[str, object] | None = None,
     title_if_default: str | None = None,
     touch_last_active: bool = False,
     skip_insert: bool = False,
@@ -46,7 +46,7 @@ async def persist_chat_message(
         if session_id is not None:
             session = await chat_session_dao.get(session_id)
             if session is not None:
-                updates: dict[str, Any] = {}
+                updates: dict[str, object] = {}
                 if not skip_insert:
                     updates["last_message_at"] = datetime.now(UTC)
                 if session_updates is not None and session_updates:

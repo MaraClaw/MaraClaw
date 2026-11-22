@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import replace
-from typing import Any, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
-from app.core.json_types import JsonValue
+from app.core.json_types import JsonValue, is_str_dict, object_attr
 from app.core.logging import logger
 from app.records.channel_config import ChannelConfigRecord
 from app.services.channels.wechat_media import WeChatMedia, parse_wechat_media, store_wechat_media
@@ -36,7 +36,7 @@ class WeChatDeliveryConfig(TypedDict):
     route_tag: str | None
 
 
-def _nonempty_string(value: JsonValue | None) -> str | None:
+def _nonempty_string(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     normalized = value.strip()
@@ -85,8 +85,8 @@ def _parse_wechat_message(raw_message: JsonValue) -> WeChatInboundMessage | None
 def _parse_wechat_delivery_config(
     config: ChannelConfigRecord | object, fallback_base_url: str
 ) -> WeChatDeliveryConfig | None:
-    extra_raw = getattr(config, "extra_config", None) or {}
-    extra: dict[str, Any] = dict[str, Any](extra_raw) if isinstance(extra_raw, dict) else {}
+    extra_raw = object_attr(config, "extra_config") or dict[str, object]()
+    extra = dict(extra_raw) if is_str_dict(extra_raw) else {}
     token = _nonempty_string(extra.get("bot_token"))
     if token is None:
         return None

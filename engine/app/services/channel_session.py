@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import uuid as _uuid
 from datetime import UTC, datetime
-from typing import Any
 
 from app.dao.chat_dao import chat_session_dao
 from app.db.errors import UniqueViolationError
@@ -58,7 +57,7 @@ async def find_or_create_channel_session(
             if session is None:
                 raise
 
-    updates: dict[str, Any] = {}
+    updates: dict[str, object] = {}
     # For P2P sessions: re-attribute to the correct user
     # (fixes legacy sessions stored under creator_id)
     if not session.is_group and session.user_id != user_id:

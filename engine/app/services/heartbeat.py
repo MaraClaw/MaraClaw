@@ -301,7 +301,7 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
                 limit=50,
             )
             if recent_activities:
-                itms = []
+                itms: list[str] = []
                 for act in reversed(list(recent_activities)):  # chronological order
                     ts = act.created_at.strftime("%m-%d %H:%M") if act.created_at else ""
                     itms.append(f"- [{ts}] {act.action_type}: {act.summary[:120]}")

@@ -10,11 +10,11 @@ Runs as a background task inside the FastAPI process.
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import NotRequired, TypedDict
+from typing import NotRequired, TypedDict, TypeIs
 
 from app.core.domain.activity import ActivityAction
 from app.core.domain.channels import ChannelType
-from app.core.json_types import json_loads_object
+from app.core.json_types import is_any_list, json_loads_object
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
@@ -39,6 +39,10 @@ class ReminderSchedule(TypedDict):
     weekdays: NotRequired[list[int]]
 
 
+def _is_weekday_list(value: object) -> TypeIs[list[int]]:
+    return is_any_list(value) and all(isinstance(day, int) for day in list[object](value))
+
+
 def _parse_schedule(remind_schedule: str) -> ReminderSchedule | None:
     """Parse remind_schedule - supports JSON format or legacy simple presets."""
     import json
@@ -59,10 +63,7 @@ def _parse_schedule(remind_schedule: str) -> ReminderSchedule | None:
             and not isinstance(interval, bool)
             and interval > 0
             and isinstance(time_of_day, str)
-            and (
-                weekdays is None
-                or (isinstance(weekdays, list) and all(isinstance(day, int) for day in list[object](weekdays)))
-            )
+            and (weekdays is None or _is_weekday_list(weekdays))
         ):
             schedule: ReminderSchedule = {
                 "freq": frequency,

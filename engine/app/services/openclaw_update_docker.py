@@ -30,6 +30,10 @@ class ContainerInfo:
 _DIGEST_LINE = re.compile(r"^Digest: (sha256:[0-9a-f]{64})$")
 
 
+def _is_iterator(value: object) -> bool:
+    return isinstance(value, Iterator)
+
+
 class UpgradeDocker:
     def __init__(self, client: DockerClient) -> None:
         self.client: DockerClient = client
@@ -54,7 +58,7 @@ class UpgradeDocker:
         stream = self.client.image.pull(
             reference, stream_logs=True, timeout=get_settings().OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS
         )
-        if not isinstance(stream, Iterator):
+        if not _is_iterator(stream):
             raise OSError(f"docker pull of {reference} did not stream its log")
         digest: str | None = None
         with closing(stream):

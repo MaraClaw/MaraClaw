@@ -9,7 +9,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, override
+from typing import override
 from uuid import UUID
 
 from anyio.to_thread import run_sync
@@ -67,7 +67,7 @@ async def upsert_gogcli_keyring_password(agent_id: UUID, password: str) -> Gogcl
     now = datetime.now(UTC)
     encrypted_password = encrypt_data(password, settings.SECRET_KEY)
     existing = await gogcli_credential_state_dao.get_by_agent(agent_id)
-    fields: dict[str, Any] = {
+    fields: dict[str, str | datetime] = {
         "encrypted_keyring_password": encrypted_password,
         "keyring_password_updated_at": now,
     }
