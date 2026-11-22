@@ -5,6 +5,7 @@ import { mergeConfirmationToken, mergeDestinationId, mergeSourceId, otherTenant,
 const panel = (page, name = 'Operations') => page.getByRole('group', { name: `Merge “${name}”`, exact: true })
 const apply = (page) => panel(page).getByRole('button', { name: 'Merge departments', exact: true })
 const checkbox = (page) => panel(page).getByRole('checkbox')
+const errorToast = (page) => page.locator('[data-sonner-toast][data-type="error"]')
 export function seed(state) {
   for (const [tenantId, directory] of Object.entries(state.directories)) {
     directory.departments[0].id = mergeSourceId
@@ -81,7 +82,7 @@ export async function runMergeCases(harness) {
     state.mergePreviewStatus = 503
     await open(page, state, base)
     await panel(page).getByLabel('Destination department').selectOption(mergeDestinationId)
-    await expect(panel(page).getByRole('alert')).toBeVisible()
+    await expect(errorToast(page)).toBeVisible()
     await expect(apply(page)).toBeDisabled()
     await harness.capture(page, 'merge-preview-error')
     state.mergePreviewStatus = 200
@@ -96,7 +97,7 @@ export async function runMergeCases(harness) {
     state.mergeStatus = 409
     await checkbox(page).check()
     await apply(page).click()
-    await expect(panel(page).getByRole('alert')).toHaveText('Synthetic merge denied')
+    await expect(errorToast(page).filter({ hasText: 'Synthetic merge denied' })).toBeVisible()
     await expect(panel(page).getByRole('heading')).toBeFocused()
     await expect(page.getByText('Merged “Operations” into “Engineering”', { exact: true })).toHaveCount(0)
     await expect(page.getByRole('group', { name: 'Departments for Member', exact: true }).getByLabel('Operations', { exact: true })).toBeChecked()

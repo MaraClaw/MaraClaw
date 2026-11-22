@@ -6,6 +6,7 @@ import { seed } from './departments-merge.browser.mjs'
 const panel = (page, name = 'Operations') => page.getByRole('group', { name: `Merge “${name}”`, exact: true })
 const apply = (page) => panel(page).getByRole('button', { name: 'Merge departments', exact: true })
 const checkbox = (page) => panel(page).getByRole('checkbox')
+const errorToast = (page) => page.locator('[data-sonner-toast][data-type="error"]')
 const freshToken = `v1:${'2'.repeat(64)}`
 
 async function review(page, state, base) {
@@ -62,7 +63,7 @@ export async function runMergeConfirmationCases(harness) {
       // Then
       await expect.poll(() => state.mergePreviews.length).toBe(2)
       await expect(panel(page).getByRole('heading')).toBeFocused()
-      await expect(panel(page).getByRole('alert')).toBeVisible()
+      await expect(errorToast(page)).toBeVisible()
       await expect(apply(page)).toBeDisabled()
       await expect(checkbox(page)).toHaveCount(0)
       assert.equal(state.merges.length, 1)
@@ -128,6 +129,8 @@ export async function runMergeConfirmationCases(harness) {
       state.mergePreviewGate = Promise.withResolvers()
       await apply(page).click()
       await expect.poll(() => state.mergePreviews.length).toBe(2)
+      await errorToast(page).locator('[data-close-button]').click()
+      await expect(errorToast(page)).toHaveCount(0)
       const stale = state.mergePreviews[1]
       state.mergePreviewGate = null
       state.mergeToken = freshToken
@@ -156,7 +159,7 @@ export async function runMergeConfirmationCases(harness) {
       await stale.delivered.promise
       await expect(current.getByRole('checkbox')).not.toBeChecked()
       await expect(current.getByRole('button', { name: 'Merge departments', exact: true })).toBeDisabled()
-      await expect(current.getByRole('alert')).toHaveCount(0)
+      await expect(errorToast(page)).toHaveCount(0)
       assert.equal(state.merges.length, 1)
       await page.keyboard.press('Escape')
       await expect(current).toHaveCount(0)
