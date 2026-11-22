@@ -30,6 +30,7 @@ def append(
     run: str = "tool:background:ok",
     text: str = "Finished\nMEDIA:/home/node/custom-state/media/result.jpg",
     event_id: str | None = None,
+    run_terminal: bool = False,
 ) -> None:
     event = {
         "type": "message",
@@ -39,7 +40,7 @@ def append(
             "role": "assistant",
             "stopReason": "stop",
             "content": [{"type": "text", "text": text}],
-            "__openclaw": {"runId": run},
+            "__openclaw": {"runId": run, **({"runTerminal": True} if run_terminal else {})},
         },
     }
     db.execute(
@@ -47,6 +48,43 @@ def append(
         (session, seq, json.dumps(event), seq),
     )
     db.commit()
+
+
+@pytest.mark.parametrize(
+    ("markers", "expected_seq"),
+    [
+        pytest.param((False, True), 2, id="interim-then-final"),
+        pytest.param((True, False), 1, id="marked-reply-not-newest"),
+        pytest.param((True, True), None, id="conflicting-final-markers"),
+        pytest.param((False, False), None, id="ambiguous-legacy"),
+        pytest.param((False,), 1, id="unique-legacy"),
+    ],
+)
+def test_terminal_lookup_uses_explicit_run_owner(
+    tmp_path: Path, markers: tuple[bool, ...], expected_seq: int | None
+) -> None:
+    from app.services.openclaw_transcript import ReplyMediaError, open_transcript
+
+    with closing(transcript(tmp_path / "agents/main/agent/openclaw-agent.sqlite")) as db:
+        db.execute("INSERT INTO session_windows VALUES ('s', 'key')")
+        for seq, marked in enumerate(markers, 1):
+            append(
+                db,
+                "s",
+                seq,
+                run="native-run",
+                text=f"MEDIA:/home/node/custom-state/workspace/result-{seq}.pdf",
+                run_terminal=marked,
+            )
+
+        with open_transcript(tmp_path) as source:
+            if expected_seq is None:
+                with pytest.raises(ReplyMediaError, match="ambiguous_terminal_media"):
+                    source.terminal("key", "native-run")
+            else:
+                reply = source.terminal("key", "native-run")
+                assert reply is not None
+                assert reply.text == f"MEDIA:/home/node/custom-state/workspace/result-{expected_seq}.pdf"
 
 
 def test_delayed_reply_reader_sees_live_wal_and_pages_all_physical_sessions(tmp_path: Path) -> None:
