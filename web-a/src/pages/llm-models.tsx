@@ -484,7 +484,7 @@ function GrokSubscriptionCard({
       <CardHeader>
         <CardTitle>{t('Connect Grok subscription')}</CardTitle>
         <CardDescription>
-          {t('Sign in with SuperGrok or X Premium. The verification code is shown here; access tokens stay on the server and are stored encrypted for this company.')}
+          {t('Sign in with SuperGrok or X Premium. New connections default to Grok 4.7 with Extra High reasoning and vision (image input) turned on. The verification code is shown here; access tokens stay on the server and are stored encrypted for this company.')}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

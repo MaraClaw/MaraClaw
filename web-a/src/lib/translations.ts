@@ -1278,7 +1278,7 @@ export const vietnamese = {
   'Could not start Grok sign-in. Check your connection and try again.': 'Không bắt đầu được đăng nhập Grok. Kiểm tra kết nối rồi thử lại.',
   'Grok subscription connected. It is in the company pool.': 'Đã kết nối gói Grok và thêm vào nhóm mô hình của công ty.',
   'Connect Grok subscription': 'Kết nối gói Grok',
-  'Sign in with SuperGrok or X Premium. The verification code is shown here; access tokens stay on the server and are stored encrypted for this company.': 'Đăng nhập bằng SuperGrok hoặc X Premium. Mã xác minh được hiển thị tại đây; mã truy cập được giữ trên máy chủ và mã hóa khi lưu cho công ty này.',
+  'Sign in with SuperGrok or X Premium. New connections default to Grok 4.7 with Extra High reasoning and vision (image input) turned on. The verification code is shown here; access tokens stay on the server and are stored encrypted for this company.': 'Đăng nhập bằng SuperGrok hoặc X Premium. Kết nối mới mặc định dùng Grok 4.7 với mức suy luận Rất cao và bật hỗ trợ hình ảnh (nhận ảnh đầu vào). Mã xác minh được hiển thị tại đây; mã truy cập được giữ trên máy chủ và mã hóa khi lưu cho công ty này.',
   'Enter code': 'Nhập mã',
   'Waiting for sign-in…': 'Đang chờ đăng nhập…',
   'This Grok sign-in has expired. Start again to get a new sign-in code.': 'Lần đăng nhập Grok này đã hết hạn. Hãy bắt đầu lại để nhận mã đăng nhập mới.',
