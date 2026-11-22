@@ -11,7 +11,7 @@ from typing import override
 import anyio
 from botocore.exceptions import ClientError
 
-from app.core.json_types import json_as_int
+from app.core.json_types import is_any_list, is_str_dict, json_as_int
 from app.services.storage_runtime.base import (
     MaterializedFile,
     StorageDeleteFailedError,
@@ -32,15 +32,16 @@ from app.services.storage_runtime.s3_connection import (
 )
 from app.services.storage_runtime.s3_create import S3CreateBackend
 from app.services.storage_runtime.s3_read import materialize_object, read_object, read_object_snapshot
+from app.services.storage_runtime.s3_types import client_error_response
 from app.services.storage_runtime.utils import normalize_storage_key
 
 _LAST_CODE_POINT = "\U0010ffff"
 
 
 def _mapping_items(value: object) -> list[Mapping[str, object]]:
-    if not isinstance(value, list):
+    if not is_any_list(value):
         return []
-    return [item for item in list[object](value) if isinstance(item, dict)]
+    return [item for item in value if is_str_dict(item)]
 
 
 class S3StorageBackend(S3CreateBackend):
@@ -308,7 +309,7 @@ class S3StorageBackend(S3CreateBackend):
                 Key=object_key,
             )
         except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+            if client_error_response(exc).get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
                 return StorageVersion(key=normalize_storage_key(key), exists=False, is_dir=False)
             raise
         return StorageVersion(

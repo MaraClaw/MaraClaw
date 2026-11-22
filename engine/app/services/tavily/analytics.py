@@ -11,6 +11,7 @@ from uuid import UUID
 
 from app.config import get_settings
 from app.core.json_types import (
+    is_str_dict,
     json_as_str,
     json_loads_object,
     json_loads_value,
@@ -86,7 +87,7 @@ def cheap_result_count(body: str) -> int | None:
         payload = json_loads_value(body)
     except JSONDecodeError:
         return None
-    if not isinstance(payload, dict):
+    if not is_str_dict(payload):
         return None
     mapping = json_object_from(payload)
     for key in ("results", "sources"):

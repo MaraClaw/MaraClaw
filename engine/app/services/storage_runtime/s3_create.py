@@ -13,6 +13,7 @@ from app.services.storage_runtime.base import (
     StorageVersion,
 )
 from app.services.storage_runtime.s3_connection import S3Connection, response_version_id
+from app.services.storage_runtime.s3_types import client_error_response
 from app.services.storage_runtime.upload_source import UploadSource, open_upload_source
 from app.services.storage_runtime.utils import normalize_storage_key
 
@@ -35,8 +36,9 @@ def _created(key: str, size: int, response: Mapping[str, object]) -> Conditional
 
 def _create_failure(exc: ClientError, key: str, attempt: int) -> ConditionalWriteResult | None:
     """A 412 is an occupied key and ``None`` retries a 409; every other failure propagates."""
-    code = exc.response.get("Error", {}).get("Code", "")
-    status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    response = client_error_response(exc)
+    code = response.get("Error", {}).get("Code", "")
+    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
     match status, code:
         case (412, _) | (_, "PreconditionFailed" | "412"):
             return ConditionalWriteResult(ok=False, conflict=True)

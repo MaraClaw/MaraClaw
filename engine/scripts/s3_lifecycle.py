@@ -11,6 +11,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from app.config import Settings, get_settings
+from app.services.storage_runtime.s3_types import client_error_response, new_s3_client
 from app.services.storage_runtime.utils import normalize_storage_key
 
 RULE_ID: Final = "maraclaw-agent-noncurrent-versions"
@@ -204,8 +205,8 @@ def _client(settings: Settings) -> LifecycleClient:
         read_timeout=30,
         region_name=settings.S3_REGION or None,
     )
-    client = boto3.Session().client(
-        "s3",
+    client = new_s3_client(
+        boto3.Session(),
         endpoint_url=settings.S3_ENDPOINT_URL or None,
         aws_access_key_id=settings.S3_ACCESS_KEY_ID or None,
         aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY or None,
@@ -221,7 +222,7 @@ def _lifecycle_configuration(client: LifecycleClient, bucket: str) -> LifecycleR
     try:
         return client.get_bucket_lifecycle_configuration(Bucket=bucket)
     except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") == "NoSuchLifecycleConfiguration":
+        if client_error_response(exc).get("Error", {}).get("Code") == "NoSuchLifecycleConfiguration":
             return {}
         raise
 
@@ -290,7 +291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return apply(client, settings.S3_BUCKET, prefix, args.days or DEFAULT_DAYS)
         return check(client, settings.S3_BUCKET, prefix)
     except ClientError as exc:
-        error = exc.response.get("Error", {})
+        error = client_error_response(exc).get("Error", {})
         print(
             f"error: S3 {exc.operation_name} failed: {error.get('Code', '')} {error.get('Message', '')}",
             file=sys.stderr,

@@ -5,6 +5,7 @@ from typing import Final
 from botocore.exceptions import ClientError, ConnectTimeoutError, EndpointConnectionError
 
 from app.services.storage_runtime.base import AtomicCreateUnsupportedError, StorageConditionalRaceError
+from app.services.storage_runtime.s3_types import client_error_response
 
 
 class Outcome(StrEnum):
@@ -31,7 +32,7 @@ def failure_outcome(exc: BaseException) -> Outcome:
     error - may have been applied, so the reservation stays charged.
     """
     if isinstance(exc, ClientError):
-        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        status = client_error_response(exc).get("ResponseMetadata", {}).get("HTTPStatusCode")
         return Outcome.REJECTED if isinstance(status, int) and 400 <= status < 500 else Outcome.UNKNOWN
     return Outcome.REJECTED if isinstance(exc, _NEVER_SENT) else Outcome.UNKNOWN
 

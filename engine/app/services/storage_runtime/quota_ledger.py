@@ -174,5 +174,5 @@ async def settle(reservation: Reservation, outcome: Outcome, adopted_bytes: int 
                 await apply_settled(db, row, max(row.committed_bytes, adopted_bytes))
             case Outcome.UNKNOWN:
                 await dao.mark_unknown(db, reservation.agent_id, reservation.operation_id)
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(outcome)
