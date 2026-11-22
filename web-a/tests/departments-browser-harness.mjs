@@ -4,11 +4,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { devices, expect } from '@playwright/test'
 import { createServer } from 'vite'
+import { uncappedOverview } from './capacity-fixtures.ts'
 import { launchDepartmentBrowser } from './departments-owned-browser.mjs'
 
 export const tenant = '86b8142b-31e6-44ab-a35e-e10998037030'
 export const otherTenant = '64c0b6ca-0312-42aa-996d-ff606043337a'
+export const nextUsersCursor = 'department-next-page'
+export const nextUserId = 'Second-page member'
 export const departmentId = 'department/a +?'
+const companies = [{ id: tenant, name: 'Alpha Labs', slug: 'alpha', is_active: true }, { id: otherTenant, name: 'Beta Works', slug: 'beta', is_active: true }]
 export const mergeSourceId = '10000000-0000-4000-8000-000000000001'
 export const mergeDestinationId = '10000000-0000-4000-8000-000000000002'
 export const mergeConfirmationToken = `v1:${'1'.repeat(64)}`
@@ -31,7 +35,7 @@ export async function createHarness() {
   const output = process.env.DEPARTMENT_ARTIFACTS ?? await mkdtemp(join(tmpdir(), 'department-evidence-'))
   await mkdir(output, { recursive: true })
   const cacheDir = join(output, 'vite-cache')
-  const server = await createServer({ cacheDir, server: { host: '127.0.0.1', port: 0, watch: { ignored: (path) => path.startsWith(output) } } })
+  const server = await createServer({ configLoader: 'runner', cacheDir, server: { host: '127.0.0.1', port: 0, watch: { ignored: (path) => path.startsWith(output) } } })
   const receipt = { engine: 'omowright.connectPipe; Playwright CDP assertions', scenarios: [], screenshots: [], requests: [], resources: { temporaryRoot: tmpdir(), cacheDir, browsers: [] }, cleanup: { browsersCreated: 0, browsersClosed: 0, profilesRemoved: 0, contextsCreated: 0, contextsClosed: 0, viteClosed: false, cacheRemoved: false, syntheticAPIsOnly: true } }
   await server.listen()
   const base = server.resolvedUrls.local[0]
@@ -58,6 +62,7 @@ export async function createHarness() {
         const path = url.pathname
         const selected = url.searchParams.get('tenant_id') ?? tenant
         const call = { method: request.method(), path, params: Object.fromEntries(url.searchParams) }
+        if (path === '/api/departments/assignments') call.userIds = url.searchParams.getAll('user_id')
         state.calls.push(call)
         receipt.requests.push({ scenario: options.name, ...call })
         const user = { ...admin, role: state.role, is_platform_admin: state.role === 'platform_admin' }
@@ -67,9 +72,18 @@ export async function createHarness() {
         if (path === '/api/auth/me') body = user
         else if (path === '/api/tenants/me') body = { id: tenant, is_active: true, is_default_end_user_org: false }
         else if (path === '/api/auth/login') body = { access_token: 'synthetic-department-token', token_type: 'bearer', user }
-        else if (path === '/api/admin/companies/options') body = [{ id: tenant, name: 'Alpha Labs', slug: 'alpha', is_active: true }, { id: otherTenant, name: 'Beta Works', slug: 'beta', is_active: true }]
+        // Alpha Labs is deliberately off the options page: the users deep link must resolve it by id.
+        else if (path === '/api/admin/companies/options') body = { items: companies.filter((company) => company.id === otherTenant || (url.searchParams.has('q') && company.name.toLowerCase().includes(url.searchParams.get('q').toLowerCase()))).map((company) => ({ ...company, can_disable: true })), next_cursor: null }
+        else if (path.startsWith('/api/tenants/')) {
+          const company = companies.find((item) => path === `/api/tenants/${item.id}`)
+          if (company) body = company
+          else { status = 404; body = { detail: 'Tenant not found' } }
+        }
         else if (path === '/api/admin/platform-admins') body = []
-        else if (path === '/api/users/page') body = { items: [row('Member', selected)], next_cursor: null }
+        else if (path === '/api/capacity/overview') body = { ...uncappedOverview, tenant_id: selected }
+        else if (path === '/api/users/page') body = options.paged && url.searchParams.get('cursor') === nextUsersCursor
+          ? { items: [row(nextUserId, selected)], next_cursor: null }
+          : { items: [row('Member', selected)], next_cursor: options.paged ? nextUsersCursor : null }
         else if (path === '/api/departments' && request.method() === 'POST') {
           const payload = request.postDataJSON()
           call.payload = payload
@@ -84,7 +98,21 @@ export async function createHarness() {
           body = { ...current.departments[index], ...payload }
           current.departments[index] = body
         }
-        else if (path === '/api/departments') body = state.directories[selected]
+        else if (path === '/api/departments') body = { departments: state.directories[selected].departments }
+        else if (path === '/api/departments/assignments') {
+          assert.ok(call.userIds.length > 0 && call.userIds.length <= 100)
+          body = state.directories[selected].assignments.filter(({ user_id }) => call.userIds.includes(user_id))
+        }
+        else if (path.startsWith('/api/users/') && path.endsWith('/departments') && request.method() === 'PUT') {
+          const userId = decodeURIComponent(path.split('/')[3])
+          const { department_ids } = request.postDataJSON()
+          const current = state.directories[selected]
+          current.assignments = [
+            ...current.assignments.filter(({ user_id }) => user_id !== userId),
+            ...department_ids.map((department_id) => ({ user_id: userId, tenant_id: selected, department_id })),
+          ]
+          body = { user_id: userId, tenant_id: selected, department_ids }
+        }
         else if (path.endsWith('/merge-preview') || path.endsWith('/merge')) {
           const apply = request.method() === 'POST'
           const payload = apply ? request.postDataJSON() : null
@@ -126,7 +154,9 @@ export async function createHarness() {
             current.departments = current.departments.filter((item) => item.id !== departmentId)
             current.assignments = current.assignments.filter((item) => item.department_id !== departmentId)
           } else body = { detail: 'Synthetic department deletion denied' }
-        } else if (path === '/api/company-admissions/review') body = url.searchParams.get('status') === state.admission.status ? [state.admission] : []
+        } else if (path === '/api/company-admissions/review/page') body = {
+          items: url.searchParams.get('status') === state.admission.status ? [state.admission] : [], next_cursor: null,
+        }
         else if (path === `/api/company-admissions/${admission.id}`) body = state.admission
         else if (path === '/api/notifications/unread-count') body = { unread_count: 0 }
         else if (path === '/api/admin/search-analytics/summary') body = { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' }

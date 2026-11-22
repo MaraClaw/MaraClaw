@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { expect } from '@playwright/test'
-import { confirmation, createHarness, departmentId, directory, openUsers, otherTenant, tenant } from './departments-browser-harness.mjs'
+import { confirmation, createHarness, departmentId, directory, nextUserId, openUsers, otherTenant, tenant } from './departments-browser-harness.mjs'
 import { runMergeCases } from './departments-merge.browser.mjs'
 import { runMergeConfirmationCases } from './departments-merge-confirmation.browser.mjs'
 
 const harness = await createHarness()
 let completed = false
 const deletes = (state) => state.calls.filter((call) => call.method === 'DELETE')
+const errorToast = (page) => page.locator('[data-sonner-toast][data-type="error"]')
 try {
   await harness.scenario({ name: 'keyboard confirmation never submits on opening; Escape and Cancel restore focus' }, async (page, state, base) => {
     // Given
@@ -61,6 +62,34 @@ try {
     await expect.poll(() => state.calls.filter((call) => call.path === '/api/users/page').length).toBe(2)
   })
 
+  await harness.scenario({ name: 'department assignments load one roster page at a time', paged: true }, async (page, state, base) => {
+    state.directories[tenant].assignments.push({ user_id: nextUserId, tenant_id: tenant, department_id: departmentId })
+    const requests = () => state.calls.filter(({ path }) => path === '/api/departments/assignments')
+      .map(({ params, userIds }) => [params.tenant_id, userIds])
+    const operations = (name) => page.getByRole('group', { name: `Departments for ${name}`, exact: true })
+      .getByRole('checkbox', { name: 'Operations', exact: true })
+    await openUsers(page, base)
+    await expect(operations('Member')).toBeChecked()
+    assert.deepEqual(requests(), [[tenant, ['Member']]])
+
+    await page.getByRole('button', { name: 'Load more users' }).click()
+
+    await expect(operations(nextUserId)).toBeChecked()
+    await expect(operations('Member')).toBeChecked()
+    assert.deepEqual(requests(), [[tenant, ['Member']], [tenant, [nextUserId]]])
+
+    const saved = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/users/${encodeURIComponent(nextUserId)}/departments`, { timeout: 10_000 })
+    await operations(nextUserId).click()
+    assert.equal((await saved).status(), 200)
+
+    await expect(operations(nextUserId)).toBeEnabled()
+    await expect(operations(nextUserId)).not.toBeChecked()
+    await expect(operations('Member')).toBeChecked()
+    assert.equal(state.directories[tenant].assignments.some(({ user_id }) => user_id === nextUserId), false)
+    assert.deepEqual(requests(), [[tenant, ['Member']], [tenant, [nextUserId]]])
+  })
+
   await harness.scenario({ name: 'preview failure blocks deletion; retry accepts zero associations' }, async (page, state, base) => {
     // Given
     state.previewStatus = 503
@@ -68,7 +97,7 @@ try {
     // When
     await page.getByRole('button', { name: 'Delete Operations', exact: true }).click()
     // Then
-    await expect(confirmation(page).getByRole('alert')).toBeVisible()
+    await expect(errorToast(page)).toBeVisible()
     await expect(confirmation(page).getByRole('button', { name: 'Delete department', exact: true })).toBeDisabled()
     assert.equal(deletes(state).length, 0)
     await harness.capture(page, 'preview-error')
@@ -117,7 +146,7 @@ try {
       await old.delivered.promise
       // Then
       await expect(confirmation(page, name).locator('dd')).toHaveText(['2', '4'])
-      await expect(confirmation(page, name).getByRole('alert')).toHaveCount(0)
+      await expect(errorToast(page)).toHaveCount(0)
       assert.equal(deletes(state).length, 0)
     })
   }
@@ -130,7 +159,7 @@ try {
     // When
     await confirmation(page).getByRole('button', { name: 'Delete department', exact: true }).click()
     // Then
-    await expect(confirmation(page).getByRole('alert')).toHaveText('Synthetic department deletion denied')
+    await expect(errorToast(page)).toHaveText('Synthetic department deletion denied')
     await expect(confirmation(page).getByRole('button', { name: 'Delete department', exact: true })).toBeEnabled()
     await expect(page.getByRole('group', { name: 'Departments for Member', exact: true }).getByLabel('Operations', { exact: true })).toBeChecked()
     await harness.capture(page, 'deletion-error')
