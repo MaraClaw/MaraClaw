@@ -45,8 +45,8 @@ def _check_bytes(data: bytes, kind: Literal["image", "file"]) -> None:
         case "file":
             if len(data) > MAX_FILE_BYTES:
                 raise ChannelMediaError("file_too_large")
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(kind)
 
 
 def _check_owner(agent: AgentRecord, file: StoredFile) -> None:

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from fastapi import HTTPException
 
 from app.core.domain.channels import ChannelType
+from app.core.json_types import JsonObject
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.stored_credentials import PreservedCredential, StoredCredentialError
 from app.dao.channel_config_dao import channel_config_dao
@@ -59,13 +59,13 @@ async def upsert_channel_config(
     app_secret: str | None = None,
     encrypt_key: str | None = None,
     verification_token: str | None = None,
-    extra_config: dict[str, Any] | None = None,
+    extra_config: JsonObject | None = None,
     is_configured: bool = True,
 ) -> ChannelConfigRecord:
     """Create or update a channel_config row for an agent."""
     stored = ChannelType(normalize_channel_type(channel_type) or channel_type)
     existing = await get_channel_config_metadata(agent_id, stored)
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "app_id": app_id,
         "app_secret": app_secret,
         "encrypt_key": encrypt_key,

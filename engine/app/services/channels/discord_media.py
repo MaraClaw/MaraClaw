@@ -61,7 +61,9 @@ async def defer_discord_media(event: submissions.ChannelEvent, interaction_id: s
 async def accept_discord_media(event: submissions.ChannelEvent, attachments: tuple[DiscordAttachment, ...]) -> None:
     if await submissions.is_channel_event_replay(event):
         return
-    budget, refs, parts = MediaBudget(), [], [event.text] if event.text else []
+    budget = MediaBudget()
+    refs: list[ChatAttachment] = []
+    parts = [event.text] if event.text else []
     retrieved, skipped = limit_attachments(attachments)
     for attachment in retrieved:
         # Only Discord's documented CDN attachment paths; no bot credential is needed on signed URLs.

@@ -82,8 +82,8 @@ async def admit_personal_original(original: PersonalOriginal) -> PersonalAccepte
             return await reject_personal_original(original, "capacity_rejected", limits)
         case "admit":
             pass
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(verdict)
     if not await _charge_sender_and_agent(original):
         return await reject_personal_original(original, "quota_rejected", limits)
     return await _accept(original)

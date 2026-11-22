@@ -20,7 +20,8 @@ async def preflight_outbound(outbound: ConfiguredOutbound) -> OutboundPreflight:
     snapshot = deepcopy(outbound)
     target, config = snapshot.target, snapshot.config
     account = target.account
-    match target.provider:
+    provider = target.provider
+    match provider:
         case OutboundProvider.SLACK:
             async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
                 response = await client.post(
@@ -56,6 +57,6 @@ async def preflight_outbound(outbound: ConfiguredOutbound) -> OutboundPreflight:
             | OutboundProvider.ZALO
         ):
             pass
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(provider)
     return OutboundPreflight(snapshot, target.model_copy(update={"account": account}))

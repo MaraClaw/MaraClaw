@@ -72,7 +72,14 @@ class ChannelEvent:
     media: tuple[StoredFile, ...] = ()
 
     def fingerprint(self) -> str:
-        payload = [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids]
+        payload: list[str | bool | tuple[str, ...] | None] = [
+            self.sender_id,
+            self.conversation_id,
+            self.is_group,
+            self.kind,
+            self.text,
+            self.media_ids,
+        ]
         if self.personal_source is not None:
             payload[1] = str(self.personal_source.auth_epoch)
         if self.zalo_source is not None:

@@ -103,8 +103,8 @@ async def handle_frame(connection: PersonalConnection, frame: ChildFrame) -> Jso
                 await revoke_current_claim(connection, frame.reason)
         case Ready():
             pass
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(frame)
     return None
 
 

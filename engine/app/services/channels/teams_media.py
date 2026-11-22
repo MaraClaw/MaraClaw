@@ -78,7 +78,9 @@ async def accept_teams_media(
 ) -> None:
     if await submissions.is_channel_event_replay(event):
         return
-    budget, refs, parts = MediaBudget(), [], [event.text] if event.text else []
+    budget = MediaBudget()
+    refs: list[ChatAttachment] = []
+    parts = [event.text] if event.text else []
     token: str | None = None
     retrieved, skipped = limit_attachments(media.attachments)
     for item in retrieved:

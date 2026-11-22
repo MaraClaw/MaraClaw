@@ -64,8 +64,8 @@ class MediaTransport:
                     state.seq += 1
             case MediaError():
                 pass
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(frame)
         try:
             state.send.send_nowait(frame)
         except anyio.WouldBlock:
@@ -118,8 +118,8 @@ class MediaTransport:
                             return data
                         case MediaError():
                             raise MediaTransferError(frame.code)
-                        case unreachable:
-                            assert_never(unreachable)
+                        case _:
+                            assert_never(frame)
         except TimeoutError:
             raise MediaTransferError("expired") from None
         except MediaTransferError as error:

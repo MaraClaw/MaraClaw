@@ -19,12 +19,12 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import Any
 
 import httpx
 from jose import JWTError, jwt
 
 from app.core.json_types import (
+    JsonObject,
     json_as_str,
     json_loads_object,
     json_object_from,
@@ -35,6 +35,16 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
+from app.services.channels.google_chat_payloads import (
+    GoogleChatAnnotationPayload,
+    GoogleChatEventPayload,
+    GoogleChatMessagePayload,
+    GoogleChatSpacePayload,
+    GoogleChatThreadPayload,
+    GoogleChatUserPayload,
+    is_chat_payload,
+)
+from app.services.im_sdk_types import is_object_dict
 from app.services.service_contracts import GoogleChatMessage
 
 CHAT_CERTS_URL = "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com"
@@ -64,7 +74,7 @@ class GoogleChatInbound:
     sender_type: str
     message_name: str | None
     has_attachment: bool
-    raw: dict[str, Any]
+    raw: JsonObject
 
 
 async def _fetch_chat_certs() -> dict[str, str]:
@@ -76,7 +86,7 @@ async def _fetch_chat_certs() -> dict[str, str]:
         resp = await client.get(CHAT_CERTS_URL)
         _ = resp.raise_for_status()
         certs_raw = json_value_from_response(resp)
-    if not isinstance(certs_raw, dict):
+    if not is_object_dict(certs_raw):
         raise TypeError("Unexpected Chat certs payload")
     certs_map = {key: value for key, value in json_object_from(certs_raw).items() if isinstance(value, str)}
     _certs = certs_map
@@ -84,7 +94,7 @@ async def _fetch_chat_certs() -> dict[str, str]:
     return certs_map
 
 
-def _decode_with_key(token: str, key: str, audience: str) -> dict[str, Any]:
+def _decode_with_key(token: str, key: str, audience: str) -> dict[str, object]:
     claims_raw: object = jwt.decode(
         token,
         key,
@@ -99,7 +109,7 @@ def _decode_with_key(token: str, key: str, audience: str) -> dict[str, Any]:
     return claims
 
 
-async def verify_google_chat_bearer(authorization: str | None, audience: str) -> dict[str, Any]:
+async def verify_google_chat_bearer(authorization: str | None, audience: str) -> dict[str, object]:
     """Verify Authorization: Bearer <jwt> from Google Chat.
 
     Raises ValueError on failure.
@@ -150,24 +160,36 @@ def has_service_account(config: ChannelConfigRecord) -> bool:
     return _service_account_info(config) is not None
 
 
-def parse_google_chat_event(body: dict[str, Any]) -> GoogleChatInbound | None:
+def parse_google_chat_event(body: GoogleChatEventPayload | JsonObject) -> GoogleChatInbound | None:
     """Parse a Chat app interaction event into a normalized inbound message."""
     event_type = str(body.get("type") or "").strip().upper()
     if event_type in {"", "CARD_CLICKED"}:
         return None
 
     message_raw = body.get("message")
-    message: dict[str, Any] = dict[str, Any](message_raw) if isinstance(message_raw, dict) else {}
+    message = (
+        GoogleChatMessagePayload(message_raw)
+        if is_chat_payload(message_raw, GoogleChatMessagePayload)
+        else GoogleChatMessagePayload()
+    )
     space_raw = body.get("space")
-    space: dict[str, Any] = dict[str, Any](space_raw) if isinstance(space_raw, dict) else {}
+    space = (
+        GoogleChatSpacePayload(space_raw)
+        if is_chat_payload(space_raw, GoogleChatSpacePayload)
+        else GoogleChatSpacePayload()
+    )
     message_space = message.get("space")
-    if not space and isinstance(message_space, dict):
-        space = dict[str, Any](message_space)
+    if not space and is_chat_payload(message_space, GoogleChatSpacePayload):
+        space = GoogleChatSpacePayload(message_space)
     sender_raw = message.get("sender")
-    sender: dict[str, Any] = dict[str, Any](sender_raw) if isinstance(sender_raw, dict) else {}
+    sender = (
+        GoogleChatUserPayload(sender_raw)
+        if is_chat_payload(sender_raw, GoogleChatUserPayload)
+        else GoogleChatUserPayload()
+    )
     user_raw = body.get("user")
-    if not sender and isinstance(user_raw, dict):
-        sender = dict[str, Any](user_raw)
+    if not sender and is_chat_payload(user_raw, GoogleChatUserPayload):
+        sender = GoogleChatUserPayload(user_raw)
 
     # Prefer argumentText (already stripped of bot @mention by Google).
     text = str(message.get("argumentText") or "").strip()
@@ -181,9 +203,9 @@ def parse_google_chat_event(body: dict[str, Any]) -> GoogleChatInbound | None:
         annotations = message.get("annotations")
         if isinstance(annotations, list) and text:
             for ann_raw in annotations:
-                if not isinstance(ann_raw, dict):
+                if not is_chat_payload(ann_raw, GoogleChatAnnotationPayload):
                     continue
-                ann = dict[str, Any](ann_raw)
+                ann = GoogleChatAnnotationPayload(ann_raw)
                 if str(ann.get("type") or "").upper() != "USER_MENTION":
                     continue
                 start: object | None = ann.get("startIndex")
@@ -193,7 +215,11 @@ def parse_google_chat_event(body: dict[str, Any]) -> GoogleChatInbound | None:
                     break
 
     thread_raw = message.get("thread")
-    thread: dict[str, Any] = dict[str, Any](thread_raw) if isinstance(thread_raw, dict) else {}
+    thread = (
+        GoogleChatThreadPayload(thread_raw)
+        if is_chat_payload(thread_raw, GoogleChatThreadPayload)
+        else GoogleChatThreadPayload()
+    )
     space_name = str(space.get("name") or "").strip()
     space_type = str(space.get("type") or space.get("spaceType") or "").strip().upper()
     space_display = str(space.get("displayName") or space.get("name") or "").strip()
@@ -296,10 +322,10 @@ def parse_external_conv_id(external: str) -> tuple[str, str | None]:
     return space_name, thread_name
 
 
-def _service_account_info(config: ChannelConfigRecord) -> dict[str, Any] | None:
+def _service_account_info(config: ChannelConfigRecord) -> dict[str, object] | None:
     extra = mapping_from_row(config.extra_config)
     raw: object = extra.get("service_account_json")
-    if isinstance(raw, dict):
+    if is_object_dict(raw):
         return mapping_from_row(raw)
     if isinstance(raw, str) and raw.strip():
         try:
@@ -322,7 +348,7 @@ def _service_account_info(config: ChannelConfigRecord) -> dict[str, Any] | None:
     return None
 
 
-async def _service_account_access_token(sa_info: dict[str, Any], scopes: list[str], *, pinned: bool = False) -> str:
+async def _service_account_access_token(sa_info: dict[str, object], scopes: list[str], *, pinned: bool = False) -> str:
     """Mint a service-account access token via JWT bearer grant (no google-auth dep)."""
     now = int(time.time())
     client_email_raw: object = sa_info.get("client_email")
@@ -383,7 +409,7 @@ async def send_google_chat_message(
     text: str,
     thread_name: str | None = None,
     strict: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Proactively post a message into a Google Chat space via Chat API."""
     sa_info = _service_account_info(config)
     if sa_info is None or not sa_info:
@@ -394,7 +420,7 @@ async def send_google_chat_message(
         raise ValueError(f"Invalid space name: {space_name}")
 
     access_token = await _service_account_access_token(sa_info, scopes=[CHAT_BOT_SCOPE])
-    last: dict[str, Any] = {}
+    last: dict[str, object] = {}
     chunks = chunk_text(text)
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
         for chunk in chunks:

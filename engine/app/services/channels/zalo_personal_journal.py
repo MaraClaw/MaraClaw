@@ -62,8 +62,8 @@ async def _queue(
         case OutboundFileChunk():
             find = "SELECT * FROM zalo_personal_media_sends WHERE command_id=%(id)s"
             conflict = "SELECT TRUE FROM zalo_personal_sends WHERE command_id=%(id)s"
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(chunk)
     async with connection_ctx() as db:
         # Resolve by immutable config without acquiring its row before the owner locks.
         raw = await db.fetchone(
