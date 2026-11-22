@@ -6,7 +6,6 @@ import { StaleSessionError } from './session-policy.ts'
 const startSchema = z.object({
   attempt_id: z.string().min(1),
   authorization_url: z.url({ protocol: /^https$/u }),
-  redirect_uri: z.url({ protocol: /^https?$/u }),
   expires_in: z.number().nonnegative(),
 }).readonly()
 const statusSchema = z.object({
@@ -19,12 +18,8 @@ const statusSchema = z.object({
 
 export type ChatGPTSubscriptionStart = z.infer<typeof startSchema>
 export type ChatGPTSubscriptionStatus = z.infer<typeof statusSchema>
-export type ChatGPTSubscriptionComplete = {
-  readonly attempt_id: string
-  readonly callback_url: string
-}
 
-// Never retain a server/transport error that may echo the pasted address.
+// Keep only the HTTP status: server and transport messages may echo provider or sign-in details.
 export class ChatGPTSubscriptionError extends Error {
   readonly status: number | null
 
@@ -48,14 +43,6 @@ async function request<T>(response: Promise<T>): Promise<T> {
 export function startChatGPTSubscription(tenantId?: string): Promise<ChatGPTSubscriptionStart> {
   const scope = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
   return request(apiRequest(`/api/enterprise/llm-models/chatgpt-subscription/start${scope}`, { schema: startSchema, method: 'POST' }))
-}
-
-export function completeChatGPTSubscription(input: ChatGPTSubscriptionComplete): Promise<ChatGPTSubscriptionStatus> {
-  return request(apiRequest('/api/enterprise/llm-models/chatgpt-subscription/complete', {
-    schema: statusSchema,
-    method: 'POST',
-    body: { attempt_id: input.attempt_id, callback_url: input.callback_url },
-  }))
 }
 
 export function getChatGPTSubscriptionStatus(attemptId: string, signal?: AbortSignal): Promise<ChatGPTSubscriptionStatus> {

@@ -1,29 +1,33 @@
-import { zodResolver } from '@hookform/resolvers/zod'
-import { useQueryClient } from '@tanstack/react-query'
+import { skipToken, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { z } from 'zod'
 
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
 import { useTranslation } from '@/hooks/use-translation'
 import {
-  ChatGPTSubscriptionError, completeChatGPTSubscription, getChatGPTSubscriptionStatus,
-  startChatGPTSubscription, type ChatGPTSubscriptionComplete, type ChatGPTSubscriptionStart,
+  ChatGPTSubscriptionError, getChatGPTSubscriptionStatus, startChatGPTSubscription,
+  type ChatGPTSubscriptionStart,
 } from '@/lib/chatgpt-subscription-api'
-import { StaleSessionError } from '@/lib/session-policy'
 
-const schema = z.object({
-  callback_url: z.string().trim().pipe(z.url({
-    protocol: /^https?$/u, error: 'Paste the full callback address from your browser address bar.',
-  })),
-})
+const pollIntervalMs = 2_000
+// Stop shortly after the link's lifetime even when no answer has said it expired.
+const expiryGraceMs = 10_000
+// Consecutive failed checks before the admin is told; checking continues until expiry.
+const failuresBeforeNotice = 3
+const restartMessages = {
+  expired: 'This ChatGPT sign-in has expired. Restart to get a new sign-in link.',
+  denied: 'ChatGPT sign-in was denied. Restart when you are ready to try again.',
+  error: 'ChatGPT sign-in could not be completed. Restart to try again.',
+} as const
+
+// Network failures and 5xx answers can pass, so they retry on the poll cadence instead of ending the attempt.
+function isTransient(failure: Error) {
+  return failure instanceof ChatGPTSubscriptionError && (failure.status === null || failure.status >= 500)
+}
 
 export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
   readonly tenantId: string
@@ -34,19 +38,17 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
   const queryClient = useQueryClient()
   const isCurrent = useSessionCurrent()
   const mounted = useRef(true)
-  const submitted = useRef<ChatGPTSubscriptionComplete | null>(null)
+  const content = useRef<HTMLDivElement>(null)
+  const link = useRef<HTMLAnchorElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const [attempt, setAttempt] = useState<ChatGPTSubscriptionStart | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [restart, setRestart] = useState(false)
   const [success, setSuccess] = useState(false)
-  const { register, handleSubmit, reset, setFocus, formState: { errors } } = useForm<z.infer<typeof schema>>({
-    resolver: zodResolver(schema), defaultValues: { callback_url: '' },
-  })
   useEffect(() => {
     mounted.current = true
-    return () => { mounted.current = false; submitted.current = null }
+    return () => { mounted.current = false }
   }, [])
   const active = () => mounted.current && isCurrent()
 
@@ -57,76 +59,57 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
     onError: () => { if (active()) setError('Could not start ChatGPT sign-in. Check your connection and try again.') },
     onSettled: (): void => { start.reset() },
   })
-  const complete = useSessionMutation({
-    gcTime: 0, retry: false,
-    // Void mutation variables: the callback never enters React Query's cache.
-    mutationFn: async () => {
-      const input = submitted.current
-      submitted.current = null
-      if (!input || !active()) throw new StaleSessionError()
-      try {
-        return (await completeChatGPTSubscription(input)).status
-      } catch (failure) {
-        if (!active()) throw new StaleSessionError()
-        if (!(failure instanceof ChatGPTSubscriptionError)) throw failure
-        if (failure.status !== null && failure.status < 500) throw failure
-        // A response may have been lost after the server saved the model.
-        // Read once before offering another submission; never poll or replay it.
-        return (await getChatGPTSubscriptionStatus(input.attempt_id)).status
-      }
-    },
-    onSuccess: (status) => {
-      if (!active()) return
-      switch (status) {
-        case 'authorized':
-          void queryClient.invalidateQueries({ queryKey: ['admin-llm-models', tenantId] })
-          setAttempt(null)
-          setSuccess(true)
-          setError(null)
-          setStatusMessage(null)
-          break
-        case 'pending':
-          setStatusMessage('Sign-in is still pending. Finish signing in, then paste the full callback address again, or restart.')
-          break
-        case 'expired':
-          setRestart(true)
-          setStatusMessage('This ChatGPT sign-in has expired. Restart to get a new sign-in link.')
-          break
-        case 'denied':
-          setRestart(true)
-          setStatusMessage('ChatGPT sign-in was denied. Restart when you are ready to try again.')
-          break
-        case 'error':
-          setRestart(true)
-          setStatusMessage('ChatGPT sign-in could not be completed. Restart to try again.')
-          break
-        default: throw new Error(status satisfies never)
-      }
-    },
-    onError: (failure) => {
-      if (!active()) return
-      if (failure instanceof ChatGPTSubscriptionError && failure.status === 400) {
-        setError('The callback address was not accepted. Copy the full address for this sign-in and paste it again.')
-      } else if (failure instanceof ChatGPTSubscriptionError && failure.status !== null && failure.status < 500) {
-        setRestart(true)
-        setError('This sign-in attempt is no longer available. Restart to try again.')
-      } else {
-        setError('Could not confirm sign-in after checking its status. Paste the address again to retry, or restart.')
-      }
-    },
-    onSettled: (): void => { submitted.current = null; complete.reset() },
+  // Only a live attempt polls. Ending it (an outcome, local expiry or restart) changes the key, which
+  // drops the old observer and aborts its request; unmount and session retirement do the same.
+  const polling = attempt && !restart ? attempt : null
+  const status = useQuery({
+    queryKey: ['admin-chatgpt-subscription', tenantId, polling?.attempt_id ?? null],
+    queryFn: polling ? ({ signal }) => getChatGPTSubscriptionStatus(polling.attempt_id, signal) : skipToken,
+    gcTime: 0,
+    retry: (_failures, failure) => isTransient(failure),
+    retryDelay: pollIntervalMs,
+    // Re-armed after every settled check, so checks never overlap.
+    refetchInterval: (query) => query.state.status === 'success' && query.state.data?.status === 'pending' ? pollIntervalMs : false,
   })
-  const busy = start.isPending || complete.isPending
+  const outcome = polling === null ? null : status.isError ? 'unavailable' : status.data?.status ?? null
+
+  useEffect(() => {
+    if (outcome === null || outcome === 'pending' || !isCurrent()) return
+    if (outcome === 'authorized') {
+      void queryClient.invalidateQueries({ queryKey: ['admin-llm-models', tenantId] })
+      setAttempt(null)
+      setSuccess(true)
+      setError(null)
+      setStatusMessage(null)
+      return
+    }
+    setRestart(true)
+    if (outcome === 'unavailable') setError('This sign-in attempt is no longer available. Restart to try again.')
+    else setStatusMessage(restartMessages[outcome])
+  }, [outcome, isCurrent, queryClient, tenantId])
+
+  useEffect(() => {
+    if (polling === null) return
+    const timer = window.setTimeout(() => {
+      if (!isCurrent()) return
+      setRestart(true)
+      setStatusMessage(restartMessages.expired)
+    }, polling.expires_in * 1000 + expiryGraceMs)
+    return () => window.clearTimeout(timer)
+  }, [polling, isCurrent])
+
+  const busy = start.isPending
   useEffect(() => {
     if (busy) return
-    if (attempt && !restart) setFocus('callback_url')
-    else if (success || restart) trigger.current?.focus()
-  }, [attempt, busy, restart, success, setFocus])
+    // Move focus only when it was lost or is already in this card; never take it from elsewhere.
+    const focused = document.activeElement
+    if (focused !== null && focused !== document.body && !content.current?.contains(focused)) return
+    if (polling) link.current?.focus()
+    else if (success || restart || error !== null) trigger.current?.focus()
+  }, [busy, polling, restart, success, error])
 
   const begin = () => {
     if (busy) return
-    reset()
-    submitted.current = null
     setAttempt(null)
     setError(null)
     setStatusMessage(null)
@@ -134,6 +117,10 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
     setSuccess(false)
     start.mutate()
   }
+
+  const statusText = success
+    ? t('ChatGPT subscription connected. It is in the company pool.')
+    : polling ? t('Waiting for sign-in…') : statusMessage ? owned(statusMessage) : ''
 
   return (
     <Card aria-labelledby={`${id}-title`}>
@@ -143,46 +130,31 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
           {t('Sign in with ChatGPT Plus, Pro, or Team in your browser. Access tokens stay on the server and are stored encrypted for this company.')}
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {success ? <p className="text-sm text-muted-foreground" role="status">{t('ChatGPT subscription connected. It is in the company pool.')}</p> : null}
-        {attempt && !restart ? (
-          <form noValidate autoComplete="off" className="grid gap-3" aria-busy={complete.isPending}
-            onSubmit={handleSubmit((values) => {
-              if (busy || !active()) return
-              submitted.current = { attempt_id: attempt.attempt_id, callback_url: values.callback_url }
-              reset()
-              setError(null)
-              setStatusMessage(null)
-              complete.mutate()
-            })}>
-            <p className="text-sm">
-              <a className="font-medium text-primary underline underline-offset-4" href={attempt.authorization_url}
-                target="_blank" rel="noopener noreferrer">{t('Open ChatGPT sign-in (new tab)')}</a>
+      <CardContent ref={content} className="flex flex-col gap-3" aria-busy={busy}>
+        {polling ? (
+          <div className="grid gap-1.5 text-sm">
+            <p>
+              <a ref={link} className="font-medium text-primary underline underline-offset-4" href={polling.authorization_url}
+                target="_blank" rel="noopener noreferrer" aria-describedby={`${id}-help`}>{t('Open ChatGPT sign-in (new tab)')}</a>
             </p>
-            <p id={`${id}-help`} className="text-sm text-muted-foreground">
-              {t('After sign-in, the expected localhost page may fail to load. That is normal: copy the FULL address from that tab’s address bar and paste it below. No CLI or local listener is needed. The link expires in about {minutes} minutes.', { minutes: number(Math.ceil(attempt.expires_in / 60)) })}
+            <p id={`${id}-help`} className="text-muted-foreground">
+              {t('Use the new tab to finish signing in. This page updates by itself. The link expires in about {minutes} minutes.', { minutes: number(Math.ceil(polling.expires_in / 60)) })}
             </p>
-            <div className="grid gap-1.5">
-              <Label htmlFor={`${id}-callback`}>{t('Full callback URL')}</Label>
-              <Input id={`${id}-callback`} type="text" autoComplete="off" spellCheck={false}
-                disabled={complete.isPending} aria-invalid={Boolean(errors.callback_url)}
-                aria-describedby={`${id}-help${errors.callback_url ? ` ${id}-invalid` : ''}`}
-                {...register('callback_url')} />
-              {errors.callback_url ? <p id={`${id}-invalid`} className="text-sm text-destructive" role="alert">{owned(errors.callback_url.message)}</p> : null}
-            </div>
-            <div><Button type="submit" disabled={busy}>
-              {complete.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-              {complete.isPending ? t('Confirming ChatGPT sign-in…') : t('Complete ChatGPT sign-in')}
-            </Button></div>
-          </form>
+          </div>
         ) : null}
-        {statusMessage ? <p className="text-sm text-muted-foreground" role="status">{owned(statusMessage)}</p> : null}
+        <p className="flex items-center gap-2 text-sm text-muted-foreground empty:sr-only" role="status">
+          {polling ? <Loader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+          {statusText}
+        </p>
+        {polling && status.failureCount >= failuresBeforeNotice
+          ? <ErrorToast message={t('Could not check ChatGPT sign-in. Check your connection. This page keeps trying until the link expires.')} />
+          : null}
         {error ? <ErrorToast message={owned(error)} /> : null}
         <div>
           <Button ref={trigger} type="button" variant={attempt ? 'outline' : 'default'}
             disabled={busy || !tenantId} onClick={begin}>
-            {start.isPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-            {start.isPending ? t('Starting ChatGPT sign-in…') : attempt ? t('Restart ChatGPT sign-in') : t('Connect ChatGPT subscription')}
+            {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            {busy ? t('Starting ChatGPT sign-in…') : attempt ? t('Restart ChatGPT sign-in') : t('Connect ChatGPT subscription')}
           </Button>
         </div>
       </CardContent>

@@ -3,18 +3,17 @@ import test, { type TestContext } from 'node:test'
 
 import { adminSession } from '../src/lib/admin-session.ts'
 import {
-  ChatGPTSubscriptionError, completeChatGPTSubscription, getChatGPTSubscriptionStatus,
-  startChatGPTSubscription,
+  ChatGPTSubscriptionError, getChatGPTSubscriptionStatus, startChatGPTSubscription,
 } from '../src/lib/chatgpt-subscription-api.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { DeferredBodyResponse, MemoryStorage } from './helpers.ts'
 
 const base = '/api/enterprise/llm-models/chatgpt-subscription'
 const started = {
-  attempt_id: 'attempt-one', authorization_url: 'https://auth.example.test/authorize?state=synthetic',
-  redirect_uri: 'http://localhost:1455/auth/callback', expires_in: 600,
+  attempt_id: 'attempt-one', authorization_url: 'https://auth.example.test/authorize?state=synthetic', expires_in: 600,
 }
-const callback = 'http://localhost:1455/auth/callback?code=synthetic-private-code&state=synthetic-state'
+// A provider address the engine might echo back in an error; the client must never retain it.
+const echoed = 'https://admin.example.test/chatgpt/callback?code=synthetic-private-code&state=synthetic-state'
 
 function ownSession(context: TestContext) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
@@ -25,6 +24,15 @@ function ownSession(context: TestContext) {
     if (previous) Object.defineProperty(globalThis, 'window', previous)
     else Reflect.deleteProperty(globalThis, 'window')
   })
+}
+
+function assertScrubbed(error: unknown, status: number | null) {
+  assert.ok(error instanceof ChatGPTSubscriptionError)
+  assert.equal(error.status, status)
+  assert.equal(JSON.stringify(error).includes('synthetic-private-code'), false)
+  assert.equal(String(error).includes('synthetic-private-code'), false)
+  assert.equal(Object.hasOwn(error, 'cause'), false)
+  return true
 }
 
 for (const tenant of [undefined, 'tenant/a &?#=']) {
@@ -44,23 +52,6 @@ for (const tenant of [undefined, 'tenant/a &?#=']) {
   })
 }
 
-test('complete sends the full callback only in the exact POST body', async (context) => {
-  // Given
-  ownSession(context)
-  const status = { status: 'authorized', attempt_id: started.attempt_id, model_id: 'model-one', detail: null, expires_in: null }
-  const fetch = context.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => Response.json(status))
-  // When
-  const result = await completeChatGPTSubscription({ attempt_id: started.attempt_id, callback_url: callback })
-  // Then
-  const [url, options] = fetch.mock.calls[0]?.arguments ?? []
-  assert.equal(url, `${base}/complete`)
-  assert.equal(options?.method, 'POST')
-  assert.equal(options?.body, JSON.stringify({ attempt_id: 'attempt-one', callback_url: callback }))
-  assert.deepEqual(options?.headers, { Accept: 'application/json', Authorization: 'Bearer synthetic-chatgpt-token', 'Content-Type': 'application/json' })
-  assert.deepEqual(result, status)
-  assert.equal(fetch.mock.callCount(), 1)
-})
-
 test('status is a bodyless read-only GET scoped only by encoded attempt_id', async (context) => {
   // Given
   ownSession(context)
@@ -74,42 +65,45 @@ test('status is a bodyless read-only GET scoped only by encoded attempt_id', asy
   assert.equal(options?.method, 'GET')
   assert.equal(options?.body, undefined)
   assert.deepEqual(result, status)
+  assert.equal(fetch.mock.callCount(), 1)
 })
 
 for (const status of ['pending', 'authorized', 'expired', 'denied', 'error']) {
-  test(`complete parses the ${status} outcome without device-code fields`, async (context) => {
+  test(`status parses the ${status} outcome without device-code fields`, async (context) => {
     // Given
     ownSession(context)
     context.mock.method(globalThis, 'fetch', async () => Response.json({ status, attempt_id: 'attempt-one', model_id: null, detail: null, expires_in: 0, user_code: 'old-device-code' }))
     // When
-    const result = await completeChatGPTSubscription({ attempt_id: 'attempt-one', callback_url: callback })
+    const result = await getChatGPTSubscriptionStatus('attempt-one')
     // Then
     assert.deepEqual(result, { status, attempt_id: 'attempt-one', model_id: null, detail: null, expires_in: 0 })
   })
 }
 
-for (const status of [400, 403, 409, 500]) {
-  test(`complete preserves HTTP ${status} classification without retaining an echoed callback`, async (context) => {
+for (const status of [400, 403, 404, 409, 500, 503]) {
+  test(`status preserves HTTP ${status} classification without retaining an echoed detail`, async (context) => {
     // Given
     ownSession(context)
-    context.mock.method(globalThis, 'fetch', async () => Response.json({ detail: callback }, { status }))
+    context.mock.method(globalThis, 'fetch', async () => Response.json({ detail: echoed }, { status }))
     // When / Then
-    await assert.rejects(completeChatGPTSubscription({ attempt_id: 'attempt-one', callback_url: callback }), (error) => {
-      assert.ok(error instanceof ChatGPTSubscriptionError)
-      assert.equal(error.status, status)
-      assert.equal(JSON.stringify(error).includes('synthetic-private-code'), false)
-      assert.equal(String(error).includes('synthetic-private-code'), false)
-      assert.equal(Object.hasOwn(error, 'cause'), false)
-      return true
-    })
+    await assert.rejects(getChatGPTSubscriptionStatus('attempt-one'), (error) => assertScrubbed(error, status))
   })
 }
 
-for (const response of [
-  { session_id: 'old-device-session', verification_url: 'https://example.test', user_code: '1234', expires_in: 600, interval: 5 },
-  { ...started, authorization_url: 'javascript:alert(1)' },
-]) {
-  test('start rejects an incompatible or unsafe browser authorization response', async (context) => {
+test('start preserves the 503 classification for unconfigured sign-in without retaining detail', async (context) => {
+  // Given
+  ownSession(context)
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ detail: echoed }, { status: 503 }))
+  // When / Then
+  await assert.rejects(startChatGPTSubscription(), (error) => assertScrubbed(error, 503))
+})
+
+for (const [name, response] of [
+  ['a device-code response', { session_id: 'old-device-session', verification_url: 'https://example.test', user_code: '1234', expires_in: 600, interval: 5 }],
+  ['a script authorization URL', { ...started, authorization_url: 'javascript:alert(1)' }],
+  ['a plain-HTTP authorization URL', { ...started, authorization_url: 'http://auth.example.test/authorize?state=synthetic' }],
+] as const) {
+  test(`start rejects ${name}`, async (context) => {
     // Given
     ownSession(context)
     context.mock.method(globalThis, 'fetch', async () => Response.json(response))
@@ -118,34 +112,20 @@ for (const response of [
   })
 }
 
-test('complete drops sensitive transport error messages', async (context) => {
+test('status drops sensitive transport error messages', async (context) => {
   // Given
   ownSession(context)
-  context.mock.method(globalThis, 'fetch', async () => { throw new TypeError(callback) })
+  context.mock.method(globalThis, 'fetch', async () => { throw new TypeError(echoed) })
   // When / Then
-  await assert.rejects(completeChatGPTSubscription({ attempt_id: 'attempt-one', callback_url: callback }), (error) => {
-    assert.ok(error instanceof ChatGPTSubscriptionError)
-    assert.equal(error.status, null)
-    assert.equal(String(error).includes(callback), false)
-    return true
-  })
+  await assert.rejects(getChatGPTSubscriptionStatus('attempt-one'), (error) => assertScrubbed(error, null))
 })
 
-test('complete scrubs malformed responses even when they echo the callback', async (context) => {
+test('status scrubs malformed responses even when they echo provider details', async (context) => {
   // Given
   ownSession(context)
-  context.mock.method(globalThis, 'fetch', async () => Response.json({ status: callback, attempt_id: 'attempt-one' }))
-  // When
-  const pending = completeChatGPTSubscription({ attempt_id: 'attempt-one', callback_url: callback })
-  // Then
-  await assert.rejects(pending, (error) => {
-    assert.ok(error instanceof ChatGPTSubscriptionError)
-    assert.equal(error.status, null)
-    assert.equal(JSON.stringify(error).includes('synthetic-private-code'), false)
-    assert.equal(String(error).includes('synthetic-private-code'), false)
-    assert.equal(Object.hasOwn(error, 'cause'), false)
-    return true
-  })
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ status: echoed, attempt_id: 'attempt-one' }))
+  // When / Then
+  await assert.rejects(getChatGPTSubscriptionStatus('attempt-one'), (error) => assertScrubbed(error, null))
 })
 
 test('status forwards caller cancellation through the owned transport', async (context) => {
@@ -164,13 +144,13 @@ test('status forwards caller cancellation through the owned transport', async (c
   assert.equal(fetch.mock.calls[0]?.arguments[1]?.signal?.aborted, true)
 })
 
-test('complete rejects a late response body after admin session replacement', async (context) => {
+test('status rejects a late response body after admin session replacement', async (context) => {
   // Given
   ownSession(context)
   const body = Promise.withResolvers<string>()
   const response = new DeferredBodyResponse(200, body.promise)
   const fetch = context.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _options?: RequestInit) => response)
-  const pending = completeChatGPTSubscription({ attempt_id: 'attempt-one', callback_url: callback })
+  const pending = getChatGPTSubscriptionStatus('attempt-one')
   const rejected = assert.rejects(pending, StaleSessionError)
   await response.bodyStarted.promise
   // When
