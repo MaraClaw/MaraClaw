@@ -1,10 +1,10 @@
 """Seed builtin tools into the database on startup."""
 
 from collections.abc import Sequence
-from typing import Any, TypedDict, TypeIs
+from typing import TypedDict, TypeIs
 from uuid import UUID
 
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import JsonObject, is_json_object
 from app.core.logging import logger
 from app.core.tool_types import ToolConfigSchema, ToolParameterSchema
 from app.dao import agent_dao, agent_tool_dao, tool_dao
@@ -93,23 +93,8 @@ class AtlassianRovoConfigTool(TypedDict):
     config_schema: AtlassianRovoConfigSchema
 
 
-def _is_json_value(value: object) -> TypeIs[JsonValue]:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return True
-    if isinstance(value, list):
-        return all(_is_json_value(item) for item in list[object](value))
-    return _is_json_object(value)
-
-
-def _is_json_object(value: object) -> TypeIs[JsonObject]:
-    if not isinstance(value, dict):
-        return False
-    mapping: dict[object, object] = dict(value)
-    return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
-
-
 def _is_tool_parameter_schema(value: object) -> TypeIs[ToolParameterSchema]:
-    if not _is_json_object(value):
+    if not is_json_object(value):
         return False
     schema_type = value.get("type")
     properties = value.get("properties")
@@ -117,13 +102,13 @@ def _is_tool_parameter_schema(value: object) -> TypeIs[ToolParameterSchema]:
     return (
         isinstance(schema_type, str)
         and isinstance(properties, dict)
-        and all(_is_json_object(property_schema) for property_schema in properties.values())
+        and all(is_json_object(property_schema) for property_schema in properties.values())
         and (required is None or (isinstance(required, list) and all(isinstance(item, str) for item in required)))
     )
 
 
 def _is_tool_config_schema(value: object) -> TypeIs[ToolConfigSchema]:
-    if not _is_json_object(value):
+    if not is_json_object(value):
         return False
     fields = value.get("fields")
     if fields is None:
@@ -131,7 +116,7 @@ def _is_tool_config_schema(value: object) -> TypeIs[ToolConfigSchema]:
     if not isinstance(fields, list):
         return False
     return all(
-        _is_json_object(field)
+        is_json_object(field)
         and (field.get("key") is None or isinstance(field.get("key"), str))
         and (field.get("type") is None or isinstance(field.get("type"), str))
         for field in fields
@@ -139,7 +124,7 @@ def _is_tool_config_schema(value: object) -> TypeIs[ToolConfigSchema]:
 
 
 def _is_builtin_tool_definition(value: object) -> TypeIs[BuiltinToolDefinition]:
-    if not _is_json_object(value):
+    if not is_json_object(value):
         return False
     return (
         isinstance(value.get("name"), str)
@@ -149,7 +134,7 @@ def _is_builtin_tool_definition(value: object) -> TypeIs[BuiltinToolDefinition]:
         and isinstance(value.get("icon"), str)
         and isinstance(value.get("is_default"), bool)
         and _is_tool_parameter_schema(value.get("parameters_schema"))
-        and _is_json_object(value.get("config"))
+        and is_json_object(value.get("config"))
         and _is_tool_config_schema(value.get("config_schema"))
     )
 
@@ -191,7 +176,7 @@ async def seed_builtin_tools():
                 logger.info(f"[ToolSeeder] Created builtin tool: {t['name']}")
             else:
                 updated_fields: list[str] = []
-                updates: dict[str, Any] = {}
+                updates: dict[str, object] = {}
                 if existing.category != t["category"]:
                     updates["category"] = t["category"]
                     updated_fields.append("category")
@@ -209,7 +194,7 @@ async def seed_builtin_tools():
                     updated_fields.append("is_default")
                     if t["is_default"]:
                         new_tool_ids.append(existing.id)
-                config: dict[str, Any] = dict(existing.config or {})
+                config: JsonObject = dict(existing.config or {})
                 config_schema = dict(existing.config_schema or {})
                 if t.get("config_schema") and config_schema != t["config_schema"]:
                     updates["config_schema"] = t["config_schema"]
@@ -223,7 +208,7 @@ async def seed_builtin_tools():
                     updated_fields.append("config")
                     config = dict(seed_config)
                 elif seed_config and config != seed_config:
-                    merged: dict[str, Any] = {**seed_config, **config}
+                    merged: JsonObject = {**seed_config, **config}
                     if merged != config:
                         updates["config"] = merged
                         updated_fields.append("config")
@@ -380,12 +365,12 @@ async def seed_atlassian_rovo_config():
             logger.info("[ToolSeeder] Created Atlassian Rovo config tool")
             return
 
-        updates: dict[str, Any] = {}
+        updates: dict[str, object] = {}
         if existing.config_schema != config_schema:
             updates["config_schema"] = config_schema
         if existing.mcp_server_url != ATLASSIAN_ROVO_MCP_URL:
             updates["mcp_server_url"] = ATLASSIAN_ROVO_MCP_URL
-        if env_key and (not existing.config or not existing.config.get("api_key")):
+        if env_key and not ((api_key := (existing.config or {}).get("api_key")) is not None and api_key):
             updates["config"] = {**(existing.config or {}), "api_key": env_key}
         if updates:
             _ = await tool_dao.update(db_obj=existing, obj_in=updates)

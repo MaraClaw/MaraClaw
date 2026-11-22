@@ -8,7 +8,7 @@ This module handles user registration including:
 
 import re
 import uuid
-from typing import Any, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
 from app.core.acl_locks import lock_tenants
 from app.core.domain.users import UserRole
@@ -183,7 +183,7 @@ class RegistrationService:
             is_active = True  # Auto-activate when no SMTP configured
         is_active = is_active or identity.is_platform_admin
 
-        quota: dict[str, Any] = {}
+        quota: dict[str, str | int] = {}
         if tenant_id is not None:
             tenant = await tenant_dao.get(tenant_id)
             if tenant is not None:
@@ -320,7 +320,7 @@ class RegistrationService:
 
         member = await self._find_unbound_org_member_by_contact(user)
         if member:
-            fields: dict[str, Any] = {"user_id": user.id}
+            fields: dict[str, object] = {"user_id": user.id}
             if user.email not in (None, "") and member.email != user.email:
                 fields["email"] = user.email
             if user.primary_mobile not in (None, "") and member.phone != user.primary_mobile:
@@ -328,7 +328,7 @@ class RegistrationService:
             member = await org_member_dao.update_fields(member.id, fields) or member
 
             # Keep identity contact in sync when org directory is authoritative.
-            identity_updates: dict[str, Any] = {}
+            identity_updates: dict[str, str] = {}
             if user.email in (None, "") and member.email not in (None, ""):
                 identity_updates["email"] = member.email
                 user.email = member.email
@@ -390,7 +390,7 @@ class RegistrationService:
         linked_existing = False
         if member:
             linked_existing = member.user_id is None
-            fields: dict[str, Any] = {
+            fields: dict[str, object] = {
                 "user_id": user.id,
                 "name": user.display_name or member.name or "User",
                 "email": user.email,
@@ -440,7 +440,7 @@ class RegistrationService:
             return
 
         for member in members:
-            fields: dict[str, Any] = {}
+            fields: dict[str, object] = {}
             if sync_email and member.email != user.email:
                 fields["email"] = user.email
             if sync_phone and member.phone != user.primary_mobile:

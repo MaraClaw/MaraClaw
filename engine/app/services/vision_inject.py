@@ -20,6 +20,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 from app.core.logging import logger
+from app.services.agentbay_types import resize_image
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -76,7 +77,7 @@ def store_temp_screenshot(raw_bytes: bytes, *, grid_options: Mapping[str, int | 
 def _prune_expired_cache() -> None:
     """Remove entries older than _CACHE_TTL_SECONDS from the memory cache."""
     now = time.monotonic()
-    expired_keys = []
+    expired_keys: list[str] = []
     for key, entry in _memory_image_cache.items():
         try:
             ts = entry[1]
@@ -234,7 +235,7 @@ def compress_bytes_to_base64(
         if img.width > _MAX_WIDTH:
             ratio = _MAX_WIDTH / img.width
             new_size = (int(img.width * ratio), int(img.height * ratio))
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
+            img = resize_image(img, new_size, Image.Resampling.LANCZOS)
 
         # Convert RGBA/P to RGB for JPEG compatibility
         if img.mode in ("RGBA", "P"):
