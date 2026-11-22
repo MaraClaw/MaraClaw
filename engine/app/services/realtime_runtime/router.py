@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from contextlib import suppress
 from dataclasses import replace
-from typing import assert_never, cast
+from typing import Protocol, assert_never, cast
 
 from fastapi import WebSocket
 from redis.asyncio import Redis
@@ -55,6 +55,10 @@ DEFAULT_AUTHORIZATION_WAIT_SECONDS = 5.0
 TERMINAL_AUTHORIZATION_WAIT_SECONDS = 15.0
 
 type ResubscribeHook = Callable[[], Awaitable[object]]
+
+
+class _ReadPubSubMessage(Protocol):
+    def __call__(self, *, ignore_subscribe_messages: bool, timeout: float) -> Awaitable[dict[str, object] | None]: ...
 
 
 def resolve_send_timeout(message: Mapping[str, object]) -> float:
@@ -239,9 +243,8 @@ class RealtimeRouter:
             "origin_instance_id": self.instance_id,
         }
         envelope = json.dumps(payload)
-        publish_tasks = [
-            redis.publish(f"{PUBSUB_PREFIX}:instance:{instance_id}", envelope) for instance_id in remote_targets
-        ]
+        publish = cast("Callable[[str, str], Awaitable[int]]", redis.publish)
+        publish_tasks = [publish(f"{PUBSUB_PREFIX}:instance:{instance_id}", envelope) for instance_id in remote_targets]
         results = await asyncio.gather(*publish_tasks, return_exceptions=True)
         errors = [result for result in results if isinstance(result, BaseException)]
         if errors:
@@ -369,8 +372,9 @@ class RealtimeRouter:
             try:
                 await pubsub.subscribe(self._instance_channel())
                 while True:
-                    message_raw = await pubsub.get_message(ignore_subscribe_messages=False, timeout=1.0)
-                    if not message_raw:
+                    get_message = cast("_ReadPubSubMessage", pubsub.get_message)
+                    message_raw = await get_message(ignore_subscribe_messages=False, timeout=1.0)
+                    if message_raw is None or not message_raw:
                         continue
                     message = dict[str, object](message_raw)
                     channel = message.get("channel")
@@ -460,8 +464,8 @@ def _redis_text(value: str | bytes) -> str:
             return value
         case bytes():
             return value.decode()
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(value)
 
 
 realtime_router = RealtimeRouter()

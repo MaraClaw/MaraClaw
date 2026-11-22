@@ -73,15 +73,17 @@ def weasyprint_url_fetcher(policy: ResourcePolicy) -> object:
     """
     from weasyprint.urls import URLFetcher, URLFetcherResponse
 
+    def require_fetch_response(response: object) -> URLFetcherResponse:
+        if not isinstance(response, URLFetcherResponse):
+            raise TypeError("WeasyPrint URLFetcher returned an unexpected response type")
+        return response
+
     class ContainedUrlFetcher(URLFetcher):
         @override
         def fetch(self, url: str, headers: dict[str, str] | None = None) -> URLFetcherResponse:
             permitted = policy.permitted_url(url)
             if permitted is None:
                 raise ValueError(f"Resource outside the conversion workspace was not loaded: {url}")
-            response: object = super().fetch(permitted, headers)
-            if not isinstance(response, URLFetcherResponse):
-                raise TypeError("WeasyPrint URLFetcher returned an unexpected response type")
-            return response
+            return require_fetch_response(super().fetch(permitted, headers))
 
     return ContainedUrlFetcher(allowed_protocols=("data", "file"), allow_redirects=False)

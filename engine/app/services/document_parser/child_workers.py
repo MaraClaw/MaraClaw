@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Final
 
-from app.core.json_types import json_loads_object, json_loads_value, object_mapping_from
+from app.core.json_types import is_any_list, is_str_dict, json_loads_object, json_loads_value, object_mapping_from
 from app.core.logging import logger
 from app.services.document_parser.errors import (
     DocumentParseError,
@@ -90,9 +90,9 @@ def decode_sheets(raw: str) -> list[dict[str, object]]:
         payload = json_loads_value(raw)
     except json.JSONDecodeError as exc:
         raise DocumentParseError("Document read failed: extractor returned unreadable sheets") from exc
-    if not isinstance(payload, list):
+    if not is_any_list(payload):
         raise DocumentParseError("Document read failed: extractor returned unreadable sheets")
-    return [object_mapping_from(item) for item in list[object](payload) if isinstance(item, dict)]
+    return [object_mapping_from(item) for item in list[object](payload) if is_str_dict(item)]
 
 
 def decode_worker_error(raw: str) -> DocumentParseError:

@@ -6,7 +6,6 @@ from typing import override
 import httpx
 
 from app.core.json_types import (
-    is_any_list,
     json_as_bool,
     json_as_int,
     json_as_str,
@@ -150,19 +149,17 @@ class AioSandboxBackend(BaseSandboxBackend):
                 if language == "python":
                     # Jupyter format - outputs is a list
                     if data and "outputs" in data:
-                        outputs_raw: object = data.get("outputs")
+                        outputs_raw = data.get("outputs")
                         text_parts: list[str] = []
-                        for out_item in outputs_raw if is_any_list(outputs_raw) else []:
-                            out_raw: object = out_item
-                            out = json_object_from(out_raw)
+                        for out_item in outputs_raw if isinstance(outputs_raw, list) else []:
+                            out = json_object_from(out_item)
                             output_type = json_as_str(out.get("output_type"))
                             if output_type == "stream" and json_as_str(out.get("name")) == "stdout":
                                 text_parts.append(json_as_str_or(out.get("text")))
                             elif output_type == "error":
-                                traceback_raw: object = out.get("traceback")
-                                if is_any_list(traceback_raw) and traceback_raw:
-                                    traceback_items = list[object](traceback_raw)
-                                    first = traceback_items[0]
+                                traceback_raw = out.get("traceback")
+                                if isinstance(traceback_raw, list) and traceback_raw:
+                                    first = traceback_raw[0]
                                     stderr += first if isinstance(first, str) else ""
                                 else:
                                     stderr += json_as_str_or(out.get("evalue"))

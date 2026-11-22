@@ -10,6 +10,7 @@ from typing import Protocol, TypeIs, override
 from anyio import fail_after
 from anyio.to_thread import run_sync
 
+from app.core.json_types import is_str_dict
 from app.core.logging import logger
 from app.services.sandbox.base import (
     BaseSandboxBackend,
@@ -346,7 +347,7 @@ def _collect_logs(logs: Iterable[tuple[str, bytes]], config: SandboxConfig) -> t
 def _normalize_exit_code(result: object) -> int:
     if isinstance(result, int) and not isinstance(result, bool):
         return result
-    if isinstance(result, dict):
+    if is_str_dict(result):
         status = result.get("StatusCode", 1)
         return status if isinstance(status, int) and not isinstance(status, bool) else 1
     return 1

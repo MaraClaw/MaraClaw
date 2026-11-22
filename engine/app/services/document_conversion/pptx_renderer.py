@@ -2,23 +2,29 @@
 
 import asyncio
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import TypeIs, cast
 
+from app.core.json_types import is_any_list
 from app.core.logging import logger
 from app.services.document_conversion.chrome_renderer import collect_browser_layout
 from app.services.document_conversion.chrome_runtime import cleanup_temporary_paths
 from app.services.document_conversion.resource_policy import ResourcePolicy
 
 
+def _is_object_dict(value: object) -> TypeIs[dict[object, object]]:
+    return isinstance(value, dict)
+
+
 def _object_mapping(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
+    if not _is_object_dict(value):
         return {}
     return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 def _object_list(value: object) -> list[object]:
-    return list(value) if isinstance(value, list) else []
+    return list(value) if is_any_list(value) else []
 
 
 def _as_str(value: object) -> str:
@@ -136,7 +142,8 @@ async def render_html_to_pptx(
             for selector in ("html", "body"):
                 style.update(css_rules.get(selector, {}))
             style.update(css_rules.get(el.name or "", {}))
-            for cls in [str(value) for value in (el.get("class") or [])]:
+            classes: Iterable[object] = el.get("class") or []
+            for cls in [str(value) for value in classes]:
                 style.update(css_rules.get(f".{cls}", {}))
                 style.update(css_rules.get(f"{el.name}.{cls}", {}))
             if (element_id := el.get("id")) is not None and element_id:
@@ -192,7 +199,8 @@ async def render_html_to_pptx(
             if alpha < 0.999:
                 backdrop_tuple: tuple[int, int, int, float] | None = None
                 if isinstance(backdrop, RGBColor):
-                    backdrop_tuple = (int(backdrop[0]), int(backdrop[1]), int(backdrop[2]), 1.0)
+                    channels = cast("tuple[int, int, int]", backdrop)
+                    backdrop_tuple = (int(channels[0]), int(channels[1]), int(channels[2]), 1.0)
                 elif isinstance(backdrop, str):
                     backdrop_tuple = color_tuple(backdrop)
                 if backdrop_tuple:

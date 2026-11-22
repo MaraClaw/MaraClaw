@@ -1,6 +1,7 @@
 """ACK evidence invalidated inside redis-py's transparent reconnect boundary."""
 
-from typing import override
+from collections.abc import Awaitable, Callable
+from typing import cast, override
 
 from redis.asyncio.client import PubSub
 from redis.asyncio.connection import Connection
@@ -31,4 +32,8 @@ class AcknowledgedPubSub(PubSub):
     ) -> None:
         # redis-py retries reads internally: clearing only in the caller is too late.
         self.acknowledged = False
-        await super()._reconnect(conn, error, failure_count, start_time, command_name)
+        reconnect = cast(
+            "Callable[[Connection, BaseException | None, int | None, float | None, str | None], Awaitable[None]]",
+            super()._reconnect,
+        )
+        await reconnect(conn, error, failure_count, start_time, command_name)
