@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.core.json_types import (
+    JsonObject,
+    JsonValue,
     datetime_from_row,
     int_from_row,
-    mapping_from_row,
+    json_object_from,
     str_from_row,
     str_list_from_row,
     uuid_from_row,
@@ -25,7 +26,7 @@ class EnterpriseInfoRecord:
 
     id: UUID
     info_type: str
-    content: dict[str, Any] = field(default_factory=dict[str, Any])
+    content: JsonObject = field(default_factory=dict[str, JsonValue])
     version: int = 1
     visible_roles: list[str] = field(default_factory=list[str])
     updated_by: UUID | None = None
@@ -34,7 +35,7 @@ class EnterpriseInfoRecord:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> EnterpriseInfoRecord:
-        content = mapping_from_row(row.get("content") or {})
+        content = json_object_from(row.get("content") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             info_type=str_from_row(row["info_type"]),

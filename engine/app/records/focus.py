@@ -5,11 +5,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.core.domain.focus import FocusKind, FocusStatus
-from app.core.json_types import datetime_from_row, int_from_row, mapping_from_row, str_from_row, uuid_from_row
+from app.core.json_types import (
+    JsonObject,
+    JsonValue,
+    datetime_from_row,
+    int_from_row,
+    json_object_from,
+    str_from_row,
+    uuid_from_row,
+)
 
 
 @dataclass(slots=True)
@@ -24,7 +31,7 @@ class AgentFocusItemRecord:
     status: FocusStatus = FocusStatus.IN_PROGRESS
     kind: FocusKind = FocusKind.NORMAL
     source: str = "user"
-    item_metadata: dict[str, Any] = field(default_factory=dict[str, Any])
+    item_metadata: JsonObject = field(default_factory=dict[str, JsonValue])
     sort_order: int = 0
     completed_at: datetime | None = None
     created_at: datetime | None = None
@@ -32,7 +39,7 @@ class AgentFocusItemRecord:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AgentFocusItemRecord:
-        meta = mapping_from_row(row.get("metadata") or row.get("item_metadata") or {})
+        meta = json_object_from(row.get("metadata") or row.get("item_metadata") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),

@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.core.json_types import (
+    JsonObject,
+    JsonValue,
     datetime_from_row,
-    mapping_from_row,
+    json_object_from,
     str_from_row,
     str_list_from_row,
     uuid_from_row,
@@ -30,7 +31,7 @@ class AgentTemplateRecord:
     soul_template: str = ""
     default_skills: list[str] = field(default_factory=list[str])
     default_mcp_servers: list[str] = field(default_factory=list[str])
-    default_autonomy_policy: dict[str, Any] = field(default_factory=dict[str, Any])
+    default_autonomy_policy: JsonObject = field(default_factory=dict[str, JsonValue])
     capability_bullets: list[str] = field(default_factory=list[str])
     bootstrap_content: str | None = None
     is_builtin: bool = False
@@ -41,7 +42,7 @@ class AgentTemplateRecord:
     def from_row(cls, row: Mapping[str, object]) -> AgentTemplateRecord:
         default_skills = str_list_from_row(row.get("default_skills") or [])
         default_mcp_servers = str_list_from_row(row.get("default_mcp_servers") or [])
-        default_autonomy_policy = mapping_from_row(row.get("default_autonomy_policy") or {})
+        default_autonomy_policy = json_object_from(row.get("default_autonomy_policy") or {})
         capability_bullets = str_list_from_row(row.get("capability_bullets") or [])
         return cls(
             id=uuid_from_row(row["id"]),

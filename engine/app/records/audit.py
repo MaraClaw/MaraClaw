@@ -5,14 +5,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.core.domain.approvals import ApprovalStatus
 from app.core.json_types import (
+    JsonObject,
+    JsonValue,
     datetime_from_row,
-    is_str_dict,
-    mapping_from_row,
+    is_json_object,
+    json_object_from,
     str_from_row,
     uuid_from_row,
     uuid_from_row_opt,
@@ -31,16 +32,16 @@ class ApprovalRequestRecord:
     id: UUID
     agent_id: UUID
     action_type: str
-    details: dict[str, Any] = field(default_factory=dict[str, Any])
+    details: JsonObject = field(default_factory=dict[str, JsonValue])
     status: ApprovalStatus = ApprovalStatus.PENDING
     created_at: datetime | None = None
     resolved_at: datetime | None = None
     resolved_by: UUID | None = None
-    execution_args: dict[str, Any] | None = field(default=None, repr=False)
+    execution_args: JsonObject | None = field(default=None, repr=False)
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> ApprovalRequestRecord:
-        details = mapping_from_row(row.get("details") or {})
+        details = json_object_from(row.get("details") or {})
         execution_args = row.get("execution_args")
         return cls(
             id=uuid_from_row(row["id"]),
@@ -51,7 +52,7 @@ class ApprovalRequestRecord:
             created_at=datetime_from_row(row.get("created_at")),
             resolved_at=datetime_from_row(row.get("resolved_at")),
             resolved_by=uuid_from_row_opt(row.get("resolved_by")),
-            execution_args=execution_args if is_str_dict(execution_args) else None,
+            execution_args=execution_args if is_json_object(execution_args) else None,
         )
 
 
@@ -67,15 +68,15 @@ class AdminAuditLogRecord:
     target_type: str
     target_id: UUID | None
     tenant_id: UUID | None
-    changes: dict[str, Any] = field(default_factory=dict[str, Any])
-    details: dict[str, Any] = field(default_factory=dict[str, Any])
+    changes: JsonObject = field(default_factory=dict[str, JsonValue])
+    details: JsonObject = field(default_factory=dict[str, JsonValue])
     ip_address: str | None = None
     created_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AdminAuditLogRecord:
-        changes = mapping_from_row(row.get("changes") or {})
-        details = mapping_from_row(row.get("details") or {})
+        changes = json_object_from(row.get("changes") or {})
+        details = json_object_from(row.get("details") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             actor_id=uuid_from_row_opt(row.get("actor_id")),

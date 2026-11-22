@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import ClassVar
 from uuid import UUID, uuid4
 
-from app.core.json_types import object_attr, object_call
+from app.core.json_types import is_any_list, is_str_dict, object_attr, object_call
 from app.db.connection import DbConnection
 from app.db.session import connection_ctx
 from app.db.types import as_jsonb
@@ -121,7 +121,7 @@ class BaseDAO[RecordT]:
         params: dict[str, object] = {}
         for col in cols:
             value: object = data[col]
-            if isinstance(value, (dict, list)):
+            if is_str_dict(value) or is_any_list(value):
                 params[col] = as_jsonb(value)
             else:
                 params[col] = value.value if isinstance(value, StrEnum) else value
@@ -146,7 +146,7 @@ class BaseDAO[RecordT]:
         assignments: list[str] = []
         for col, raw_value in data.items():
             value: object = raw_value
-            if isinstance(value, (dict, list)):
+            if is_str_dict(value) or is_any_list(value):
                 params[col] = as_jsonb(value)
             else:
                 params[col] = value.value if isinstance(value, StrEnum) else value

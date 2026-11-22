@@ -17,6 +17,22 @@ Pure-psycopg repositories returning `app.records` dataclasses.
 - Keyset paging over nullable sort keys needs an explicit NULL branch in the cursor predicate (`chat_dao.list_page`); never OFFSET.
 - New table: baseline SQL → record → DAO singleton → `dao/__init__.py`. If the table FKs to tenants/agents/users **without** `ON DELETE CASCADE`, add a static delete in `tenant_dao.delete_cascade` **before** the parent row.
 
+## Row typing (strict)
+
+- Rows are `Mapping[str, object]` (what `BaseDAO` hands `record_factory`); never `dict[str, Any]` or psycopg `class_row`. `from_row` narrows each cell with an `app.core.json_types` helper (`str_from_row`, `int_from_row`, `uuid_from_row`, `datetime_from_row`, ...).
+- JSONB object columns are `JsonObject` fields filled by `json_object_from(...)` (deep check; a non-object becomes `{}`). Import `JsonObject`/`JsonValue` at runtime: `default_factory=dict[str, JsonValue]` evaluates it.
+- `mapping_from_row` / `is_str_dict` / `is_any_list` / `object_list_from_row` narrow an untyped `object` to `dict[str, object]` / `list[object]`. On a value already typed `JsonValue` use `isinstance(x, list)` or `is_json_object(x)`: ty treats `list[JsonValue]` and `list[object]` as disjoint.
+- `dict` is invariant: build records from variables annotated `JsonObject`, not `dict[str, str]` / `dict[str, object]`. `JsonObject.get()` is `JsonValue | None`: test it with `(v := ...) is not None and v` or narrow with `json_as_str` and friends.
+
+```python
+# before
+config: dict[str, Any] = field(default_factory=dict[str, Any])
+config = mapping_from_row(row.get("config") or {})
+# after
+config: JsonObject = field(default_factory=dict[str, JsonValue])
+config = json_object_from(row.get("config") or {})
+```
+
 ## Covered
 
 Most product tables (agents, chat, tools, skills, triggers, clawbook, workspace, gogcli, `admin_audit_logs`, `web_search_events`, …). `dao/__init__.py` is the export list. Agent-scoped events stay in `audit_logs`; admin who/what/when/changes go in `admin_audit_logs`. `web_search_events` has **no FK** to tenants/agents — do not add it to `delete_cascade`.

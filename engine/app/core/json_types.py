@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Protocol, TypeIs
+from typing import Protocol, TypeIs
 from uuid import UUID
 
 type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
@@ -37,14 +37,14 @@ def is_json_value(value: object) -> TypeIs[JsonValue]:
     """Narrow a JSON-compatible scalar, list, or object."""
     if value is None or isinstance(value, (str, int, float, bool)):
         return True
-    if isinstance(value, list):
+    if is_any_list(value):
         return all(is_json_value(item) for item in list[object](value))
     return is_json_object(value)
 
 
 def is_json_object(value: object) -> TypeIs[JsonObject]:
     """Narrow a mapping to ``JsonObject`` (HTTP JSON, JSONB objects)."""
-    if not isinstance(value, dict):
+    if not _is_dict(value):
         return False
     mapping: dict[object, object] = dict(value)
     return all(isinstance(key, str) and is_json_value(item) for key, item in mapping.items())
@@ -88,24 +88,28 @@ def object_from_literal(value: str) -> object:
         return loaded if is_json_value(loaded) else None
 
 
-def is_str_dict(value: object) -> TypeIs[dict[str, Any]]:
-    """Narrow a mapping to ``dict[str, Any]`` (JSONB objects, callback payloads)."""
+def _is_dict(value: object) -> TypeIs[dict[object, object]]:
     return isinstance(value, dict)
 
 
-def is_any_list(value: object) -> TypeIs[list[Any]]:
-    """Narrow a sequence to ``list[Any]``."""
+def is_str_dict(value: object) -> TypeIs[dict[str, object]]:
+    """Narrow a mapping to ``dict[str, object]`` (JSONB objects, callback payloads); values are not validated."""
+    return isinstance(value, dict)
+
+
+def is_any_list(value: object) -> TypeIs[list[object]]:
+    """Narrow a sequence to ``list[object]``; items are not validated."""
     return isinstance(value, list)
 
 
-def mapping_from_row(value: object) -> dict[str, Any]:
-    """Return ``value`` when it is a mapping, otherwise an empty dict."""
+def mapping_from_row(value: object) -> dict[str, object]:
+    """Return ``value`` when it is a mapping, otherwise an empty dict (shallow check, no copy)."""
     return value if is_str_dict(value) else {}
 
 
 def object_mapping_from(value: object) -> dict[str, object]:
     """Return a ``dict[str, object]`` copy of a mapping, otherwise ``{}``."""
-    if not isinstance(value, dict):
+    if not _is_dict(value):
         return {}
     mapping: dict[object, object] = dict(value)
     return {str(key): item for key, item in mapping.items()}
@@ -113,15 +117,15 @@ def object_mapping_from(value: object) -> dict[str, object]:
 
 def str_list_from_row(value: object) -> list[str]:
     """Return string items from a JSON array, otherwise an empty list."""
-    if not isinstance(value, list):
+    if not is_any_list(value):
         return []
     items = list[object](value)
     return [item for item in items if isinstance(item, str)]
 
 
-def object_list_from_row(value: object) -> list[dict[str, Any]]:
+def object_list_from_row(value: object) -> list[dict[str, object]]:
     """Return mapping items from a JSON array, otherwise an empty list."""
-    if not isinstance(value, list):
+    if not is_any_list(value):
         return []
     items = list[object](value)
     return [item for item in items if is_str_dict(item)]
@@ -189,7 +193,7 @@ def str_findall(pattern: object, text: str) -> list[str]:
     if not callable(findall):
         return []
     found: object = findall(text)
-    if not isinstance(found, list):
+    if not is_any_list(found):
         return []
     return [item for item in list[object](found) if isinstance(item, str)]
 

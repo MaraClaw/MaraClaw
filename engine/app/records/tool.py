@@ -5,10 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
-from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
+from app.core.json_types import (
+    JsonObject,
+    JsonValue,
+    datetime_from_row,
+    json_object_from,
+    str_from_row,
+    uuid_from_row,
+    uuid_from_row_opt,
+)
 
 
 @dataclass(slots=True)
@@ -22,9 +29,9 @@ class ToolRecord:
     type: str = "builtin"
     category: str = "general"
     icon: str = "🔧"
-    parameters_schema: dict[str, Any] = field(default_factory=dict[str, Any])
-    config: dict[str, Any] = field(default_factory=dict[str, Any])
-    config_schema: dict[str, Any] = field(default_factory=dict[str, Any])
+    parameters_schema: JsonObject = field(default_factory=dict[str, JsonValue])
+    config: JsonObject = field(default_factory=dict[str, JsonValue])
+    config_schema: JsonObject = field(default_factory=dict[str, JsonValue])
     mcp_server_url: str | None = None
     mcp_server_name: str | None = None
     mcp_tool_name: str | None = None
@@ -37,9 +44,9 @@ class ToolRecord:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> ToolRecord:
-        parameters_schema = mapping_from_row(row.get("parameters_schema") or {})
-        config = mapping_from_row(row.get("config") or {})
-        config_schema = mapping_from_row(row.get("config_schema") or {})
+        parameters_schema = json_object_from(row.get("parameters_schema") or {})
+        config = json_object_from(row.get("config") or {})
+        config_schema = json_object_from(row.get("config_schema") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             name=str_from_row(row["name"]),
@@ -71,14 +78,14 @@ class AgentToolRecord:
     agent_id: UUID
     tool_id: UUID
     enabled: bool = True
-    config: dict[str, Any] = field(default_factory=dict[str, Any])
+    config: JsonObject = field(default_factory=dict[str, JsonValue])
     source: str = "system"
     installed_by_agent_id: UUID | None = None
     created_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AgentToolRecord:
-        config = mapping_from_row(row.get("config") or {})
+        config = json_object_from(row.get("config") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),

@@ -6,14 +6,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
 from uuid import UUID
 
 from app.core.json_types import (
+    JsonObject,
+    JsonValue,
     datetime_from_row,
     float_from_row,
     int_from_row,
-    mapping_from_row,
+    json_object_from,
     str_from_row,
     uuid_from_row,
     uuid_from_row_opt,
@@ -52,7 +53,7 @@ class AgentResourcePressureEpisodeRecord:
     kind: PressureKind = PressureKind.THRESHOLD
     ended_at: datetime | None = None
     sample_count: int = 1
-    detail: dict[str, Any] = field(default_factory=dict[str, Any])
+    detail: JsonObject = field(default_factory=dict[str, JsonValue])
     event_key: str | None = None
 
     @classmethod
@@ -77,6 +78,6 @@ class AgentResourcePressureEpisodeRecord:
             last_seen_at=last_seen_at,
             ended_at=datetime_from_row(row.get("ended_at")),
             sample_count=int_from_row(row["sample_count"], 1),
-            detail=mapping_from_row(row.get("detail")),
+            detail=json_object_from(row.get("detail")),
             event_key=None if row.get("event_key") is None else str_from_row(row["event_key"]),
         )
