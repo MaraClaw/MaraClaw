@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
-from typing import Any, Literal, TypedDict
+from typing import Literal, TypedDict
 
 import httpx
 
@@ -15,8 +15,8 @@ from app.services.llm.types import LLMMessage, LLMResponse, ToolPayload
 # Type Definitions
 # ============================================================================
 
-ChunkCallback = Callable[[str], Coroutine[Any, Any, None]]
-ThinkingCallback = Callable[[str], Coroutine[Any, Any, None]]
+ChunkCallback = Callable[[str], Coroutine[object, object, None]]
+ThinkingCallback = Callable[[str], Coroutine[object, object, None]]
 
 
 class ToolCallbackData(TypedDict, total=False):
@@ -33,7 +33,7 @@ class ToolCallbackData(TypedDict, total=False):
     arguments: str
 
 
-ToolCallback = Callable[[ToolCallbackData], Coroutine[Any, Any, None]]
+ToolCallback = Callable[[ToolCallbackData], Coroutine[object, object, None]]
 
 
 class LLMError(Exception):

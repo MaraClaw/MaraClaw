@@ -21,6 +21,6 @@ def rebuild_llm_content_parts(content: list[VisionContent]) -> list[LLMContentPa
                         image_url={"url": vision_part["image_url"]["url"]},
                     )
                 )
-            case unexpected:
-                assert_never(unexpected)
+            case _:
+                assert_never(vision_part["type"])
     return parts

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from typing import Any, ClassVar, cast, override
+from collections.abc import Mapping, Sequence
+from typing import ClassVar, Literal, TypedDict, override
 
 import httpx
 
 from app.core.json_types import (
     JsonObject,
+    is_any_list,
     is_str_dict,
     json_as_str,
     json_as_str_or,
@@ -20,10 +21,43 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
 from app.services.llm.retry_policy import call_with_retry, raise_for_status
-from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, LLMUsage
+from app.services.llm.types import LLMContentPart, LLMMessage, LLMResponse, LLMRole, LLMToolCall, LLMUsage
 
 
-def _mapping_str(mapping: dict[str, object], key: str, default: str = "") -> str:
+class ResponsesMessageItem(TypedDict):
+    role: LLMRole
+    content: object
+
+
+class ResponsesFunctionCallItem(TypedDict):
+    type: Literal["function_call"]
+    call_id: str
+    name: str
+    arguments: str
+
+
+class ResponsesFunctionCallOutputItem(TypedDict):
+    type: Literal["function_call_output"]
+    call_id: str
+    output: str | list[LLMContentPart]
+
+
+# A replayed ``provider_items`` entry (encrypted reasoning) passes through as ``dict[str, object]``.
+type ResponsesInputItem = (
+    ResponsesMessageItem | ResponsesFunctionCallItem | ResponsesFunctionCallOutputItem | dict[str, object]
+)
+
+
+class ResponsesFunctionTool(TypedDict):
+    """A function tool; its fields are forwarded unvalidated from the tool definition."""
+
+    type: Literal["function"]
+    name: object
+    description: object
+    parameters: object
+
+
+def _mapping_str(mapping: Mapping[str, object], key: str, default: str = "") -> str:
     return json_as_str_or(mapping.get(key), default)
 
 
@@ -82,12 +116,11 @@ class OpenAIResponsesClient(LLMClient):
 
     def _format_content_for_input(self, content: object) -> object:
         """Convert OpenAI chat-style content into Responses API input content."""
-        if not isinstance(content, list):
+        if not is_any_list(content):
             return content
 
-        content_parts: list[object] = list(content)
-        formatted: list[dict[str, Any]] = []
-        for raw_part in content_parts:
+        formatted: list[JsonObject] = []
+        for raw_part in content:
             if not is_str_dict(raw_part):
                 continue
             part = json_object_from(raw_part)
@@ -99,11 +132,11 @@ class OpenAIResponsesClient(LLMClient):
                 formatted.append({"type": "input_image", "image_url": json_as_str_or(img.get("url"))})
             else:
                 formatted.append(part)
-        return formatted or content_parts
+        return formatted or list(content)
 
-    def _messages_to_input(self, messages: list[LLMMessage]) -> list[dict[str, Any]]:
+    def _messages_to_input(self, messages: list[LLMMessage]) -> list[ResponsesInputItem]:
         """Convert canonical message format to Responses API input format."""
-        input_items: list[dict[str, Any]] = []
+        input_items: list[ResponsesInputItem] = []
 
         for msg in messages:
             # Handle system messages with dynamic_content
@@ -164,7 +197,7 @@ class OpenAIResponsesClient(LLMClient):
         return self._sanitize_input_items(input_items)
 
     @staticmethod
-    def _sanitize_input_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _sanitize_input_items(items: list[ResponsesInputItem]) -> list[ResponsesInputItem]:
         """Remove orphaned function_call_output items that have no matching function_call.
 
         Also removes function_call items whose function_call_output is missing,
@@ -216,18 +249,17 @@ class OpenAIResponsesClient(LLMClient):
             )
         ]
 
-    def _convert_tools(self, tools: list[ToolDefinition] | None) -> list[dict[str, Any]] | None:
+    def _convert_tools(self, tools: Sequence[Mapping[str, object]] | None) -> list[ResponsesFunctionTool] | None:
         """Convert OpenAI tool schema to Responses API function tool schema."""
         if tools is None or not tools:
             return None
 
-        converted: list[dict[str, Any]] = []
+        converted: list[ResponsesFunctionTool] = []
         for tool in tools:
-            tool_data = cast("Mapping[str, object]", tool)
-            if tool_data.get("type") != "function":
+            if tool.get("type") != "function":
                 continue
             function = tool.get("function")
-            if tool_data.get("function") is None:
+            if not is_str_dict(function):
                 continue
             converted.append(
                 {
@@ -247,9 +279,9 @@ class OpenAIResponsesClient(LLMClient):
         max_tokens: int | None,
         stream: bool = False,
         **kwargs: object,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Build request payload."""
-        payload: dict[str, Any] = {
+        payload: dict[str, object] = {
             "model": self.model,
             "input": self._messages_to_input(messages),
             "stream": stream,
@@ -363,7 +395,7 @@ class OpenAIResponsesClient(LLMClient):
                 msg = json_as_str(err.get("message")) or str(err_raw)
                 err_type = json_as_str(err.get("type"))
                 err_code = json_as_str(err.get("code"))
-                extra = []
+                extra: list[str] = []
                 if err_type not in (None, ""):
                     extra.append(f"type={err_type}")
                 if err_code not in (None, ""):
@@ -388,7 +420,7 @@ class OpenAIResponsesClient(LLMClient):
 
         return None
 
-    def _build_error_log_context(self, data: JsonObject) -> dict[str, Any]:
+    def _build_error_log_context(self, data: JsonObject) -> JsonObject:
         """Build compact context for error logs."""
         return {
             "provider": "openai-response",

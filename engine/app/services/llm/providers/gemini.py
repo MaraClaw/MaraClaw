@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
-from typing import Any, ClassVar, cast, override
+from collections.abc import Mapping, Sequence
+from typing import ClassVar, Literal, NotRequired, TypedDict, cast, override
 
 import httpx
 
 from app.core.json_types import (
     JsonObject,
+    is_any_list,
     is_json_value,
     is_str_dict,
     json_as_int,
@@ -26,6 +27,38 @@ from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCa
 from app.services.llm.providers.openai_compatible import OpenAICompatibleClient
 from app.services.llm.retry_policy import StreamDelivery, call_with_retry, raise_for_status, stream_http_error
 from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, ToolPayload
+
+
+class GeminiContent(TypedDict):
+    role: Literal["user", "model"]
+    parts: list[JsonObject]
+
+
+class GeminiGenerationConfig(TypedDict, total=False):
+    """``generationConfig``; ``reasoning.apply_reasoning_effort`` may merge ``thinkingConfig`` into it."""
+
+    temperature: float
+    maxOutputTokens: int
+
+
+class GeminiFunctionDeclaration(TypedDict):
+    """A function declaration; its fields are forwarded unvalidated from the tool definition."""
+
+    name: object
+    description: object
+    parameters: NotRequired[dict[str, object]]
+
+
+class GeminiTool(TypedDict):
+    functionDeclarations: list[GeminiFunctionDeclaration]
+
+
+class GeminiFunctionCallingConfig(TypedDict):
+    mode: Literal["AUTO"]
+
+
+class GeminiToolConfig(TypedDict):
+    functionCallingConfig: GeminiFunctionCallingConfig
 
 
 class GeminiClient(LLMClient):
@@ -108,10 +141,9 @@ class GeminiClient(LLMClient):
         if isinstance(content, str):
             return [{"text": content}]
 
-        if isinstance(content, list):
+        if is_any_list(content):
             parts: list[JsonObject] = []
-            content_parts: list[object] = list(content)
-            for raw_part in content_parts:
+            for raw_part in content:
                 if not is_str_dict(raw_part):
                     continue
                 part = json_object_from(raw_part)
@@ -156,34 +188,33 @@ class GeminiClient(LLMClient):
         return out
 
     def _convert_tools(
-        self, tools: list[ToolDefinition] | None
-    ) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
+        self, tools: Sequence[Mapping[str, object]] | None
+    ) -> tuple[list[GeminiTool] | None, GeminiToolConfig | None]:
         """Convert OpenAI-style tools to Gemini function declarations."""
         if tools is None or not tools:
             return None, None
 
-        declarations: list[dict[str, Any]] = []
+        declarations: list[GeminiFunctionDeclaration] = []
         for tool in tools:
-            tool_data = cast("Mapping[str, object]", tool)
-            if tool_data.get("type") != "function":
+            if tool.get("type") != "function":
                 continue
             function = tool.get("function")
-            if tool_data.get("function") is None:
+            if not is_str_dict(function):
                 continue
-            decl: dict[str, Any] = {
+            decl: GeminiFunctionDeclaration = {
                 "name": function.get("name", ""),
                 "description": function.get("description", ""),
             }
             params = function.get("parameters")
-            if isinstance(params, dict):
+            if is_str_dict(params):
                 decl["parameters"] = params
             declarations.append(decl)
 
         if not declarations:
             return None, None
 
-        tools_payload = [{"functionDeclarations": declarations}]
-        tool_config = None
+        tools_payload: list[GeminiTool] = [{"functionDeclarations": declarations}]
+        tool_config: GeminiToolConfig | None = None
         if self.supports_tool_choice:
             tool_config = {"functionCallingConfig": {"mode": "AUTO"}}
         return tools_payload, tool_config
@@ -195,10 +226,10 @@ class GeminiClient(LLMClient):
         temperature: float | None,
         max_tokens: int | None,
         **kwargs: object,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Build Gemini request payload."""
         system_blocks: list[str] = []
-        contents: list[dict[str, Any]] = []
+        contents: list[GeminiContent] = []
         tool_name_map = self._extract_tool_name_map(messages)
 
         for msg in messages:
@@ -249,11 +280,12 @@ class GeminiClient(LLMClient):
             if cast("str", msg.role) == "tool":
                 name = tool_name_map.get(msg.tool_call_id or "", msg.tool_call_id or "tool_result")
                 response_content = msg.content or ""
+                response_obj: JsonObject
                 if isinstance(response_content, str):
                     try:
                         parsed_raw = json_loads_value(response_content)
                         if is_str_dict(parsed_raw):
-                            response_obj: JsonObject = json_object_from(parsed_raw)
+                            response_obj = json_object_from(parsed_raw)
                         elif is_json_value(parsed_raw):
                             response_obj = {"result": parsed_raw}
                         else:
@@ -279,15 +311,16 @@ class GeminiClient(LLMClient):
                     }
                 )
 
-        payload: dict[str, Any] = {
+        generation_config: GeminiGenerationConfig = {}
+        payload: dict[str, object] = {
             "contents": contents or [{"role": "user", "parts": [{"text": ""}]}],
-            "generationConfig": {},
+            "generationConfig": generation_config,
         }
         if temperature is not None:
-            payload["generationConfig"]["temperature"] = temperature
+            generation_config["temperature"] = temperature
 
         if max_tokens not in (None, 0):
-            payload["generationConfig"]["maxOutputTokens"] = max_tokens
+            generation_config["maxOutputTokens"] = max_tokens
 
         if system_blocks:
             payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_blocks)}]}
@@ -295,7 +328,7 @@ class GeminiClient(LLMClient):
         tools_payload, tool_config = self._convert_tools(tools)
         if tools_payload is not None and tools_payload:
             payload["tools"] = tools_payload
-        if tool_config is not None and tool_config:
+        if tool_config is not None:
             payload["toolConfig"] = tool_config
 
         from app.services.llm.reasoning import apply_reasoning_effort
@@ -310,7 +343,7 @@ class GeminiClient(LLMClient):
 
     def _normalize_usage(self, usage: object) -> dict[str, int] | None:
         """Normalize Gemini usage metadata to unified usage dict."""
-        if not isinstance(usage, dict):
+        if not is_str_dict(usage):
             return None
         usage_obj = json_object_from(usage)
         input_tokens = json_as_int(usage_obj.get("promptTokenCount"))
@@ -471,7 +504,7 @@ class GeminiClient(LLMClient):
             delivery=delivery,
         )
 
-    async def _stream_once(self, url: str, payload: dict[str, Any], on_chunk: ChunkCallback | None) -> LLMResponse:
+    async def _stream_once(self, url: str, payload: dict[str, object], on_chunk: ChunkCallback | None) -> LLMResponse:
         """One streaming attempt. Its accumulators are local, so a retry starts clean."""
         full_text = ""
         tool_calls: list[LLMToolCall] = []

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, ClassVar, override
+from typing import ClassVar, override
 
 import httpx
 
@@ -102,13 +102,13 @@ class OpenAICompatibleClient(LLMClient):
         max_tokens: int | None,
         stream: bool = False,
         **kwargs: object,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Build request payload."""
         messages_payload = self._messages_to_openai_payload(messages)
         logger.debug(
             f"[LLM-Debug] OpenAICompatibleClient payload messages for model {self.model}: {json.dumps(messages_payload, indent=2, ensure_ascii=False)}"
         )
-        payload: dict[str, Any] = {
+        payload: dict[str, object] = {
             "model": self.model,
             "messages": messages_payload,
             "stream": stream,
@@ -162,7 +162,7 @@ class OpenAICompatibleClient(LLMClient):
                         }
                     )
                 elif isinstance(msg.content, list):
-                    content_blocks = [json_object_from(part) for part in msg.content if isinstance(part, dict)]
+                    content_blocks = [json_object_from(part) for part in msg.content if is_str_dict(part)]
                     _ = self._mark_last_text_block_cacheable(content_blocks)
 
                 if msg.dynamic_content not in (None, ""):
@@ -201,9 +201,8 @@ class OpenAICompatibleClient(LLMClient):
                 }
             ]
             return message
-        if isinstance(content, list):
-            content_items: list[object] = list(content)
-            blocks: list[JsonObject] = [json_object_from(part) for part in content_items if is_str_dict(part)]
+        if is_any_list(content):
+            blocks: list[JsonObject] = [json_object_from(part) for part in content if is_str_dict(part)]
             if self._mark_last_text_block_cacheable(blocks):
                 message = dict(message)
                 message["content"] = blocks
@@ -272,8 +271,8 @@ class OpenAICompatibleClient(LLMClient):
         if (usage := data.get("usage")) is not None and usage:
             chunk.usage = _usage_from_json(data.get("usage"))
 
-        choices_raw: object = data.get("choices")
-        if not is_any_list(choices_raw) or not choices_raw:
+        choices_raw = data.get("choices")
+        if not isinstance(choices_raw, list) or not choices_raw:
             return chunk, in_think, tag_buffer, json_buffer
 
         choice = _first_json_object(choices_raw)
@@ -294,8 +293,8 @@ class OpenAICompatibleClient(LLMClient):
             chunk.content, in_think, tag_buffer = self._filter_think_tags(text, in_think, tag_buffer)
 
         # Tool calls
-        tool_calls_raw: object = delta.get("tool_calls")
-        if is_any_list(tool_calls_raw) and tool_calls_raw:
+        tool_calls_raw = delta.get("tool_calls")
+        if isinstance(tool_calls_raw, list) and tool_calls_raw:
             tool_call_items = list[object](tool_calls_raw)
             tc_obj = json_object_from(tool_call_items[0])
             fn = json_object_from(tc_obj.get("function"))
@@ -446,7 +445,7 @@ class OpenAICompatibleClient(LLMClient):
     async def _stream_once(
         self,
         url: str,
-        payload: dict[str, Any],
+        payload: dict[str, object],
         on_chunk: ChunkCallback | None,
         on_tool_delta: ToolCallback | None,
         on_thinking: ThinkingCallback | None,

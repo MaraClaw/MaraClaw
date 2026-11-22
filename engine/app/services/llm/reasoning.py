@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, is_str_dict
 from app.services.llm.registry import normalize_provider
 
 ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh", "max", "ultra"]
@@ -146,7 +146,7 @@ def apply_reasoning_effort(
 def _deep_merge(target: dict[str, object], extra: JsonObject) -> None:
     for key, value in extra.items():
         existing = target.get(key)
-        if isinstance(existing, dict) and isinstance(value, dict):
+        if is_str_dict(existing) and isinstance(value, dict):
             _deep_merge(existing, value)
         else:
             target[key] = value

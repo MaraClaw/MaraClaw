@@ -111,8 +111,8 @@ def create_llm_client(
                 supports_tool_choice=spec.supports_tool_choice,
                 supports_cache_control=normalized_provider == "qwen",
             )
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(spec.protocol)
     return cache_put(cache_key, built)
 
 
