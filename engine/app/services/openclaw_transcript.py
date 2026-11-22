@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import ClassVar, override
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
 
 from app.records.chat_attachment import ChatAttachment
 
@@ -32,6 +32,7 @@ class _TextBlock(BaseModel):
 
 class _Run(BaseModel):
     run_id: str = Field(alias="runId", min_length=1, max_length=512)
+    run_terminal: StrictBool = Field(default=False, alias="runTerminal")
 
 
 class _Message(BaseModel):
@@ -53,6 +54,7 @@ class TranscriptReply:
     id: str
     run_id: str
     text: str
+    run_terminal: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,9 +171,11 @@ class TranscriptSource:
                 ).fetchall()
             )
         matching = [row.event for row in _decode(rows) if row.event is not None and row.event.run_id == run_id]
-        if len(matching) > 1:
+        # Codex also records interim assistant messages with stopReason=stop.
+        candidates = [reply for reply in matching if reply.run_terminal] or matching
+        if len(candidates) > 1:
             raise ReplyMediaError("ambiguous_terminal_media")
-        return matching[0] if matching else None
+        return candidates[0] if candidates else None
 
 
 @contextmanager
@@ -216,7 +220,7 @@ def _decode(rows: list[tuple[str, int, str | None, bytes | None]]) -> tuple[Tran
             continue
         content = message.content
         text = content if isinstance(content, str) else "\n".join(part.text for part in content if part.type == "text")
-        reply = TranscriptReply(event.id, message.run.run_id, text)
+        reply = TranscriptReply(event.id, message.run.run_id, text, run_terminal=message.run.run_terminal)
         replies.append(TranscriptRow(str(physical), int(seq), reply))
     return tuple(replies)
 
