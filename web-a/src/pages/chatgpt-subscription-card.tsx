@@ -68,7 +68,8 @@ export function ChatGPTSubscriptionCard({ tenantId, platformAdmin }: {
     gcTime: 0,
     retry: (_failures, failure) => isTransient(failure),
     retryDelay: pollIntervalMs,
-    // Re-armed after every settled check, so checks never overlap.
+    // Re-armed after every settled check, so checks never overlap. The admin signs in on another tab, so keep polling while this one is hidden.
+    refetchIntervalInBackground: true,
     refetchInterval: (query) => query.state.status === 'success' && query.state.data?.status === 'pending' ? pollIntervalMs : false,
   })
   const outcome = polling === null ? null : status.isError ? 'unavailable' : status.data?.status ?? null
