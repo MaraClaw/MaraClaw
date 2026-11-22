@@ -1,7 +1,6 @@
 """Company onboarding APIs."""
 
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -45,7 +44,7 @@ async def _ensure_row(user: UserRecord, entry_mode: str) -> UserTenantOnboarding
     if row:
         if row.status == "completed":
             return row
-        updates: dict[str, Any] = {"entry_mode": entry_mode}
+        updates: dict[str, str] = {"entry_mode": entry_mode}
         if row.current_step == "company":
             updates["current_step"] = "assistant"
         return await user_tenant_onboarding_dao.update(db_obj=row, obj_in=updates) or row

@@ -6,12 +6,13 @@ import asyncio
 import hmac
 import json
 import uuid
-from typing import Any, TypedDict
+from collections.abc import Callable
+from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.api.background_tasks import schedule_background_task
-from app.core.json_types import json_as_str_or, json_object_from
+from app.core.json_types import JsonValue, json_as_str_or, json_object_from
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
@@ -36,6 +37,10 @@ CHANNEL_TYPE = "google_chat"
 _DEDUP_NS = "google_chat"
 
 
+def _decode_event_body(body: bytes, load: Callable[[bytes], JsonValue]) -> JsonValue:
+    return load(body)
+
+
 class GoogleChatChannelPayload(TypedDict, total=False):
     """Config payload for a Google Chat app bound to an agent.
 
@@ -47,7 +52,7 @@ class GoogleChatChannelPayload(TypedDict, total=False):
     """
 
     project_number: str
-    service_account_json: str | dict[str, Any]
+    service_account_json: str | dict[str, object]
     client_email: str
     audience: str
     verification_token: str
@@ -80,7 +85,7 @@ async def configure_google_chat_channel(
         app_secret=write.client_email,
         encrypt_key=write.encrypt_key,
         verification_token=verification_token,
-        extra_config=write.extra_config,
+        extra_config=json_object_from(write.extra_config),
         is_configured=True,
     )
     return channel_config_out(config)
@@ -257,7 +262,7 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
         return Response(status_code=404)
 
     try:
-        body: dict[str, Any] = json.loads(body_bytes) if body_bytes else {}
+        body: JsonValue = _decode_event_body(body_bytes, json.loads) if body_bytes else {}
     except ValueError, UnicodeError:
         return Response(status_code=400)
     if not isinstance(body, dict):

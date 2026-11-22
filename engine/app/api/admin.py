@@ -6,7 +6,7 @@ and control platform-level settings.
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -139,8 +139,8 @@ class AdminAuditLogOut(BaseModel):
     target_type: str
     target_id: uuid.UUID | None = None
     tenant_id: uuid.UUID | None = None
-    changes: dict[str, Any]
-    details: dict[str, Any]
+    changes: dict[str, object]
+    details: dict[str, object]
     ip_address: str | None = None
     created_at: datetime | None = None
 

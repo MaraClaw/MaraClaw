@@ -533,7 +533,7 @@ async def update_skill(
             raise HTTPException(404, "Skill not found")
         _ensure_skill_write_access(skill, current_user)
 
-        updates = {}
+        updates: dict[str, object] = {}
         if body.name is not None:
             updates["name"] = body.name
         if body.description is not None:

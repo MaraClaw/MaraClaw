@@ -56,7 +56,7 @@ async def get_agent_activity(
             "id": str(log.id),
             "action_type": log.action_type,
             "summary": log.summary,
-            "detail": log.detail_json,
+            "detail": dict[str, object](log.detail_json),
             "related_id": str(log.related_id) if log.related_id else None,
             "created_at": log.created_at.isoformat() if log.created_at else None,
         }
@@ -204,8 +204,8 @@ async def list_conversations(
 
     # 2. Agent-to-agent conversations
     agent_sessions = await chat_session_dao.list_agent_peer_sessions_for_agent(agent_id)
-    partner_ids = []
-    session_ids = []
+    partner_ids: list[UUID] = []
+    session_ids: list[str] = []
     for sess in agent_sessions:
         partner_id = sess.peer_agent_id if sess.agent_id == agent_id else sess.agent_id
         if partner_id:

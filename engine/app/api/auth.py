@@ -522,7 +522,7 @@ async def login_flow(
                 tenants_result = await tenant_dao.get_by_ids(tenant_ids)
                 tenants_map = {str(t.id): t for t in tenants_result}
 
-            tenant_choices = []
+            tenant_choices: list[TenantChoice] = []
             for u in valid_users:
                 tenant = tenants_map.get(str(u.tenant_id)) if u.tenant_id else None
                 tenant_choices.append(

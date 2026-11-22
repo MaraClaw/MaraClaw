@@ -13,13 +13,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.core.domain.channels import ChannelType
 from app.core.json_types import (
+    JsonObject,
     http_header,
     json_as_str,
     json_as_str_or,
     json_loads_object,
     json_object_from,
     json_object_from_response,
-    mapping_from_row,
 )
 from app.core.logging import logger
 from app.core.outbound_transport import public_http_client
@@ -276,13 +276,11 @@ async def slack_event_webhook(
         except Exception as _e_info:
             logger.error(f"[Slack] Failed to fetch user info for {sender_id}: {_e_info}")
 
-    _extra_info = mapping_from_row(
-        {
-            "name": _slack_real_name or f"Slack User {sender_id[:8]}",
-            "email": _slack_email,
-            "avatar_url": _slack_avatar,
-        }
-    )
+    _extra_info: JsonObject = {
+        "name": _slack_real_name or f"Slack User {sender_id[:8]}",
+        "email": _slack_email,
+        "avatar_url": _slack_avatar,
+    }
     try:
         platform_user = await channel_inbound.resolve_sender_user(
             agent=agent_obj,

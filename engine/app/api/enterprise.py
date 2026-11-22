@@ -6,7 +6,6 @@ import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -359,7 +358,7 @@ async def _list_llm_models(tenant_id: str | None, current_user: UserRecord) -> l
             default_model_id = tenant.default_model_id
             fallback_model_id = getattr(tenant, "default_fallback_model_id", None)
 
-    models_out = []
+    models_out: list[LLMModelOut] = []
     try:
         models = await llm_model_dao.list_for_tenant(tid)
     except StoredCredentialError:
@@ -622,7 +621,7 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
     assert_can_manage_model(current_user, model)
 
     before = _llm_audit_metadata(model)
-    updates: dict[str, Any] = {}
+    updates: dict[str, object] = {}
     if data.provider not in (None, ""):
         updates["provider"] = data.provider
     if data.model not in (None, ""):
@@ -1055,7 +1054,7 @@ async def _sync_tenant_sso_state(tenant_id: uuid.UUID) -> None:
     if not tenant:
         return
 
-    updates: dict[str, Any] = {"sso_enabled": active_sso_count > 0}
+    updates: dict[str, object] = {"sso_enabled": active_sso_count > 0}
 
     if active_sso_count > 0 and tenant.sso_domain in (None, ""):
         try:
@@ -1382,7 +1381,7 @@ async def _update_oauth2_provider(
     if not _is_platform_admin_user(current_user) and provider.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Not authorized to update this provider")
 
-    updates: dict[str, Any] = {}
+    updates: dict[str, object] = {}
     if data.name is not None:
         updates["name"] = data.name
     if data.is_active is not None:
@@ -1448,7 +1447,7 @@ async def _update_identity_provider(
     if not _is_platform_admin_user(current_user) and provider.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Not authorized to update this provider")
 
-    updates: dict[str, Any] = {}
+    updates: dict[str, object] = {}
     if data.name is not None:
         updates["name"] = data.name
     if data.is_active is not None:
@@ -1569,7 +1568,7 @@ async def _create_invitation_codes(
     """Batch-create invitation codes for the current user's company."""
     tenant_id = _require_tenant_admin(current_user)
     await _require_free_account(tenant_id)
-    codes_created = []
+    codes_created: list[str] = []
     expires_at = invitation_expiry(data.ttl_hours)
     for _ in range(min(data.count, 100)):
         code_str = _new_invitation_code()

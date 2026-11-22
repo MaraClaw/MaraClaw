@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from redis.exceptions import RedisError
 
 from app.core.incident_reporting import report_exception
-from app.core.json_types import json_loads_value
+from app.core.json_types import is_str_dict, json_as_str, json_loads_value
 from app.core.logging import logger, set_trace_id
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
@@ -92,9 +92,9 @@ EVICTION_CLOSE_TIMEOUT_SECONDS = DEFAULT_SEND_TIMEOUT_SECONDS
 
 
 def _json_object_payload(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
+    if not is_str_dict(value):
         raise TypeError("JSON object required")
-    return {key: item for key, item in value.items() if isinstance(key, str)}
+    return {name: item for key, item in value.items() if (name := json_as_str(key)) is not None}
 
 
 def _payload_str(value: object, default: str = "") -> str:

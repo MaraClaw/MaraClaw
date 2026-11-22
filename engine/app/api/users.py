@@ -2,7 +2,7 @@ import uuid
 from base64 import b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
 from datetime import datetime
-from typing import Any, ClassVar, Literal
+from typing import ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
@@ -435,8 +435,8 @@ class AdminAuditLogOut(BaseModel):
     target_type: str
     target_id: uuid.UUID | None = None
     tenant_id: uuid.UUID | None = None
-    changes: dict[str, Any]
-    details: dict[str, Any]
+    changes: dict[str, object]
+    details: dict[str, object]
     ip_address: str | None = None
     created_at: datetime | None = None
 

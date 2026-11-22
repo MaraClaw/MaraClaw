@@ -141,8 +141,8 @@ async def _resolve_author(
             if access != "manage":
                 raise HTTPException(403, "Manage access is required for agent authorship")
             return authorized_agent.id, authorized_agent.name
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(author_type)
 
 
 # ── Routes ──────────────────────────────────────────

@@ -97,8 +97,7 @@ async def get_sso_config(sid: uuid.UUID, request: Request) -> list[SSOProviderRe
     auth_urls: list[SSOProviderResponse] = []
     for p in providers:
         if p.provider_type == "feishu":
-            app_id = (p.config or {}).get("app_id")
-            if app_id:
+            if (app_id := (p.config or {}).get("app_id")) is not None and app_id:
                 redir = f"{public_base}/api/auth/feishu/callback"
                 url = f"https://open.feishu.cn/open-apis/authen/v1/index?app_id={app_id}&redirect_uri={quote(redir)}&state={sid}"
                 auth_urls.append({"provider_type": "feishu", "name": p.name, "url": url})
@@ -118,7 +117,7 @@ async def get_sso_config(sid: uuid.UUID, request: Request) -> list[SSOProviderRe
         elif p.provider_type == "wecom":
             corp_id = (p.config or {}).get("corp_id")
             agent_id = (p.config or {}).get("agent_id")
-            if corp_id and agent_id:
+            if corp_id is not None and corp_id and agent_id is not None and agent_id:
                 # Callback implemented in app/api/wecom.py
                 redir = f"{public_base}/api/auth/wecom/callback"
                 url = f"https://open.work.weixin.qq.com/wwopen/sso/qrConnect?appid={corp_id}&agentid={agent_id}&redirect_uri={quote(redir)}&state={sid}"
