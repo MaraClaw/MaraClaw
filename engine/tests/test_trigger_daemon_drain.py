@@ -9,8 +9,8 @@ from types import SimpleNamespace
 from typing import override
 
 import pytest
-from app.core.json_types import JsonValue
 
+from app.core.json_types import JsonValue
 from app.records.trigger import AgentTriggerRecord
 from app.services import heartbeat, trigger_daemon
 from app.services.trigger_runtime import invoker, scan
