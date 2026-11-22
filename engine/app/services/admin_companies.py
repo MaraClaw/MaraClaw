@@ -19,7 +19,13 @@ from app.config import get_settings
 from app.core.domain.agent_sections import AGENT_SECTION_IDS, canonical_agent_sections
 from app.dao.tenant_dao import TenantUsageStats, tenant_dao
 from app.records.tenant import TenantRecord
-from app.schemas.admin_companies import CompanyAgentSections, CompanyOption, CompanyPageOut, CompanyStats
+from app.schemas.admin_companies import (
+    CompanyAgentSections,
+    CompanyOption,
+    CompanyOptionPageOut,
+    CompanyPageOut,
+    CompanyStats,
+)
 
 MAX_CURSOR_LENGTH: Final = 1024
 MAX_SEARCH_LENGTH: Final = 200
@@ -152,29 +158,37 @@ async def list_company_stats(q: str | None) -> list[CompanyStats]:
     return await _stats_rows(tenants)
 
 
-async def list_company_page(q: str | None, cursor: str | None, limit: int) -> CompanyPageOut:
+async def _select_company_page(
+    q: str | None, cursor: str | None, limit: int
+) -> tuple[Sequence[TenantRecord], str | None]:
     """Keyset page on ``created_at DESC, id DESC``; ``q`` returns a ranked top 50 with no cursor."""
     query = _search_text(q)
     if query:
         if cursor is not None:
             raise HTTPException(status_code=400, detail="Cursor cannot be combined with search")
-        return CompanyPageOut(items=await _stats_rows(await tenant_dao.search_by_name(query)), next_cursor=None)
+        return await tenant_dao.search_by_name(query), None
     page_size = min(max(limit, 1), MAX_PAGE_SIZE)
     position = _decode_cursor(cursor) if cursor is not None else None
     rows = await tenant_dao.list_page(
         limit=page_size, before=(position.created_at, position.id) if position is not None else None
     )
     page = rows[:page_size]
-    next_cursor = _encode_cursor(page[-1]) if len(rows) > page_size else None
-    return CompanyPageOut(items=await _stats_rows(page), next_cursor=next_cursor)
+    return page, _encode_cursor(page[-1]) if len(rows) > page_size else None
 
 
-async def list_company_options() -> list[CompanyOption]:
-    """Every company, newest first, without stats."""
-    return [
-        CompanyOption.model_validate(tenant, from_attributes=True)
-        for tenant in await tenant_dao.list_ordered_by_created_at(desc=True)
-    ]
+async def list_company_page(q: str | None, cursor: str | None, limit: int) -> CompanyPageOut:
+    """Company page with batched stats."""
+    tenants, next_cursor = await _select_company_page(q, cursor, limit)
+    return CompanyPageOut(items=await _stats_rows(tenants), next_cursor=next_cursor)
+
+
+async def list_company_options(q: str | None, cursor: str | None, limit: int) -> CompanyOptionPageOut:
+    """The same page as :func:`list_company_page`, without stats, for pickers."""
+    tenants, next_cursor = await _select_company_page(q, cursor, limit)
+    return CompanyOptionPageOut(
+        items=[CompanyOption.model_validate(tenant, from_attributes=True) for tenant in tenants],
+        next_cursor=next_cursor,
+    )
 
 
 async def get_company_stats(company_id: uuid.UUID) -> CompanyStats | None:

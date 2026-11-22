@@ -16,16 +16,22 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from types import ModuleType
 from typing import Protocol, TypeIs
+from weakref import WeakValueDictionary
 
 import httpx
 
 from app.core.domain.channels import ChannelType
-from app.core.json_types import json_as_str_or, json_object_from
 from app.core.logging import logger
-from app.dao.channel_config_dao import channel_config_dao
+from app.records.channel_config import ChannelConfigRecord
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import cancel_tasks
-from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
+from app.services.channels.stream_reconcile import StreamReconciler
+from app.services.channels.stream_source import (
+    StreamSource,
+    acquire_stream_source,
+    authorize_stream_source,
+    connection_credentials,
+)
 from app.services.storage_runtime.quota_errors import StorageQuotaError
 
 
@@ -119,14 +125,20 @@ class DiscordGatewayManager:
         self._clients: dict[uuid.UUID, _DiscordClientLike] = {}
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._callbacks: dict[uuid.UUID, CallbackAdmission] = {}
+        self._sources: dict[uuid.UUID, StreamSource] = {}
+        self._lifecycle_locks: WeakValueDictionary[uuid.UUID, asyncio.Lock] = WeakValueDictionary()
+        self._reconciler: StreamReconciler = StreamReconciler(ChannelType.DISCORD, "[Discord GW]")
+        self._closing: bool = False
 
-    async def start_client(
-        self,
-        agent_id: uuid.UUID,
-        bot_token: str,
-        *,
-        stop_existing: bool = True,
-    ):
+    def open(self) -> None:
+        """Admit client starts again; the connector runtime opens every manager when it starts."""
+        self._closing = False
+
+    def close(self) -> None:
+        """Refuse client starts from now on; draining closes before any cleanup awaits."""
+        self._closing = True
+
+    async def start_client(self, agent_id: uuid.UUID, bot_token: str) -> None:
         """Start a Discord Gateway client for the given agent."""
         if not _HAS_DISCORD or _discord_mod is None:
             logger.warning("[Discord GW] discord.py not installed, cannot start client")
@@ -136,18 +148,18 @@ class DiscordGatewayManager:
             return
 
         logger.info(f"[Discord GW] Starting Gateway client for agent {agent_id}")
+        async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            await self._start_client(agent_id, bot_token)
 
-        # Stop existing client if any
-        if stop_existing and agent_id in self._tasks:
-            await self.stop_client(agent_id)
-        existing = self._tasks.get(agent_id)
-        if existing and not existing.done():
-            return
-
+    async def _start_client(self, agent_id: uuid.UUID, bot_token: str) -> None:
+        await self._stop_client(agent_id)
         if (sdk := _get_discord_module()) is None:
             logger.warning("[Discord GW] discord.py not installed, cannot start client")
             return
         source = await acquire_stream_source(agent_id, ChannelType.DISCORD, (bot_token,))
+        if self._closing:
+            logger.info(f"[Discord GW] Manager is closing; not starting a client for agent {agent_id}")
+            return
         intents_cls = _mod_attr(sdk, "Intents")
         default_intents = _mod_attr(intents_cls, "default")
         if not callable(default_intents):
@@ -253,6 +265,7 @@ class DiscordGatewayManager:
 
         task = asyncio.create_task(_run_bot(), name=f"discord-gw-{str(agent_id)[:8]}")
         self._tasks[agent_id] = task
+        self._sources[agent_id] = source
         logger.info(f"[Discord GW] Gateway task scheduled for agent {agent_id}")
 
     async def _handle_message(
@@ -307,8 +320,13 @@ class DiscordGatewayManager:
             logger.exception(f"[Discord GW] Error handling message for {agent_id}: {e}")
             return f"An error occurred while processing your message: {str(e)[:100]}"
 
-    async def stop_client(self, agent_id: uuid.UUID):
+    async def stop_client(self, agent_id: uuid.UUID) -> None:
         """Stop a running Discord Gateway client."""
+        async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            await self._stop_client(agent_id)
+
+    async def _stop_client(self, agent_id: uuid.UUID) -> None:
+        _ = self._sources.pop(agent_id, None)
         if callbacks := self._callbacks.pop(agent_id, None):
             await callbacks.stop()
         task = self._tasks.pop(agent_id, None)
@@ -323,6 +341,7 @@ class DiscordGatewayManager:
                 logger.error(f"[Discord GW] Error closing client for {agent_id}: {e}")
 
     async def stop_all(self) -> None:
+        self.close()
         for callbacks in self._callbacks.values():
             callbacks.close()
         results = await asyncio.gather(
@@ -333,23 +352,25 @@ class DiscordGatewayManager:
             if isinstance(result, BaseException):
                 logger.warning("[Discord GW] Client cleanup failed: {}", result)
 
-    async def start_all(self):
-        """Start Gateway clients for all configured Discord agents."""
-        if not _HAS_DISCORD:
-            logger.info("[Discord GW] discord.py not installed, skipping Discord Gateway init")
-            return
-        logger.info("[Discord GW] Initializing all active Discord Gateway channels...")
-        configs = await channel_config_dao.list_configured(ChannelType.DISCORD)
+    def live_source(self, agent_id: uuid.UUID) -> StreamSource | None:
+        task = self._tasks.get(agent_id)
+        return None if task is None or task.done() else self._sources.get(agent_id)
 
-        for config in configs:
-            extra = json_object_from(config.extra_config)
-            mode = json_as_str_or(extra.get("connection_mode"), "webhook")
-            if mode == "gateway":
-                bot_token = config.app_secret
-                if bot_token not in (None, ""):
-                    await self.start_client(config.agent_id, bot_token, stop_existing=False)
-                else:
-                    logger.warning(f"[Discord GW] Skipping agent {config.agent_id}: missing bot_token")
+    def tracked_agents(self) -> set[uuid.UUID]:
+        return set(self._tasks) | set(self._clients) | set(self._callbacks)
+
+    async def ensure_source(self, config: ChannelConfigRecord, source: StreamSource) -> None:
+        (bot_token,) = connection_credentials(config)
+        async with self._lifecycle_locks.setdefault(config.agent_id, asyncio.Lock()):
+            if self.live_source(config.agent_id) != source:
+                await self._start_client(config.agent_id, bot_token)
+
+    async def reconcile_clients(self) -> None:
+        """One connector pass; a row switched from gateway to webhook mode loses its gateway client here."""
+        if not _HAS_DISCORD:
+            logger.debug("[Discord GW] discord.py not installed, nothing to reconcile")
+            return
+        _ = await self._reconciler.reconcile(self)
 
     def status(self) -> dict[str, bool]:
         """Return status of all active Gateway tasks."""

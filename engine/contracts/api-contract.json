@@ -6514,6 +6514,35 @@
         "title": "CompanyOption",
         "type": "object"
       },
+      "CompanyOptionPageOut": {
+        "description": "Stats-free picker page; the cursor is the one ``CompanyPageOut`` uses.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyOption"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "CompanyOptionPageOut",
+        "type": "object"
+      },
       "CompanyPageOut": {
         "properties": {
           "items": {
@@ -8345,13 +8374,6 @@
       },
       "DepartmentsOut": {
         "properties": {
-          "assignments": {
-            "items": {
-              "$ref": "#/components/schemas/AssignmentOut"
-            },
-            "title": "Assignments",
-            "type": "array"
-          },
           "departments": {
             "items": {
               "$ref": "#/components/schemas/DepartmentOut"
@@ -8361,8 +8383,7 @@
           }
         },
         "required": [
-          "departments",
-          "assignments"
+          "departments"
         ],
         "title": "DepartmentsOut",
         "type": "object"
@@ -21667,7 +21688,7 @@
   },
   "info": {
     "title": "MaraClaw",
-    "version": "1.1.4"
+    "version": "1.1.6"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -22321,22 +22342,72 @@
     },
     "/api/admin/companies/options": {
       "get": {
-        "description": "Complete newest-first company list without stats, for pickers.",
+        "description": "Stats-free picker page with the ``/companies/page`` keyset, search and limit clamp.",
         "operationId": "get_2f6170692f61646d696e2f636f6d70616e6965732f6f7074696f6e73",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/CompanyOption"
-                  },
-                  "title": "Response List Company Picker Options Api Admin Companies Options Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/CompanyOptionPageOut"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -38576,6 +38647,79 @@
         ]
       }
     },
+    "/api/departments/assignments": {
+      "get": {
+        "operationId": "get_2f6170692f6465706172746d656e74732f61737369676e6d656e7473",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "User Id",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssignmentOut"
+                  },
+                  "title": "Response List Department Assignments Api Departments Assignments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Department Assignments",
+        "tags": [
+          "departments"
+        ]
+      }
+    },
     "/api/departments/options": {
       "get": {
         "operationId": "get_2f6170692f6465706172746d656e74732f6f7074696f6e73",
@@ -50170,6 +50314,7 @@
       "CompanyActivationOut",
       "CompanyActivationRequest",
       "CompanyConfigOperations",
+      "CompanyOptionPageOut",
       "CompanyReportOut",
       "CompanyReportRegenerate",
       "CompanyRuntimePageOut",
@@ -50514,6 +50659,8 @@
       "CompanyActivationOut",
       "CompanyActivationRequest",
       "CompanyConfigOperations",
+      "CompanyOption",
+      "CompanyOptionPageOut",
       "CompanyReportOut",
       "CompanyReportRegenerate",
       "CompanyRuntimeAgentOut",

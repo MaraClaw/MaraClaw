@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from psycopg import sql
 
 from app.api import departments
+from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.org_department_dao import org_department_dao
 from app.db.connection import DbConnection
@@ -56,6 +57,7 @@ async def roster_store(schema_db: DbConnection, monkeypatch: pytest.MonkeyPatch)
         yield schema_db
 
     monkeypatch.setattr(org_department_dao, "session", session)
+    monkeypatch.setattr(departments.tenant_dao, "session", session)
     return RosterStore(schema_db, tenant, department, membership, identity)
 
 
@@ -70,6 +72,50 @@ async def read_roster(store: RosterStore, department_id: UUID) -> Response:
                 return await client.get(f"/api/departments/{department_id}/members")
     finally:
         app.dependency_overrides.clear()
+
+
+async def test_assignment_pages_return_only_requested_users_from_selected_tenant(roster_store: RosterStore) -> None:
+    store = roster_store
+    other_tenant, other_department, foreign_user = uuid4(), uuid4(), uuid4()
+    await store.db.execute(
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%s, 'Foreign', 'foreign', 'ultra')", (other_tenant,)
+    )
+    await store.db.execute(
+        "INSERT INTO local_departments (id, tenant_id, name) VALUES (%s, %s, 'Foreign')",
+        (other_department, other_tenant),
+    )
+    extra_users = [UUID(int=number) for number in range(3, 103)]
+    await store.db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) SELECT id, %s, 'Member' FROM unnest(%s::uuid[]) AS id",
+        (store.tenant_id, extra_users),
+    )
+    await store.db.execute(
+        "INSERT INTO local_department_memberships (user_id, tenant_id, department_id) "
+        "SELECT id, %s, %s FROM unnest(%s::uuid[]) AS id",
+        (store.tenant_id, store.department_id, extra_users),
+    )
+    await store.db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%s, %s, 'Foreign Member')",
+        (foreign_user, other_tenant),
+    )
+    await store.db.execute(
+        "INSERT INTO local_department_memberships (user_id, tenant_id, department_id) VALUES (%s, %s, %s)",
+        (foreign_user, other_tenant, other_department),
+    )
+    app = FastAPI()
+    app.include_router(departments.router, prefix="/api")
+    app.dependency_overrides[get_current_user] = lambda: UserRecord(
+        id=uuid4(), tenant_id=store.tenant_id, role=UserRole.ORG_ADMIN
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for page_ids in ([store.membership_id, *extra_users[:-1]], [extra_users[-1], foreign_user]):
+            response = await client.get("/api/departments/assignments", params={"user_id": list(map(str, page_ids))})
+            assert response.status_code == 200, response.text
+            assert response.json() == [
+                {"user_id": str(user_id), "tenant_id": str(store.tenant_id), "department_id": str(store.department_id)}
+                for user_id in page_ids
+                if user_id != foreign_user
+            ]
 
 
 @pytest.mark.parametrize(

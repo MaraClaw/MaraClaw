@@ -19,8 +19,9 @@ const assignmentSchema = z.object({
 
 const departmentsSchema = z.object({
   departments: z.array(departmentSchema).readonly(),
-  assignments: z.array(assignmentSchema.readonly()).readonly(),
 }).readonly()
+
+const departmentAssignmentsSchema = z.array(assignmentSchema.readonly()).readonly()
 
 const userDepartmentSchema = assignmentSchema.extend({
   department_id: z.string().nullable(),
@@ -38,6 +39,7 @@ const deletionPreviewSchema = z.object({
 }).readonly()
 
 export type DepartmentsResponse = z.infer<typeof departmentsSchema>
+export type DepartmentAssignments = z.infer<typeof departmentAssignmentsSchema>
 export type Department = z.infer<typeof departmentSchema>
 export type DepartmentInput = { readonly name: string; readonly description?: string }
 export type UserDepartments = z.infer<typeof userDepartmentsSchema>
@@ -67,7 +69,7 @@ export async function mergeDepartment(selection: DepartmentMergeApply) {
   })
 }
 
-export function groupDepartmentAssignments(assignments: DepartmentsResponse['assignments']): ReadonlyMap<string, readonly string[]> {
+export function groupDepartmentAssignments(assignments: DepartmentAssignments): ReadonlyMap<string, readonly string[]> {
   const grouped = new Map<string, readonly string[]>()
   for (const assignment of assignments) {
     grouped.set(assignment.user_id, [...grouped.get(assignment.user_id) ?? [], assignment.department_id])
@@ -78,6 +80,12 @@ export function groupDepartmentAssignments(assignments: DepartmentsResponse['ass
 export async function listDepartments(tenantId: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ tenant_id: tenantId })
   return apiRequest(`/api/departments?${query}`, { schema: departmentsSchema, signal })
+}
+
+export async function listDepartmentAssignments(tenantId: string, userIds: readonly string[], signal?: AbortSignal) {
+  const query = new URLSearchParams({ tenant_id: tenantId })
+  for (const userId of userIds) query.append('user_id', userId)
+  return apiRequest(`/api/departments/assignments?${query}`, { schema: departmentAssignmentsSchema, signal })
 }
 
 export async function createDepartment(tenantId: string, input: DepartmentInput) {

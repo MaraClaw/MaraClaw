@@ -1,6 +1,8 @@
-import type { QueryClient } from '@tanstack/react-query'
+import type { QueryClient, QueryFilters } from '@tanstack/react-query'
 
-import { createDepartment, deleteDepartment, mergeDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentInput, type DepartmentMergeApply, type DepartmentMergePreview, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
+import { createDepartment, deleteDepartment, mergeDepartment, renameDepartment, setUserDepartments, type Department, type DepartmentAssignments, type DepartmentInput, type DepartmentMergeApply, type DepartmentMergePreview, type DepartmentsResponse, type UserDepartments } from '../lib/departments-api.ts'
+
+import { departmentAssignmentsKey, departmentDirectoryKey } from './users-department-assignment-options.ts'
 
 type CreateDepartmentInput = DepartmentInput & { readonly tenantId: string }
 
@@ -8,7 +10,7 @@ export function createDepartmentOptions(queryClient: QueryClient) {
   return {
     mutationFn: ({ tenantId, ...input }: CreateDepartmentInput) => createDepartment(tenantId, input),
     onSuccess: async (created: Department, input: CreateDepartmentInput) => {
-      const queryKey = ['admin-departments', input.tenantId]
+      const queryKey = departmentDirectoryKey(input.tenantId)
       queryClient.setQueryData<DepartmentsResponse>(queryKey, (current) => current
         ? { ...current, departments: [...current.departments.filter((department) => department.id !== created.id), created] }
         : undefined)
@@ -26,7 +28,7 @@ export function renameDepartmentOptions(queryClient: QueryClient) {
   return {
     mutationFn: ({ tenantId, departmentId, ...input }: RenameDepartmentInput) => renameDepartment(tenantId, departmentId, input),
     onSuccess: (updated: Department, input: RenameDepartmentInput) => {
-      const queryKey = ['admin-departments', input.tenantId]
+      const queryKey = departmentDirectoryKey(input.tenantId)
       queryClient.setQueryData<DepartmentsResponse>(queryKey, (current) => current
         ? {
             ...current,
@@ -49,27 +51,22 @@ type DeleteDepartmentInput = {
   readonly departmentId: string
 }
 
+function refreshDepartmentMemberships(queryClient: QueryClient, tenantId: string) {
+  void queryClient.invalidateQueries({ queryKey: departmentDirectoryKey(tenantId) })
+  void queryClient.invalidateQueries({ queryKey: ['admin-users', tenantId] })
+  void queryClient.invalidateQueries({ queryKey: ['admin-user'] })
+}
+
 export function deleteDepartmentOptions(queryClient: QueryClient) {
   return {
     mutationFn: (input: DeleteDepartmentInput) => deleteDepartment(input.tenantId, input.departmentId),
     onSuccess: (_deleted: void, input: DeleteDepartmentInput) => {
-      const queryKey = ['admin-departments', input.tenantId]
-      const current = queryClient.getQueryData<DepartmentsResponse>(queryKey)
-      const affectedUsers = new Set(current?.assignments
-        .filter((assignment) => assignment.department_id === input.departmentId)
-        .map((assignment) => assignment.user_id))
+      const queryKey = departmentDirectoryKey(input.tenantId)
+      void queryClient.cancelQueries({ queryKey })
       queryClient.setQueryData<DepartmentsResponse>(queryKey, (directory) => directory
-        ? {
-            ...directory,
-            departments: directory.departments.filter((department) => department.id !== input.departmentId),
-            assignments: directory.assignments.filter((assignment) => assignment.department_id !== input.departmentId),
-          }
+        ? { departments: directory.departments.filter((department) => department.id !== input.departmentId) }
         : undefined)
-      void queryClient.invalidateQueries({ queryKey, exact: true })
-      void queryClient.invalidateQueries({ queryKey: ['admin-users', input.tenantId] })
-      for (const userId of affectedUsers) {
-        void queryClient.invalidateQueries({ queryKey: ['admin-user', userId], exact: true })
-      }
+      refreshDepartmentMemberships(queryClient, input.tenantId)
     },
   }
 }
@@ -79,29 +76,15 @@ export function mergeDepartmentOptions(queryClient: QueryClient) {
     mutationFn: (input: DepartmentMergeApply) => mergeDepartment(input),
     retry: false,
     onSuccess: (merged: DepartmentMergePreview, input: DepartmentMergeApply) => {
-      const queryKey = ['admin-departments', input.tenantId]
-      const current = queryClient.getQueryData<DepartmentsResponse>(queryKey)
-      const affectedUsers = new Set(current?.assignments
-        .filter((assignment) => assignment.department_id === input.sourceId || assignment.department_id === input.destinationId)
-        .map((assignment) => assignment.user_id))
-      queryClient.setQueryData<DepartmentsResponse>(queryKey, (directory) => {
-        if (!directory) return undefined
-        const destinations = new Set(directory.assignments
-          .filter((assignment) => assignment.department_id === input.destinationId)
-          .map((assignment) => assignment.user_id))
-        return {
-          departments: directory.departments.filter((department) => department.id !== input.sourceId)
-            .map((department) => department.id === input.destinationId ? merged.destination : department),
-          assignments: directory.assignments.flatMap((assignment) => assignment.department_id !== input.sourceId
-            ? [assignment]
-            : destinations.has(assignment.user_id) ? [] : [{ ...assignment, department_id: input.destinationId }]),
-        }
-      })
-      void queryClient.invalidateQueries({ queryKey, exact: true })
-      void queryClient.invalidateQueries({ queryKey: ['admin-users', input.tenantId] })
-      for (const userId of affectedUsers) {
-        void queryClient.invalidateQueries({ queryKey: ['admin-user', userId], exact: true })
-      }
+      const queryKey = departmentDirectoryKey(input.tenantId)
+      void queryClient.cancelQueries({ queryKey })
+      queryClient.setQueryData<DepartmentsResponse>(queryKey, (directory) => directory
+        ? {
+            departments: directory.departments.filter((department) => department.id !== input.sourceId)
+              .map((department) => department.id === input.destinationId ? merged.destination : department),
+          }
+        : undefined)
+      refreshDepartmentMemberships(queryClient, input.tenantId)
     },
   }
 }
@@ -109,26 +92,27 @@ export function mergeDepartmentOptions(queryClient: QueryClient) {
 export function replaceUserDepartmentsOptions(queryClient: QueryClient) {
   return {
     mutationFn: (input: ReplaceUserDepartmentsInput) => setUserDepartments(input.tenantId, input.userId, input.departmentIds),
-    onSuccess: async (updated: UserDepartments, input: ReplaceUserDepartmentsInput) => {
-      const queryKey = ['admin-departments', input.tenantId]
-      queryClient.setQueryData<DepartmentsResponse>(queryKey, (current) => current
-        ? {
-            ...current,
-            assignments: [
-              ...current.assignments.filter((assignment) => assignment.user_id !== input.userId),
-              ...updated.department_ids.map((department_id) => ({
-                user_id: updated.user_id,
-                tenant_id: updated.tenant_id,
-                department_id,
-              })),
-            ],
-          }
+    onSuccess: (updated: UserDepartments, input: ReplaceUserDepartmentsInput) => {
+      const filters = {
+        queryKey: departmentAssignmentsKey(input.tenantId),
+        predicate: ({ queryKey: [, , , userIds] }) => Array.isArray(userIds) && userIds.includes(input.userId),
+      } satisfies QueryFilters
+      // Preserve any reconciliation already required for other rows on these pages.
+      const refresh = new Set(queryClient.getQueryCache().findAll(filters)
+        .filter(({ state }) => state.isInvalidated || state.fetchStatus !== 'idle')
+        .map(({ queryHash }) => queryHash))
+      void queryClient.cancelQueries(filters)
+      const replacement = updated.department_ids.map((department_id) => ({
+        user_id: updated.user_id,
+        tenant_id: updated.tenant_id,
+        department_id,
+      }))
+      queryClient.setQueriesData<DepartmentAssignments>(filters, (current) => current
+        ? [...current.filter((row) => row.user_id !== input.userId), ...replacement]
         : undefined)
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey, exact: true }),
-        queryClient.invalidateQueries({ queryKey: ['admin-users', input.tenantId], exact: true }),
-        queryClient.invalidateQueries({ queryKey: ['admin-user', input.userId], exact: true }),
-      ])
+      void queryClient.invalidateQueries({ ...filters, predicate: ({ queryHash }) => refresh.has(queryHash) })
+      // The detail DTO does not carry department IDs; refresh just this user's entry.
+      return queryClient.invalidateQueries({ queryKey: ['admin-user', input.userId], exact: true })
     },
   }
 }

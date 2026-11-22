@@ -85,9 +85,10 @@ def test_parse_wecom_xml_rejects_doctype_payload():
 
 
 @pytest.mark.asyncio
-async def test_get_wecom_channel_reports_runtime_websocket_status(monkeypatch):
+async def test_get_wecom_channel_reports_persisted_websocket_status(monkeypatch):
     agent_id = uuid.uuid4()
     config = make_channel(agent_id, connection_mode="websocket")
+    config.is_connected = True
     config.extra_config["nested"] = [{"bot_token": "nested-secret", "public": "visible"}]
 
     async def fake_check_agent_access(_user, _agent_id):
@@ -98,12 +99,7 @@ async def test_get_wecom_channel_reports_runtime_websocket_status(monkeypatch):
         assert agent_id == config.agent_id
         return config
 
-    class FakeManager:
-        def status(self):
-            return {str(agent_id): True}
-
     monkeypatch.setattr(wecom_api, "check_agent_access", fake_check_agent_access)
-    monkeypatch.setattr(wecom_api, "wecom_stream_manager", FakeManager())
     monkeypatch.setattr(wecom_api.channel_config_dao, "get_for_agent", fake_get_for_agent)
 
     result = await wecom_api.get_wecom_channel(

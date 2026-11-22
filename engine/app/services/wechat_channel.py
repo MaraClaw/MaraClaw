@@ -24,7 +24,7 @@ from app.core.json_types import (
 )
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
-from app.runtime.tasks import capped_backoff, jittered_backoff, loop_progress
+from app.runtime.tasks import jittered_backoff
 from app.services.service_contracts import WeChatContextEntry
 
 if TYPE_CHECKING:
@@ -35,9 +35,6 @@ WECHAT_CHANNEL_VERSION = "1.0.0"
 WECHAT_TEXT_LIMIT = 2000
 WECHAT_CONTEXT_CACHE_KEY = "recent_context_tokens"
 WECHAT_CONTEXT_CACHE_LIMIT = 100
-PROGRESS_BUDGET_SECONDS: Final = 300.0
-RECONCILE_RETRY_BASE_SECONDS: Final = 1.0
-RECONCILE_RETRY_CAP_SECONDS: Final = 30.0
 POLL_RETRY_BASE_SECONDS: Final = 2.0
 POLL_RETRY_CAP_SECONDS: Final = 30.0
 _random_source: Callable[[], float] = system_random
@@ -210,11 +207,22 @@ class WeChatPollManager:
     def __init__(self) -> None:
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._connected: dict[uuid.UUID, bool] = {}
-        self._reconcile_interval_seconds: int = 30
+        self._closing: bool = False
+
+    def open(self) -> None:
+        """Admit poller starts again; the connector runtime opens every manager when it starts."""
+        self._closing = False
+
+    def close(self) -> None:
+        """Refuse poller starts from now on; draining closes before any cleanup awaits."""
+        self._closing = True
 
     async def start_client(self, agent_id: uuid.UUID, stop_existing: bool = True) -> None:
         if stop_existing:
             await self.stop_client(agent_id)
+        if self._closing:
+            logger.info(f"[WeChat] Manager is closing; not starting a poller for agent {agent_id}")
+            return
         task = asyncio.create_task(self._run_client(agent_id), name=f"wechat-poll-{str(agent_id)[:8]}")
         self._tasks[agent_id] = task
         self._connected[agent_id] = False
@@ -229,27 +237,8 @@ class WeChatPollManager:
         self._connected[agent_id] = False
         await self._set_connected(agent_id, False)
 
-    async def start_all(self) -> None:
-        logger.info("[WeChat] Poll manager started")
-        progress = loop_progress()
-        failures = 0
-        while True:
-            try:
-                await self.reconcile_clients()
-            except Exception as exc:
-                logger.opt(exception=exc).warning("[WeChat] Reconcile pass failed; will retry")
-                await asyncio.sleep(
-                    capped_backoff(
-                        failures, base_seconds=RECONCILE_RETRY_BASE_SECONDS, cap_seconds=RECONCILE_RETRY_CAP_SECONDS
-                    )
-                )
-                failures += 1
-                continue
-            failures = 0
-            progress.beat()
-            await asyncio.sleep(self._reconcile_interval_seconds)
-
     async def stop_all(self) -> None:
+        self.close()
         results = await asyncio.gather(
             *(self.stop_client(agent_id) for agent_id in tuple(self._tasks)),
             return_exceptions=True,

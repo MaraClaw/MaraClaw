@@ -22,4 +22,5 @@ def connection_config(monkeypatch, agent_id, provider, *, app_id="app", credenti
     )
     monkeypatch.setattr(channel_config_dao, "get", AsyncMock(return_value=config))
     monkeypatch.setattr(channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    monkeypatch.setattr(channel_config_dao, "set_connected", AsyncMock())
     return config

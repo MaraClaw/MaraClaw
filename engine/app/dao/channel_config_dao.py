@@ -157,5 +157,14 @@ class ChannelConfigDAO(BaseDAO[ChannelConfigRecord]):
             )
             return {ChannelType(str_from_row(row["channel_type"])) for row in rows if row.get("channel_type")}
 
+    async def set_connected(self, config_id: UUID, *, connected: bool) -> None:
+        """Record connector health only; leaves credentials, options and ``updated_at`` alone."""
+        async with self.session() as db:
+            await db.execute(
+                "UPDATE channel_configs SET is_connected=%(connected)s "
+                "WHERE id=%(id)s AND is_connected IS DISTINCT FROM %(connected)s",
+                {"id": config_id, "connected": connected},
+            )
+
 
 channel_config_dao = ChannelConfigDAO()

@@ -51,6 +51,13 @@ class CompanyPageOut(BaseModel):
     next_cursor: str | None
 
 
+class CompanyOptionPageOut(BaseModel):
+    """Stats-free picker page; the cursor is the one ``CompanyPageOut`` uses."""
+
+    items: list[CompanyOption]
+    next_cursor: str | None
+
+
 class CompanyAgentSections(BaseModel):
     """Agent page sections: every canonical id, and the ones hidden from members of the company."""
 

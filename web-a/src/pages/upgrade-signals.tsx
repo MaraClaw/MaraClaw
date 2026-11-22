@@ -2,13 +2,13 @@ import { useQuery } from '@tanstack/react-query'
 import { useId, useMemo, useState, type FormEvent } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 
+import { CompanyPicker, useCompanyPicker } from '@/components/companies/company-picker'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
-import { companyOptions } from '@/hooks/company-options'
 import { resourcePressureSummaryOptions } from '@/hooks/resource-pressure-options'
 import { useTranslation } from '@/hooks/use-translation'
 import { OrganizationPlanIdValues, PressureResourceValues } from '@/lib/engine-contracts.generated'
@@ -58,15 +58,14 @@ function UpgradeSignalsFilters({ applied, onApply }: {
 }) {
   const { t } = useTranslation()
   const id = useId()
-  const companies = useQuery(companyOptions())
   const [draft, setDraft] = useState(applied)
   const [syncedFrom, setSyncedFrom] = useState(applied)
   if (applied !== syncedFrom) {
     setSyncedFrom(applied)
     setDraft(applied)
   }
+  const companies = useCompanyPicker({ value: draft.company })
   const rangeError = upgradeSignalsQuery(draft).rangeError
-  const unknownCompany = Boolean(draft.company && !companies.isLoading && !(companies.data ?? []).some((company) => company.id === draft.company))
   const change = (patch: Partial<UpgradeSignalsForm>) => setDraft((previous) => ({ ...previous, ...patch }))
   const nothingToClear = !hasUpgradeSignalsFilters(draft) && !hasUpgradeSignalsFilters(applied)
 
@@ -117,18 +116,17 @@ function UpgradeSignalsFilters({ applied, onApply }: {
                 {PressureResourceValues.map((resource) => <option key={resource} value={resource}>{t(resourceLabels[resource])}</option>)}
               </Select>
             </div>
-            <div className="flex min-w-0 flex-col gap-2">
-              <Label htmlFor={`${id}-company`}>{t('Company')}</Label>
-              <Select id={`${id}-company`} value={draft.company} onChange={(event) => change({ company: event.target.value })}>
-                <option value="">{t('All companies')}</option>
-                {unknownCompany ? <option value={draft.company}>{t('Unknown company')}</option> : null}
-                {(companies.data ?? []).map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
-              </Select>
-            </div>
+            <CompanyPicker
+              picker={companies}
+              label={t('Company')}
+              emptyLabel={t('All companies')}
+              unknownLabel={t('Unknown company')}
+              onChange={(company) => change({ company })}
+            />
           </div>
           <p id={`${id}-dates-help`} className="text-sm text-muted-foreground">{t('Both dates are included, in your local time.')}</p>
           {rangeError ? <p id={`${id}-range-error`} role="alert" className="text-sm text-destructive">{t('The To date must be on or after the From date.')}</p> : null}
-          {companies.isError ? <ErrorToast error={companies.error} message={t('Could not load the company list. Check your connection and try again.')} /> : null}
+          {companies.error ? <ErrorToast error={companies.error} message={t('Could not load the company list. Check your connection and try again.')} /> : null}
           <div className="flex flex-wrap gap-3">
             <Button type="submit" className={buttonClass}>{t('Apply filters')}</Button>
             {/* Stays focusable when nothing is filtered, so keyboard focus is not lost after clearing. */}

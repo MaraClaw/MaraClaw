@@ -18,7 +18,7 @@ Shared admin primitives, domain widgets/forms, shells, navigation and brand. Kee
 | Shells | `layout/admin-shell.tsx`: protected nav + `Outlet`; `layout/auth-shell.tsx`: forgot/reset chrome (login has its own) |
 | Navigation | `layout/nav-icon.tsx`: active/inactive assets; `layout/section-rail.tsx`: route links or local selection |
 | Notifications | `layout/admin-shell.tsx`: shared Notifications nav tile and unread badge |
-| Company UI | `companies/create-company-form.tsx`: company + plan + genesis OA; `companies/company-plan-badge.tsx`: Pro/Max/Ultra badge (every company has a tier); `companies/company-status-icon.tsx`: active/disabled state |
+| Company UI | `companies/create-company-form.tsx`: company + plan + genesis OA; `companies/company-plan-badge.tsx`: Pro/Max/Ultra badge (every company has a tier); `companies/company-status-icon.tsx`: active/disabled state; `companies/company-picker.tsx`: `useCompanyPicker` + `CompanyPicker`, the one bounded company selector (search, load more, selection resolved by id and pinned when off the loaded pages) for Users, Models, Tools, Analytics and Upgrade signals |
 | User rows | `users/user-card.tsx`: linked row, toggle action and slots; page owns role/toggle policy |
 | Agent transfer | `users/transfer-agents.tsx`: `TransferAgents` dialog rendered in a `UserCard` slot by `pages/users-departments.tsx` |
 | Agent daily messages | `users/agent-daily-messages.tsx`: `AgentDailyMessages` usage/limit and reset-time display; guarded reset dialog on user detail |

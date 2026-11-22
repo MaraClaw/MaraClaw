@@ -3,7 +3,7 @@
 // Optional UPGRADE_SIGNALS_MATCH selects scenario names by regular expression.
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { createHarness, expect, originalSearch } from './upgrade-signals-harness.browser.mjs'
+import { archivedTenantId, createHarness, expect, originalSearch } from './upgrade-signals-harness.browser.mjs'
 import { agentId, csvBody, otherTenantId, tenantId } from './resource-pressure-fixtures.ts'
 
 const harness = await createHarness({ match: process.env.UPGRADE_SIGNALS_MATCH })
@@ -145,6 +145,36 @@ try {
       await expect(page).toHaveURL(harness.base)
       await expect(page.getByRole('link', { name: 'Upgrade signals', exact: true })).toHaveCount(0)
       assert.deepEqual(pressureRequests(state), [])
+    })
+
+    const companyPicker = (page) => page.getByLabel('Company', { exact: true })
+    const optionTexts = (page) => companyPicker(page).locator('option').allTextContents()
+    await harness.scenario({ name: 'off-page company filter resolves by id into the draft and applied filters', path: `upgrade-signals${originalSearch}&company=${archivedTenantId}` }, async (page, state) => {
+      await expect(companyPicker(page)).toHaveValue(archivedTenantId)
+      await expect(companyPicker(page).locator('option:checked')).toHaveText('Initech')
+      assert.deepEqual(await optionTexts(page), ['All companies', 'Initech', 'Acme Corp', 'Globex'])
+      assert.deepEqual([...new Set(state.requests.filter((request) => request.path.startsWith('/api/tenants/')).map((request) => request.path))], [`/api/tenants/${archivedTenantId}`])
+      assert.equal(pressureRequests(state).find((request) => request.path.endsWith('/summary')).params.tenant_id, archivedTenantId)
+      await page.getByLabel('Search companies by name', { exact: true }).fill('glob')
+      await expect(companyPicker(page).locator('option')).toHaveText(['All companies', 'Initech', 'Globex'])
+      await companyPicker(page).selectOption(otherTenantId)
+      await expect(page).toHaveURL(`${harness.base}upgrade-signals${originalSearch}&company=${archivedTenantId}`)
+      await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
+      await expect(page).toHaveURL(`${harness.base}upgrade-signals${originalSearch}&company=${otherTenantId}`)
+      await expect(page.getByRole('link', { name: 'Open Globex', exact: true })).toBeVisible()
+      await harness.capture(page, 'off-page-company-filter')
+    })
+    await harness.scenario({ name: 'unknown company filter id is labelled unknown', path: `upgrade-signals${originalSearch}&company=5b9d6c1e-0000-4c55-8a4e-0d1c2f3a4b5c` }, async (page, state) => {
+      await expect(companyPicker(page).locator('option:checked')).toHaveText('Unknown company')
+      await expect(companyPicker(page)).toHaveValue('5b9d6c1e-0000-4c55-8a4e-0d1c2f3a4b5c')
+      assert.equal(state.requests.some((request) => request.path === '/api/tenants/5b9d6c1e-0000-4c55-8a4e-0d1c2f3a4b5c'), true)
+    })
+    // The URL parser keeps only UUID companies, so a malformed value filters nothing and is never looked up.
+    await harness.scenario({ name: 'malformed company filter value is ignored without a lookup', path: `upgrade-signals${originalSearch}&company=not-a-company` }, async (page, state) => {
+      await expect(page.getByRole('link', { name: 'Open Globex', exact: true })).toBeVisible()
+      await expect(companyPicker(page).locator('option:checked')).toHaveText('All companies')
+      assert.equal(state.requests.some((request) => request.path.startsWith('/api/tenants/')), false)
+      assert.equal('tenant_id' in pressureRequests(state).find((request) => request.path.endsWith('/summary')).params, false)
     })
 
     await harness.scenario({ name: 'invalid company deep link sends no pressure reads', path: 'upgrade-signals/not-a-uuid' }, async (page, state) => {

@@ -18,7 +18,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `resource-pressure-options.ts`: parsed-filter summary and cursor-page episode reads (`['admin-resource-pressure', ...]`, `retry: false`).
 - `organization-plan-options.ts`: the public plan catalog read (`['organization-plans']`, `retry: false`) behind the create-company form's plan summaries.
 - `clawbook-options.ts`: Clawbook post pages and per-post comment pages (infinite, cursor `null` first, no retry).
-- `company-options.ts`: company reads and mutations; `companyRuntimeOptions` keys runtime pages by company and cursor, forwards the signal and disables retries.
+- `company-options.ts`: company reads and mutations; `companyRuntimeOptions` keys runtime pages by company and cursor, forwards the signal and disables retries. Picker reads live under `['admin-companies', 'options', ...]`: `companyOptionsBrowseOptions` (infinite, load more by `next_cursor`), `companyOptionsSearchOptions(q)` (one ranked page keyed by the trimmed query, skipped when empty, no load more) and `companyOptionByIdOptions(id)` (`getTenant`, 404 is `null`, a non-UUID is never sent; `isCompanyId`).
 
 ### Providers
 - `use-auth.tsx`: auth context, session-scoped query provider and auth consumers.
@@ -36,6 +36,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `use-transfer-reviews.ts`: `useTransferReviewAccess` capability plus gated payment reads and decisions.
 - `use-capacity.ts`: `useCapacityAccess` (`canBuy`, `canView`, `canReview`, `canManageSettings`, all false under a password-change lock) plus the gated reads and session-owned mutations.
 - `use-session-mutation.ts`: React mutation binding to the current auth owner.
+- `use-debounced-value.ts`: `useDebouncedValue(value, delayMs)` for search inputs (Companies list, company picker).
 
 ## Invariants
 

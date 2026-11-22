@@ -4,12 +4,15 @@ import asyncio
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import ModuleType
 from typing import ClassVar
 
 import pytest
 
+from app.core.domain.channels import ChannelType
+from app.dao.channel_config_dao import channel_config_dao
+from app.records.channel_config import ChannelConfigRecord
 from stream_source_fixtures import connection_config
 
 type EventHandler = Callable[..., Awaitable[None]]
@@ -88,8 +91,9 @@ class FakeLogger:
         self.messages.append(message)
 
 
-@pytest.mark.asyncio
-async def test_on_ready_handles_absent_and_present_client_users(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def gateway(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """Import the gateway module against the fake SDK, so the manager sees discord.py installed."""
     FakeClient.instances.clear()
     monkeypatch.setitem(sys.modules, "discord", FakeDiscordModule())
 
@@ -100,13 +104,20 @@ async def test_on_ready_handles_absent_and_present_client_users(monkeypatch: pyt
 
     from app.services import discord_gateway
 
+    return discord_gateway
+
+
+@pytest.mark.asyncio
+async def test_on_ready_handles_absent_and_present_client_users(
+    monkeypatch: pytest.MonkeyPatch, gateway: ModuleType
+) -> None:
     test_logger = FakeLogger()
-    monkeypatch.setattr(discord_gateway, "logger", test_logger)
+    monkeypatch.setattr(gateway, "logger", test_logger)
 
     absent_agent_id = uuid.uuid4()
     connection_config(monkeypatch, absent_agent_id, "discord", credential="token")
     FakeClient.initial_user = None
-    absent_manager = discord_gateway.DiscordGatewayManager()
+    absent_manager = gateway.DiscordGatewayManager()
     await absent_manager.start_client(absent_agent_id, "token")
     absent_client = FakeClient.instances[-1]
     assert absent_client.intents.message_content is True
@@ -124,7 +135,7 @@ async def test_on_ready_handles_absent_and_present_client_users(monkeypatch: pyt
     present_agent_id = uuid.uuid4()
     connection_config(monkeypatch, present_agent_id, "discord", credential="token")
     FakeClient.initial_user = FakeUser(name="Mara", discriminator="0001", id=42)
-    present_manager = discord_gateway.DiscordGatewayManager()
+    present_manager = gateway.DiscordGatewayManager()
     await present_manager.start_client(present_agent_id, "token")
     present_client = FakeClient.instances[-1]
     await present_client.started.wait()
@@ -137,3 +148,35 @@ async def test_on_ready_handles_absent_and_present_client_users(monkeypatch: pyt
     present_task = present_manager._tasks[present_agent_id]
     await present_manager.stop_client(present_agent_id)
     await present_task
+
+
+@pytest.mark.asyncio
+async def test_reconcile_keeps_an_unchanged_gateway_and_stops_it_after_a_switch_to_webhook(
+    monkeypatch: pytest.MonkeyPatch, gateway: ModuleType
+) -> None:
+    agent_id = uuid.uuid4()
+    config = connection_config(monkeypatch, agent_id, "discord", credential="token")
+    rows: list[ChannelConfigRecord] = [config]
+
+    async def list_configured(_channel_type: ChannelType) -> list[ChannelConfigRecord]:
+        return rows
+
+    monkeypatch.setattr(channel_config_dao, "list_configured", list_configured)
+    manager = gateway.DiscordGatewayManager()
+
+    await manager.reconcile_clients()
+    client = FakeClient.instances[-1]
+    await client.started.wait()
+    task = manager._tasks[agent_id]
+
+    await manager.reconcile_clients()
+
+    assert FakeClient.instances == [client]
+    assert manager._tasks[agent_id] is task
+
+    rows[:] = [replace(config, extra_config={"connection_mode": "webhook"})]
+    await manager.reconcile_clients()
+
+    assert client.closed
+    assert task.done()
+    assert manager.tracked_agents() == set()

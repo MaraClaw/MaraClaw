@@ -5,6 +5,9 @@ import anyio
 import pytest
 
 from app.api import feishu
+from app.dao.channel_config_dao import channel_config_dao
+from app.services.channels.stream_source import stream_source
+from stream_source_fixtures import connection_config
 from test_feishu_acceptance_ack import event_frame, live_frame_adapter
 
 __all__ = ["live_frame_adapter"]
@@ -65,3 +68,37 @@ async def test_restart_waits_for_retiring_actual_frame_cleanup(monkeypatch, live
         release.set()
         callback.cancel()
         await asyncio.gather(callback, *operations, return_exceptions=True)
+
+
+async def test_reconcile_keeps_an_unchanged_source_and_restarts_or_stops_on_config_changes(
+    monkeypatch, live_frame_adapter
+):
+    manager, agent_id, clients, connected = live_frame_adapter
+    original_task = manager._tasks[agent_id]
+    rows = [await channel_config_dao.get(manager.live_source(agent_id).config_id)]
+
+    async def list_configured(_channel_type):
+        return rows
+
+    monkeypatch.setattr(channel_config_dao, "list_configured", list_configured)
+
+    await manager.reconcile_clients()
+
+    assert len(clients) == 1
+    assert manager._tasks[agent_id] is original_task
+
+    connected.clear()
+    rotated = connection_config(monkeypatch, agent_id, "feishu", credential="rotated")
+    rows[:] = [rotated]
+    await manager.reconcile_clients()
+    await asyncio.wait_for(connected.wait(), 1)
+
+    assert len(clients) == 2
+    assert original_task.done()
+    assert manager.live_source(agent_id) == stream_source(rotated)
+
+    rows.clear()
+    await manager.reconcile_clients()
+
+    assert manager.tracked_agents() == set()
+    assert manager.live_source(agent_id) is None

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 
 from app.api.background_tasks import schedule_background_task
+from app.config import get_settings
 from app.core.domain.activity import ActivityAction
 from app.core.domain.channels import ChannelType
 from app.core.json_types import (
@@ -32,6 +33,7 @@ from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.task_dao import task_dao
+from app.process_roles import parse_process_roles, role_enabled
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
@@ -402,16 +404,16 @@ async def configure_channel(
             },
         )
         config = config or existing
+        if role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
+            from app.services.feishu_ws import feishu_ws_manager
 
-        from app.services.feishu_ws import feishu_ws_manager
-
-        mode = json_as_str_or((config.extra_config or {}).get("connection_mode"), "webhook")
-        if mode == "websocket":
-            schedule_background_task(
-                feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret), "Feishu start_client"
-            )
-        else:
-            schedule_background_task(feishu_ws_manager.stop_client(agent_id), "Feishu stop_client")
+            mode = json_as_str_or((config.extra_config or {}).get("connection_mode"), "webhook")
+            if mode == "websocket":
+                schedule_background_task(
+                    feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret), "Feishu start_client"
+                )
+            else:
+                schedule_background_task(feishu_ws_manager.stop_client(agent_id), "Feishu stop_client")
 
         return channel_config_out(config)
 
@@ -428,10 +430,10 @@ async def configure_channel(
         }
     )
 
-    from app.services.feishu_ws import feishu_ws_manager
-
     mode = json_as_str_or((config.extra_config or {}).get("connection_mode"), "webhook")
-    if mode == "websocket":
+    if mode == "websocket" and role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
+        from app.services.feishu_ws import feishu_ws_manager
+
         schedule_background_task(
             feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret), "Feishu start_client"
         )
@@ -470,10 +472,10 @@ async def delete_channel_config(agent_id: uuid.UUID, current_user: UserRecord = 
     if not config:
         raise HTTPException(status_code=404, detail="Channel not configured")
     _ = await channel_config_dao.delete(record_id=config.id)
+    if role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
+        from app.services.feishu_ws import feishu_ws_manager
 
-    from app.services.feishu_ws import feishu_ws_manager
-
-    schedule_background_task(feishu_ws_manager.stop_client(agent_id), "Feishu stop_client")
+        schedule_background_task(feishu_ws_manager.stop_client(agent_id), "Feishu stop_client")
 
 
 # ─── Feishu Event Webhook ───────────────────────────────

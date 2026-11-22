@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -14,20 +14,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { companiesPageOptions, companyActivationOptions } from '@/hooks/company-options'
 import { useAuth } from '@/hooks/use-auth'
+import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { ApiError } from '@/lib/http'
 import { formatPhone } from '@/lib/phone'
 import { isPlatformAdminUser } from '@/lib/types/auth'
 import { useTranslation } from '@/hooks/use-translation'
-
-function useDebouncedValue(value: string, delayMs: number): string {
-  const [debounced, setDebounced] = useState(value)
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs)
-    return () => window.clearTimeout(timer)
-  }, [value, delayMs])
-  return debounced
-}
 
 export function CompaniesPage() {
   const { t, number } = useTranslation()

@@ -4,7 +4,7 @@ from enum import IntEnum, StrEnum
 
 from pydantic import JsonValue, TypeAdapter
 
-from app.api.admin import toggle_company
+from app.api.admin import list_company_picker_options, toggle_company
 from app.api.agent_credentials import AgentCredentialPayload
 from app.api.files import list_files_page
 from app.api.skills import install_from_clawhub, refresh_registry_skill
@@ -180,7 +180,9 @@ PUBLIC_SCHEMA_NAMES = {
     "JsonObject-Output": "JsonOutputObject",
 }
 
-AUDITED_HTTP_ENDPOINTS = frozenset({list_files_page, install_from_clawhub, refresh_registry_skill, toggle_company})
+AUDITED_HTTP_ENDPOINTS = frozenset(
+    {list_files_page, install_from_clawhub, refresh_registry_skill, list_company_picker_options, toggle_company}
+)
 
 
 def explicit_schemas() -> dict[str, JsonValue]:

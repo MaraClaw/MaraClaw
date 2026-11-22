@@ -19,7 +19,6 @@ const queryKey = ['admin-departments', input.tenantId]
 const assignment = (user_id: string, department_id: string) => ({ user_id, department_id, tenant_id: source.tenant_id })
 const directory: DepartmentsResponse = {
   departments: [source, destination, other],
-  assignments: [assignment('overlap', source.id), assignment('overlap', destination.id), assignment('source-only', source.id), assignment('destination-only', destination.id), assignment('source-only', other.id), assignment('unrelated', other.id)],
 }
 
 for (const field of ['source', 'destination'] as const) {
@@ -62,24 +61,26 @@ for (const confirmation_token of [undefined, null, 'v1:short', `v1:${'A'.repeat(
   }
 }
 
-test('merge unions overlapping memberships and refreshes source and destination members without touching another tenant', async (t) => {
+test('merge refreshes inactive assignment pages and user details without touching another tenant roster', async (t) => {
   // Given
   const client = new QueryClient()
   t.after(() => client.clear())
-  const owned = [queryKey, ['admin-users', input.tenantId, 'page', 'search'], ...['overlap', 'source-only', 'destination-only'].map((user) => ['admin-user', user])]
-  const unrelated = [['admin-departments', 'other-tenant'], ['admin-users', 'other-tenant', 'page'], ['admin-user', 'unrelated'], [...queryKey, 'detail']]
+  const page = [...queryKey, 'assignments', ['source-only']]
+  const owned = [queryKey, page, ['admin-users', input.tenantId, 'page', 'search'], ['admin-user', 'unseen-user']]
+  const unrelated = [['admin-departments', 'other-tenant', 'assignments', ['source-only']], ['admin-users', 'other-tenant', 'page']]
   for (const key of [...owned, ...unrelated]) client.setQueryData(key, directory)
+  client.setQueryData(page, [assignment('source-only', source.id), assignment('source-only', other.id)])
   t.mock.method(globalThis, 'fetch', async () => Response.json(result))
   const { policy } = createFixture()
   const observer = new MutationObserver(client, ownMutationOptions(policy, policy.capture(), mergeDepartmentOptions(client)))
   // When
   await observer.mutate(input)
   // Then
-  assert.deepEqual(client.getQueryData(queryKey), {
-    departments: [result.destination, other],
-    assignments: [assignment('overlap', destination.id), assignment('source-only', destination.id), assignment('destination-only', destination.id), assignment('source-only', other.id), assignment('unrelated', other.id)],
-  })
-  for (const key of owned) assert.equal(client.getQueryState(key)?.isInvalidated, true)
+  assert.deepEqual(client.getQueryData(queryKey), { departments: [result.destination, other] })
+  const current = [assignment('source-only', destination.id), assignment('source-only', other.id)]
+  const reopened = await client.fetchQuery({ queryKey: page, queryFn: async () => current, staleTime: Infinity })
+  assert.deepEqual(reopened, current)
+  for (const key of owned.filter((key) => key !== page)) assert.equal(client.getQueryState(key)?.isInvalidated, true)
   for (const key of unrelated) {
     assert.deepEqual(client.getQueryData(key), directory)
     assert.equal(client.getQueryState(key)?.isInvalidated, false)

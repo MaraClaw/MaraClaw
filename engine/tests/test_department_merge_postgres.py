@@ -10,7 +10,7 @@ from app.core.permissions import check_agent_access
 from app.dao.org_department_dao import org_department_dao
 from app.db.session import transaction
 from app.records.user import UserRecord
-from app.schemas.department import DepartmentMembersOut, DepartmentMergePreviewOut
+from app.schemas.department import AssignmentOut, DepartmentMembersOut, DepartmentMergePreviewOut
 from app.services import org_departments
 from department_merge_postgres_fixtures import (
     department_store,
@@ -78,6 +78,9 @@ async def test_merge_http_recomputes_preview_and_preserves_permission_and_roster
         *((member, store.other) for member in store.members),
         (store.members[0], unrelated),
     }
+    assert await org_department_dao.list_assignments_for_users(store.tenant, [store.members[2]]) == [
+        AssignmentOut(user_id=store.members[2], tenant_id=store.tenant, department_id=store.other)
+    ]
     assert {(row["agent_id"], row["scope_type"], row["scope_id"], row["access_level"]) for row in after[2]} == {
         (store.agents[0], "department", store.other, "use"),
         (store.agents[1], "department", store.other, "use"),

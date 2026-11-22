@@ -108,7 +108,6 @@ def probe(pool: CountingPool, user: UserRecord, monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setattr(user_dao, "get_with_identity", AsyncMock(return_value=user))
     monkeypatch.setattr(departments.tenant_dao, "get", tenant_lookup)
     monkeypatch.setattr(departments.org_department_dao, "list_for_tenant", AsyncMock(return_value=[]))
-    monkeypatch.setattr(departments.org_department_dao, "list_assignments", AsyncMock(return_value=[]))
     monkeypatch.setattr(exclusion, "check_agent_access", authorize)
     monkeypatch.setattr(exclusion, "assert_no_active_run", AsyncMock())
     monkeypatch.setattr(exclusion, "assert_transfer_ready", AsyncMock())

@@ -4,9 +4,10 @@ import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-qu
 import { z } from 'zod'
 
 import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
-import { groupDepartmentAssignments, listDepartments, renameDepartment, setUserDepartments, type DepartmentsResponse } from '../src/lib/departments-api.ts'
+import { renameDepartment, setUserDepartments, type DepartmentAssignments, type DepartmentsResponse } from '../src/lib/departments-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
+import { departmentAssignmentsOptions } from '../src/pages/users-department-assignment-options.ts'
 import { createDepartmentOptions, replaceUserDepartmentsOptions, renameDepartmentOptions } from '../src/pages/users-department-mutations.ts'
 import { createFixture } from './helpers.ts'
 
@@ -16,7 +17,6 @@ const input = { tenantId: original.tenant_id, departmentId: original.id, name: r
 const queryKey = ['admin-departments', original.tenant_id]
 const initial: DepartmentsResponse = {
   departments: [original, { ...original, id: 'engineering', name: 'Engineering' }],
-  assignments: [{ tenant_id: original.tenant_id, user_id: 'member-a', department_id: original.id }],
 }
 
 for (const description of [undefined, '', '  New responsibilities\nEscalations  ']) {
@@ -118,9 +118,8 @@ test('rename replaces the cached department in place and invalidates only the ex
   const client = new QueryClient()
   t.after(() => client.clear())
   client.setQueryData(queryKey, initial)
-  const unrelatedKeys = [['admin-departments', 'tenant-b'], [...queryKey, 'detail'], ['admin-users', original.tenant_id]]
+  const unrelatedKeys = [['admin-departments', 'tenant-b'], [...queryKey, 'assignments', ['member-a']], ['admin-users', original.tenant_id]]
   for (const key of unrelatedKeys) client.setQueryData(key, initial)
-  const before = client.getQueryData<DepartmentsResponse>(queryKey)
   t.mock.method(globalThis, 'fetch', async () => Response.json(renamed))
   const observer = new MutationObserver(client, renameDepartmentOptions(client))
   // When
@@ -128,7 +127,6 @@ test('rename replaces the cached department in place and invalidates only the ex
   // Then
   const result = client.getQueryData<DepartmentsResponse>(queryKey)
   assert.deepEqual(result?.departments, [renamed, initial.departments[1]])
-  assert.strictEqual(result?.assignments, before?.assignments)
   assert.equal(client.getQueryState(queryKey)?.isInvalidated, true)
   for (const key of unrelatedKeys) {
     assert.deepEqual(client.getQueryData(key), initial)
@@ -194,23 +192,33 @@ test('a late rename cannot rewrite or invalidate a retired session cache', async
 })
 
 const memberId = 'member/a +?'
-const memberships: DepartmentsResponse = {
-  ...initial,
-  assignments: [
-    { tenant_id: original.tenant_id, user_id: memberId, department_id: original.id },
-    { tenant_id: original.tenant_id, user_id: 'member-b', department_id: 'engineering' },
-    { tenant_id: original.tenant_id, user_id: memberId, department_id: 'engineering' },
-  ],
-}
+const memberships: DepartmentAssignments = [
+  { tenant_id: original.tenant_id, user_id: memberId, department_id: original.id },
+  { tenant_id: original.tenant_id, user_id: 'member-b', department_id: 'engineering' },
+  { tenant_id: original.tenant_id, user_id: memberId, department_id: 'engineering' },
+]
+const assignmentPage = [...queryKey, 'assignments', [memberId, 'member-b'].sort()]
 
-test('loading departments groups every membership row without losing earlier selections', async (t) => {
-  // Given
-  t.mock.method(globalThis, 'fetch', async () => Response.json(memberships))
-  // When
-  const grouped = groupDepartmentAssignments((await listDepartments(original.tenant_id)).assignments)
-  // Then
-  assert.deepEqual(grouped.get(memberId), [original.id, 'engineering'])
-  assert.deepEqual(grouped.get('member-b'), ['engineering'])
+test('assignment query scopes and groups membership rows and shares a cache entry regardless of input order', async (t) => {
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL) => Response.json(memberships))
+  const options = departmentAssignmentsOptions(original.tenant_id, ['member-b', memberId, memberId])
+  const reversed = departmentAssignmentsOptions(original.tenant_id, [memberId, 'member-b'])
+  const observer = new QueryObserver(client, options)
+  const empty = new QueryObserver(client, departmentAssignmentsOptions(original.tenant_id, []))
+  const unsubscribe = empty.subscribe(() => {})
+  t.after(unsubscribe)
+
+  const { data: grouped } = await observer.refetch()
+
+  assert.deepEqual(options.queryKey, assignmentPage)
+  assert.deepEqual(reversed.queryKey, options.queryKey)
+  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/departments/assignments?tenant_id=tenant+%26a&user_id=member-b&user_id=member%2Fa+%2B%3F')
+  assert.equal(fetch.mock.callCount(), 1)
+  assert.equal(empty.getCurrentResult().fetchStatus, 'idle')
+  assert.deepEqual(grouped?.get(memberId), [original.id, 'engineering'])
+  assert.deepEqual(grouped?.get('member-b'), ['engineering'])
 })
 
 test('replace-set sends an encoded scoped plural PUT and parses the complete response', async (t) => {
@@ -238,25 +246,34 @@ test('replace-set rejects a malformed membership response', async (t) => {
 })
 
 for (const departmentIds of [['engineering', original.id], ['engineering'], []]) {
-  test(`replace-set reconciles ${departmentIds.length} memberships and only invalidates exact owned keys`, async (t) => {
-    // Given
+  test(`replace-set reconciles ${departmentIds.length} memberships only on pages containing the subject`, async (t) => {
     const client = new QueryClient()
     t.after(() => client.clear())
-    const ownedKeys = [queryKey, ['admin-users', original.tenant_id], ['admin-user', memberId]]
-    const unrelatedKeys = [['admin-departments', 'tenant-b'], [...queryKey, 'detail'], ['admin-users', 'tenant-b'], ['admin-user', 'member-b']]
-    for (const key of [...ownedKeys, ...unrelatedKeys]) client.setQueryData(key, memberships)
+    const overlap = [...queryKey, 'assignments', [memberId]]
+    const otherPage = [...queryKey, 'assignments', ['member-b']]
+    const otherTenantPage = ['admin-departments', 'tenant-b', 'assignments', [memberId]]
+    const subjectDetail = ['admin-user', memberId]
+    const unrelated = [otherPage, otherTenantPage, ['admin-user', 'member-b'], ['admin-users', original.tenant_id, 'page']]
+    const otherMembership = memberships.filter((row) => row.user_id !== memberId)
+    client.setQueryData(queryKey, initial)
+    client.setQueryData(assignmentPage, memberships)
+    client.setQueryData(overlap, []) // The page contains the subject even if its cached response has no rows.
+    client.setQueryData(subjectDetail, { id: memberId })
+    for (const key of unrelated) client.setQueryData(key, otherMembership)
     const updated = { tenant_id: original.tenant_id, user_id: memberId, department_ids: departmentIds }
     t.mock.method(globalThis, 'fetch', async () => Response.json(updated))
     const observer = new MutationObserver(client, replaceUserDepartmentsOptions(client))
-    // When
+
     await observer.mutate({ tenantId: original.tenant_id, userId: memberId, departmentIds: ['ignored-request-id'] })
-    // Then
-    const result = client.getQueryData<DepartmentsResponse>(queryKey)
-    assert.deepEqual(result?.assignments, [memberships.assignments[1], ...departmentIds.map((department_id) => ({ user_id: memberId, tenant_id: original.tenant_id, department_id }))])
-    assert.deepEqual(result?.departments, memberships.departments)
-    for (const key of ownedKeys) assert.equal(client.getQueryState(key)?.isInvalidated, true)
-    for (const key of unrelatedKeys) {
-      assert.deepEqual(client.getQueryData(key), memberships)
+
+    const updatedRows = departmentIds.map((department_id) => ({ user_id: memberId, tenant_id: original.tenant_id, department_id }))
+    assert.deepEqual(client.getQueryData(assignmentPage), [...otherMembership, ...updatedRows])
+    assert.deepEqual(client.getQueryData(overlap), updatedRows)
+    assert.deepEqual(client.getQueryData(queryKey), initial)
+    assert.equal(client.getQueryState(queryKey)?.isInvalidated, false)
+    assert.equal(client.getQueryState(subjectDetail)?.isInvalidated, true)
+    for (const key of unrelated) {
+      assert.deepEqual(client.getQueryData(key), otherMembership)
       assert.equal(client.getQueryState(key)?.isInvalidated, false)
     }
   })
@@ -266,15 +283,15 @@ test('a rejected replace-set preserves every cached membership for inline error 
   // Given
   const client = new QueryClient()
   t.after(() => client.clear())
-  client.setQueryData(queryKey, memberships)
+  client.setQueryData(assignmentPage, memberships)
   t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: 'Department belongs to another tenant' }, { status: 403 }))
   const observer = new MutationObserver(client, replaceUserDepartmentsOptions(client))
   // When
   const pending = observer.mutate({ tenantId: original.tenant_id, userId: memberId, departmentIds: [] })
   // Then
   await assert.rejects(pending, (error) => error instanceof ApiError && error.status === 403)
-  assert.deepEqual(client.getQueryData(queryKey), memberships)
-  assert.equal(client.getQueryState(queryKey)?.isInvalidated, false)
+  assert.deepEqual(client.getQueryData(assignmentPage), memberships)
+  assert.equal(client.getQueryState(assignmentPage)?.isInvalidated, false)
 })
 
 for (const status of [200, 403]) {
@@ -283,7 +300,7 @@ for (const status of [200, 403]) {
     const { policy } = createFixture()
     const client = new QueryClient()
     t.after(() => client.clear())
-    client.setQueryData(queryKey, memberships)
+    client.setQueryData(assignmentPage, memberships)
     const response = Promise.withResolvers<Response>()
     const started = Promise.withResolvers<void>()
     t.mock.method(globalThis, 'fetch', () => { started.resolve(); return response.promise })
@@ -295,7 +312,7 @@ for (const status of [200, 403]) {
     response.resolve(Response.json({ tenant_id: original.tenant_id, user_id: memberId, department_ids: [] }, { status }))
     // Then
     await rejected
-    assert.deepEqual(client.getQueryData(queryKey), memberships)
-    assert.equal(client.getQueryState(queryKey)?.isInvalidated, false)
+    assert.deepEqual(client.getQueryData(assignmentPage), memberships)
+    assert.equal(client.getQueryState(assignmentPage)?.isInvalidated, false)
   })
 }

@@ -68,12 +68,14 @@ class OrgDepartmentDAO(BaseDAO[OrgDepartmentRecord]):
             )
             return [OrgDepartmentRecord.from_row(row) for row in rows]
 
-    async def list_assignments(self, tenant_id: UUID) -> list[AssignmentOut]:
+    async def list_assignments_for_users(self, tenant_id: UUID, user_ids: Sequence[UUID]) -> list[AssignmentOut]:
+        if not user_ids:
+            return []
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT user_id, tenant_id, department_id FROM local_department_memberships "
-                "WHERE tenant_id = %(tenant)s ORDER BY user_id, department_id",
-                {"tenant": tenant_id},
+                "WHERE tenant_id = %(tenant)s AND user_id = ANY(%(users)s) ORDER BY user_id, department_id",
+                {"tenant": tenant_id, "users": list(user_ids)},
             )
             return [AssignmentOut.model_validate(row) for row in rows]
 

@@ -1,6 +1,6 @@
 /**
  * Standalone, synthetic-only Tools QA. Run from web-a: node tests/tools.browser.mjs
- * Optional: TOOLS_ARTIFACTS=/owned/output CHROMIUM_EXECUTABLE=/existing/chromium.
+ * Optional: TOOLS_ARTIFACTS=/owned/output CHROMIUM_EXECUTABLE=/existing/chromium TOOLS_SCENARIO=<name substring>.
  * No backend, credentials, installs, Playwright launches, or user browser profiles.
  * UI labels mirror pages/tools*.tsx. All network contracts below are synthetic.
  */
@@ -34,6 +34,9 @@ const customId = 'd8122022-c233-4f10-91df-91e2d065d2cb'
 const createdId = 'e8122022-c233-4f10-91df-91e2d065d2cb'
 const globalId = 'f8122022-c233-4f10-91df-91e2d065d2cb'
 const foreignId = '18122022-c233-4f10-91df-91e2d065d2cb'
+// Gamma is never on the browse page: only the by-id lookup or a picker search reaches it.
+const tenantC = '28122022-c233-4f10-91df-91e2d065d2cb'
+const unknownTenant = '38122022-c233-4f10-91df-91e2d065d2cb'
 const longLabel = 'Synthetic international operations connector — LongUnbrokenToolLabelForNarrowScreenReflow0123456789'
 const builtin = {
   id: builtinId, name: 'synthetic_builtin', display_name: 'Synthetic built-in lookup',
@@ -65,7 +68,7 @@ function catalogFixture(tool, { role, scope }) {
   } }
 }
 function catalogFixtures(role) {
-  const scopes = { current: [builtin, custom, globalTool, foreignTool], [tenantA]: [builtin, custom, globalTool, foreignTool], [tenantB]: [builtin, foreignTool, globalTool] }
+  const scopes = { current: [builtin, custom, globalTool, foreignTool], [tenantA]: [builtin, custom, globalTool, foreignTool], [tenantB]: [builtin, foreignTool, globalTool], [tenantC]: [builtin, globalTool], [unknownTenant]: [], 'not-a-company': [] }
   return Object.fromEntries(Object.entries(scopes).map(([scope, rows]) => [scope, structuredClone(rows.map((tool) => catalogFixture(tool, { role, scope })))]))
 }
 const admin = {
@@ -74,7 +77,8 @@ const admin = {
   role: 'org_admin', is_platform_admin: false, tenant_id: tenantA, is_active: true,
   email_verified: true, must_change_password: false, created_at: builtin.created_at,
 }
-const companies = [tenantA, tenantB].map((id, index) => ({ id, name: `Synthetic ${index ? 'Beta' : 'Alpha'}`, slug: `synthetic-${index}`, is_active: true, created_at: builtin.created_at }))
+const companies = [tenantA, tenantB, tenantC].map((id, index) => ({ id, name: `Synthetic ${['Alpha', 'Beta', 'Gamma'][index]}`, slug: `synthetic-${index}`, is_active: true, can_disable: true, tier: 'pro', created_at: builtin.created_at }))
+const companyOptionsPage = ({ q }) => ({ items: q ? companies.filter((company) => company.name.toLowerCase().includes(q.toLowerCase())) : companies.slice(0, 2), next_cursor: null })
 const matrix = [1440, 1920, 390].flatMap((width) => ['light', 'dark'].map((theme) => ({ width, theme })))
 const receipt = {
   startedAt: new Date().toISOString(), status: 'running', engine: 'omowright.connectPipe',
@@ -195,7 +199,8 @@ async function syntheticApi(state, incoming, outgoing) {
     receipt.requests.push({ scenario: scenarioName, ...request })
     const tools = /^\/api\/tools(?:\/[^/]+)?$/u.test(path) || /^\/api\/tools\/mcp\/(?:discover|import)$/u.test(path)
     const ancillary = ['/api/auth/me', '/api/notifications/unread-count', '/api/admin/companies/options', '/api/admin/search-analytics/summary', '/api/admin/search-analytics/orgs']
-    assert.ok(tools || ancillary.includes(path), `Blocked unrecognized API ${path}`)
+    const tenantLookup = /^\/api\/tenants\/[^/]+$/u.test(path)
+    assert.ok(tools || tenantLookup || ancillary.includes(path), `Blocked unrecognized API ${path}`)
     if (!tools) assert.equal(request.method, 'GET', 'Only Tools mutations are allowed')
     else state.calls.push(request)
     const barrier = state.barriers.find((item) => !item.released && item.match(request))
@@ -204,12 +209,15 @@ async function syntheticApi(state, incoming, outgoing) {
     switch (path) {
       case '/api/auth/me': response = { body: { ...admin, role: state.role, is_platform_admin: state.role === 'platform_admin' } }; break
       case '/api/notifications/unread-count': response = { body: { unread_count: 0 } }; break
-      case '/api/admin/companies/options': response = { body: companies }; break
+      case '/api/admin/companies/options': response = { body: companyOptionsPage(request.params) }; break
       case '/api/admin/search-analytics/summary': response = { body: { event_count: 0, error_count: 0, quota_count: 0, unique_orgs: 0, unique_agents: 0, unattributed_count: 0, avg_latency_ms: 0, by_kind: [], scope: 'system' } }; break
       case '/api/admin/search-analytics/orgs': response = { body: [] }; break
-      default:
+      default: {
+        const company = tenantLookup && companies.find((item) => path === `/api/tenants/${item.id}`)
+        if (tenantLookup) { response = company ? { body: company } : { status: 404, body: { detail: 'Tenant not found' } }; break }
         response = toolsResponse(requestState, request)
         state.rejectedWrites = requestState.rejectedWrites
+      }
     }
     // An HTTP client abort is not a failed CDP fulfillment: no interception ID exists.
     if (outgoing.destroyed) receipt.transport.abandonedResponses++
@@ -236,11 +244,13 @@ async function capture(page, state) {
 }
 
 async function scenario(options, exercise) {
+  if (process.env.TOOLS_SCENARIO && !options.name.includes(process.env.TOOLS_SCENARIO)) return
   activeScenario = options.name
   console.log(`START ${options.name}`)
   const state = { role: 'org_admin', scope: tenantA, width: 1440, theme: 'light', status: 200, mutationStatus: 200, rejectedWrites: 0, calls: [], barriers: [], catalog: catalogFixtures(options.role ?? 'org_admin'), ...options, origin: new URL(server.resolvedUrls.local[0]).origin }
   activeScenarioState = state
   if (state.loading) state.loadingBarrier = responseBarrier(state, (request) => request.method === 'GET' && request.path === '/api/tools')
+  if (state.holdTenant) state.tenantBarrier = responseBarrier(state, (request) => request.path === `/api/tenants/${state.holdTenant}`)
   // Use the supported owned-tab manager with per-tab dimensions. Drain its
   // navigation repin before applying iPhone metrics (repin itself is desktop-only).
   // The connection owns its SessionManager as well as pages. Retire both at each
@@ -263,7 +273,7 @@ async function scenario(options, exercise) {
     const session = await page.resolveSessionId()
     await page.cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: state.theme }, { name: 'prefers-reduced-motion', value: 'reduce' }] }, session)
     await page.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__toolsCsp=[];document.addEventListener('securitypolicyviolation',event=>window.__toolsCsp.push({uri:event.blockedURI,directive:event.effectiveDirective,disposition:event.disposition}));localStorage.setItem('maraclaw-admin-token','synthetic-tools-token');localStorage.setItem('maraclaw-admin-theme',${JSON.stringify(state.theme)});` }, session)
-    await page.goto(`${state.origin}/tools`)
+    await page.goto(`${state.origin}${state.path ?? '/tools'}`)
     await tabs.repin(tab.targetId, viewport)
     if (state.width === 390) await omowright.emulate(page, 'iphone-14')
     await visible(page.locator('main'))
@@ -322,6 +332,8 @@ async function selectCompany(page, state, scope) {
   const previousHeading = await page.locator('main h2').filter({ hasText: exactText('Tool catalog') }).evaluate((element) => element.id)
   state.scope = scope
   await field(page, ui.company).selectOption(scope)
+  // Writes unlock only once the picker resolves the company by id; wait for that catalog, not the pending one.
+  await visible(page.locator('#tools-company-help').filter({ hasText: /^This selection scopes/u }))
   await detached(page.locator(`[id=${JSON.stringify(previousHeading)}]`))
   await visible(page.locator('button[aria-label="Refresh catalog"]:not(:disabled)'))
 }
@@ -715,6 +727,43 @@ try {
       await field(page, ui.display).fill('Synthetic scoped edit'); await button(page, ui.save).click()
       await visible(button(page, ui.edit('Synthetic scoped edit')))
       verify('PA mutation carries selected tenant', mutations(state).at(-1).payload.tenant_id, tenantA)
+    })
+    await scenario({ name: 'pa-off-page-company-deep-link', role: 'platform_admin', scope: tenantC, path: `/tools?company=${tenantC}` }, async (page, state) => {
+      const picker = field(page, ui.company)
+      const optionTexts = () => picker.evaluate((select) => [...select.options].map((option) => option.textContent))
+      await visible(page.locator('#tools-company-help').filter({ hasText: /^This selection scopes/u }))
+      verify('off-page deep link is resolved by id and listed once', await optionTexts(), ['Current / platform scope', 'Synthetic Gamma', 'Synthetic Alpha', 'Synthetic Beta'])
+      verify('off-page company keeps the deep-linked value', await picker.inputValue(), tenantC)
+      verify('the deep link resolved through the tenant lookup', receipt.requests.some((request) => request.scenario === state.name && request.path === `/api/tenants/${tenantC}`))
+      await visible(button(page, ui.add))
+      verify('a resolved off-page company unlocks creation', await button(page, ui.add).isDisabled(), false)
+      const searched = responseBarrier(state, (request) => request.path === '/api/admin/companies/options' && request.params.q === 'Synthetic')
+      await page.getByLabel('Search companies by name', { exact: true }).fill('Synthetic')
+      await bounded(searched.entered, 'Picker search never reached the options endpoint')
+      verify('a pending search keeps only the pinned selection', await optionTexts(), ['Current / platform scope', 'Synthetic Gamma'])
+      searched.release(); await bounded(searched.completed, 'Picker search did not drain')
+      await page.locator('option').filter({ hasText: exactText('Synthetic Alpha') }).waitFor({ state: 'attached', timeout: 12_000 })
+      verify('search results list the selection exactly once', await optionTexts(), ['Current / platform scope', 'Synthetic Alpha', 'Synthetic Beta', 'Synthetic Gamma'])
+      verify('an off-page selection makes no writes', mutations(state).length, 0)
+    })
+    await scenario({ name: 'pa-unknown-company-deep-link', role: 'platform_admin', scope: unknownTenant, path: `/tools?company=${unknownTenant}`, holdTenant: unknownTenant }, async (page, state) => {
+      const picker = field(page, ui.company)
+      const selectedText = () => picker.evaluate((select) => select.selectedOptions[0]?.textContent)
+      await bounded(state.tenantBarrier.entered, 'Company lookup never reached the tenant endpoint')
+      await visible(button(page, ui.add))
+      verify('a pending lookup is never labelled unrecognized', await selectedText(), 'Loading company…')
+      verify('a pending lookup cannot create', await button(page, ui.add).isDisabled())
+      state.tenantBarrier.release(); await bounded(state.tenantBarrier.completed, 'Company lookup did not drain')
+      await page.locator('option').filter({ hasText: exactText('Unrecognized company selection') }).waitFor({ state: 'attached', timeout: 12_000 })
+      verify('a 404 lookup keeps the deep link', await picker.inputValue(), unknownTenant)
+      verify('an unrecognized company cannot create', await button(page, ui.add).isDisabled())
+      verify('an unrecognized company makes no writes', mutations(state).length, 0)
+    })
+    await scenario({ name: 'pa-malformed-company-deep-link', role: 'platform_admin', scope: 'not-a-company', path: '/tools?company=not-a-company' }, async (page, state) => {
+      await page.locator('option').filter({ hasText: exactText('Unrecognized company selection') }).waitFor({ state: 'attached', timeout: 12_000 })
+      await visible(button(page, ui.add))
+      verify('a malformed company cannot create', await button(page, ui.add).isDisabled())
+      verify('a malformed company is never looked up', receipt.requests.some((request) => request.scenario === state.name && request.path.startsWith('/api/tenants/')), false)
     })
     for (const dimensions of matrix.filter(({ width }) => width === 390 || width === 1440)) {
       await scenario({ ...dimensions, name: `pa-selector-${dimensions.width}-${dimensions.theme}`, role: 'platform_admin', scope: 'current' }, async (page, state) => {

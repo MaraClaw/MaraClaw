@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.core.acl_locks import lock_tenants, lock_user
+from app.core.domain.users import MAX_USERS_PAGE_SIZE
 from app.core.security import get_current_user, raise_if_password_change_required
 from app.dao.org_department_dao import org_department_dao
 from app.dao.tenant_dao import tenant_dao
@@ -60,10 +61,19 @@ async def list_departments(
     if await tenant_dao.get(tenant) is None:
         raise HTTPException(404, "Organization not found")
     departments = await org_department_dao.list_for_tenant(tenant)
-    return DepartmentsOut(
-        departments=[DepartmentOut.model_validate(row) for row in departments],
-        assignments=await org_department_dao.list_assignments(tenant),
-    )
+    return DepartmentsOut(departments=[DepartmentOut.model_validate(row) for row in departments])
+
+
+@router.get("/departments/assignments", response_model=list[AssignmentOut])
+async def list_department_assignments(
+    user_id: list[UUID] = Query(..., max_length=MAX_USERS_PAGE_SIZE),
+    tenant_id: UUID | None = Query(None),
+    current_user: UserRecord = Depends(get_current_user),
+) -> list[AssignmentOut]:
+    tenant = admin_tenant(current_user, tenant_id)
+    if await tenant_dao.get(tenant) is None:
+        raise HTTPException(404, "Organization not found")
+    return await org_department_dao.list_assignments_for_users(tenant, user_id)
 
 
 @router.post("/departments", response_model=DepartmentOut, status_code=201)

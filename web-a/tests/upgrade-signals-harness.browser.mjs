@@ -10,6 +10,10 @@ import { agentId, csvBody, episodeCursor, episodeRow, quietSummaryRow, summaryRo
 
 export const expect = playwrightExpect.configure({ timeout: 10_000 })
 export const originalSearch = '?since=2026-11-01&until=2026-11-15&tier=pro&resource=memory'
+// Initech is never on the browse page: only its by-id lookup or a picker search names it. Any other id answers 404.
+export const archivedTenantId = '7c2e9b14-0d3a-4f6b-8e15-3a9d2c4b6e70'
+const archived = { tenant_id: archivedTenantId, tenant_name: 'Initech' }
+const companyOption = (row) => ({ id: row.tenant_id, name: row.tenant_name, slug: row.tenant_name.toLowerCase(), is_active: true, can_disable: true, tier: 'pro' })
 
 export async function createHarness({ match } = {}) {
   assert.equal(Boolean(process.env.OMO_BROWSER_ENGINE), false, 'Upgrade signals QA needs an owned synthetic browser')
@@ -79,7 +83,14 @@ export async function createHarness({ match } = {}) {
         let body, status = 200
         if (path === '/api/auth/me') body = { ...adminUser(agentId), identity_id: agentId, tenant_id: tenantId, role: options.orgAdmin ? 'org_admin' : 'platform_admin', is_platform_admin: !options.orgAdmin }
         else if (path === '/api/notifications/unread-count') body = { unread_count: 0 }
-        else if (path === '/api/admin/companies/options') body = state.rows.map((row) => ({ id: row.tenant_id, name: row.tenant_name }))
+        else if (path === '/api/admin/companies/options') {
+          const matches = params.q ? [...state.rows, archived].filter((row) => row.tenant_name.toLowerCase().includes(params.q.toLowerCase())) : state.rows
+          body = { items: matches.map(companyOption), next_cursor: null }
+        } else if (path.startsWith('/api/tenants/')) {
+          const row = [...state.rows, archived].find((item) => path === `/api/tenants/${item.tenant_id}`)
+          if (row) body = companyOption(row)
+          else { status = 404; body = { detail: 'Tenant not found' } }
+        }
         else if (path.endsWith('/resource-pressure/summary')) {
           status = state.summaryStatus
           body = status === 200 ? state.rows.filter((row) => !params.tenant_id || row.tenant_id === params.tenant_id) : { detail: 'Synthetic summary unavailable' }

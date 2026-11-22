@@ -38,7 +38,8 @@ def connection_mode(config: ChannelConfigRecord) -> str:
     return json_as_str_or(json_object_from(config.extra_config).get("connection_mode"), default)
 
 
-def _connection_credentials(config: ChannelConfigRecord) -> tuple[str, ...]:
+def connection_credentials(config: ChannelConfigRecord) -> tuple[str, ...]:
+    """Credentials handed to the provider SDK, in the order its ``start_client`` takes them."""
     match config.channel_type:
         case ChannelType.FEISHU | ChannelType.DINGTALK:
             return config.app_id or "", config.app_secret or ""
@@ -53,17 +54,22 @@ def _connection_credentials(config: ChannelConfigRecord) -> tuple[str, ...]:
 
 def stream_source(config: ChannelConfigRecord) -> StreamSource:
     """Snapshot only authority, excluding mutable health and unrelated options."""
-    digest = hashlib.sha256(json.dumps(_connection_credentials(config), separators=(",", ":")).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps(connection_credentials(config), separators=(",", ":")).encode()).hexdigest()
     return StreamSource(config.id, config.agent_id, config.channel_type, connection_mode(config), config.app_id, digest)
 
 
+def desired_stream_source(config: ChannelConfigRecord) -> StreamSource | None:
+    """The source a connector should hold for ``config``, or None when the row asks for no stream; never raises."""
+    mode = STREAM_MODES.get(config.channel_type)
+    if mode is None or not config.is_configured or connection_mode(config) != mode:
+        return None
+    if not all(connection_credentials(config)):
+        return None
+    return stream_source(config)
+
+
 def check_stream_source(config: ChannelConfigRecord | None, source: StreamSource) -> ChannelConfigRecord:
-    if (
-        config is None
-        or not config.is_configured
-        or source.mode != STREAM_MODES.get(source.provider)
-        or stream_source(config) != source
-    ):
+    if config is None or desired_stream_source(config) != source:
         raise HTTPException(403, "Connector source has been revoked")
     return config
 
@@ -79,7 +85,7 @@ async def acquire_stream_source(agent_id: UUID, provider: ChannelType, credentia
     if config is None:
         raise HTTPException(403, "Channel configuration is unavailable")
     source = stream_source(config)
-    if _connection_credentials(config) != credentials or config.channel_type != provider or config.agent_id != agent_id:
+    if connection_credentials(config) != credentials or config.channel_type != provider or config.agent_id != agent_id:
         raise HTTPException(403, "Connector credentials have been revoked")
     check_stream_source(config, source)
     return source

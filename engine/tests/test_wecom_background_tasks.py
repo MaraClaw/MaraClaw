@@ -181,3 +181,27 @@ async def test_connector_background_failure_is_logged(monkeypatch):
     assert result.agent_id == agent_id
     logger.opt.assert_called_once_with(exception=failure)
     logger.opt.return_value.error.assert_called_once_with("Background task failed: WeCom start_client")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "persisted", "expected"),
+    [("websocket", True, True), ("websocket", False, False), ("webhook", True, False)],
+)
+async def test_status_route_reports_the_health_the_connector_recorded(monkeypatch, mode, persisted, expected):
+    # Given a row whose health the connector process recorded, and no client in this process
+    config = ChannelConfigRecord(
+        id=uuid4(),
+        agent_id=uuid4(),
+        channel_type=ChannelType.WECOM,
+        is_configured=True,
+        is_connected=persisted,
+        extra_config={"connection_mode": mode, "bot_id": "bot", "bot_secret": "secret"},
+    )
+    monkeypatch.setattr(wecom, "check_agent_access", AsyncMock(return_value=(object(), None)))
+    monkeypatch.setattr(wecom.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    assert wecom.wecom_stream_manager.live_source(config.agent_id) is None
+    # When
+    result = await wecom.get_wecom_channel(config.agent_id, Mock())
+    # Then
+    assert result.is_connected is expected

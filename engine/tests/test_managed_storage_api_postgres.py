@@ -129,7 +129,7 @@ async def test_a_blocked_upload_leaves_the_single_pool_slot_available(
         async with asyncio.timeout(5):
             response = await api.get("/api/departments", headers=world.scenario.headers("genesis"))
         assert response.status_code == 200, response.text
-        assert response.json() == {"departments": [], "assignments": []}
+        assert response.json() == {"departments": []}
         assert not pending.done(), "upload must still be blocked while the other request completes"
     finally:
         gate.release.set()

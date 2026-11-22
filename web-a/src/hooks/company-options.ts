@@ -1,4 +1,5 @@
 import { infiniteQueryOptions, queryOptions, skipToken, type QueryClient } from '@tanstack/react-query'
+import { z } from 'zod'
 
 import {
   fetchCompanyAgentSections,
@@ -8,6 +9,7 @@ import {
   listCompanyOptions,
   previewCompanyTier,
   changeCompanyTier,
+  type CompanyOption,
   type CompanyTierChange,
   getCompanyRuntime,
   toggleCompany,
@@ -37,10 +39,44 @@ export function companiesPageOptions(tenantId: string | null, search: string) {
   })
 }
 
-export function companyOptions() {
+const companyIdSchema = z.guid()
+
+export function isCompanyId(value: string): boolean {
+  return companyIdSchema.safeParse(value).success
+}
+
+export function companyOptionsBrowseOptions() {
+  return infiniteQueryOptions({
+    queryKey: ['admin-companies', 'options', 'browse'],
+    initialPageParam: null,
+    queryFn: ({ pageParam, signal }: { readonly pageParam: string | null; readonly signal: AbortSignal }) =>
+      listCompanyOptions({ q: '', cursor: pageParam }, signal),
+    getNextPageParam: (page) => page.next_cursor,
+  })
+}
+
+export function companyOptionsSearchOptions(search: string) {
+  const q = search.trim()
   return queryOptions({
-    queryKey: ['admin-companies', 'options'],
-    queryFn: ({ signal }) => listCompanyOptions(signal),
+    queryKey: ['admin-companies', 'options', 'search', q],
+    queryFn: q ? ({ signal }) => listCompanyOptions({ q, cursor: null }, signal) : skipToken,
+  })
+}
+
+export function companyOptionByIdOptions(companyId: string) {
+  return queryOptions({
+    queryKey: ['admin-companies', 'options', 'by-id', companyId],
+    queryFn: isCompanyId(companyId)
+      ? async ({ signal }): Promise<CompanyOption | null> => {
+          try {
+            const company = await getTenant(companyId, signal)
+            return { id: company.id, name: company.name }
+          } catch (error) {
+            if (error instanceof ApiError && error.status === 404) return null
+            throw error
+          }
+        }
+      : skipToken,
   })
 }
 

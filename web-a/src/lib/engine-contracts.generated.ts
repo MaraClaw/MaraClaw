@@ -506,6 +506,12 @@ export type CompanyActivationRequest = z.infer<typeof CompanyActivationRequestSc
 export const CompanyConfigOperationsSchema = z.strictObject({ ["set"]: JsonInputObjectSchema.optional(), ["tenant_id"]: z.union([z.guid(), z.null()]).optional(), ["unset"]: z.array(z.string()).optional() });
 export type CompanyConfigOperations = z.infer<typeof CompanyConfigOperationsSchema>;
 
+export const CompanyOptionSchema = z.looseObject({ ["can_disable"]: z.boolean(), ["created_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["id"]: z.guid(), ["is_active"]: z.boolean(), ["is_default_end_user_org"]: z.boolean().optional(), ["is_system"]: z.boolean().optional(), ["name"]: z.string(), ["slug"]: z.string(), ["sso_domain"]: z.union([z.string(), z.null()]).optional(), ["sso_enabled"]: z.boolean().optional() });
+export type CompanyOption = z.infer<typeof CompanyOptionSchema>;
+
+export const CompanyOptionPageOutSchema = z.looseObject({ ["items"]: z.array(CompanyOptionSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });
+export type CompanyOptionPageOut = z.infer<typeof CompanyOptionPageOutSchema>;
+
 export const CompanyReportOutSchema = z.looseObject({ ["content"]: z.string(), ["generated_at"]: z.string(), ["id"]: z.string(), ["missing_count"]: z.number().refine(Number.isInteger), ["needs_refresh"]: z.boolean(), ["period_end"]: z.string(), ["period_label"]: z.string(), ["period_start"]: z.string(), ["report_type"]: z.string(), ["submitted_count"]: z.number().refine(Number.isInteger), ["updated_at"]: z.string() });
 export type CompanyReportOut = z.infer<typeof CompanyReportOutSchema>;
 
@@ -647,7 +653,7 @@ export type DepartmentOptionsOut = z.infer<typeof DepartmentOptionsOutSchema>;
 export const DepartmentUpdateSchema = z.looseObject({ ["description"]: z.string().optional(), ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100) });
 export type DepartmentUpdate = z.infer<typeof DepartmentUpdateSchema>;
 
-export const DepartmentsOutSchema = z.looseObject({ ["assignments"]: z.array(AssignmentOutSchema), ["departments"]: z.array(DepartmentOutSchema) });
+export const DepartmentsOutSchema = z.looseObject({ ["departments"]: z.array(DepartmentOutSchema) });
 export type DepartmentsOut = z.infer<typeof DepartmentsOutSchema>;
 
 export const DingTalkExtraConfigSchema = z.looseObject({ ["agent_id"]: z.string().optional(), ["connection_mode"]: z.string().optional() });

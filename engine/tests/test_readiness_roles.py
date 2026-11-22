@@ -1,16 +1,13 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from types import SimpleNamespace
-from typing import override
 
 import pytest
 
 from app.api import background_tasks
 from app.process_roles import parse_process_roles, role_enabled
-from app.runtime import lifecycle, readiness
-from app.runtime.connectors import WeChatRuntime
+from app.runtime import connectors, lifecycle, readiness
 from app.runtime.tasks import OwnedTasks
-from app.services.wechat_channel import PROGRESS_BUDGET_SECONDS as WECHAT_BUDGET_SECONDS, WeChatPollManager
 from producer_admission_fixtures import producer_admission
 from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS
 
@@ -94,7 +91,13 @@ async def test_actual_start_registers_required_role_evidence(
         await asyncio.Event().wait()
 
     class Connector:
-        async def start_all(self) -> None:
+        def open(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        async def reconcile_clients(self) -> None:
             await gate.wait()
 
         async def stop_all(self) -> None:
@@ -137,7 +140,7 @@ async def test_actual_start_registers_required_role_evidence(
     monkeypatch.setattr(capacity_renewal_worker, "start_capacity_renewal_worker", loop)
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", loop)
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", loop)
-    monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Connector(),))
+    monkeypatch.setattr(lifecycle, "connector_managers", lambda: {"connector": Connector()})
     monkeypatch.setattr(runtime.incidents, "start", lambda: None)
     monkeypatch.setattr(runtime.incidents, "stop", noop)
     monkeypatch.setattr(runtime.proxy, "start", noop)
@@ -176,7 +179,7 @@ async def test_actual_start_registers_required_role_evidence(
         if role_enabled(roles, "connector"):
             budgeted |= CONNECTOR_BUDGETED_LOOPS
         assert set(runtime.tasks.progress) == budgeted
-        assert ("Connector" in required) == role_enabled(roles, "connector")
+        assert ("connector" in required) == role_enabled(roles, "connector")
         assert ("whatsapp_personal" in required) == role_enabled(roles, "connector")
         assert bootstrapped == ([False] if role_enabled(roles, "bootstrap") else [])
         if role_enabled(roles, "api") or role_enabled(roles, "connector") or role == "bootstrap":
@@ -200,30 +203,47 @@ async def test_actual_start_registers_required_role_evidence(
     assert runtime.readiness.draining
 
 
-async def test_wechat_first_reconciliation_is_finite_and_ongoing_loop_is_required() -> None:
+async def test_first_reconcile_pass_retries_in_place_then_registers_the_required_budgeted_loop() -> None:
+    # Given a manager whose first pass hits a transient configuration read failure.
     tasks = OwnedTasks()
-    reconciled = asyncio.Event()
-    loop_started = asyncio.Event()
+    passes: list[str] = []
+    delays: list[float] = []
+    loop_paced = asyncio.Event()
 
-    class Manager(WeChatPollManager):
-        @override
+    class Manager:
+        def open(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
         async def reconcile_clients(self) -> None:
-            reconciled.set()
+            passes.append("pass")
+            if len(passes) == 1:
+                raise OSError("database briefly unavailable")
 
-        @override
-        async def start_all(self) -> None:
-            loop_started.set()
+        async def stop_all(self) -> None:
+            return None
+
+    async def pace(seconds: float) -> None:
+        delays.append(seconds)
+        if seconds == 1000.0:
+            loop_paced.set()
             await asyncio.Event().wait()
 
-    adapter = WeChatRuntime(Manager(), tasks)
-    await adapter.start_all()
-    await asyncio.wait_for(loop_started.wait(), 5)
-    assert reconciled.is_set()
+    # When the finite setup runs.
+    runtime = connectors.ReconcileRuntime("wechat", Manager(), tasks, sleep=pace, interval_seconds=1000.0)
+    await asyncio.wait_for(runtime.start(), 5)
+    await asyncio.wait_for(loop_paced.wait(), 5)
+    # Then the failure was retried in place after the base backoff, and setup returned with the loop required.
+    assert passes == ["pass", "pass"]
+    assert delays == [connectors.RETRY_BASE_SECONDS, 1000.0]
     assert tasks.ready()
     task, finite = tasks.required["wechat-reconcile"]
     assert not finite
-    assert tasks.progress["wechat-reconcile"].budget_seconds == WECHAT_BUDGET_SECONDS
+    assert tasks.progress["wechat-reconcile"].budget_seconds == connectors.PROGRESS_BUDGET_SECONDS
+    # And the loop is required: once it is gone, readiness fails.
     task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    _ = await asyncio.gather(task, return_exceptions=True)
     assert not tasks.ready()
     await tasks.stop()

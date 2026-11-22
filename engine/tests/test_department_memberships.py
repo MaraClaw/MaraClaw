@@ -1,6 +1,6 @@
 from dataclasses import replace
 from typing import Literal, assert_never
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 from uuid import uuid4
 
 import pytest
@@ -28,11 +28,46 @@ def test_plural_replacement_normalizes_duplicates_and_retains_row_directory(dire
     }
     assert assignments == {subject.id: set(selected)}
     assert [call.args[0] for call in bumped.await_args_list] == sorted([old_agent, new_agent])
-    listing = client.get("/api/departments").json()
-    assert listing["assignments"] == [
+    listing = client.get("/api/departments/assignments", params={"user_id": str(subject.id)})
+    assert listing.status_code == 200
+    assert listing.json() == [
         {"user_id": str(subject.id), "tenant_id": str(actor.tenant_id), "department_id": str(department_id)}
         for department_id in selected
     ]
+
+
+def test_unchanged_replace_reads_only_locked_subject_and_has_no_side_effects(directory, monkeypatch):
+    client, actor, subject, first, second, assignments, bumped, *_ = directory
+    other_user = uuid4()
+    assignments[other_user] = {second.id}
+    dao = org_departments.org_department_dao
+    calls = AsyncMock()
+    calls.read.side_effect = dao.list_assignments_for_users
+    monkeypatch.setattr(org_departments, "lock_tenants", calls.tenants)
+    monkeypatch.setattr(org_departments, "lock_user", calls.user)
+    monkeypatch.setattr(dao, "list_assignments_for_users", calls.read)
+    tenant_wide = AsyncMock(side_effect=AssertionError("Replacement must not read a tenant-wide membership list"))
+    monkeypatch.setattr(dao, "list_assignments", tenant_wide, raising=False)
+    forbidden = AsyncMock(side_effect=AssertionError("Unchanged membership must not write or resolve grants"))
+    monkeypatch.setattr(dao, "replace_assignments", forbidden)
+    monkeypatch.setattr(dao, "grant_agents_for_user", forbidden)
+    monkeypatch.setattr(org_departments, "lock_agent", forbidden)
+    monkeypatch.setattr(org_departments, "write_admin_audit", forbidden)
+
+    response = client.put(f"/api/users/{subject.id}/departments", json={"department_ids": [str(first.id)]})
+
+    assert response.status_code == 200
+    assert response.json()["department_ids"] == [str(first.id)]
+    assert calls.mock_calls == [
+        call.tenants(None, (actor.tenant_id, actor.tenant_id)),
+        call.user(None, actor.id, actor.tenant_id),
+        call.user(None, subject.id, actor.tenant_id),
+        call.read(actor.tenant_id, [subject.id]),
+    ]
+    assert assignments == {subject.id: {first.id}, other_user: {second.id}}
+    tenant_wide.assert_not_awaited()
+    forbidden.assert_not_awaited()
+    bumped.assert_not_awaited()
 
 
 @pytest.mark.parametrize("plural", [False, True])

@@ -10,6 +10,7 @@ from tests.im_webhook_fixtures import channel_config
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
+from app.runtime import connectors
 from app.services import wechat_channel, wechat_message_processor
 from app.services.channels import binding, submissions
 from app.services.llm.types import OpenAIMessage
@@ -186,56 +187,54 @@ async def test_process_wechat_message_remembers_context_before_accepting_native_
     assert [entry[0] for entry in order.mock_calls] == ["replay", "remember", "accept"]
 
 
-def run_reconcile_loop(
-    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, manager: wechat_channel.WeChatPollManager
+async def run_reconcile_loop(
+    worker_http: WorkerHTTP, manager: wechat_channel.WeChatPollManager
 ) -> tuple[asyncio.Task[object], list[float]]:
+    """Finish the connector's first pass, then return its ``wechat-reconcile`` loop parked in its first sleep."""
     delays: list[float] = []
 
     async def pace(seconds: float) -> None:
         delays.append(seconds)
         await worker_http.pacing.wait(seconds)
 
-    monkeypatch.setattr(wechat_channel.asyncio, "sleep", pace)
-    task = worker_http.start_loop(
-        "wechat-reconcile", manager.start_all(), budget_seconds=wechat_channel.PROGRESS_BUDGET_SECONDS
-    )
-    return task, delays
+    await connectors.ReconcileRuntime("wechat", manager, worker_http.runtime.tasks, sleep=pace).start()
+    await worker_http.pacing.paused()
+    return worker_http.runtime.tasks.required["wechat-reconcile"][0], delays
 
 
-async def test_start_all_survives_reconcile_failures_with_capped_backoff_and_resets_after_success(
+async def test_reconcile_loop_survives_failures_with_capped_backoff_and_resets_after_success(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
 ) -> None:
-    # Given a reconcile pass that fails every time.
+    # Given a booted connector whose later reconcile passes fail every time.
     manager = wechat_channel.WeChatPollManager()
-    reconcile = AsyncMock(side_effect=OSError("database unavailable"))
+    reconcile = AsyncMock()
     monkeypatch.setattr(manager, "reconcile_clients", reconcile)
-    task, delays = run_reconcile_loop(monkeypatch, worker_http, manager)
-    await worker_http.pacing.paused()
+    task, delays = await run_reconcile_loop(worker_http, manager)
+    reconcile.side_effect = OSError("database unavailable")
     # When the loop retries until the backoff is capped.
-    for _ in range(6):
+    for _ in range(7):
         await worker_http.pacing.step()
-    base, cap = wechat_channel.RECONCILE_RETRY_BASE_SECONDS, wechat_channel.RECONCILE_RETRY_CAP_SECONDS
+    base, cap = connectors.RETRY_BASE_SECONDS, connectors.RETRY_CAP_SECONDS
     # Then every failed pass waited out a doubling delay that stops at the cap, and the loop is still alive.
-    assert delays == [min(cap, base * 2**failures) for failures in range(7)]
-    assert delays[-1] == cap < wechat_channel.PROGRESS_BUDGET_SECONDS
+    assert delays[1:] == [min(cap, base * 2**failures) for failures in range(7)]
+    assert delays[-1] == cap < connectors.PROGRESS_BUDGET_SECONDS
     assert not task.done()
     # And a successful pass returns to the regular cadence, after which the next failure starts from the base again.
     reconcile.side_effect = None
     await worker_http.pacing.step()
     reconcile.side_effect = OSError("database unavailable")
     await worker_http.pacing.step()
-    assert delays[-2:] == [manager._reconcile_interval_seconds, base]
-    assert reconcile.await_count == 9
+    assert delays[-2:] == [connectors.RECONCILE_INTERVAL_SECONDS, base]
+    assert reconcile.await_count == 10
 
 
-async def test_start_all_beats_after_every_successful_pass(
+async def test_reconcile_loop_beats_after_every_successful_pass(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
 ) -> None:
     # Given a reconcile pass that always succeeds.
     manager = wechat_channel.WeChatPollManager()
     monkeypatch.setattr(manager, "reconcile_clients", AsyncMock())
-    task, _ = run_reconcile_loop(monkeypatch, worker_http, manager)
-    await worker_http.pacing.paused()
+    task, _ = await run_reconcile_loop(worker_http, manager)
     # When passes keep finishing for longer than the budget in total.
     for _ in range(4):
         await worker_http.pacing.step()
@@ -244,15 +243,14 @@ async def test_start_all_beats_after_every_successful_pass(
     assert not task.done()
 
 
-async def test_start_all_goes_stale_while_reconcile_keeps_failing_and_recovers_on_success(
+async def test_reconcile_loop_goes_stale_while_passes_keep_failing_and_recovers_on_success(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
 ) -> None:
     # Given a reconcile pass that starts failing after one success.
     manager = wechat_channel.WeChatPollManager()
     reconcile = AsyncMock()
     monkeypatch.setattr(manager, "reconcile_clients", reconcile)
-    task, _ = run_reconcile_loop(monkeypatch, worker_http, manager)
-    await worker_http.pacing.paused()
+    task, _ = await run_reconcile_loop(worker_http, manager)
     reconcile.side_effect = OSError("database unavailable")
     # When failing passes outlast the budget.
     for _ in range(4):
@@ -266,7 +264,7 @@ async def test_start_all_goes_stale_while_reconcile_keeps_failing_and_recovers_o
     await worker_http.ready(expected=True)
 
 
-async def test_start_all_is_not_kept_ready_by_a_running_poller(
+async def test_reconcile_loop_is_not_kept_ready_by_a_running_poller(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
 ) -> None:
     # Given a real poller started by the first pass, and a database that then fails every reconcile pass.
@@ -287,9 +285,8 @@ async def test_start_all_is_not_kept_ready_by_a_running_poller(
     monkeypatch.setattr(manager, "_fetch_updates", fetch_updates)
     monkeypatch.setattr(manager, "_set_connected", AsyncMock())
     monkeypatch.setattr(manager, "_update_extra", AsyncMock())
-    task, _ = run_reconcile_loop(monkeypatch, worker_http, manager)
     try:
-        await worker_http.pacing.paused()
+        task, _ = await run_reconcile_loop(worker_http, manager)
         await asyncio.wait_for(fetched.get(), 2)
         list_configured.side_effect = OSError("database unavailable")
         # When failing passes outlast the budget while the poller keeps completing polls.
@@ -305,14 +302,17 @@ async def test_start_all_is_not_kept_ready_by_a_running_poller(
         await manager.stop_all()
 
 
-async def test_start_all_cancels_promptly_while_waiting_out_a_backoff(
+async def test_reconcile_loop_cancels_promptly_while_waiting_out_a_backoff(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
 ) -> None:
     # Given a failing pass that is parked in its backoff delay.
     manager = wechat_channel.WeChatPollManager()
-    monkeypatch.setattr(manager, "reconcile_clients", AsyncMock(side_effect=OSError("database unavailable")))
-    task, _ = run_reconcile_loop(monkeypatch, worker_http, manager)
-    await worker_http.pacing.paused()
+    reconcile = AsyncMock()
+    monkeypatch.setattr(manager, "reconcile_clients", reconcile)
+    task, delays = await run_reconcile_loop(worker_http, manager)
+    reconcile.side_effect = OSError("database unavailable")
+    await worker_http.pacing.step()
+    assert delays[-1] == connectors.RETRY_BASE_SECONDS
     # When the loop is cancelled.
     task.cancel()
     done, _ = await asyncio.wait({task}, timeout=2)
@@ -321,7 +321,7 @@ async def test_start_all_cancels_promptly_while_waiting_out_a_backoff(
     assert task.cancelled()
 
 
-async def test_start_all_cancels_promptly_while_stop_client_awaits_a_poller(
+async def test_reconcile_loop_cancels_promptly_while_stop_client_awaits_a_poller(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
 ) -> None:
     # Given a poller that is slow to finish cancellation, and a removed channel config that makes the pass stop it.
@@ -337,13 +337,15 @@ async def test_start_all_cancels_promptly_while_stop_client_awaits_a_poller(
             await release.wait()
             raise
 
-    stuck = asyncio.create_task(poller())
-    manager._tasks[uuid.uuid4()] = stuck
     monkeypatch.setattr(wechat_channel.channel_config_dao, "list_configured", AsyncMock(return_value=[]))
     monkeypatch.setattr(manager, "_set_connected", AsyncMock())
+    task, _ = await run_reconcile_loop(worker_http, manager)
+    stuck = asyncio.create_task(poller())
+    manager._tasks[uuid.uuid4()] = stuck
     try:
         await asyncio.wait_for(parked.wait(), 2)
-        task, _ = run_reconcile_loop(monkeypatch, worker_http, manager)
+        # Release the loop's sleep without waiting for its next one: this pass parks in stop_client.
+        worker_http.pacing.go.put_nowait(None)
         await asyncio.wait_for(cleaning_up.wait(), 2)
         # When the loop is cancelled while stop_client is still waiting for that poller.
         task.cancel()

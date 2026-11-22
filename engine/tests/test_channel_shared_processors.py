@@ -96,6 +96,10 @@ async def invoke_processor(name, pipeline, *, group=False, native_id="native-id"
         if name in {"dingtalk", "wecom_stream"}
         else "webhook",
     }
+    if name in {"dingtalk", "wecom_stream", "discord_gateway"}:
+        config.app_id = config.app_id or "app"
+        config.app_secret = config.app_secret or "secret"
+        config.extra_config = {**config.extra_config, "bot_id": "bot", "bot_secret": "secret"}
     match name:
         case "dingtalk":
             await dingtalk.process_dingtalk_message(

@@ -9,9 +9,21 @@ from pydantic import ValidationError
 
 from app.core import access_cache, permissions
 from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
+from app.dao.org_department_dao import OrgDepartmentDAO
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.user import UserRecord
 from app.services.org_departments import admin_tenant
+
+
+@pytest.mark.asyncio
+async def test_empty_assignment_read_needs_no_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    dao = OrgDepartmentDAO()
+    session = AsyncMock(side_effect=AssertionError("An empty assignment read must not check out a connection"))
+    monkeypatch.setattr(dao, "session", session)
+
+    assert await dao.list_assignments_for_users(uuid4(), []) == []
+
+    session.assert_not_called()
 
 
 def test_bootstrap_resolves_engine_baseline():

@@ -14,7 +14,7 @@ try {
       await page.getByLabel('Request status', { exact: true }).selectOption('withdrawn')
       // Then
       await expect(page.getByRole('list', { name: 'Admission requests', exact: true })).toContainText('Withdrawn')
-      assert.equal(state.calls.filter((call) => call.path === '/api/company-admissions/review').at(-1).params.status, 'withdrawn')
+      assert.equal(state.calls.filter((call) => call.path === '/api/company-admissions/review/page').at(-1).params.status, 'withdrawn')
       await harness.capture(page, `withdrawn-${width}-${scheme}-list`)
       await page.getByRole('link', { name: `Review request from ${admission.applicant.email}`, exact: true }).click()
       await expect(page.getByRole('heading', { name: 'Request details', exact: true })).toBeVisible()
