@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, SupportsIndex, SupportsInt, cast
 
 from app.core.logging import logger
+from app.services.agentbay_types import is_sdk_mapping, resize_image
 
 from .agentbay_media import _agentbay_normalize_image_bytes, _agentbay_save_image_to_workspace
 from .registry import ToolArguments, ToolArgumentValue
@@ -24,7 +25,7 @@ def _float_input(value: ToolArgumentValue | None) -> str | int | float:
 
 
 def _agentbay_extract_screen_dimensions(screen_data: object) -> tuple[int | None, int | None, str]:
-    if not isinstance(screen_data, dict):
+    if not is_sdk_mapping(screen_data):
         return None, None, ""
     width_raw: object = screen_data.get("width")
     height_raw: object = screen_data.get("height")
@@ -34,7 +35,7 @@ def _agentbay_extract_screen_dimensions(screen_data: object) -> tuple[int | None
         height = int(cast("str | Buffer | SupportsInt | SupportsIndex", height_raw)) if height_raw is not None else None
     except TypeError, ValueError:
         width, height = None, None
-    parts = []
+    parts: list[str] = []
     if width not in (None, 0) and height not in (None, 0):
         parts.append(f"width={width}, height={height}")
     if dpi is not None:
@@ -86,7 +87,9 @@ def _agentbay_crop_image_bytes(
             elif max_side <= 520:
                 scale = 2
             if scale > 1:
-                cropped = cropped.resize((cropped.width * scale, cropped.height * scale), Image.Resampling.LANCZOS)
+                cropped = resize_image(
+                    cropped, (cropped.width * scale, cropped.height * scale), Image.Resampling.LANCZOS
+                )
             buf = BytesIO()
             cropped.save(buf, format="PNG")
             return buf.getvalue(), (left, top, right - left, bottom - top), scale
@@ -118,7 +121,7 @@ def _agentbay_desktop_coordinate_note(
     image_height: int | None = None,
     crop: tuple[int, int, int, int] | None = None,
 ) -> str:
-    parts = []
+    parts: list[str] = []
     if screen_note:
         parts.append(f"Cloud Desktop coordinate system for mouse tools: {screen_note}.")
     if image_width not in (None, 0) and image_height not in (None, 0):

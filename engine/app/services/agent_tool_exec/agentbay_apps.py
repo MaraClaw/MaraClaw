@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from app.core.json_types import JsonObject, json_as_str, json_object_from
 from app.core.logging import logger
+from app.services.agentbay_types import is_sdk_list, is_sdk_mapping
 
 from .registry import ToolArguments
 
@@ -16,11 +17,11 @@ type _App = JsonObject
 
 
 def _apps_from_response(value: object) -> list[_App]:
-    if not isinstance(value, list):
+    if not is_sdk_list(value):
         return []
     apps: list[_App] = []
     for item in list[object](value):
-        if isinstance(item, dict):
+        if is_sdk_mapping(item):
             apps.append(json_object_from(item))
         elif item:
             apps.append({"name": str(item)})
@@ -144,7 +145,7 @@ async def _agentbay_computer_start_app(agent_id: uuid.UUID | None, ws: Path, arg
 
                     data_str = (
                         json.dumps(data, ensure_ascii=False, indent=2)
-                        if isinstance(data, (dict, list, str, int, float, bool))
+                        if is_sdk_mapping(data) or is_sdk_list(data) or isinstance(data, (str, int, float, bool))
                         else str(data)
                     )
                 except TypeError, ValueError:

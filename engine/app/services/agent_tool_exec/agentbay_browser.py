@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.core.json_types import json_as_str_or
 from app.core.logging import logger
+from app.services.agentbay_types import is_sdk_list
 
 from .agentbay_media import _agentbay_normalize_image_bytes, _agentbay_save_image_to_workspace
 from .registry import ToolArguments
@@ -206,7 +207,7 @@ async def _agentbay_browser_observe(agent_id: uuid.UUID | None, ws: Path, argume
             import json
 
             elements_raw: object = result.get("elements", [])
-            elements = list(elements_raw) if isinstance(elements_raw, list) else []
+            elements = list[object](elements_raw) if is_sdk_list(elements_raw) else []
             if not elements:
                 return "No interactive elements found matching your instruction."
             return f"Found {len(elements)} interactive element(s):\n\n{json.dumps(elements, ensure_ascii=False, indent=2)[:5000]}"

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.logging import logger
+from app.services.agentbay_types import is_sdk_list, is_sdk_mapping
 
 from .agentbay_apps import _agentbay_normalize_text
 from .registry import ToolArguments
@@ -81,7 +82,7 @@ async def _agentbay_computer_list_windows(agent_id: uuid.UUID | None, ws: Path, 
             import json
 
             windows = result.get("windows", [])
-            if not isinstance(windows, list) or not windows:
+            if not is_sdk_list(windows) or not windows:
                 return "No root windows found."
             return f"OS-level root desktop windows ({len(windows)}). These window_id values refer to whole application windows. Use them for activation, or for closing only when the user explicitly asked to close/quit an entire desktop window or app. Do NOT use these IDs for in-app popups, modals, embedded marketplace/store panels, browser/app tabs, document tabs, or software-internal dialogs; close those with the app UI, Escape, Ctrl+W, or agentbay_computer_dismiss_dialog.\n\n{json.dumps(windows, ensure_ascii=False, indent=2)[:5000]}"
         return f"Failed to list windows: {result.get('error_message', 'Unknown error')}"
@@ -132,11 +133,12 @@ async def _agentbay_computer_close_window(agent_id: uuid.UUID | None, ws: Path, 
             import json
             from difflib import SequenceMatcher
 
-            title_norm, candidates = _agentbay_normalize_text(title), []
+            title_norm = _agentbay_normalize_text(title)
+            candidates: list[tuple[float, dict[object, object]]] = []
             raw_windows = windows_result.get("windows", [])
-            windows = list[object](raw_windows) if isinstance(raw_windows, list) else []
+            windows = list[object](raw_windows) if is_sdk_list(raw_windows) else []
             for window in windows:
-                if not isinstance(window, dict):
+                if not is_sdk_mapping(window):
                     continue
                 candidate = str(window.get("title") or window.get("window_title") or "")
                 candidate_norm = _agentbay_normalize_text(candidate)
@@ -148,11 +150,12 @@ async def _agentbay_computer_close_window(agent_id: uuid.UUID | None, ws: Path, 
                     else SequenceMatcher(None, title_norm, candidate_norm).ratio()
                 )
                 if score >= 0.35:
-                    item = dict[str, object](window)
-                    item["match_score"] = round(score, 3)
-                    candidates.append(item)
-            candidates.sort(key=lambda item: item.get("match_score", 0), reverse=True)
-            return f"Refusing to close by title-only match for `{title}` because it can close the wrong application. The candidates below are whole OS-level root windows. Choose a root window_id only if the user explicitly wants to close/quit that entire application window. For in-app popups, modals, embedded marketplace/store panels, browser/app tabs, document tabs, or software-internal dialogs, do not close a root window; use app UI controls, Escape, Ctrl+W, or agentbay_computer_dismiss_dialog instead.\n\n{json.dumps(candidates[:8], ensure_ascii=False, indent=2)[:3000]}"
+                    item = dict(window)
+                    match_score = round(score, 3)
+                    item["match_score"] = match_score
+                    candidates.append((match_score, item))
+            candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+            return f"Refusing to close by title-only match for `{title}` because it can close the wrong application. The candidates below are whole OS-level root windows. Choose a root window_id only if the user explicitly wants to close/quit that entire application window. For in-app popups, modals, embedded marketplace/store panels, browser/app tabs, document tabs, or software-internal dialogs, do not close a root window; use app UI controls, Escape, Ctrl+W, or agentbay_computer_dismiss_dialog instead.\n\n{json.dumps([item for _, item in candidates[:8]], ensure_ascii=False, indent=2)[:3000]}"
         except RuntimeError as e:
             return f"{e!s}"
         except Exception as e:

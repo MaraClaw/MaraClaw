@@ -138,7 +138,7 @@ async def _agentbay_code_edit_file(agent_id: uuid.UUID | None, ws: Path, argumen
     if not isinstance(edits, list) or not edits:
         return "Missing required argument 'edits'"
 
-    normalized_edits = []
+    normalized_edits: list[dict[str, str]] = []
     for edit in edits:
         if not isinstance(edit, dict):
             return "Each edit must be an object with oldText and newText."
@@ -183,7 +183,7 @@ async def _agentbay_command_exec(agent_id: uuid.UUID | None, ws: Path, arguments
         _session_id = _string_argument(arguments, "_session_id", remove=True)
         client = await get_agentbay_client_for_agent(agent_id, "code", session_id=_session_id)
         result = await client.command_exec(command, timeout_ms=timeout_ms, cwd=cwd)
-        parts = []
+        parts: list[str] = []
         if result.get("success"):
             parts.append(f"Command executed successfully (exit code: {result.get('exit_code', 0)})")
         else:

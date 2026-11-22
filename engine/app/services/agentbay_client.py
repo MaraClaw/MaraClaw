@@ -15,6 +15,7 @@ from pydantic import BaseModel, JsonValue, RootModel
 from app.core.json_types import object_attr, object_call
 from app.core.logging import configure_logging, disable_agentbay_logger_override, logger
 from app.core.logging.agentbay import disable_agentbay_logger_override as _disable_before_sdk
+from app.services.agentbay_types import browser_operator, is_sdk_list, is_sdk_mapping, resize_image
 
 _disable_before_sdk()
 from agentbay import AgentBay, CreateSessionParams, Session  # noqa: E402
@@ -36,13 +37,13 @@ def _sdk_attr(value: object, name: str, default: object = None) -> object:
 
 def _sdk_item(value: object) -> dict[str, object] | str:
     attrs = _sdk_attr(value, "__dict__")
-    if not isinstance(attrs, dict):
+    if not is_sdk_mapping(attrs):
         return str(value)
     return {key: item for key, item in attrs.items() if isinstance(key, str)}
 
 
 def _sdk_items(value: object) -> list[dict[str, object] | str]:
-    if not isinstance(value, list):
+    if not is_sdk_list(value):
         return []
     return [_sdk_item(item) for item in list[object](value)]
 
@@ -164,7 +165,7 @@ class AgentBayClient:
         # no longer block the agent loop waiting for it.
         try:
             _ = await asyncio.wait_for(
-                asyncio.to_thread(session.browser.operator.navigate, url),
+                asyncio.to_thread(browser_operator(session).navigate, url),
                 timeout=40.0,
             )
         except TimeoutError:
@@ -181,7 +182,7 @@ class AgentBayClient:
         if screenshot:
             # Wait for dynamic content and SPA rendering (React/Vue) before screenshotting
             await asyncio.sleep(3)
-            screenshot_data = await asyncio.to_thread(session.browser.operator.screenshot, full_page=False)
+            screenshot_data = await asyncio.to_thread(browser_operator(session).screenshot, full_page=False)
             result["screenshot"] = screenshot_data
 
         return result
@@ -197,7 +198,7 @@ class AgentBayClient:
         # Wait for dynamic content and SPA rendering before screenshotting
         await asyncio.sleep(3)
 
-        screenshot_data = await asyncio.to_thread(session.browser.operator.screenshot, full_page=False)
+        screenshot_data = await asyncio.to_thread(browser_operator(session).screenshot, full_page=False)
         return {"success": True, "screenshot": screenshot_data}
 
     async def browser_click(self, selector: str) -> AgentBayResponse:
@@ -206,7 +207,7 @@ class AgentBayClient:
 
         from agentbay import ActOptions
 
-        _ = await asyncio.to_thread(session.browser.operator.act, ActOptions(action=f"click on {selector}"))
+        _ = await asyncio.to_thread(browser_operator(session).act, ActOptions(action=f"click on {selector}"))
         return {"success": True, "selector": selector}
 
     async def browser_type(self, selector: str, text: str) -> AgentBayResponse:
@@ -238,7 +239,7 @@ class AgentBayClient:
                 "This ensures modern web frameworks like React register the input."
             )
 
-        _ = await asyncio.to_thread(session.browser.operator.act, ActOptions(action=action_msg))
+        _ = await asyncio.to_thread(browser_operator(session).act, ActOptions(action=action_msg))
         return {"success": True, "selector": selector, "text": text}
 
     async def browser_login(self, url: str, login_config: str) -> AgentBayResponse:
@@ -257,11 +258,11 @@ class AgentBayClient:
         session = await self._ensure_browser_initialized()
 
         # Navigate to the login page first
-        _ = await asyncio.to_thread(session.browser.operator.navigate, url)
+        _ = await asyncio.to_thread(browser_operator(session).navigate, url)
 
         # Execute the login skill
         result = await asyncio.to_thread(
-            session.browser.operator.login,
+            browser_operator(session).login,
             login_config,
             use_vision=True,
         )
@@ -314,7 +315,7 @@ class AgentBayClient:
             schema=GenericExtractSchema,
             selector=selector or None,
         )
-        success, extracted = await asyncio.to_thread(session.browser.operator.extract, options)
+        success, extracted = await asyncio.to_thread(browser_operator(session).extract, options)
         extracted_raw: object = list[object]((extracted,))[0]
         if success and extracted_raw and isinstance(extracted_raw, BaseModel):
             extracted_raw = extracted_raw.model_dump()
@@ -333,7 +334,7 @@ class AgentBayClient:
             instruction=instruction,
             selector=selector or None,
         )
-        success, results = await asyncio.to_thread(session.browser.operator.observe, options)
+        success, results = await asyncio.to_thread(browser_operator(session).observe, options)
         return {"success": success, "elements": _sdk_items(results)}
 
     # ─── Command (Shell) Operations ──────────────────
@@ -607,7 +608,7 @@ class AgentBayClient:
             # Resize to max 1920px wide for live preview (up from 1280px to preserve details)
             if img.width > 1920:
                 ratio = 1920 / img.width
-                img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.Resampling.LANCZOS)
+                img = resize_image(img, (int(img.width * ratio), int(img.height * ratio)), Image.Resampling.LANCZOS)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             buffer = BytesIO()
@@ -634,7 +635,7 @@ class AgentBayClient:
             return None
 
         try:
-            screenshot_data: object = await asyncio.to_thread(session.browser.operator.screenshot, full_page=False)
+            screenshot_data: object = await asyncio.to_thread(browser_operator(session).screenshot, full_page=False)
             if not (screenshot_data := list[object]((screenshot_data,))[0]):
                 logger.info("[AgentBay] Browser snapshot returned empty data")
                 return None
@@ -665,7 +666,7 @@ class AgentBayClient:
             # Resize to max 1920px wide for live preview (up from 1280px to preserve details)
             if img.width > 1920:
                 ratio = 1920 / img.width
-                img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.Resampling.LANCZOS)
+                img = resize_image(img, (int(img.width * ratio), int(img.height * ratio)), Image.Resampling.LANCZOS)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             buffer = BytesIO()
