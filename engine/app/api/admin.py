@@ -39,7 +39,7 @@ from app.schemas.admin_companies import (
     CompanyActivationRequest,
     CompanyAgentSections,
     CompanyAgentSectionsUpdate,
-    CompanyOption,
+    CompanyOptionPageOut,
     CompanyPageOut,
     CompanyStats,
 )
@@ -182,13 +182,16 @@ async def list_companies_page(
     return await list_company_page(q, cursor, limit)
 
 
-@router.get("/companies/options", response_model=list[CompanyOption])
+@router.get("/companies/options", response_model=CompanyOptionPageOut)
 async def list_company_picker_options(
+    q: str | None = None,
+    limit: int = DEFAULT_PAGE_SIZE,
+    cursor: str | None = None,
     current_user: UserRecord = Depends(require_role("platform_admin")),
-) -> list[CompanyOption]:
-    """Complete newest-first company list without stats, for pickers."""
+) -> CompanyOptionPageOut:
+    """Stats-free picker page with the ``/companies/page`` keyset, search and limit clamp."""
     _ = current_user
-    return await list_company_options()
+    return await list_company_options(q, cursor, limit)
 
 
 @router.get("/companies/{company_id}/stats", response_model=CompanyStats)

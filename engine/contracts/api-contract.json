@@ -6514,6 +6514,35 @@
         "title": "CompanyOption",
         "type": "object"
       },
+      "CompanyOptionPageOut": {
+        "description": "Stats-free picker page; the cursor is the one ``CompanyPageOut`` uses.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyOption"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "CompanyOptionPageOut",
+        "type": "object"
+      },
       "CompanyPageOut": {
         "properties": {
           "items": {
@@ -22313,22 +22342,72 @@
     },
     "/api/admin/companies/options": {
       "get": {
-        "description": "Complete newest-first company list without stats, for pickers.",
+        "description": "Stats-free picker page with the ``/companies/page`` keyset, search and limit clamp.",
         "operationId": "get_2f6170692f61646d696e2f636f6d70616e6965732f6f7074696f6e73",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/CompanyOption"
-                  },
-                  "title": "Response List Company Picker Options Api Admin Companies Options Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/CompanyOptionPageOut"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -50235,6 +50314,7 @@
       "CompanyActivationOut",
       "CompanyActivationRequest",
       "CompanyConfigOperations",
+      "CompanyOptionPageOut",
       "CompanyReportOut",
       "CompanyReportRegenerate",
       "CompanyRuntimePageOut",
@@ -50579,6 +50659,8 @@
       "CompanyActivationOut",
       "CompanyActivationRequest",
       "CompanyConfigOperations",
+      "CompanyOption",
+      "CompanyOptionPageOut",
       "CompanyReportOut",
       "CompanyReportRegenerate",
       "CompanyRuntimeAgentOut",

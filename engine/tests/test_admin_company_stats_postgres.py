@@ -264,20 +264,45 @@ async def test_exact_full_page_has_no_cursor_and_search_is_ranked_without_one(wo
     assert legacy_cjk == []
 
 
-async def test_options_list_every_company_newest_first_without_stats(world: CompanyWorld):
-    # Given more tenants than the largest page.
+async def test_option_pages_walk_every_company_in_clamped_stats_free_pages(world: CompanyWorld, statements: list[str]):
+    # Given more tenants than the largest page, and the legacy newest-first order.
     for number in range(205):
         _ = await _tenant(_BASE + timedelta(minutes=number), f"opt-{number}")
+    _ = await _tenant(_BASE - timedelta(days=1), "Picker Zeta")
+    everything = [row["id"] for row in (await _get(world, "/companies")).json()]
 
-    # When the picker list is read.
-    response = await _get(world, "/companies/options")
+    # When the picker pages are walked with an oversized limit.
+    statements.clear()
+    pages: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, Any] = {"limit": 9999}
+        if cursor is not None:
+            params["cursor"] = cursor
+        body = (await _get(world, "/companies/options", **params)).json()
+        pages.append(body)
+        cursor = str(body["next_cursor"]) if body["next_cursor"] is not None else None
+        if cursor is None:
+            break
 
-    # Then it is complete, ordered like the legacy list, and carries no stats.
-    options = response.json()
-    assert len(options) == 206
-    assert [row["id"] for row in options] == [row["id"] for row in (await _get(world, "/companies")).json()]
-    assert "user_count" not in options[0]
-    assert options[0]["can_disable"] is True
+    # Then each page is clamped to 200, the walk matches the legacy order, and no stats or unbounded reads ran.
+    assert [len(page["items"]) for page in pages] == [200, 7]
+    assert [row["id"] for page in pages for row in page["items"]] == everything
+    assert "user_count" not in pages[0]["items"][0]
+    assert pages[0]["items"][0]["can_disable"] is True
+    tenant_reads = [sql for sql in statements if "FROM tenants" in sql and "ORDER BY" in sql]
+    assert len(tenant_reads) == 2
+    assert all("LIMIT" in sql for sql in tenant_reads)
+    assert not [sql for sql in statements if "unnest" in sql]
+
+    # When searching, and when a cursor is combined with search.
+    found = (await _get(world, "/companies/options", q="picker")).json()
+    mixed = await _get(world, "/companies/options", q="picker", cursor=str(pages[0]["next_cursor"]))
+
+    # Then search is ranked without a cursor and the combination is rejected.
+    assert [row["name"] for row in found["items"]] == ["Picker Zeta"]
+    assert found["next_cursor"] is None
+    assert mixed.status_code == 400
 
 
 async def test_single_company_stats_404_and_zero_rows(world: CompanyWorld):

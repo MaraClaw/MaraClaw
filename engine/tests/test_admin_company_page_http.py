@@ -1,4 +1,4 @@
-"""Company list routes: authorization before cursor decoding, cursors, pickers and legacy shape."""
+"""Company list routes: authorization before cursor decoding, cursors, picker pages and legacy shape."""
 
 from base64 import urlsafe_b64encode
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -24,6 +24,7 @@ from app.records.user import UserRecord
 
 _BASE = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
 _PAGE = "/api/admin/companies/page"
+_OPTIONS = "/api/admin/companies/options"
 _PHONE = "+84912345678"
 
 
@@ -82,7 +83,7 @@ def pages(monkeypatch) -> dict[str, AsyncMock]:
     return mocks
 
 
-@pytest.mark.parametrize("path", [_PAGE, "/api/admin/companies/options", f"/api/admin/companies/{uuid4()}/stats"])
+@pytest.mark.parametrize("path", [_PAGE, _OPTIONS, f"/api/admin/companies/{uuid4()}/stats"])
 @pytest.mark.parametrize("state", ["missing", "wrong_role", "force_change"])
 async def test_every_company_read_requires_platform_admin(client, principal, pages, path, state):
     # Given a caller who is not a usable platform admin, and a cursor that would fail to decode.
@@ -97,7 +98,7 @@ async def test_every_company_read_requires_platform_admin(client, principal, pag
             principal.identity.must_change_password = True
 
     # When the route is called.
-    response = await client.get(path, params={"cursor": "!"} if path == _PAGE else None, headers=headers)
+    response = await client.get(path, params={"cursor": "!"} if path in (_PAGE, _OPTIONS) else None, headers=headers)
 
     # Then authorization answers first and nothing is read.
     assert response.status_code == (401 if state == "missing" else 403)
@@ -120,8 +121,9 @@ async def test_every_company_read_requires_platform_admin(client, principal, pag
         ).decode(),
     ],
 )
-async def test_malformed_or_forged_cursor_is_400(client, principal, pages, cursor):
-    response = await client.get(_PAGE, params={"cursor": cursor}, headers={"Authorization": "Bearer t"})
+@pytest.mark.parametrize("path", [_PAGE, _OPTIONS])
+async def test_malformed_or_forged_cursor_is_400(client, principal, pages, path, cursor):
+    response = await client.get(path, params={"cursor": cursor}, headers={"Authorization": "Bearer t"})
     assert response.status_code == 400
     assert response.json()["detail"] == "Invalid cursor"
     pages["list_page"].assert_not_awaited()
@@ -148,23 +150,28 @@ async def test_cursor_round_trips_and_seeks_after_last_item(client, principal, p
     assert last["next_cursor"] is None
 
 
-@pytest.mark.parametrize(("limit", "expected"), [(0, 1), (-5, 1), (9999, 200)])
-async def test_page_limit_is_clamped(client, principal, pages, limit, expected):
-    _ = await client.get(_PAGE, params={"limit": limit}, headers={"Authorization": "Bearer t"})
+@pytest.mark.parametrize("path", [_PAGE, _OPTIONS])
+@pytest.mark.parametrize(("limit", "expected"), [(None, 50), (0, 1), (-5, 1), (9999, 200)])
+async def test_page_limit_is_clamped(client, principal, pages, path, limit, expected):
+    params = {} if limit is None else {"limit": limit}
+    _ = await client.get(path, params=params, headers={"Authorization": "Bearer t"})
     assert pages["list_page"].await_args.kwargs["limit"] == expected
 
 
-async def test_search_returns_ranked_list_without_cursor_and_rejects_a_cursor(client, principal, pages):
+@pytest.mark.parametrize("path", [_PAGE, _OPTIONS])
+async def test_search_returns_ranked_list_without_cursor_and_rejects_a_cursor(client, principal, pages, path):
     headers = {"Authorization": "Bearer t"}
-    found = await client.get(_PAGE, params={"q": " co ", "limit": 1}, headers=headers)
+    found = await client.get(path, params={"q": " co ", "limit": 1}, headers=headers)
     assert found.json()["next_cursor"] is None
     assert len(found.json()["items"]) == 1
     pages["search_by_name"].assert_awaited_once_with("co")
     pages["list_page"].assert_not_awaited()
 
-    with_cursor = await client.get(_PAGE, params={"q": "co", "cursor": "anything"}, headers=headers)
-    too_long = await client.get(_PAGE, params={"q": "x" * 201}, headers=headers)
+    with_cursor = await client.get(path, params={"q": "co", "cursor": "anything"}, headers=headers)
+    too_long = await client.get(path, params={"q": "x" * 201}, headers=headers)
     assert (with_cursor.status_code, too_long.status_code) == (400, 400)
+    assert with_cursor.json()["detail"] == "Cursor cannot be combined with search"
+    pages["list_ordered_by_created_at"].assert_not_awaited()
 
 
 async def test_company_rows_carry_the_tier_of_their_tenant_row(client, principal, pages):
@@ -195,16 +202,35 @@ async def test_company_rows_carry_the_contact_phone_of_their_tenant_row(client, 
     assert [row["phone"] for row in unpaged] == [_PHONE, None, None]
 
 
-async def test_options_are_stats_free_and_stats_route_reports_404(client, principal, pages):
+async def test_options_are_stats_free_keyset_pages_that_never_read_every_company(client, principal, pages):
     headers = {"Authorization": "Bearer t"}
-    options = (await client.get("/api/admin/companies/options", headers=headers)).json()
-    assert [row["id"] for row in options] == [str(UUID(int=n)) for n in (1, 2, 3)]
-    assert "user_count" not in options[0]
-    assert "tier" not in options[0]
-    assert "phone" not in options[0]
-    assert options[0]["can_disable"] is True
-    pages["usage_stats"].assert_not_awaited()
 
+    # When the first picker page has a lookahead row.
+    first = (await client.get(_OPTIONS, params={"limit": 2}, headers=headers)).json()
+
+    # Then it trims to the limit, carries no stats and signs the boundary.
+    assert set(first) == {"items", "next_cursor"}
+    assert [row["id"] for row in first["items"]] == [str(UUID(int=n)) for n in (1, 2)]
+    assert "user_count" not in first["items"][0]
+    assert "tier" not in first["items"][0]
+    assert "phone" not in first["items"][0]
+    assert first["items"][0]["can_disable"] is True
+    assert pages["list_page"].await_args.kwargs == {"limit": 2, "before": None}
+
+    # When the cursor is replayed, the seek starts after the second tenant and the last page has no cursor.
+    pages["list_page"].return_value = [_tenant(3)]
+    last = (await client.get(_OPTIONS, params={"limit": 2, "cursor": first["next_cursor"]}, headers=headers)).json()
+    assert pages["list_page"].await_args.kwargs == {"limit": 2, "before": (_tenant(2).created_at, UUID(int=2))}
+    assert [row["id"] for row in last["items"]] == [str(UUID(int=3))]
+    assert last["next_cursor"] is None
+
+    # And neither stats nor the full company list were read.
+    pages["usage_stats"].assert_not_awaited()
+    pages["list_ordered_by_created_at"].assert_not_awaited()
+
+
+async def test_stats_route_reports_404(client, principal, pages):
+    headers = {"Authorization": "Bearer t"}
     found = await client.get(f"/api/admin/companies/{UUID(int=1)}/stats", headers=headers)
     assert found.json()["user_count"] == 2
     pages["get"].return_value = None
