@@ -1,17 +1,21 @@
 """HTTP traversal and measured query work against opt-in, isolated PostgreSQL."""
 
 import os
+from calendar import monthrange
 from collections.abc import Mapping
 from dataclasses import asdict
+from datetime import date, timedelta
 from typing import Final
 from uuid import UUID
 
 import orjson
 import pytest
-from anyio import Path
+from anyio import Path, create_task_group, fail_after
 from pydantic import TypeAdapter
 
-from app.schemas.okr import ObjectiveOut, ObjectivePageOut
+from app.db.connection import DbConnection
+from app.db.pool import get_pool
+from app.schemas.okr import ObjectiveOut, ObjectivePageOut, PeriodOut
 from okr_paging_postgres_fixtures import (
     COUNT,
     LEGACY_PATH,
@@ -35,6 +39,41 @@ async def _page(seeded: OKRPostgres, params: Mapping[str, str | int]) -> Objecti
     response = await seeded.client.get(PAGE_PATH, params={**PERIOD, **params})
     assert response.status_code == 200, response.text
     return ObjectivePageOut.model_validate_json(response.content)
+
+
+async def test_live_periods_use_monthly_settings_when_concurrent_insert_wins(okr_postgres: OKRPostgres) -> None:
+    async def get_periods() -> None:
+        response = await okr_postgres.client.get("/api/okr/periods")
+        assert response.status_code == 200, response.text
+        current, upcoming = TypeAdapter(list[PeriodOut]).validate_json(response.content)
+        assert current.is_current
+        assert not upcoming.is_current
+        for period in (current, upcoming):
+            start, end = date.fromisoformat(period.start), date.fromisoformat(period.end)
+            assert start.day == 1
+            assert end == start.replace(day=monthrange(start.year, start.month)[1])
+        assert date.fromisoformat(upcoming.start) == date.fromisoformat(current.end) + timedelta(days=1)
+
+    tenant = {"tenant_id": okr_postgres.tenant_id}
+    async with get_pool().connection() as raw:
+        competing_db = DbConnection(raw)
+        [winner] = await competing_db.fetchall(
+            "INSERT INTO okr_settings (tenant_id, period_frequency) VALUES (%(tenant_id)s, 'monthly') RETURNING *",
+            tenant,
+        )
+        with fail_after(10):
+            async with create_task_group() as tasks:
+                tasks.start_soon(get_periods)
+                while not await okr_postgres.db.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() "
+                    "AND wait_event_type = 'Lock' AND %(winner)s = ANY(pg_blocking_pids(pid)))",
+                    {"winner": raw.info.backend_pid},
+                ):
+                    pass
+                await competing_db.commit()
+
+        rows = await okr_postgres.db.fetchall("SELECT * FROM okr_settings WHERE tenant_id = %(tenant_id)s", tenant)
+        assert rows == [winner]
 
 
 @pytest.mark.parametrize("limit", [1, 7, 50])

@@ -6,7 +6,7 @@ from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
-from app.db.errors import UniqueViolationError
+from app.db.errors import DbError
 from app.records.okr import OKRSettingsRecord
 
 _COLUMNS = (
@@ -42,13 +42,22 @@ class OKRSettingsDAO(BaseDAO[OKRSettingsRecord]):
         existing = await self.get(tenant_id)
         if existing is not None:
             return existing
-        try:
-            return await self.create(obj_in={"tenant_id": tenant_id})
-        except UniqueViolationError:
-            refreshed = await self.get(tenant_id)
-            if refreshed is None:
-                raise
-            return refreshed
+
+        async with self.session() as db:
+            row = await db.fetchone(
+                f"""INSERT INTO okr_settings (tenant_id) VALUES (%(tenant_id)s)
+                    ON CONFLICT (tenant_id) DO NOTHING
+                    RETURNING {self._select_list()}""",
+                {"tenant_id": tenant_id},
+            )
+            if row is not None:
+                return self._from_row(row)
+
+            # A separate statement sees the concurrent insert's commit under READ COMMITTED.
+            existing = await self.get(tenant_id)
+            if existing is None:
+                raise DbError("Conflicting OKR settings row disappeared before it could be read")
+            return existing
 
 
 okr_settings_dao = OKRSettingsDAO()
