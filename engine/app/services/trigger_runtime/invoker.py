@@ -143,8 +143,8 @@ async def _run_trigger_invocation(
             logger.warning(f"Agent {agent.name}'s model is unavailable, skipping trigger invocation")
             return "Agent primary model is unavailable or disabled"
 
-        context_parts = []
-        trigger_names = []
+        context_parts: list[str] = []
+        trigger_names: list[str] = []
         for t in triggers:
             part = f"Trigger: {t.name} ({t.type})\nReason: {t.reason}"
             if t.name == "daily_okr_collection":
@@ -349,7 +349,7 @@ async def _run_trigger_invocation(
 
         if final_reply and delivery_target and not delivered_platform_message_via_tool:
             try:
-                trigger_reasons = []
+                trigger_reasons: list[str] = []
                 for t in triggers:
                     summary_value = json_as_str_or(json_object_from(t.config).get("_notification_summary"))
                     ns = summary_value.strip()
