@@ -7,13 +7,13 @@ import json
 import random
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, suppress
 from typing import Protocol, TypeIs
 from unittest.mock import patch
 from weakref import WeakValueDictionary
 
 from app.core.domain.channels import ChannelType
-from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from, mapping_from_row
+from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 from app.runtime.callbacks import CallbackAdmission
@@ -24,12 +24,10 @@ from app.services.channels.stream_source import StreamSource, acquire_stream_sou
 try:
     import lark_oapi as _lark_mod
     import lark_oapi.ws as _lark_ws_mod
-
-    _HAS_LARK = True
 except ImportError:
     _lark_mod = None
     _lark_ws_mod = None
-    _HAS_LARK = False
+_HAS_LARK = _lark_ws_mod is not None
 
 
 _CONNECT_RETRY_BASE_SECONDS = 2.0
@@ -107,8 +105,8 @@ def _feishu_event_body(data: object) -> JsonObject | None:
     """Normalize a Feishu WS event payload into a JSON object, or None if unusable."""
     raw_body: object = getattr(data, "raw_body", None)
     if not raw_body:
-        if isinstance(data, dict):
-            return _json_object(data)
+        if _is_json_object(data):
+            return data
         body_dict: JsonObject = {}
         if hasattr(data, "header"):
             header_obj: object = getattr(data, "header", None)
@@ -121,7 +119,7 @@ def _feishu_event_body(data: object) -> JsonObject | None:
 
         if hasattr(data, "event"):
             event_raw: object = getattr(data, "event", None)
-            body_dict["event"] = _json_object(event_raw) if isinstance(event_raw, dict) else mapping_from_row(event_raw)
+            body_dict["event"] = _json_object(event_raw)
         else:
             content_raw: object = getattr(data, "content", None)
             if isinstance(content_raw, str):
@@ -145,17 +143,14 @@ def _feishu_event_body(data: object) -> JsonObject | None:
     return {}
 
 
+_orig_websockets_connect: Callable[..., object] | None = None
 if _HAS_LARK:
-    try:
+    with suppress(ImportError):
         import websockets as _websockets
 
         # Keep a reference to the original connect so we can restore it if needed.
         _orig_websockets_connect = _websockets.connect
-        _PROXY_PATCH_AVAILABLE = True
-    except ImportError:
-        _PROXY_PATCH_AVAILABLE = False
-else:
-    _PROXY_PATCH_AVAILABLE = False
+_PROXY_PATCH_AVAILABLE = _orig_websockets_connect is not None
 
 
 def _make_no_proxy_connect(orig_connect: Callable[..., object]) -> Callable[[], AbstractAsyncContextManager[None]]:
@@ -368,7 +363,11 @@ class FeishuWSManager:
 
         # Build scoped proxy bypass: active only during _connect() to avoid
         # permanently replacing websockets.connect for the whole process.
-        _no_proxy_ctx = _make_no_proxy_connect(_orig_websockets_connect) if _PROXY_PATCH_AVAILABLE else None
+        _no_proxy_ctx = (
+            _make_no_proxy_connect(_orig_websockets_connect)
+            if _PROXY_PATCH_AVAILABLE and _orig_websockets_connect is not None
+            else None
+        )
 
         async def _connect_once() -> None:
             if _no_proxy_ctx:

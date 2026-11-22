@@ -62,7 +62,7 @@ def _markdown_to_feishu_blocks(markdown: str) -> list[dict[str, ToolArgumentValu
 
         if stripped.startswith("```"):
             language = stripped[3:].strip()
-            code_lines = []
+            code_lines: list[str] = []
             line_index += 1
             while line_index < len(lines) and not lines[line_index].strip().startswith("```"):
                 code_lines.append(lines[line_index])

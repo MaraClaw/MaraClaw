@@ -11,6 +11,7 @@ from app.core.json_types import JsonObject, is_json_object, json_as_str, json_ob
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.channel_context import channel_feishu_sender_open_id
+from app.services.im_sdk_types import is_object_list
 
 from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
 
@@ -112,9 +113,9 @@ def _nested_mapping(value: object) -> JsonObject:
 
 
 def _object_items(value: object) -> list[dict[str, ToolArgumentValue]]:
-    if not isinstance(value, list):
+    if not is_object_list(value):
         return []
-    return [raw for raw in list[object](value) if is_json_object(raw)]
+    return [raw for raw in value if is_json_object(raw)]
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:
@@ -252,7 +253,7 @@ async def _freebusy_section(sender_open_id: str, token: str, start_iso: str, end
         from zoneinfo import ZoneInfo
 
         tz_cn = ZoneInfo("Asia/Shanghai")
-        busy_lines = []
+        busy_lines: list[str] = []
         for slot in sorted(busy_slots, key=lambda item: json_as_str(item.get("start_time")) or ""):
             start_raw = json_as_str(slot.get("start_time")) or ""
             end_raw = json_as_str(slot.get("end_time")) or ""

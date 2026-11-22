@@ -11,6 +11,7 @@ from httpx import AsyncClient, Response
 from app.core.json_types import JsonObject, json_as_str, json_object_from_response, object_attr
 from app.services import agent_tools
 from app.services.feishu_service import FeishuService
+from app.services.im_sdk_types import is_object_list
 
 from .registry import ToolArguments, tool_arg_str_or
 
@@ -52,7 +53,7 @@ def _nested_mapping(value: object) -> Mapping[object, object]:
 
 
 def _object_items(value: object) -> list[JsonObject]:
-    if not isinstance(value, list):
+    if not is_object_list(value):
         return []
     return [item for item in value if isinstance(item, dict)]
 
@@ -104,7 +105,7 @@ async def _feishu_drive_share(agent_id: uuid.UUID, arguments: ToolArguments) -> 
         resolved.append((name, match.group(1) if match else ""))
     resolved.extend((open_id, open_id) for open_id in member_open_ids if open_id)
 
-    results = []
+    results: list[str] = []
     async with _httpx_client(timeout=15) as client:
         for display, open_id in resolved:
             if not open_id:
