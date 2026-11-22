@@ -291,6 +291,13 @@ case "$LOG_DRIVER" in
         ;;
 esac
 
+# ChatGPT sign-in: the engine serves the OAuth callback itself. A localhost redirect URI on its own port
+# (the public Codex client only allows http://localhost:1455/auth/callback) must reach the engine, so publish it.
+CHATGPT_LOCAL_REDIRECT_RE='^http://(localhost|127\.0\.0\.1):([0-9]+)/'
+if [[ "${CHATGPT_OAUTH_REDIRECT_URI:-}" =~ $CHATGPT_LOCAL_REDIRECT_RE ]] && [ "${BASH_REMATCH[2]}" != "$PORT" ]; then
+    RUN_ARGS+=(-p "${BASH_REMATCH[2]}:8000")
+fi
+
 if [ "${DETACH:-0}" = "1" ]; then
     RUN_ARGS+=(-d --restart unless-stopped)
 else

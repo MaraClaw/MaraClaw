@@ -139,6 +139,7 @@ from app.api.capacity_evidence import router as capacity_evidence_router
 from app.api.channel_catalog import router as channel_catalog_router
 from app.api.channel_links import router as channel_links_router
 from app.api.chat_sessions import router as chat_sessions_router
+from app.api.chatgpt_oauth_callback import build_callback_router as build_chatgpt_oauth_callback_router
 from app.api.clawbook import router as clawbook_router
 from app.api.company_admissions import router as company_admissions_router
 from app.api.departments import router as departments_router
@@ -260,6 +261,8 @@ app.include_router(tavily_proxy_router)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(pages_public_router)
 app.include_router(file_shares_public_router)
+# Public, root-mounted at the path of CHATGPT_OAUTH_REDIRECT_URI as read here (restart to change); none when empty.
+app.include_router(build_chatgpt_oauth_callback_router())
 app.include_router(credentials_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(agentbay_control_router, prefix=settings.API_PREFIX)
 app.include_router(gogcli_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)

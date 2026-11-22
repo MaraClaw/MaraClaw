@@ -24,8 +24,9 @@ from app.services.subscription_boundaries import unchanged_subscription_model
 AUTH_KIND_API_KEY: Final = "api_key"
 AUTH_KIND_CHATGPT_SUBSCRIPTION: Final = "chatgpt_subscription"
 CHATGPT_SUBSCRIPTION_PROVIDER: Final = "openai"
-CHATGPT_SUBSCRIPTION_MODEL: Final = "gpt-6-luna"
+CHATGPT_SUBSCRIPTION_MODEL: Final = "gpt-6.2-sol"
 CHATGPT_SUBSCRIPTION_LABEL: Final = "ChatGPT"
+CHATGPT_SUBSCRIPTION_REASONING_EFFORT: Final = "high"
 REFRESH_SKEW = timedelta(minutes=5)
 
 
@@ -77,6 +78,7 @@ async def _persist_subscription_tokens(
                 "base_url": CHATGPT_CODEX_BASE_URL,
                 "label": CHATGPT_SUBSCRIPTION_LABEL,
                 "tenant_id": tenant_id,
+                "reasoning_effort": CHATGPT_SUBSCRIPTION_REASONING_EFFORT,
                 "supports_vision": True,
             }
         )

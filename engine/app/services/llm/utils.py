@@ -151,6 +151,7 @@ def create_llm_client_from_model(model: _ClientModel, *, timeout: float | None =
             timeout=resolved_timeout,
             extra_headers=codex_request_headers(account_id),
             stateless=True,
+            stream_only=True,
         )
         return cache_put(cache_key, built)
     built = create_llm_client(
@@ -159,6 +160,7 @@ def create_llm_client_from_model(model: _ClientModel, *, timeout: float | None =
         model=getattr(model, "model", None) or "",
         base_url=getattr(model, "base_url", None),
         timeout=resolved_timeout,
+        stream_only=getattr(model, "auth_kind", "") == "grok_subscription",
     )
     return cache_put(cache_key, built)
 

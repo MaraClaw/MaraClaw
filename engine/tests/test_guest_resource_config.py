@@ -297,7 +297,7 @@ async def test_guest_agent_settings_survive_regeneration_beside_platform_model(g
     defaults = json_object_from(agents["defaults"])
     assert agents["entries"] == GUEST_ENTRIES
     assert defaults["thinkingDefault"] == GUEST_DEFAULTS["thinkingDefault"]
-    assert defaults["modelPolicy"] == {"mode": "strict", "allow": ["openai/gpt-6.1-sol"]}
+    assert defaults["modelPolicy"] == {"mode": "strict", "allow": ["openai/gpt-6.2-sol"]}
     assert defaults["model"] == json_object_from(json_object_from(generated["agents"])["defaults"])["model"]
     assert stored["env"] == generated["env"]
 

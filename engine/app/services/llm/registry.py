@@ -72,7 +72,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="OpenAI",
         protocol="openai_compatible",
         default_base_url="https://api.openai.com/v1",
-        default_model="gpt-6.1-sol",
+        default_model="gpt-6.2-sol",
         default_max_tokens=16384,
     ),
     "openai-response": ProviderSpec(
@@ -80,7 +80,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="OpenAI Responses",
         protocol="openai_responses",
         default_base_url="https://api.openai.com/v1",
-        default_model="gpt-6.1-sol",
+        default_model="gpt-6.2-sol",
         default_max_tokens=16384,
     ),
     "grok": ProviderSpec(
@@ -96,7 +96,7 @@ PROVIDER_REGISTRY: dict[str, ProviderSpec] = {
         display_name="Azure OpenAI",
         protocol="openai_compatible",
         default_base_url=None,
-        default_model="gpt-6.1-sol",
+        default_model="gpt-6.2-sol",
         default_max_tokens=16384,
     ),
     "deepseek": ProviderSpec(

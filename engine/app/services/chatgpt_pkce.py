@@ -1,15 +1,18 @@
-"""Browser authorization material and strict, local-only callback parsing."""
+"""Browser authorization material and strict parsing of the provider redirect query, without network I/O."""
 
 import base64
 import hashlib
 import re
 import secrets
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode
 
-from fastapi import HTTPException
+from app.config import get_settings
+from app.services.chatgpt_oauth import OPENAI_OAUTH_ISSUER
 
-from app.services.chatgpt_oauth import OPENAI_OAUTH_CLIENT_ID, OPENAI_OAUTH_ISSUER, OPENAI_REDIRECT_URI
+_MAX_QUERY_LENGTH = 8192
+# new_browser_authorization mints token_urlsafe states; anything else can never name an attempt.
+_STATE = re.compile(r"[A-Za-z0-9_-]{1,256}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +24,7 @@ class BrowserAuthorization:
 
 @dataclass(frozen=True, slots=True)
 class BrowserCallback:
+    state: str
     code: str | None
     error: str | None
 
@@ -30,12 +34,13 @@ def pkce_challenge(verifier: str) -> str:
 
 
 def new_browser_authorization() -> BrowserAuthorization:
+    settings = get_settings()
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)
     query = urlencode(
         {
-            "client_id": OPENAI_OAUTH_CLIENT_ID,
-            "redirect_uri": OPENAI_REDIRECT_URI,
+            "client_id": settings.CHATGPT_OAUTH_CLIENT_ID,
+            "redirect_uri": settings.CHATGPT_OAUTH_REDIRECT_URI,
             "scope": "openid profile email offline_access",
             "response_type": "code",
             "code_challenge": pkce_challenge(verifier),
@@ -49,34 +54,37 @@ def new_browser_authorization() -> BrowserAuthorization:
     return BrowserAuthorization(state, verifier, f"{OPENAI_OAUTH_ISSUER}/oauth/authorize?{query}")
 
 
-def parse_browser_callback(callback_url: str, expected_state: str) -> BrowserCallback:
-    """Never visit the URL. Invalid input leaves the single-use attempt intact."""
+def parse_callback_query(query: str) -> BrowserCallback | None:
+    """Read the raw redirect query; ``None`` when it is malformed or ambiguous.
+
+    Exactly one ``state`` and exactly one of ``code`` / ``error`` are required, and no parameter may repeat.
+    Other parameters (``error_description``, ``iss``, ``scope``) are tolerated and never returned, so provider prose
+    cannot reach a response, a log or Redis.
+    """
     try:
         if (
-            len(callback_url) > 8192
-            or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in callback_url)
-            or "\\" in callback_url
-            or "#" in callback_url
-            or re.search(r"%(?![0-9a-fA-F]{2})", callback_url)
+            len(query) > _MAX_QUERY_LENGTH
+            or not query.isascii()
+            or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in query)
+            or "\\" in query
+            or "#" in query
+            or re.search(r"%(?![0-9a-fA-F]{2})", query)
         ):
-            raise ValueError
-        url = urlsplit(callback_url)
-        if url.scheme != "http" or url.netloc != "localhost:1455" or url.path != "/auth/callback":
-            raise ValueError
-        pairs = parse_qsl(url.query, keep_blank_values=True, strict_parsing=True, errors="strict", max_num_fields=32)
+            return None
+        pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, errors="strict", max_num_fields=32)
         params = dict(pairs)
         if len(params) != len(pairs) or any(
             not key or any(ord(char) < 32 or ord(char) == 127 for char in key + value) for key, value in pairs
         ):
-            raise ValueError
+            return None
         state = params.get("state", "")
-        if not state or not secrets.compare_digest(state.encode("utf-8"), expected_state.encode("utf-8")):
-            raise ValueError
+        if not _STATE.fullmatch(state):
+            return None
         if ("code" in params) == ("error" in params):
-            raise ValueError
-        credential = params.get("code") if "code" in params else params.get("error")
-        if credential is None or credential == "" or any(char.isspace() for char in credential):
-            raise ValueError
-        return BrowserCallback(params.get("code"), params.get("error"))
+            return None
+        credential = params["code"] if "code" in params else params["error"]
+        if not credential or any(char.isspace() for char in credential):
+            return None
+        return BrowserCallback(state=state, code=params.get("code"), error=params.get("error"))
     except ValueError, UnicodeError:
-        raise HTTPException(status_code=400, detail="Invalid ChatGPT callback URL or state") from None
+        return None

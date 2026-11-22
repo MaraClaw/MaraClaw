@@ -1,4 +1,7 @@
-"""Redis single-use PKCE tickets and owner-bound, short-lived recovery results."""
+"""Redis single-use PKCE tickets, their state index, and owner-bound, short-lived recovery results.
+
+Keys hash the attempt id or the OAuth state, so neither raw value is ever a Redis key.
+"""
 
 import hashlib
 import secrets
@@ -58,8 +61,8 @@ class AttemptView:
     result: ChatGPTSubscriptionStatusOut | None = None
 
 
-def _key(attempt_id: str, kind: str) -> str:
-    digest = hashlib.sha256(attempt_id.encode()).hexdigest()
+def _key(token: str, kind: str) -> str:
+    digest = hashlib.sha256(token.encode()).hexdigest()
     return f"{get_settings().REDIS_KEY_PREFIX}chatgpt-oauth:{digest}:{kind}"
 
 
@@ -83,9 +86,13 @@ async def issue(binding: AttemptBinding, authorization: BrowserAuthorization) ->
         if not bool(bound):
             raise unavailable()
         saved = await redis.set(_key(attempt_id, "pending"), ticket.model_dump_json(), nx=True, ex=ATTEMPT_TTL)
+        if not bool(saved):
+            raise unavailable()
+        # The provider redirect carries only the state: this index is how the callback finds the attempt.
+        indexed = await redis.set(_key(authorization.state, "state"), attempt_id, nx=True, ex=ATTEMPT_TTL)
     except RedisError:
         raise unavailable() from None
-    if not bool(saved):
+    if not bool(indexed):
         raise unavailable()
     return attempt_id
 
@@ -120,27 +127,28 @@ async def read_attempt(attempt_id: str, user: UserRecord) -> AttemptView | None:
         raise unavailable() from None
 
 
-async def pending_ticket(attempt_id: str) -> PendingTicket | None:
+async def claim_by_state(state: str) -> PendingTicket | None:
+    """Consume the state index, then the pending ticket it names; each ``GETDEL`` succeeds once.
+
+    ``None`` for an unknown, expired or already used state. A ticket that does not belong to the state is a
+    corrupt record and fails closed as unavailable.
+    """
     try:
         redis = await get_redis()
-        raw = await redis.get(_key(attempt_id, "pending"))
-        return PendingTicket.model_validate_json(raw) if raw is not None else None
-    except RedisError, ValidationError:
-        raise unavailable() from None
-
-
-async def claim(attempt_id: str, binding: AttemptBinding) -> PendingTicket | None:
-    try:
-        redis = await get_redis()
+        attempt_id = await redis.getdel(_key(state, "state"))
+        if attempt_id is None:
+            return None
+        if not isinstance(attempt_id, str):
+            raise unavailable()
         raw = await redis.getdel(_key(attempt_id, "pending"))
         if raw is None:
             return None
         ticket = PendingTicket.model_validate_json(raw)
-        if ticket.binding != binding:
-            raise unavailable()
-        return ticket
     except RedisError, ValidationError:
         raise unavailable() from None
+    if ticket.attempt_id != attempt_id or not secrets.compare_digest(ticket.state.encode(), state.encode()):
+        raise unavailable()
+    return ticket
 
 
 async def finish(binding: AttemptBinding, result: ChatGPTSubscriptionStatusOut) -> None:

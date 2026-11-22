@@ -31,6 +31,13 @@ from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.openclaw_update_gate import OpenClawUpdateGateError
 
 
+def schedule_company_models_push(tenant_id: UUID) -> None:
+    """After the caller commits, rewrite every guest's OpenClaw config in the company from its fresh slots."""
+    from app.api.background_tasks import schedule_background_task
+
+    schedule_background_task(push_company_models_to_guests(tenant_id), f"push company models tenant={tenant_id}")
+
+
 async def push_company_models_to_guests(tenant_id: UUID) -> None:
     """Rewrite ``openclaw.json`` for every agent of ``tenant_id`` from its current model slots."""
     async with optional_connection_ctx():

@@ -8,6 +8,7 @@ from typing import Literal, Protocol
 
 import httpx
 
+from app.config import get_settings
 from app.core.json_types import (
     JsonObject,
     is_str_dict,
@@ -18,10 +19,8 @@ from app.core.json_types import (
     json_value_from_response,
 )
 
-OPENAI_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_OAUTH_ISSUER = "https://auth.openai.com"
 OPENAI_TOKEN_URL = f"{OPENAI_OAUTH_ISSUER}/oauth/token"
-OPENAI_REDIRECT_URI = "http://localhost:1455/auth/callback"
 CHATGPT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 CODEX_CLIENT_VERSION = "0.145.0"
 
@@ -176,14 +175,15 @@ async def exchange_authorization_code(
     """Exchange a browser authorization code with the original private PKCE verifier."""
     if not authorization_code or not code_verifier:
         return TokenPoll(status="error", error="missing authorization code")
+    settings = get_settings()
     client = transport or get_chatgpt_oauth_transport()
     status, body = await client.post_form(
         OPENAI_TOKEN_URL,
         {
             "grant_type": "authorization_code",
             "code": authorization_code,
-            "redirect_uri": OPENAI_REDIRECT_URI,
-            "client_id": OPENAI_OAUTH_CLIENT_ID,
+            "redirect_uri": settings.CHATGPT_OAUTH_REDIRECT_URI,
+            "client_id": settings.CHATGPT_OAUTH_CLIENT_ID,
             "code_verifier": code_verifier,
         },
     )
@@ -203,7 +203,7 @@ async def refresh_access_token(
         OPENAI_TOKEN_URL,
         {
             "grant_type": "refresh_token",
-            "client_id": OPENAI_OAUTH_CLIENT_ID,
+            "client_id": get_settings().CHATGPT_OAUTH_CLIENT_ID,
             "refresh_token": refresh_token,
         },
     )

@@ -247,7 +247,7 @@ def test_embedding_credentials_stay_separate_from_chat_provider_credentials(gues
     primary: Any = SimpleNamespace(
         id=uuid.uuid4(),
         provider="openai",
-        model="gpt-6.1-sol",
+        model="gpt-6.2-sol",
         api_key_encrypted="chat-secret-key",
         auth_kind="api_key",
         label="Chat",

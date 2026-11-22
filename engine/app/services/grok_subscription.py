@@ -43,7 +43,7 @@ from app.services.subscription_boundaries import (
 AUTH_KIND_API_KEY: Final = "api_key"
 AUTH_KIND_GROK_SUBSCRIPTION: Final = "grok_subscription"
 GROK_SUBSCRIPTION_PROVIDER: Final = "grok"
-GROK_SUBSCRIPTION_MODEL: Final = "grok-4.8"
+GROK_SUBSCRIPTION_MODEL: Final = "grok-4.7"
 GROK_SUBSCRIPTION_LABEL: Final = "Grok SuperGrok"
 GROK_SUBSCRIPTION_BASE_URL: Final = "https://api.x.ai/v1"
 REFRESH_SKEW = timedelta(minutes=5)
@@ -219,7 +219,6 @@ async def _persist_subscription_tokens(
         "auth_kind": AUTH_KIND_GROK_SUBSCRIPTION,
         "enabled": True,
         "provider": GROK_SUBSCRIPTION_PROVIDER,
-        "model": GROK_SUBSCRIPTION_MODEL,
         "base_url": GROK_SUBSCRIPTION_BASE_URL,
     }
     if tokens.refresh_token:
@@ -231,8 +230,10 @@ async def _persist_subscription_tokens(
         saved = await llm_model_dao.create(
             obj_in={
                 **updates,
+                "model": GROK_SUBSCRIPTION_MODEL,
                 "label": GROK_SUBSCRIPTION_LABEL,
                 "tenant_id": tenant_id,
+                "reasoning_effort": "xhigh",
                 "supports_vision": True,
             }
         )

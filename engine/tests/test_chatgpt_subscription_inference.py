@@ -23,18 +23,22 @@ async def test_probe_uses_codex_responses_client(monkeypatch):
 
     class FakeResponse:
         status_code = 200
-        text = ""
 
-        def json(self):
-            return {
-                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
-                "output_text": "ok",
-            }
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"type":"response.output_text.delta","delta":"ok"}'
+            yield 'data: {"type":"response.completed","response":{"output":[]}}'
 
     class FakeHttpx:
         is_closed = False
 
-        async def post(self, url, json=None, headers=None):
+        def stream(self, method, url, json=None, headers=None):
+            captured["method"] = method
             captured["url"] = url
             captured["json"] = json
             captured["headers"] = headers
@@ -59,6 +63,7 @@ async def test_probe_uses_codex_responses_client(monkeypatch):
     assert result.get("reply") == "ok"
     assert str(captured["url"]).endswith("/responses")
     assert "codex" in str(captured["url"])
+    assert captured["json"]["stream"] is True
     assert captured["json"]["store"] is False
     assert "temperature" not in captured["json"]
     assert "max_output_tokens" not in captured["json"]
@@ -73,6 +78,7 @@ def test_create_llm_client_from_model_uses_codex_responses():
     client = create_llm_client_from_model(row, timeout=9)
     assert type(client) is OpenAIResponsesClient
     assert client.stateless is True
+    assert client.stream_only is True
     assert client.base_url == "https://chatgpt.com/backend-api/codex"
     headers = client._get_headers()
     assert headers["chatgpt-account-id"] == "acct-stored"

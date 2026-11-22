@@ -16,7 +16,7 @@ from app.api import background_tasks, enterprise as enterprise_api
 from app.dao.llm_dao import llm_model_dao
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
-from app.services import openclaw_company_models as push, openclaw_update_exclusion
+from app.services import enterprise_llm, openclaw_company_models as push, openclaw_update_exclusion
 from app.services.agent_manager import agent_manager
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
 
@@ -116,4 +116,103 @@ async def test_company_slot_change_schedules_the_guest_push(monkeypatch, route):
     else:
         await enterprise_api.set_fallback_llm_model(chosen.id, current_user=user)
 
+    assert scheduled == [f"push company models tenant={_TENANT}"]
+
+
+@pytest.fixture
+def scheduled(monkeypatch) -> list[str]:
+    seen: list[str] = []
+
+    def schedule(coroutine: Any, description: str) -> None:
+        assert coroutine.cr_frame.f_locals["tenant_id"] == _TENANT
+        coroutine.close()
+        seen.append(description)
+
+    monkeypatch.setattr(background_tasks, "schedule_background_task", schedule)
+    return seen
+
+
+def _org_admin() -> Any:
+    return SimpleNamespace(id=uuid.uuid4(), role="org_admin", tenant_id=_TENANT, identity=None)
+
+
+@pytest.mark.asyncio
+async def test_editing_a_company_model_schedules_the_guest_push(monkeypatch, scheduled):
+    # Given an enabled company model whose provider key is edited.
+    model = _model("main")
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=model))
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "update", AsyncMock(return_value=model))
+    tenant = SimpleNamespace(id=_TENANT, default_model_id=model.id, default_fallback_model_id=None)
+    monkeypatch.setattr(enterprise_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(enterprise_api, "write_admin_audit", AsyncMock())
+
+    # When
+    await enterprise_api.update_llm_model(
+        model.id,
+        enterprise_api.LLMModelUpdate(api_key="sk-new-key", temperature=None, reasoning_effort=None),
+        current_user=_org_admin(),
+    )
+
+    # Then
+    assert scheduled == [f"push company models tenant={_TENANT}"]
+
+
+@pytest.mark.asyncio
+async def test_removing_a_company_model_schedules_the_guest_push(monkeypatch, scheduled):
+    # Given a company model that no agent uses.
+    model = _model("gone")
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "get", AsyncMock(return_value=model))
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "delete", AsyncMock())
+    monkeypatch.setattr(enterprise_api.agent_dao, "names_referencing_model", AsyncMock(return_value=[]))
+    tenant = SimpleNamespace(id=_TENANT, default_model_id=None, default_fallback_model_id=None)
+    monkeypatch.setattr(enterprise_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(enterprise_api, "write_admin_audit", AsyncMock())
+
+    # When
+    await enterprise_api.remove_llm_model(model.id, current_user=_org_admin())
+
+    # Then
+    assert scheduled == [f"push company models tenant={_TENANT}"]
+
+
+@pytest.mark.asyncio
+async def test_adding_the_first_company_model_schedules_the_guest_push(monkeypatch, scheduled):
+    # Given a company without a primary model.
+    model = _model("first")
+    monkeypatch.setattr(enterprise_api.llm_model_dao, "create", AsyncMock(return_value=model))
+    tenant = SimpleNamespace(id=_TENANT, default_model_id=None, default_fallback_model_id=None)
+    monkeypatch.setattr(enterprise_api.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(enterprise_api.tenant_dao, "update", AsyncMock())
+    monkeypatch.setattr(enterprise_api, "write_admin_audit", AsyncMock())
+
+    # When
+    await enterprise_api.add_llm_model(
+        enterprise_api.LLMModelCreate(
+            provider="anthropic",
+            model="first",
+            api_key="sk-key",
+            label="first",
+            temperature=None,
+            reasoning_effort=None,
+        ),
+        current_user=_org_admin(),
+    )
+
+    # Then the new slot assignment reaches the guests.
+    assert scheduled == [f"push company models tenant={_TENANT}"]
+
+
+@pytest.mark.asyncio
+async def test_activating_a_subscription_model_schedules_the_guest_push(monkeypatch, scheduled):
+    # Given a connected subscription row in a company without a primary.
+    model = _model("subscription")
+    tenant = SimpleNamespace(id=_TENANT, default_model_id=None, default_fallback_model_id=None)
+    monkeypatch.setattr(enterprise_llm.tenant_dao, "get", AsyncMock(return_value=tenant))
+    monkeypatch.setattr(enterprise_llm.tenant_dao, "update", AsyncMock())
+    monkeypatch.setattr(enterprise_llm.agent_dao, "assign_primary_where_null", AsyncMock(return_value=0))
+
+    # When
+    await enterprise_llm.activate_pool_model_for_tenant(model)
+
+    # Then
     assert scheduled == [f"push company models tenant={_TENANT}"]

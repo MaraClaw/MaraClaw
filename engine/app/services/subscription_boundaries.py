@@ -43,6 +43,14 @@ async def fresh_subscription_actor(user: UserRecord) -> UserRecord:
     return fresh
 
 
+async def fresh_subscription_owner(actor_id: UUID, identity_id: UUID, tenant_id: UUID | None) -> UserRecord:
+    """Reload a recorded actor where no session exists (the OAuth browser callback), then run every actor check."""
+    owner = await user_dao.get_with_identity(actor_id, fresh=True)
+    if owner is None or (owner.identity_id, owner.tenant_id) != (identity_id, tenant_id):
+        raise HTTPException(status_code=403, detail="Administrator authority changed")
+    return await fresh_subscription_actor(owner)
+
+
 async def active_subscription_tenant(tenant_id: UUID) -> None:
     db = get_connection()
     if db is None:

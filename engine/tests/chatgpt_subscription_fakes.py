@@ -9,14 +9,20 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import pytest
 from redis.exceptions import RedisError
 
+from app.config import get_settings
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
+from app.dao.user_dao import user_dao
 from app.records.identity import IdentityRecord
 from app.records.llm import LLMModelRecord
 from app.records.user import UserRecord
 from app.services import chatgpt_oauth, chatgpt_subscription_handoff as browser, chatgpt_subscription_store as store
-from app.services.chatgpt_subscription_types import ChatGPTSubscriptionCompleteIn, ChatGPTSubscriptionStartOut
+from app.services.chatgpt_subscription_types import ChatGPTSubscriptionStartOut
 
+# Pinned by the fixture so a local engine/.env never decides what these tests see.
+REDIRECT_URI = "http://engine.example.test:8000/auth/callback"
+CALLBACK_PATH = "/auth/callback"
+CLIENT_ID = "app_maraclaw_test_client"
 _NOW = datetime.now(UTC)
 _TENANT = uuid.uuid4()
 _OTHER = uuid.uuid4()
@@ -103,6 +109,8 @@ class TicketRedis:
         self.rows: dict[str, tuple[str, datetime]] = {}
         self.writes: list[tuple[str, int, bool]] = []
         self.fail_on: set[str] = set()
+        # Owners the session-less callback reloads by actor id; the fixture records each started attempt's actor.
+        self.accounts: dict[uuid.UUID, UserRecord] = {}
 
     def _get(self, key: str) -> str | None:
         row = self.rows.get(key)
@@ -113,6 +121,10 @@ class TicketRedis:
             self.rows.pop(key)
             return None
         return value
+
+    def pending(self, attempt_id: str) -> store.PendingTicket | None:
+        raw = self._get(store._key(attempt_id, "pending"))
+        return None if raw is None else store.PendingTicket.model_validate_json(raw)
 
     async def set(self, key: str, value: str, *, nx: bool, ex: int) -> bool:
         if "set" in self.fail_on:
@@ -138,18 +150,34 @@ class TicketRedis:
 
 @pytest.fixture
 def oauth_store(monkeypatch):
+    monkeypatch.setenv("CHATGPT_OAUTH_REDIRECT_URI", REDIRECT_URI)
+    monkeypatch.setenv("CHATGPT_OAUTH_CLIENT_ID", CLIENT_ID)
+    get_settings.cache_clear()
     redis = TicketRedis()
+    new_binding = store.new_binding
+
+    def record_owner(user: UserRecord, tenant_id: uuid.UUID) -> store.AttemptBinding:
+        redis.accounts[user.id] = user
+        return new_binding(user, tenant_id)
+
+    async def load_owner(user_id: uuid.UUID, *, fresh: bool = False) -> UserRecord | None:
+        return redis.accounts.get(user_id)
+
     monkeypatch.setattr(store, "get_redis", AsyncMock(return_value=redis))
+    monkeypatch.setattr(store, "new_binding", record_owner)
+    monkeypatch.setattr(user_dao, "get_with_identity", load_owner)
     monkeypatch.setattr(store, "datetime", redis.clock)
     monkeypatch.setattr(browser, "datetime", redis.clock)
     monkeypatch.setattr(browser.llm_model_dao, "get_subscription_for_tenant", AsyncMock(return_value=None))
     monkeypatch.setattr(chatgpt_oauth, "_transport", None)
-    return redis
+    yield redis
+    get_settings.cache_clear()
 
 
-def callback(start: ChatGPTSubscriptionStartOut, **params: str) -> ChatGPTSubscriptionCompleteIn:
-    state = parse_qs(urlsplit(start.authorization_url).query)["state"][0]
-    query = {"state": state, "code": "authorization-code"} if not params else {"state": state, **params}
-    return ChatGPTSubscriptionCompleteIn(
-        attempt_id=start.attempt_id, callback_url=f"http://localhost:1455/auth/callback?{urlencode(query)}"
-    )
+def state_of(start: ChatGPTSubscriptionStartOut) -> str:
+    return parse_qs(urlsplit(start.authorization_url).query)["state"][0]
+
+
+def callback_query(start: ChatGPTSubscriptionStartOut, **params: str) -> str:
+    """The provider redirect query for this attempt; a code unless other parameters are given."""
+    return urlencode({"state": state_of(start), **(params or {"code": "authorization-code"})})

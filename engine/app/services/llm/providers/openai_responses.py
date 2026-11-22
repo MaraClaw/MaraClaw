@@ -10,17 +10,19 @@ import httpx
 
 from app.core.json_types import (
     JsonObject,
+    JsonValue,
     is_any_list,
     is_str_dict,
     json_as_str,
     json_as_str_or,
+    json_loads_object,
     json_object_from,
     json_object_from_response,
     object_list_from_row,
 )
 from app.core.logging import logger
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
-from app.services.llm.retry_policy import call_with_retry, raise_for_status
+from app.services.llm.retry_policy import StreamDelivery, call_with_retry, raise_for_status, stream_http_error
 from app.services.llm.types import LLMContentPart, LLMMessage, LLMResponse, LLMRole, LLMToolCall, LLMUsage
 
 
@@ -86,11 +88,13 @@ class OpenAIResponsesClient(LLMClient):
         supports_tool_choice: bool = True,
         extra_headers: dict[str, str] | None = None,
         stateless: bool = False,
+        stream_only: bool = False,
     ):
         super().__init__(api_key, base_url or self.DEFAULT_BASE_URL, model, timeout)
         self.supports_tool_choice: bool = supports_tool_choice
         self.extra_headers: dict[str, str] = extra_headers or {}
         self.stateless: bool = stateless
+        self.stream_only: bool = stream_only
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -441,7 +445,11 @@ class OpenAIResponsesClient(LLMClient):
         max_tokens: int | None = None,
         **kwargs: object,
     ) -> LLMResponse:
-        """Non-streaming completion."""
+        """Non-streaming completion. A ``stream_only`` backend is read through its event stream instead."""
+        if self.stream_only:
+            return await self.stream(
+                messages, tools, temperature, max_tokens, on_chunk=None, on_tool_delta=None, on_thinking=None, **kwargs
+            )
         url = f"{self._normalize_base_url()}/responses"
         payload = self._build_payload(messages, tools, temperature, max_tokens, stream=False, **kwargs)
 
@@ -481,9 +489,19 @@ class OpenAIResponsesClient(LLMClient):
     ) -> LLMResponse:
         """Streaming completion.
 
-        Minimal implementation: fallback to non-streaming and forward final text. ``complete`` owns the retries,
+        A ``stream_only`` backend streams server-sent events and retries only until its first callback fires.
+        Otherwise this falls back to non-streaming and forwards the final text: ``complete`` owns the retries,
         and no callback has fired until it returns, so a failed attempt is always safe to retry.
         """
+        if self.stream_only:
+            url = f"{self._normalize_base_url()}/responses"
+            payload = self._build_payload(messages, tools, temperature, max_tokens, stream=True, **kwargs)
+            delivery = StreamDelivery(on_chunk, on_tool_delta, on_thinking)
+            return await call_with_retry(
+                lambda: self._stream_once(url, payload, delivery.on_chunk, delivery.on_thinking),
+                provider="openai-responses",
+                delivery=delivery,
+            )
         response = await self.complete(
             messages=messages,
             tools=tools,
@@ -496,6 +514,64 @@ class OpenAIResponsesClient(LLMClient):
         if on_thinking and response.reasoning_content not in (None, ""):
             await on_thinking(response.reasoning_content)
         return response
+
+    async def _stream_once(
+        self,
+        url: str,
+        payload: dict[str, object],
+        on_chunk: ChunkCallback | None,
+        on_thinking: ThinkingCallback | None,
+    ) -> LLMResponse:
+        """One streaming attempt. Its accumulators are local, so a retry starts clean.
+
+        The terminal ``response.completed`` event may carry an empty ``output`` when nothing is stored, so the
+        finished items are collected from ``response.output_item.done`` and the final event only supplies metadata.
+        """
+        items: list[JsonValue] = []
+        text_parts: list[str] = []
+        final: JsonObject = {}
+        client = await self._get_client()
+        async with client.stream("POST", url, json=payload, headers=self._get_headers()) as resp:
+            if resp.status_code >= 400:
+                raise await stream_http_error(resp)
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line.removeprefix("data:").strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                try:
+                    event = json_loads_object(raw)
+                except ValueError:
+                    continue
+                event_type = json_as_str(event.get("type")) or ""
+                if event_type == "response.output_text.delta":
+                    delta = json_as_str_or(event.get("delta"))
+                    if delta:
+                        text_parts.append(delta)
+                        if on_chunk:
+                            await on_chunk(delta)
+                elif event_type == "response.reasoning_summary_text.delta":
+                    delta = json_as_str_or(event.get("delta"))
+                    if delta and on_thinking:
+                        await on_thinking(delta)
+                elif event_type == "response.output_item.done":
+                    item = event.get("item")
+                    if item is not None:
+                        items.append(item)
+                elif event_type in {"response.completed", "response.incomplete", "response.failed"}:
+                    final = json_object_from(event.get("response"))
+                    break
+                elif event_type == "error":
+                    raise LLMError(self._extract_api_error({"error": event}) or "Responses stream error")
+        api_error = self._extract_api_error(final)
+        if api_error not in (None, ""):
+            logger.error("OpenAIResponses API error: %s | context=%s", api_error, self._build_error_log_context(final))
+            raise LLMError(api_error)
+        data: JsonObject = {**final, "output": items or final.get("output")}
+        if text_parts:
+            data["output_text"] = "".join(text_parts)
+        return self._parse_response_data(data)
 
     @override
     async def close(self) -> None:

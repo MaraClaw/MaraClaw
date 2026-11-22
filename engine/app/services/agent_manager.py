@@ -7,8 +7,8 @@ import secrets
 import shutil
 import sqlite3
 import tempfile
-import time
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -22,13 +22,13 @@ from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
 from app.core.domain.agents import AgentStatus
-from app.core.json_types import JsonObject, is_str_dict, json_object_from
+from app.core.json_types import JsonObject, is_str_dict, json_loads_value, json_object_from, object_call
 from app.core.logging import logger
 from app.core.security import decrypt_data
 from app.dao import llm_model_dao
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
-from app.services.chatgpt_oauth import OPENAI_OAUTH_CLIENT_ID, account_id_from_jwt
+from app.services.chatgpt_oauth import account_id_from_jwt
 from app.services.chatgpt_subscription import (
     AUTH_KIND_CHATGPT_SUBSCRIPTION,
     ensure_fresh_access_token as ensure_chatgpt_token,
@@ -47,7 +47,7 @@ from app.services.guest_identity import (
     stop_guest_containers,
 )
 from app.services.guest_image import ensure_guest_image
-from app.services.guest_limits import resolve_guest_limits
+from app.services.guest_limits import GuestLimits, resolve_guest_limits
 from app.services.guest_logging import guest_log_options
 from app.services.guest_ports import guest_port_candidates, is_port_bind_conflict
 from app.services.guest_resource_config import preserve_guest_resources
@@ -90,6 +90,8 @@ settings = get_settings()
 _XAI_GUEST_PROVIDERS = frozenset({"grok", "xai", "x-ai", "x_ai"})
 XAI_OAUTH_PROFILE_ID = "xai:default"
 OPENAI_OAUTH_PROFILE_ID = "openai:default"
+_LEGACY_AUTH_PROFILES_PATH = Path("agents/main/agent/auth-profiles.json")
+_LEGACY_OAUTH_PATH = Path("credentials/oauth.json")
 _guest_config_fingerprints: dict[str, str] = {}
 
 
@@ -205,7 +207,7 @@ def openai_oauth_credential(model: LLMModelRecord | None) -> JsonObject | None:
         "access": access,
         "refresh": refresh,
         "expires": _token_expires_ms(model),
-        "clientId": OPENAI_OAUTH_CLIENT_ID,
+        "clientId": get_settings().CHATGPT_OAUTH_CLIENT_ID,
     }
     if account_id:
         payload["accountId"] = account_id
@@ -361,27 +363,24 @@ class AgentManager:
         _ = tmp.replace(path)
         return True
 
-    def _upsert_auth_profile_sqlite(self, agent_dir: Path, store: JsonObject) -> None:
-        db_path = agent_dir / "agents" / "main" / "agent" / "openclaw-agent.sqlite"
-        if not db_path.is_file():
-            return
-        payload = json.dumps(store)
-        now_ms = int(time.time() * 1000)
+    @staticmethod
+    def _stored_oauth_profile_ids(agent_dir: Path) -> set[str]:
+        db_uri = (agent_dir / "state" / "openclaw.sqlite").absolute().as_uri()
         try:
-            with sqlite3.connect(db_path) as conn:
-                _ = conn.execute(
-                    "CREATE TABLE IF NOT EXISTS auth_profile_store "
-                    "(store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+            with closing(sqlite3.connect(f"{db_uri}?mode=ro", uri=True)) as conn:
+                cursor = conn.execute(
+                    "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'"
                 )
-                _ = conn.execute(
-                    "INSERT INTO auth_profile_store (store_key, store_json, updated_at) "
-                    "VALUES ('primary', ?, ?) "
-                    "ON CONFLICT(store_key) DO UPDATE SET store_json = excluded.store_json, "
-                    "updated_at = excluded.updated_at",
-                    (payload, now_ms),
-                )
-        except sqlite3.Error as exc:
-            logger.warning("[OpenClaw] could not write guest auth sqlite for {}: {}", agent_dir.name, exc)
+                row = object_call(cursor.fetchone)
+            match row:
+                case (str() as value,):
+                    store = json_loads_value(value)
+                    profiles = store.get("profiles") if is_str_dict(store) else None
+                    return set(profiles) if is_str_dict(profiles) else set()
+                case _:
+                    return set()
+        except sqlite3.Error, ValueError, RecursionError:
+            return set()
 
     def _sync_guest_oauth(
         self,
@@ -415,10 +414,16 @@ class AgentManager:
                 legacy["openai"] = openai_legacy
         if not profiles:
             return
+        stored_ids = self._stored_oauth_profile_ids(agent_dir)
+        for profile_id, provider in ((XAI_OAUTH_PROFILE_ID, "xai"), (OPENAI_OAUTH_PROFILE_ID, "openai")):
+            if profile_id in stored_ids:
+                _ = profiles.pop(profile_id, None)
+                _ = legacy.pop(provider, None)
+        if not profiles:
+            return
         store: JsonObject = {"version": 1, "profiles": profiles}
-        wrote_legacy = self._atomic_write_json(agent_dir / "credentials" / "oauth.json", json_object_from(legacy))
-        wrote_store = self._atomic_write_json(agent_dir / "agents" / "main" / "agent" / "auth-profiles.json", store)
-        self._upsert_auth_profile_sqlite(agent_dir, store)
+        wrote_legacy = self._atomic_write_json(agent_dir / _LEGACY_OAUTH_PATH, legacy)
+        wrote_store = self._atomic_write_json(agent_dir / _LEGACY_AUTH_PROFILES_PATH, store)
         if wrote_legacy or wrote_store:
             logger.info("[OpenClaw] wrote OAuth profiles for guest {}", agent_dir.name)
 
@@ -499,7 +504,7 @@ class AgentManager:
 
         The default model is the primary slot; assigned models appear in the catalog and the explicit override policy.
         """
-        chosen_ref = guest_model_ref(model) or guest_model_ref(fallback) or "openai/gpt-6.1-sol"
+        chosen_ref = guest_model_ref(model) or guest_model_ref(fallback) or "openai/gpt-6.2-sol"
         defaults: JsonObject = {
             "workspace": "${OPENCLAW_STATE_DIR}/workspace",
             "model": self._defaults_model_block(chosen_ref, fallback),
@@ -675,8 +680,14 @@ class AgentManager:
                     agent_dir, container_envs, gogcli_volumes = await self._apply_guest_state(
                         agent, models, rehydrate=rehydrate
                     )
-                    # Last checkpoint before Docker creates a container: a stop seen here creates nothing.
+                    guest_state_volume = (str(agent_dir), "/home/node/custom-state", "rw")
+                    # A stop seen before Docker creates a container creates nothing.
                     await assert_start_active(operation_id)
+                    if (agent_dir / _LEGACY_AUTH_PROFILES_PATH).exists() or (agent_dir / _LEGACY_OAUTH_PATH).exists():
+                        await run_docker(
+                            self._migrate_guest_oauth, client, guest_image, guest_state_volume, container_envs, limits
+                        )
+                        await assert_start_active(operation_id)
                 except (OSError, ValueError, HTTPError, HTTPException) as exc:
                     if not guests:
                         raise GuestStartPreflightError("Guest start preparation failed") from exc
@@ -698,7 +709,7 @@ class AgentManager:
                         name=guest_container_name(agent.id),
                         networks=[settings.DOCKER_NETWORK],
                         publish=[(f"127.0.0.1:{container_port}", settings.OPENCLAW_GATEWAY_PORT)],
-                        volumes=[(str(agent_dir), "/home/node/custom-state", "rw"), *gogcli_volumes],
+                        volumes=[guest_state_volume, *gogcli_volumes],
                         envs=container_envs,
                         restart="unless-stopped",
                         memory=limits.memory_bytes,
@@ -736,6 +747,35 @@ class AgentManager:
                 _clear_runtime(original, agent)
                 return None
         return None
+
+    @staticmethod
+    def _migrate_guest_oauth(
+        client: DockerClient,
+        guest_image: str,
+        state_volume: tuple[str, str, str],
+        container_envs: dict[str, str],
+        limits: GuestLimits,
+    ) -> None:
+        guest_name = Path(state_volume[0]).name
+        try:
+            _ = client.run(
+                guest_image,
+                ["openclaw", "doctor", "--fix", "--non-interactive"],
+                pull="never",
+                remove=True,
+                volumes=[state_volume],
+                envs=container_envs,
+                memory=limits.memory_bytes,
+                memory_swap=limits.memory_bytes,
+                cpus=limits.cpus,
+                pids_limit=limits.pids_limit,
+            )
+        except (ClientNotFoundError, DockerException) as exc:
+            logger.error(
+                "[OpenClaw] OAuth migration via doctor failed for guest {}: {}", guest_name, type(exc).__name__
+            )
+            raise
+        logger.info("[OpenClaw] Migrated OAuth profiles via doctor for guest {}", guest_name)
 
     def _rehearse_guest_state(self, agent: AgentRecord, models: _GuestModels) -> None:
         """Run the failure-prone state steps in a scratch tree so preparation errors never reach the live one."""

@@ -144,8 +144,8 @@ def test_unset_experiments_keep_original_generated_json_bytes(monkeypatch):
         "agents": {
             "defaults": {
                 "workspace": "${OPENCLAW_STATE_DIR}/workspace",
-                "model": {"primary": "openai/gpt-6.1-sol"},
-                "modelPolicy": {"allow": ["openai/gpt-6.1-sol"]},
+                "model": {"primary": "openai/gpt-6.2-sol"},
+                "modelPolicy": {"allow": ["openai/gpt-6.2-sol"]},
             }
         },
         "memory": {"search": {"enabled": True, "rememberAcrossConversations": False}},

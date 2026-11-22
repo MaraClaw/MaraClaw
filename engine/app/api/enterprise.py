@@ -79,11 +79,9 @@ from app.services.chatgpt_subscription import (
 )
 from app.services.chatgpt_subscription_handoff import (
     chatgpt_subscription_status,
-    complete_chatgpt_subscription_handoff,
     start_chatgpt_subscription_handoff,
 )
 from app.services.chatgpt_subscription_types import (
-    ChatGPTSubscriptionCompleteIn,
     ChatGPTSubscriptionStartOut,
     ChatGPTSubscriptionStatusOut,
 )
@@ -120,6 +118,7 @@ from app.services.llm import (
     get_provider_manifest,
 )
 from app.services.llm.registry import ProviderManifest
+from app.services.openclaw_company_models import schedule_company_models_push
 from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
 from app.services.sso_service import sso_service
 from app.services.subscription_boundaries import fresh_subscription_actor, unchanged_subscription_model
@@ -245,7 +244,10 @@ async def probe_llm_model(
 
     start = time.time()
     try:
-        if existing is not None and getattr(existing, "auth_kind", "") == AUTH_KIND_CHATGPT_SUBSCRIPTION:
+        if existing is not None and getattr(existing, "auth_kind", "") in {
+            AUTH_KIND_CHATGPT_SUBSCRIPTION,
+            "grok_subscription",
+        }:
             client = create_llm_client_from_model(existing)
         else:
             client = create_llm_client(
@@ -297,7 +299,7 @@ async def start_chatgpt_subscription(
     tenant_id: str | None = None,
     current_user: UserRecord = Depends(get_current_admin),
 ) -> ChatGPTSubscriptionStartOut:
-    """Start browser OAuth PKCE. Tokens and the verifier stay on the server."""
+    """Start browser OAuth PKCE; the engine-hosted callback finishes it. Tokens and the verifier stay on the server."""
     assert_llm_pool_admin(current_user)
     return await start_chatgpt_subscription_handoff(current_user, tenant_id)
 
@@ -309,14 +311,6 @@ async def get_chatgpt_subscription_status(
 ) -> ChatGPTSubscriptionStatusOut:
     """Read an owner-bound result without contacting the provider."""
     return await chatgpt_subscription_status(current_user, attempt_id)
-
-
-@router.post("/llm-models/chatgpt-subscription/complete", response_model=ChatGPTSubscriptionStatusOut)
-async def complete_chatgpt_subscription(
-    data: ChatGPTSubscriptionCompleteIn,
-    current_user: UserRecord = Depends(get_current_admin),
-) -> ChatGPTSubscriptionStatusOut:
-    return await complete_chatgpt_subscription_handoff(current_user, data)
 
 
 @router.post("/llm-models/{model_id}/refresh-subscription", response_model=GrokSubscriptionRefreshOut)
@@ -420,6 +414,8 @@ async def _add_llm_model(data: LLMModelCreate, tenant_id: str | None, current_us
                 changes.update(_llm_slot_changes(tenant, {"default_fallback_model_id": model.id}))
                 _ = await tenant_dao.update(db_obj=tenant, obj_in={"default_fallback_model_id": model.id})
                 assigned_fallback = True
+            if assigned_primary or assigned_fallback:
+                schedule_company_models_push(tenant.id)
 
     await write_admin_audit(
         actor=current_user,
@@ -436,14 +432,6 @@ async def _add_llm_model(data: LLMModelCreate, tenant_id: str | None, current_us
         default_model_id=model.id if assigned_primary else None,
         fallback_model_id=model.id if assigned_fallback else None,
     )
-
-
-def _schedule_company_model_push(tenant_id: uuid.UUID) -> None:
-    """After commit, rewrite every guest's OpenClaw config in the company from its migrated slots."""
-    from app.api.background_tasks import schedule_background_task
-    from app.services.openclaw_company_models import push_company_models_to_guests
-
-    schedule_background_task(push_company_models_to_guests(tenant_id), f"push company models tenant={tenant_id}")
 
 
 @router.post("/llm-models/{model_id}/set-default", status_code=status.HTTP_204_NO_CONTENT)
@@ -484,7 +472,7 @@ async def _set_default_llm_model(model_id: uuid.UUID, current_user: UserRecord) 
             f"[set_default_llm_model] Migrated agents in tenant {tenant.id} from {previous_default} -> {model.id}"
         )
     await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="primary")
-    _schedule_company_model_push(tenant.id)
+    schedule_company_models_push(tenant.id)
     await write_admin_audit(
         actor=current_user,
         action="llm_model_set_default",
@@ -531,7 +519,7 @@ async def _set_fallback_llm_model(model_id: uuid.UUID, current_user: UserRecord)
         new_model_id=model.id,
     )
     await agent_dao.clear_other_slots_matching(tenant_id=tenant.id, model_id=model.id, keep="fallback")
-    _schedule_company_model_push(tenant.id)
+    schedule_company_models_push(tenant.id)
     logger.info(f"[set_fallback_llm_model] Set fallback for tenant {tenant.id} to {model.id}")
     await write_admin_audit(
         actor=current_user,
@@ -591,6 +579,8 @@ async def _remove_llm_model(model_id: uuid.UUID, force: bool, current_user: User
     if agent_names:
         await agent_dao.nullify_model_references(model_id)
     _ = await llm_model_dao.delete(record_id=model_id)
+    if model.tenant_id:
+        schedule_company_models_push(model.tenant_id)
     await write_admin_audit(
         actor=current_user,
         action="llm_model_delete",
@@ -659,6 +649,8 @@ async def _update_llm_model(model_id: uuid.UUID, data: LLMModelUpdate, current_u
         from app.services.openclaw_hot_cache import drop_model_caches
 
         run_after_commit(drop_model_caches)
+        if model.tenant_id:
+            schedule_company_models_push(model.tenant_id)
         default_model_id = None
         fallback_model_id = None
         changes: dict[str, object] = {

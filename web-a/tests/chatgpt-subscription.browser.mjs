@@ -16,22 +16,74 @@ const output = process.env.CHATGPT_ARTIFACTS ?? await mkdtemp(join(tmpdir(), 'ch
 await mkdir(output, { recursive: true })
 const base = '/api/enterprise/llm-models/chatgpt-subscription'
 const tenantA = 'a8122022-c233-4f10-91df-91e2d065d2cb', tenantB = 'b8122022-c233-4f10-91df-91e2d065d2cb'
-const callback = 'http://localhost:1455/auth/callback?code=synthetic-private-code&state=synthetic-state'
+// Provider detail a status answer may carry; the card must never render or store it.
+const privateDetail = 'synthetic-private-code'
 // AuthUserSchema requires UUID ids; any other value fails the session parse and signs out.
 const admin = { id: 'c1a7e5d0-3b6f-4a2e-9d41-7f0c8e2b5a91', identity_id: 'c1a7e5d0-3b6f-4a2e-9d41-7f0c8e2b5a92', email: 'synthetic@example.test', display_name: 'Synthetic Operator', role: 'org_admin', is_platform_admin: false, tenant_id: tenantA, is_active: true, email_verified: true, must_change_password: false, avatar_url: null, created_at: '2026-10-23T00:00:00Z' }
 // Gamma is never on the browse page: only the by-id lookup reaches it. The unknown id answers 404.
 const tenantC = '28122022-c233-4f10-91df-91e2d065d2cb', unknownTenant = '38122022-c233-4f10-91df-91e2d065d2cb'
 const companies = [tenantA, tenantB, tenantC].map((id, i) => ({ id, name: `Synthetic ${['Alpha', 'Beta', 'Gamma'][i]}`, slug: `synthetic-${i}`, is_active: true, can_disable: true, tier: 'pro', created_at: admin.created_at }))
+// The card checks status every 2 s and gives up 10 s after the link's 600 s lifetime. The page shim holds exactly
+// those timers, so each scenario fires every check itself, and it counts status fetches to prove they never overlap.
+const pollMs = 2_000, expiryMs = 610_000
+const pageShim = `(() => {
+  const buckets = { poll: ${pollMs}, expiry: ${expiryMs} }, held = new Map()
+  let nextId = 0
+  const hold = (real, repeat) => (callback, delay, ...args) => {
+    const bucket = Object.keys(buckets).find((name) => buckets[name] === delay)
+    if (!bucket || typeof callback !== 'function') return real(callback, delay, ...args)
+    const id = --nextId
+    held.set(id, { bucket, repeat, run: () => callback(...args) })
+    return id
+  }
+  const clear = (real) => (id) => { if (!held.delete(id)) real(id) }
+  window.setTimeout = hold(window.setTimeout.bind(window), false)
+  window.setInterval = hold(window.setInterval.bind(window), true)
+  window.clearTimeout = clear(window.clearTimeout.bind(window))
+  window.clearInterval = clear(window.clearInterval.bind(window))
+  window.__syntheticTimers = {
+    count: (bucket) => [...held.values()].filter((item) => item.bucket === bucket).length,
+    fire(bucket) {
+      const due = [...held].filter(([, item]) => item.bucket === bucket)
+      for (const [id, item] of due) { if (!item.repeat) held.delete(id); item.run() }
+      return due.length
+    },
+  }
+  // A check is in flight from fetch until its body is read or it is aborted.
+  const fetch = window.fetch.bind(window), status = { calls: 0, active: 0, max: 0, settled: 0 }
+  window.__statusFetch = status
+  window.fetch = (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (!url.includes('${base}/status')) return fetch(input, init)
+    let open = true
+    const done = () => { if (open) { open = false; status.active--; status.settled++ } }
+    status.calls++; status.active++; status.max = Math.max(status.max, status.active)
+    init?.signal?.addEventListener('abort', done, { once: true })
+    return fetch(input, init).then((response) => {
+      const text = response.text.bind(response)
+      response.text = () => text().finally(done)
+      return response
+    }, (error) => { done(); throw error })
+  }
+})();`
 const receipt = { status: 'running', output, scenarios: [], screenshots: [], controlFrames: [], violations: [], cleanup: { tabs: 0, closedTabs: 0, barriers: 0, released: 0 } }
 const inFlight = new Set()
 let browser, server, profile, current
 const wait = (locator, state = 'visible') => locator.waitFor({ state, timeout: 12_000 })
 const button = (page, text) => page.locator('button').filter({ hasText: new RegExp(`^${text}$`, 'u') }).last()
 const card = (page) => page.locator('[data-slot="card"]').filter({ has: page.locator('h3').filter({ hasText: /^Connect ChatGPT subscription$/u }) })
-const field = (page) => page.getByLabel('Full callback URL', { exact: true })
+const link = (page) => card(page).locator('a[target="_blank"]')
+const shownStatus = (page) => card(page).locator('[role="status"]:not(:empty)')
 const connect = (page) => page.locator('button:not(:disabled)').filter({ hasText: /^Connect ChatGPT subscription$/u }).last()
 const picker = (page) => page.getByLabel('Company', { exact: true })
 const selectedCompany = (page) => picker(page).evaluate((select) => ({ value: select.value, label: select.selectedOptions[0]?.textContent, options: [...select.options].map((option) => option.textContent) }))
+const focused = (locator) => locator.evaluate((element) => element === document.activeElement)
+const statusFetch = (page) => page.evaluate(() => ({ ...window.__statusFetch }))
+const fire = (page, bucket) => page.evaluate((name) => window.__syntheticTimers.fire(name), bucket)
+const statusCalls = (state) => state.calls.filter((call) => call.path === `${base}/status`).length
+const modelCalls = (state, scope = null) => state.calls.filter((call) => call.path === '/api/enterprise/llm-models' && call.scope === scope).length
+// One macrotask lets a fired timer's request start, or not, before anything is counted.
+const settle = (page) => page.evaluate(() => new Promise((resolve) => { setTimeout(resolve, 0) }))
 async function bounded(promise) {
   let timer
   try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Synthetic barrier timed out')), 12_000) })]) }
@@ -44,12 +96,31 @@ function hold(state, path) {
   state.barriers.push(barrier); receipt.cleanup.barriers++
   return barrier
 }
+// Bounded in-page waits on shim state, paced by animation frames rather than fixed delays.
+async function answered(page, settled) {
+  await page.evaluate(async (expected) => {
+    const deadline = performance.now() + 12_000
+    while (window.__statusFetch.settled < expected || window.__statusFetch.active > 0) {
+      if (performance.now() > deadline) throw new Error(`Status check ${expected} did not settle`)
+      await new Promise(requestAnimationFrame)
+    }
+  }, settled)
+  await settle(page)
+}
+async function timersAt(page, bucket, count) {
+  await page.evaluate(async ([name, expected]) => {
+    const deadline = performance.now() + 12_000
+    while (window.__syntheticTimers.count(name) !== expected) {
+      if (performance.now() > deadline) throw new Error(`${name} timers did not reach ${expected}`)
+      await new Promise(requestAnimationFrame)
+    }
+  }, [bucket, count])
+}
 async function api(state, request, response) {
   try {
     assert.ok(state)
     const url = new URL(request.url, 'http://synthetic.invalid'), path = url.pathname
-    assert.equal(url.search.includes('callback'), false)
-    assert.equal(url.href.includes('synthetic-private-code'), false)
+    assert.equal(url.href.includes(privateDetail), false)
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)
     const payload = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined
@@ -59,16 +130,16 @@ async function api(state, request, response) {
       assert.equal(request.method, 'POST'); assert.equal(payload, undefined)
       assert.equal(url.searchParams.get('tenant_id'), state.platform ? state.scope : null)
       state.attempt++
-      body = { attempt_id: `attempt-${state.attempt}`, authorization_url: 'https://auth.example.test/authorize?state=synthetic-state', redirect_uri: 'http://localhost:1455/auth/callback', expires_in: 600 }
-    } else if (path === `${base}/complete`) {
-      assert.equal(request.method, 'POST'); assert.equal(url.search, '')
-      assert.deepEqual(payload, { attempt_id: `attempt-${state.attempt}`, callback_url: callback })
-      status = state.completeStatus
-      body = status === 200 ? { status: state.outcome, attempt_id: payload.attempt_id, detail: callback } : { detail: callback }
+      body = { attempt_id: `attempt-${state.attempt}`, authorization_url: 'https://auth.example.test/authorize?state=synthetic-state', expires_in: 600 }
     } else if (path === `${base}/status`) {
       assert.equal(request.method, 'GET'); assert.equal(payload, undefined)
       assert.deepEqual([...url.searchParams], [['attempt_id', `attempt-${state.attempt}`]])
-      body = { status: state.recovery, attempt_id: `attempt-${state.attempt}` }
+      state.statusMax = Math.max(state.statusMax, ++state.statusActive)
+      response.once('close', () => { state.statusActive-- })
+      // Scripted answers in order: a status name, or an HTTP error code; pending once the script runs out.
+      const next = state.statuses.shift() ?? 'pending'
+      if (typeof next === 'number') { status = next; body = { detail: privateDetail } }
+      else body = { status: next, attempt_id: `attempt-${state.attempt}`, detail: next === 'pending' ? null : privateDetail, expires_in: next === 'pending' ? 600 : null }
     } else if (path.endsWith('/grok-subscription/start')) {
       body = { session_id: 'synthetic-grok', verification_url: 'https://auth.example.test/grok', user_code: 'SYNTHETIC', interval: 5, expires_in: 600 }
     } else if (path.endsWith('/grok-subscription/status')) {
@@ -98,26 +169,36 @@ async function api(state, request, response) {
     if (!response.destroyed) { response.writeHead(502); response.end('{}') }
   }
 }
-async function begin(page) {
-  await button(page, 'Connect ChatGPT subscription').click()
-  await wait(field(page))
-  assert.equal(await field(page).evaluate((element) => element === document.activeElement), true)
-  assert.deepEqual(await card(page).locator('a').evaluate((element) => ({ target: element.target, rel: element.rel, href: element.href })), { target: '_blank', rel: 'noopener noreferrer', href: 'https://auth.example.test/authorize?state=synthetic-state' })
+// Starting shows the sign-in link (no address field), focuses it and runs the first check at once.
+async function begin(page, state, label = 'Connect ChatGPT subscription') {
+  const { settled } = await statusFetch(page)
+  await button(page, label).click()
+  await wait(link(page))
+  assert.deepEqual(await link(page).evaluate((element) => ({ target: element.target, rel: element.rel, href: element.href })), { target: '_blank', rel: 'noopener noreferrer', href: 'https://auth.example.test/authorize?state=synthetic-state' })
+  assert.equal(await card(page).locator('input, textarea').count(), 0)
+  await answered(page, settled + 1)
+  assert.equal(await focused(link(page)), true)
+  await timersAt(page, 'expiry', 1)
 }
-async function submit(page, state) {
-  const barrier = hold(state, `${base}/complete`)
-  await field(page).fill(callback)
-  await button(page, 'Complete ChatGPT sign-in').click()
-  await bounded(barrier.entered)
-  assert.equal(await field(page).inputValue(), '')
-  assert.equal(await field(page).isDisabled(), true)
-  assert.equal(await button(page, 'Restart ChatGPT sign-in').isDisabled(), true)
-  barrier.release(); await bounded(barrier.done)
+// Fires every held poll timer (the interval and any retry back-off) and expects exactly one new check.
+async function poll(page) {
+  const { calls, settled } = await statusFetch(page)
+  assert.ok(await fire(page, 'poll') > 0, 'No status check was scheduled')
+  await answered(page, settled + 1)
+  assert.equal((await statusFetch(page)).calls, calls + 1)
+}
+// An outcome removes the link and every timer, sends nothing more and focuses the trigger.
+async function ended(page, trigger) {
+  await wait(link(page), 'detached')
+  await timersAt(page, 'poll', 0); await timersAt(page, 'expiry', 0)
+  const { calls } = await statusFetch(page)
+  await settle(page)
+  assert.equal((await statusFetch(page)).calls, calls)
+  assert.equal(await focused(button(page, trigger)), true)
 }
 async function screenshot(page, state, suffix) {
-  const controls = await field(page).count() ? [field(page), button(page, 'Complete ChatGPT sign-in'), button(page, 'Restart ChatGPT sign-in')] : []
-  const anchor = controls[0] ?? card(page)
-  await anchor.evaluate((element) => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
+  const controls = await link(page).count() ? [link(page), button(page, 'Restart ChatGPT sign-in')] : [card(page).locator('button').last()]
+  await controls[0].evaluate((element) => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
   await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame) })
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
   const bounds = []
@@ -126,15 +207,15 @@ async function screenshot(page, state, suffix) {
       const { top, bottom, left, right } = element.getBoundingClientRect()
       return { top, bottom, left, right, viewportWidth: innerWidth, viewportHeight: innerHeight, scrollTop: document.querySelector('main').scrollTop }
     })
-    assert.ok(rect.top >= 0 && rect.bottom <= rect.viewportHeight && rect.left >= 0 && rect.right <= rect.viewportWidth, `Callback control outside capture: ${JSON.stringify(rect)}`)
+    assert.ok(rect.top >= 0 && rect.bottom <= rect.viewportHeight && rect.left >= 0 && rect.right <= rect.viewportWidth, `Sign-in control outside capture: ${JSON.stringify(rect)}`)
     bounds.push(rect)
   }
   const path = join(output, `${state.name}-${suffix}.png`)
   await writeFile(path, await page.screenshot()); receipt.screenshots.push(path)
-  if (bounds.length) receipt.controlFrames.push({ path, bounds })
+  receipt.controlFrames.push({ path, bounds })
 }
 async function scenario(options, exercise) {
-  const state = { name: options.name, platform: false, scope: tenantA, width: 1440, theme: 'light', outcome: 'authorized', recovery: 'authorized', completeStatus: 200, attempt: 0, calls: [], barriers: [], ...options }
+  const state = { name: options.name, platform: false, scope: tenantA, width: 1440, theme: 'light', outcome: 'authorized', statuses: [], statusActive: 0, statusMax: 0, attempt: 0, calls: [], barriers: [], ...options }
   current = state
   const tabs = omowright.createAgentTabs(browser), viewport = { width: state.width, height: state.width === 390 ? 844 : 1000 }
   const tab = await tabs.create('about:blank', { viewport }), page = tab.page
@@ -143,7 +224,7 @@ async function scenario(options, exercise) {
   page.on('pageerror', (error) => pageErrors.push(String(error)))
   try {
     const session = await page.resolveSessionId()
-    await page.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('maraclaw-admin-token','synthetic-chatgpt-token');localStorage.setItem('maraclaw-admin-theme',${JSON.stringify(state.theme)});` }, session)
+    await page.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('maraclaw-admin-token','synthetic-chatgpt-token');localStorage.setItem('maraclaw-admin-theme',${JSON.stringify(state.theme)});${pageShim}` }, session)
     await page.goto(`${server.resolvedUrls.local[0]}${state.path ?? `models${state.platform ? `?company=${tenantA}` : ''}`}`)
     await tabs.repin(tab.targetId, viewport)
     if (state.width === 390) await omowright.emulate(page, 'iphone-14')
@@ -153,7 +234,9 @@ async function scenario(options, exercise) {
     assert.deepEqual(pageErrors, [])
     assert.deepEqual(receipt.violations, [])
     assert.equal(state.calls.some((call) => call.path.includes('grok-subscription')), Boolean(state.grok))
-    assert.equal(await page.evaluate(() => [location.href, ...Object.values(localStorage), ...Object.values(sessionStorage), document.body.innerText].some((value) => value.includes('synthetic-private-code'))), false)
+    // Status checks never overlapped, in the page or at the synthetic server.
+    assert.ok((await statusFetch(page)).max <= 1); assert.ok(state.statusMax <= 1)
+    assert.equal(await page.evaluate((secret) => [location.href, ...Object.values(localStorage), ...Object.values(sessionStorage), document.body.innerText].some((value) => value.includes(secret)), privateDetail), false)
     receipt.scenarios.push(state.name)
   } finally {
     for (const barrier of state.barriers) barrier.release()
@@ -181,40 +264,68 @@ try {
   }], server: { host: '127.0.0.1', port: 0, headers: { 'Content-Security-Policy': csp }, watch: { ignored: (path) => path.startsWith(output) } } })
   await server.listen()
   browser = await omowright.connectPipe({ browserPath: executable, browserArgs: ['--headless', '--no-first-run', '--disable-background-networking', `--user-data-dir=${profile}`], storageRoot: profile, commandTimeoutMs: 12_000, dialogPolicy: { accept: false } })
-  for (const width of [1440, 390, 1920]) for (const theme of ['light', 'dark']) await scenario({ name: `form-${width}-${theme}`, width, theme }, async (page, state) => {
-    // Given: a fresh attempt; starting has not polled status or opened any provider.
-    await begin(page)
-    assert.equal(state.calls.filter((call) => call.path === `${base}/status`).length, 0)
-    await screenshot(page, state, 'callback-controls')
-    await button(page, 'Complete ChatGPT sign-in').focus(); await page.keyboard.press('Enter')
-    await wait(card(page).locator('[role="alert"]'))
-    assert.equal(await field(page).evaluate((element) => element === document.activeElement), true)
-    await screenshot(page, state, 'validation')
-    // When: completion succeeds through the real UI.
-    await submit(page, state)
-    // Then: the model pool is refetched and the sensitive form disappears.
-    await wait(card(page).locator('[role="status"]')); await wait(field(page), 'detached')
-    assert.equal(state.calls.filter((call) => call.path === '/api/enterprise/llm-models').length >= 2, true)
+  for (const width of [1440, 390, 1920]) for (const theme of ['light', 'dark']) await scenario({ name: `waiting-${width}-${theme}`, width, theme, statuses: ['pending', 'pending', 'authorized'] }, async (page, state) => {
+    // Given: a fresh attempt whose first check answered pending, with the next check scheduled.
+    await begin(page, state)
+    assert.equal(statusCalls(state), 1)
+    await timersAt(page, 'poll', 1)
+    await screenshot(page, state, 'waiting')
+    // When a check is held, firing every due timer again starts no second request.
+    const barrier = hold(state, `${base}/status`)
+    await fire(page, 'poll')
+    await bounded(barrier.entered)
+    assert.equal(await fire(page, 'poll'), 1)
+    await settle(page)
+    assert.equal(statusCalls(state), 2)
+    assert.equal((await statusFetch(page)).active, 1)
+    barrier.release(); await bounded(barrier.done)
+    await answered(page, 2)
+    // Then the next check authorizes: the model pool is refetched and polling stops.
+    await poll(page)
+    await ended(page, 'Connect ChatGPT subscription')
+    await wait(shownStatus(page))
+    assert.equal(statusCalls(state), 3)
+    assert.ok(modelCalls(state) >= 2)
     await screenshot(page, state, 'authorized')
   })
-  for (const outcome of ['pending', 'denied', 'expired', 'error', 400, 409, 503]) await scenario({ name: `outcome-${outcome}`, ...(typeof outcome === 'number' ? { completeStatus: outcome } : { outcome }) }, async (page, state) => {
-    await begin(page); await submit(page, state)
-    if (outcome === 503) { await wait(card(page).locator('[role="status"]')); assert.equal(state.calls.filter((call) => call.path === `${base}/status`).length, 1) }
-    else {
-      const domainOutcome = typeof outcome === 'string'
-      await wait(domainOutcome ? card(page).locator('[role="status"]') : page.locator('[data-sonner-toast]'))
-      if (domainOutcome) {
-        assert.equal(await page.locator('[data-sonner-toast]').count(), 0)
-        await screenshot(page, state, 'persistent-status')
-      }
-      if (outcome === 400 || outcome === 'pending') {
-        await wait(button(page, 'Complete ChatGPT sign-in')); state.completeStatus = 200; state.outcome = 'authorized'
-        await submit(page, state); await wait(card(page).locator('[role="status"]'))
-      } else {
-        await wait(field(page), 'detached'); await button(page, 'Restart ChatGPT sign-in').click(); await wait(field(page))
-        assert.equal(state.attempt, 2)
-      }
-    }
+  for (const outcome of ['denied', 'expired', 'error', 404, 409]) await scenario({ name: `outcome-${outcome}`, statuses: ['pending', outcome] }, async (page, state) => {
+    await begin(page, state); await poll(page)
+    await ended(page, 'Restart ChatGPT sign-in')
+    if (typeof outcome === 'string') {
+      // A sign-in outcome is a persistent status, not a toast.
+      await wait(shownStatus(page))
+      assert.equal(await page.locator('[data-sonner-toast]').count(), 0)
+      await screenshot(page, state, 'persistent-status')
+    } else await wait(page.locator('[data-sonner-toast]'))
+    assert.equal(statusCalls(state), 2)
+    // Restart issues a fresh attempt that polls on its own.
+    await begin(page, state, 'Restart ChatGPT sign-in')
+    assert.equal(state.attempt, 2)
+  })
+  await scenario({ name: 'transient-failures', statuses: [503, 502, 503, 'pending', 'authorized'] }, async (page, state) => {
+    // Given: two failed checks keep the attempt waiting without an error.
+    await begin(page, state); await poll(page)
+    assert.equal(await page.locator('[data-sonner-toast]').count(), 0)
+    assert.equal(await link(page).count(), 1)
+    // When a third consecutive check fails, one error appears and checking continues.
+    await poll(page)
+    await wait(page.locator('[data-sonner-toast]'))
+    assert.equal(await link(page).count(), 1)
+    await poll(page); await poll(page)
+    // Then recovery still authorizes.
+    await ended(page, 'Connect ChatGPT subscription')
+    assert.ok(modelCalls(state) >= 2)
+    assert.ok(await page.locator('[data-sonner-toast]').count() <= 1)
+  })
+  await scenario({ name: 'local-expiry' }, async (page, state) => {
+    // Given: checks keep answering pending.
+    await begin(page, state); await poll(page)
+    // When the link's lifetime plus grace passes, the card stops waiting without another check.
+    assert.equal(await fire(page, 'expiry'), 1)
+    await ended(page, 'Restart ChatGPT sign-in')
+    await wait(shownStatus(page))
+    assert.equal(await page.locator('[data-sonner-toast]').count(), 0)
+    assert.equal(statusCalls(state), 2)
   })
   for (const outcome of ['expired', 'denied', 'error']) await scenario({ name: `grok-${outcome}`, outcome, grok: true }, async (page, state) => {
     await button(page, 'Connect Grok subscription').click()
@@ -226,20 +337,26 @@ try {
     await writeFile(join(output, `${state.name}.png`), await page.screenshot())
     receipt.screenshots.push(join(output, `${state.name}.png`))
   })
-  for (const path of ['start', 'complete']) await scenario({ name: `tenant-switch-${path}`, platform: true }, async (page, state) => {
-    if (path === 'complete') await begin(page)
+  for (const path of ['start', 'status']) await scenario({ name: `tenant-switch-${path}`, platform: true, statuses: ['pending', 'authorized'] }, async (page, state) => {
+    if (path === 'status') await begin(page, state)
     const barrier = hold(state, `${base}/${path}`)
     if (path === 'start') await button(page, 'Connect ChatGPT subscription').click()
-    else { await field(page).fill(callback); await button(page, 'Complete ChatGPT sign-in').click() }
+    else await fire(page, 'poll')
     await bounded(barrier.entered)
+    const previousModels = modelCalls(state, tenantA)
     state.scope = tenantB
     await picker(page).selectOption(tenantB)
     await wait(connect(page))
+    // The old card unmounted: its timers are gone before the held answer (authorized, for status) arrives.
+    await timersAt(page, 'poll', 0); await timersAt(page, 'expiry', 0)
     barrier.release(); await bounded(barrier.done)
+    await settle(page)
     await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame) })
     await button(page, 'Connect ChatGPT subscription').focus(); await page.keyboard.press('Tab')
-    assert.equal(await field(page).count(), 0); assert.equal(await card(page).locator('[role="status"]').count(), 0)
-    assert.equal(state.calls.filter((call) => call.path === '/api/enterprise/llm-models' && call.scope === tenantB).length, 1)
+    assert.equal(await link(page).count(), 0); assert.equal(await shownStatus(page).count(), 0)
+    assert.equal(modelCalls(state, tenantB), 1); assert.equal(modelCalls(state, tenantA), previousModels)
+    assert.equal(statusCalls(state), path === 'status' ? 2 : 0)
+    assert.equal((await statusFetch(page)).active, 0)
   })
   const lookups = (state) => [...new Set(state.calls.filter((call) => call.path.startsWith('/api/tenants/')).map((call) => call.path))]
   const modelScopes = (state) => [...new Set(state.calls.filter((call) => call.path === '/api/enterprise/llm-models').map((call) => call.scope))]
@@ -250,14 +367,14 @@ try {
       assert.equal(await companyParam(page), expected)
       assert.deepEqual(modelScopes(state), [expected])
       assert.equal(lookups(state).includes(`/api/tenants/${ownTenant}`), true)
-      await begin(page)
+      await begin(page, state)
     })
   }
   await scenario({ name: 'pa-off-page-deep-link', platform: true, scope: tenantC, path: `models?company=${tenantC}` }, async (page, state) => {
     assert.deepEqual(await selectedCompany(page), { value: tenantC, label: 'Synthetic Gamma', options: ['Synthetic Gamma', 'Synthetic Alpha', 'Synthetic Beta'] })
     assert.deepEqual(lookups(state), [`/api/tenants/${tenantC}`])
     assert.deepEqual(modelScopes(state), [tenantC])
-    await begin(page)
+    await begin(page, state)
   })
   await scenario({ name: 'pa-unknown-deep-link', platform: true, scope: unknownTenant, path: `models?company=${unknownTenant}`, ready: (page) => wait(page.locator('option').filter({ hasText: /^Unknown company$/u }), 'attached') }, async (page, state) => {
     assert.deepEqual(await selectedCompany(page), { value: unknownTenant, label: 'Unknown company', options: ['Unknown company', 'Synthetic Alpha', 'Synthetic Beta'] })
