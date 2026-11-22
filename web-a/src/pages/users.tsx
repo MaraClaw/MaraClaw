@@ -4,12 +4,11 @@ import { useCallback, useEffect, useId, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
+import { CompanyPicker, useCompanyPicker } from '@/components/companies/company-picker'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
 import { UserCard } from '@/components/users/user-card'
-import { companyOptions } from '@/hooks/company-options'
 import { useAuth } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
@@ -40,14 +39,13 @@ export function UsersPage() {
   const companyId = params.get('company') ?? ''
   const filterId = useId()
 
-  const companies = useQuery({
-    ...companyOptions(),
+  const companies = useCompanyPicker({
+    value: companyId,
     enabled: platformAdmin,
+    preselect: { ownCompanyId: user?.tenant_id },
   })
 
-  const tenantId = platformAdmin
-    ? companies.data?.find((company) => company.id === companyId)?.id ?? null
-    : user?.tenant_id ?? null
+  const tenantId = platformAdmin ? companies.company?.id ?? null : user?.tenant_id ?? null
 
   const rosterExport = useUsersRosterExport({ tenantId, search }, owner)
 
@@ -71,10 +69,8 @@ export function UsersPage() {
   }, [setParams, rosterExport.retire])
 
   useEffect(() => {
-    if (!platformAdmin || tenantId || !companies.data?.length) return
-    const own = companies.data.find((company) => company.id === user?.tenant_id)
-    updateListState({ company: own?.id ?? companies.data[0].id })
-  }, [platformAdmin, tenantId, companies.data, user?.tenant_id, updateListState])
+    if (companies.defaultCompanyId) updateListState({ company: companies.defaultCompanyId })
+  }, [companies.defaultCompanyId, updateListState])
 
   useEffect(() => {
     const stored = sessionStorage.getItem('web-a:users-scroll')
@@ -145,24 +141,17 @@ export function UsersPage() {
         </p>
       </div>
 
+      {platformAdmin ? (
+        <CompanyPicker
+          picker={companies}
+          label={t('Company')}
+          labelClassName="font-normal text-muted-foreground"
+          unknownLabel={t('Unknown company')}
+          className="sm:max-w-md"
+          onChange={(company) => updateListState({ company })}
+        />
+      ) : null}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-        {platformAdmin ? (
-          <label htmlFor={`${filterId}-company`} className="grid w-auto gap-1.5 text-sm">
-            <span className="text-muted-foreground">{t('Company')}</span>
-            <Select
-              id={`${filterId}-company`}
-              fit
-              value={companyId}
-              onChange={(event) => updateListState({ company: event.target.value })}
-            >
-              {(companies.data ?? []).map((company) => (
-                <option key={company.id} value={company.id}>
-                  {company.name}
-                </option>
-              ))}
-            </Select>
-          </label>
-        ) : null}
         <label htmlFor={`${filterId}-search`} className="grid min-w-0 flex-1 gap-1.5 text-sm">
           <span className="text-muted-foreground">{t('Search')}</span>
           <span className="relative">
@@ -192,7 +181,7 @@ export function UsersPage() {
         <ErrorToast error={companies.error} message={companies.error instanceof ApiError ? companies.error.message : t('Failed to load companies')} />
       ) : null}
 
-      {platformAdmin && !companies.isLoading && !companies.error && (companies.data?.length ?? 0) === 0 ? (
+      {platformAdmin && companies.noCompanies ? (
         <p className="text-sm text-muted-foreground">{t('No companies yet.')}</p>
       ) : null}
 
@@ -256,7 +245,7 @@ export function UsersPage() {
           <TenantUsers
             key={tenantId}
             tenantId={tenantId}
-            rows={visibleCompany}
+            pages={users.data?.pages ?? []}
             canToggle={canToggle}
             pending={toggle.isPending}
             onToggle={(row) => toggle.mutate({ row, isActive: !row.is_active })}

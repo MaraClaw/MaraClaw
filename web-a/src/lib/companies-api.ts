@@ -8,6 +8,7 @@ import {
   CompanyRuntimePageOutSchema,
   CompanyActivationOutSchema,
   CompanyActivationRequestSchema,
+  CompanyOptionPageOutSchema,
   OrganizationPlanIdValues,
   type OrganizationPlanId,
 } from './engine-contracts.generated.ts'
@@ -70,6 +71,12 @@ const companiesPageSchema = z.object({
 
 export type CompaniesPage = z.infer<typeof companiesPageSchema>
 export type CompanyOption = z.infer<typeof companyOptionSchema>
+export type CompanyOptionsPage = z.infer<typeof CompanyOptionPageOutSchema>
+
+export type CompanyOptionsInput = {
+  readonly q: string
+  readonly cursor: string | null
+}
 
 export type CompaniesPageInput = {
   readonly search: string
@@ -112,8 +119,11 @@ export async function listCompaniesPage(input: CompaniesPageInput, signal?: Abor
   return apiRequest(`/api/admin/companies/page?${params}`, { schema: companiesPageSchema, signal })
 }
 
-export async function listCompanyOptions(signal?: AbortSignal): Promise<CompanyOption[]> {
-  return apiRequest('/api/admin/companies/options', { schema: z.array(companyOptionSchema), signal })
+export async function listCompanyOptions(input: CompanyOptionsInput, signal?: AbortSignal): Promise<CompanyOptionsPage> {
+  const params = new URLSearchParams({ limit: '50' })
+  if (input.q.trim()) params.set('q', input.q.trim())
+  if (input.cursor !== null) params.set('cursor', input.cursor)
+  return apiRequest(`/api/admin/companies/options?${params}`, { schema: CompanyOptionPageOutSchema, signal })
 }
 
 export async function getCompanyStats(companyId: string, signal?: AbortSignal): Promise<CompanyStats> {

@@ -1,12 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
+import { CompanyPicker, useCompanyPicker } from '@/components/companies/company-picker'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { showErrorToast } from '@/lib/error-toast'
@@ -16,7 +17,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { Select } from '@/components/ui/select'
-import { companyOptions } from '@/hooks/company-options'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { useTranslation } from '@/hooks/use-translation'
@@ -101,20 +101,26 @@ export function LlmModelsPage() {
   const companyId = searchParams.get('company') ?? ''
   const [formError, setFormError] = useState<string | null>(null)
 
-  const tenantId = platformAdmin ? companyId : (user?.tenant_id ?? '')
-
-  const companies = useQuery({
-    ...companyOptions(),
+  const companies = useCompanyPicker({
+    value: companyId,
     enabled: platformAdmin,
+    preselect: { ownCompanyId: user?.tenant_id },
   })
 
+  const tenantId = platformAdmin ? (companies.company?.id ?? '') : (user?.tenant_id ?? '')
+
+  const selectCompany = useCallback((company: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (company) next.set('company', company)
+      else next.delete('company')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
   useEffect(() => {
-    if (!platformAdmin || companyId || !companies.data?.length) return
-    const own = companies.data.find((company) => company.id === user?.tenant_id)
-    const next = new URLSearchParams(searchParams)
-    next.set('company', own?.id ?? companies.data[0].id)
-    setSearchParams(next, { replace: true })
-  }, [platformAdmin, companyId, companies.data, user?.tenant_id, searchParams, setSearchParams])
+    if (companies.defaultCompanyId) selectCompany(companies.defaultCompanyId)
+  }, [companies.defaultCompanyId, selectCompany])
 
   const providers = useQuery({
     queryKey: ['admin-llm-providers'],
@@ -243,26 +249,14 @@ export function LlmModelsPage() {
       </div>
 
       {platformAdmin ? (
-        <label htmlFor={`${formId}-company`} className="grid w-auto gap-1.5 text-sm">
-          <span className="text-muted-foreground">{t('Company')}</span>
-          <Select
-            id={`${formId}-company`}
-            fit
-            value={companyId}
-            onChange={(event) => {
-              const next = new URLSearchParams(searchParams)
-              if (event.target.value) next.set('company', event.target.value)
-              else next.delete('company')
-              setSearchParams(next, { replace: true })
-            }}
-          >
-            {(companies.data ?? []).map((company) => (
-              <option key={company.id} value={company.id}>
-                {company.name}
-              </option>
-            ))}
-          </Select>
-        </label>
+        <CompanyPicker
+          picker={companies}
+          label={t('Company')}
+          labelClassName="font-normal text-muted-foreground"
+          unknownLabel={t('Unknown company')}
+          className="sm:w-80"
+          onChange={selectCompany}
+        />
       ) : null}
 
       <GrokSubscriptionCard tenantId={tenantId} platformAdmin={platformAdmin} />
@@ -404,7 +398,7 @@ export function LlmModelsPage() {
         </CardContent>
       </Card>
 
-      {companies.isError ? <ErrorToast error={companies.error} message={t('Could not load companies for models.')} /> : null}
+      {companies.error ? <ErrorToast error={companies.error} message={t('Could not load companies for models.')} /> : null}
       {providers.isError ? <ErrorToast error={providers.error} message={t('Could not load model providers.')} /> : null}
       {models.isLoading ? <p className="text-sm text-muted-foreground">{t('Loading models…')}</p> : null}
       {models.error ? (

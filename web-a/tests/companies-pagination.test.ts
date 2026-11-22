@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InfiniteQueryObserver, QueryClient } from '@tanstack/react-query'
+import { InfiniteQueryObserver, QueryClient, skipToken } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { companiesPageOptions, companyOptions, companyStatsOptions } from '../src/hooks/company-options.ts'
-import { createCompany, getCompanyStats, listCompanies, listCompaniesPage, listCompanyOptions } from '../src/lib/companies-api.ts'
+import {
+  companiesPageOptions,
+  companyOptionByIdOptions,
+  companyOptionsBrowseOptions,
+  companyOptionsSearchOptions,
+  companyStatsOptions,
+  isCompanyId,
+} from '../src/hooks/company-options.ts'
+import {
+  createCompany, getCompanyStats, listCompanies, listCompaniesPage, listCompanyOptions, type CompanyOption,
+} from '../src/lib/companies-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 
 const row = {
@@ -13,6 +22,9 @@ const row = {
   can_disable: true, created_at: null, user_count: 7, active_user_count: 5,
   inactive_user_count: 2, agent_count: 3, org_admin_email: null, phone: '+84912345678', tier: 'pro' as const,
 }
+
+const companyId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const option = (n: number, name = `Company ${n}`) => ({ id: companyId(n), name, slug: `company-${n}`, is_active: true, can_disable: true })
 
 test('company page encodes search and opaque cursor and forwards cancellation', async (t) => {
   // Given
@@ -96,18 +108,84 @@ for (const [status, tenantId] of [[403, null], [503, 'alpha']] as const) {
   })
 }
 
-test('picker options accept stats-free rows and preserve the complete server order', async (t) => {
+test('picker options send search or an opaque cursor, parse stats-free pages and forward cancellation', async (t) => {
   // Given
-  const ordered = [{ id: 'z', name: 'Zebra' }, { id: 'a', name: 'Alpha' }, { id: 'own', name: 'Own' }]
-  const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json(ordered))
+  const page = { items: [option(1, 'Zebra'), option(2, 'Alpha')], next_cursor: 'opaque/next +?=' }
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json(page))
+  const signal = new AbortController().signal
   // When
-  const options = await listCompanyOptions()
+  const browsed = await listCompanyOptions({ q: '', cursor: 'opaque/cursor +?=' }, signal)
+  const searched = await listCompanyOptions({ q: ' %_Zeb+? ', cursor: null })
   // Then
-  assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/admin/companies/options')
-  assert.deepEqual(options, ordered)
-  assert.equal(options[0]?.id, 'z')
-  assert.equal(options.some(company => company.id === 'own'), true)
-  assert.equal(options.some(company => company.id === 'unknown'), false)
+  const [first, second] = fetch.mock.calls.map(call => new URL(String(call.arguments[0]), 'https://example.test'))
+  assert.equal(first?.pathname, '/api/admin/companies/options')
+  assert.deepEqual(Object.fromEntries(first?.searchParams ?? []), { limit: '50', cursor: 'opaque/cursor +?=' })
+  assert.deepEqual(Object.fromEntries(second?.searchParams ?? []), { limit: '50', q: '%_Zeb+?' })
+  assert.strictEqual(fetch.mock.calls[0]?.arguments[1]?.signal, signal)
+  assert.deepEqual([browsed, searched], [page, page])
+})
+
+for (const body of [[option(1)], { items: [{ id: 'alpha', name: 'Alpha' }], next_cursor: null }, { items: [], next_cursor: 7 }]) {
+  test(`picker options reject the legacy array and malformed pages: ${JSON.stringify(body)}`, async (t) => {
+    // Given
+    t.mock.method(globalThis, 'fetch', async () => Response.json(body))
+    // When / Then
+    await assert.rejects(listCompanyOptions({ q: '', cursor: null }), z.ZodError)
+  })
+}
+
+test('picker browse appends pages on demand while search is one ranked page with no load-more', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const requests: Record<string, string>[] = []
+  t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL) => {
+    const request = new URL(String(url), 'https://example.test')
+    requests.push(Object.fromEntries(request.searchParams))
+    if (request.searchParams.has('q')) return Response.json({ items: [option(9, 'Old Zebra')], next_cursor: null })
+    const cursor = request.searchParams.get('cursor')
+    return Response.json({ items: [option(cursor ? 2 : 1)], next_cursor: cursor ? null : 'next/+=' })
+  })
+  const browse = new InfiniteQueryObserver(client, companyOptionsBrowseOptions())
+  t.after(browse.subscribe(() => undefined))
+  await browse.refetch()
+  // When
+  const more = await browse.fetchNextPage()
+  const found = await client.fetchQuery(companyOptionsSearchOptions('  Zebra '))
+  // Then
+  assert.deepEqual(more.data?.pages.flatMap(page => page.items.map(item => item.id)), [companyId(1), companyId(2)])
+  assert.equal(more.hasNextPage, false)
+  assert.deepEqual(found, { items: [option(9, 'Old Zebra')], next_cursor: null })
+  assert.deepEqual(requests, [{ limit: '50' }, { limit: '50', cursor: 'next/+=' }, { limit: '50', q: 'Zebra' }])
+  assert.deepEqual(companyOptionsBrowseOptions().queryKey, ['admin-companies', 'options', 'browse'])
+  assert.deepEqual(companyOptionsSearchOptions(' Zebra ').queryKey, ['admin-companies', 'options', 'search', 'Zebra'])
+  assert.equal(companyOptionsSearchOptions('   ').queryFn, skipToken)
+})
+
+test('picker resolves a selection by id: 404 is unknown, errors stay errors, a malformed id is never sent', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const fetch = t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL) => {
+    const path = String(url)
+    if (path.endsWith(companyId(1))) return Response.json({ id: companyId(1), name: 'Old Co', slug: 'old', is_active: true, tier: 'pro' })
+    return path.endsWith(companyId(2))
+      ? Response.json({ detail: 'Tenant not found' }, { status: 404 })
+      : Response.json({ detail: 'Unavailable' }, { status: 503 })
+  })
+  // When
+  const resolved = await client.fetchQuery(companyOptionByIdOptions(companyId(1)))
+  const missing = await client.fetchQuery(companyOptionByIdOptions(companyId(2)))
+  // Then
+  assert.deepEqual(resolved, { id: companyId(1), name: 'Old Co' })
+  assert.equal(missing, null)
+  await assert.rejects(client.fetchQuery(companyOptionByIdOptions(companyId(3))), error => error instanceof ApiError && error.status === 503)
+  assert.deepEqual(fetch.mock.calls.map(call => call.arguments[0]), [1, 2, 3].map(n => `/api/tenants/${companyId(n)}`))
+  assert.deepEqual(companyOptionByIdOptions(companyId(1)).queryKey, ['admin-companies', 'options', 'by-id', companyId(1)])
+  for (const value of ['', 'alpha', `${companyId(1)}x`]) {
+    assert.equal(isCompanyId(value), false)
+    assert.equal(companyOptionByIdOptions(value).queryFn, skipToken)
+  }
 })
 
 test('company detail reads one encoded stats endpoint while legacy listing remains a bare array', async (t) => {
@@ -177,14 +255,22 @@ test('search and tenant changes cannot reuse pages, and company prefix invalidat
   t.after(() => client.clear())
   const pageKey = companiesPageOptions('alpha', '').queryKey
   client.setQueryData(pageKey, { pages: [{ items: [row], next_cursor: 'old' }], pageParams: [null] })
-  client.setQueryData(companyOptions().queryKey, [{ id: row.id, name: row.name }])
+  client.setQueryData(companyOptionsBrowseOptions().queryKey, { pages: [{ items: [option(1)], next_cursor: 'old' }], pageParams: [null] })
+  client.setQueryData(companyOptionsSearchOptions('zeb').queryKey, { items: [option(1)], next_cursor: null })
+  const resolved: CompanyOption | null = { id: companyId(1), name: 'Company 1' }
+  client.setQueryData(companyOptionByIdOptions(companyId(1)).queryKey, resolved)
   client.setQueryData(companyStatsOptions('alpha').queryKey, row)
   // When
   await client.invalidateQueries({ queryKey: ['admin-companies'] })
   // Then
   assert.equal(client.getQueryData(companiesPageOptions('alpha', 'new').queryKey), undefined)
   assert.equal(client.getQueryData(companiesPageOptions('beta', '').queryKey), undefined)
-  for (const key of [pageKey, companyOptions().queryKey, companyStatsOptions('alpha').queryKey]) {
+  const pickerKeys = [
+    companyOptionsBrowseOptions().queryKey,
+    companyOptionsSearchOptions('zeb').queryKey,
+    companyOptionByIdOptions(companyId(1)).queryKey,
+  ]
+  for (const key of [pageKey, ...pickerKeys, companyStatsOptions('alpha').queryKey]) {
     assert.equal(client.getQueryState(key)?.isInvalidated, true)
   }
 })

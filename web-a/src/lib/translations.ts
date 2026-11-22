@@ -259,6 +259,8 @@ export const vietnamese = {
   'No companies match “{search}”.': 'Không có công ty nào khớp với “{search}”.',
   'No companies yet.': 'Chưa có công ty.',
   'Load more companies': 'Tải thêm công ty',
+  'Choose a company': 'Chọn công ty',
+  'Loading company…': 'Đang tải công ty…',
   'Loading user…': 'Đang tải người dùng…',
   'Failed to load user': 'Không tải được người dùng',
   'Account fields returned by the admin users API.': 'Các trường tài khoản do API quản trị người dùng trả về.',

@@ -12,12 +12,12 @@ import {
   YAxis,
 } from 'recharts'
 
+import { CompanyPicker, useCompanyPicker } from '@/components/companies/company-picker'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
-import { companyOptions } from '@/hooks/company-options'
 import { ApiError } from '@/lib/http'
 import {
   getSearchAnalyticsDashboard,
@@ -92,7 +92,7 @@ export function SearchEngineAnalytics() {
   const window = useMemo(() => rangeFor(range), [range])
   const scoped = { ...window, tenantId: tenantId || undefined }
 
-  const companies = useQuery(companyOptions())
+  const companies = useCompanyPicker({ value: tenantId })
   const dashboard = useQuery({
     queryKey: ['admin-search-analytics-dashboard', scoped],
     queryFn: ({ signal }) => getSearchAnalyticsDashboard(scoped, signal),
@@ -107,8 +107,10 @@ export function SearchEngineAnalytics() {
     : null
 
   const systemWide = !tenantId
-  const selectedCompany = (companies.data ?? []).find((company) => company.id === tenantId)
-  const unknownCompany = Boolean(tenantId && !selectedCompany && !companies.isLoading)
+  const selectedCompany = companies.company
+  const scopeTitle = systemWide
+    ? t('Entire system')
+    : selectedCompany?.name ?? (companies.status === 'unknown' ? t('Unknown company') : companies.status === 'error' ? tenantId : t('Loading company…'))
   const totals = dashboard.data?.selected_summary
   const platform = dashboard.data?.system_summary
   const kindMix = totals?.by_kind ?? []
@@ -143,7 +145,7 @@ export function SearchEngineAnalytics() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="font-display text-xl font-semibold tracking-tight">
-              {systemWide ? t('Entire system') : selectedCompany?.name || t('Unknown company')}
+              {scopeTitle}
             </h2>
             <Badge variant={systemWide ? 'secondary' : 'outline'}>
               {t(systemWide ? 'All companies' : 'Per organization')}
@@ -155,7 +157,7 @@ export function SearchEngineAnalytics() {
               : 'This company’s share of platform search, errors, and what its agents look up.')}
           </p>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-wrap items-start gap-3">
           <label htmlFor={`${filterId}-range`} className="grid gap-1 text-sm">
             <span className="text-muted-foreground">{t('Range')}</span>
             <Select
@@ -169,29 +171,21 @@ export function SearchEngineAnalytics() {
               <option value="90">{t('Last 90 days')}</option>
             </Select>
           </label>
-          <label htmlFor={`${filterId}-scope`} className="grid gap-1 text-sm">
-            <span className="text-muted-foreground">{t('Scope')}</span>
-            <Select
-              id={`${filterId}-scope`}
-              fit
-              value={tenantId}
-              onChange={(event) => update({ company: event.target.value })}
-              aria-label={t('Analytics scope')}
-            >
-              <option value="">{t('Entire system')}</option>
-              {unknownCompany ? <option value={tenantId}>{t('Unknown company')}</option> : null}
-              {(companies.data ?? []).map((company) => (
-                <option key={company.id} value={company.id}>
-                  {company.name}
-                </option>
-              ))}
-            </Select>
-          </label>
+          <CompanyPicker
+            picker={companies}
+            label={t('Scope')}
+            labelClassName="font-normal text-muted-foreground"
+            selectLabel={t('Analytics scope')}
+            emptyLabel={t('Entire system')}
+            unknownLabel={t('Unknown company')}
+            className="gap-1 sm:w-72"
+            onChange={(company) => update({ company })}
+          />
         </div>
       </div>
 
       {error ? <ErrorToast error={dashboard.error} message={error} /> : null}
-      {companies.isError ? <ErrorToast error={companies.error} message={t('Could not load companies for search analytics.')} /> : null}
+      {companies.error ? <ErrorToast error={companies.error} message={t('Could not load companies for search analytics.')} /> : null}
       {exportStatus.isError ? <ErrorToast error={exportStatus.error} message={t('Could not load search export status.')} /> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
