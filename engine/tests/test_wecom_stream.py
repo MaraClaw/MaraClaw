@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import override
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -460,8 +461,8 @@ async def test_stream_task_cancellation_is_not_logged_as_failure(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_non_stopping_start_retains_existing_live_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: a live stream task for an agent
+async def test_reconcile_keeps_an_unchanged_live_client_and_records_its_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: a configured WebSocket row and an SDK client that connects at once
     client = FakeWSClient({})
     monkeypatch.setitem(
         sys.modules,
@@ -471,22 +472,55 @@ async def test_non_stopping_start_retains_existing_live_task(monkeypatch: pytest
     monkeypatch.setattr(wecom_stream, "_disable_wecom_sdk_proxy", lambda: None)
     manager = WeComStreamManager()
     agent_id = uuid.uuid4()
-    connection_config(monkeypatch, agent_id, "wecom")
-    await manager.start_client(agent_id, "bot", "secret")
-    await asyncio.wait_for(client.initial_connection.wait(), timeout=0.1)
+    config = connection_config(monkeypatch, agent_id, "wecom")
+    monkeypatch.setattr(wecom_stream.channel_config_dao, "list_configured", AsyncMock(return_value=[config]))
+    recorded = asyncio.Event()
+    set_connected = AsyncMock(side_effect=lambda *_args, **_kwargs: recorded.set())
+    monkeypatch.setattr(wecom_stream.channel_config_dao, "set_connected", set_connected)
+
+    # When: the connector pass starts the client
+    await manager.reconcile_clients()
+    await asyncio.wait_for(recorded.wait(), timeout=1)
     owner = manager._tasks[agent_id]
 
     try:
-        # When: reconciliation asks to start the same agent without stopping it
-        retained_task = await manager.start_client(agent_id, "bot", "secret", stop_existing=False)
-
-        # Then: the original task remains the sole client owner
-        assert retained_task is owner
+        # Then: the connection is recorded on the row for the API's status route
+        assert set_connected.await_args_list == [call(config.id, connected=True)]
+        # When: later passes read the same source and the recorded health
+        config.is_connected = True
+        await manager.reconcile_clients()
+        await manager.reconcile_clients()
+        # Then: the original task remains the sole client owner and nothing is rewritten
         assert manager._tasks[agent_id] is owner
         assert client.connect_calls == 1
+        assert set_connected.await_count == 1
+        # When: the client is stopped, Then: the row records it as disconnected
+        await manager.stop_client(agent_id)
+        assert set_connected.await_args_list[-1] == call(config.id, connected=False)
     finally:
         await manager.stop_client(agent_id)
         if not owner.done():
             owner.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await owner
+
+
+@pytest.mark.asyncio
+async def test_reconcile_corrects_a_stale_connected_flag_on_a_row_without_a_live_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a row left marked connected although it now asks for webhook mode
+    manager = WeComStreamManager()
+    config = connection_config(monkeypatch, uuid.uuid4(), "wecom")
+    config.extra_config = {"connection_mode": "webhook"}
+    config.is_connected = True
+    monkeypatch.setattr(wecom_stream.channel_config_dao, "list_configured", AsyncMock(return_value=[config]))
+    set_connected = AsyncMock()
+    monkeypatch.setattr(wecom_stream.channel_config_dao, "set_connected", set_connected)
+
+    # When: a connector pass runs
+    await manager.reconcile_clients()
+
+    # Then: no client starts and the stale flag is corrected
+    assert manager.tracked_agents() == set()
+    set_connected.assert_awaited_once_with(config.id, connected=False)

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
+from app.config import get_settings
 from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
@@ -24,6 +25,7 @@ from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_body
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
+from app.process_roles import parse_process_roles, role_enabled
 from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import DiscordInteractionResponse, WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
@@ -103,12 +105,15 @@ async def configure_discord_channel(
             }
         )
 
-    # Mode-specific post-configuration
-    if connection_mode == "gateway":
+    # Only the connector process holds gateway clients; elsewhere its next reconcile pass applies the saved mode.
+    if role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
         from app.services.discord_gateway import discord_gateway_manager
 
-        await discord_gateway_manager.start_client(agent_id, bot_token)
-    else:
+        if connection_mode == "gateway":
+            await discord_gateway_manager.start_client(agent_id, bot_token)
+        else:
+            await discord_gateway_manager.stop_client(agent_id)
+    if connection_mode != "gateway":
         try:
             reg = await _register_slash_commands(application_id, bot_token)
             logger.info(f"[Discord] Slash command registration: {reg['status']}")
@@ -145,13 +150,14 @@ async def delete_discord_channel(agent_id: uuid.UUID, current_user: UserRecord =
     config = await get_channel_config_metadata(agent_id, ChannelType.DISCORD)
     if not config:
         raise HTTPException(status_code=404, detail="Discord not configured")
-    try:
-        from app.services.discord_gateway import discord_gateway_manager
-
-        await discord_gateway_manager.stop_client(agent_id)
-    except Exception as error:
-        logger.warning(f"[Discord] Failed to stop Gateway client: {error}")
     _ = await channel_config_dao.delete(record_id=config.id)
+    if role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
+        try:
+            from app.services.discord_gateway import discord_gateway_manager
+
+            await discord_gateway_manager.stop_client(agent_id)
+        except Exception as error:
+            logger.warning(f"[Discord] Failed to stop Gateway client: {error}")
 
 
 # ─── Slash Command Registration ─────────────────────────

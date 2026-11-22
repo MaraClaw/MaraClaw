@@ -1,4 +1,6 @@
 import asyncio
+import math
+from functools import partial
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -9,7 +11,7 @@ from app.api import background_tasks
 from app.db.errors import DbError
 from app.records.company_transfer import TransferChoice
 from app.records.company_transfer_cleanup import TransferCleanupRecord
-from app.runtime import lifecycle
+from app.runtime import connectors, lifecycle
 from app.services import audit_logger, company_transfer_cleanup as cleanup
 from producer_admission_fixtures import producer_admission
 from worker_progress_fixtures import WorkerHTTP, worker_http
@@ -21,21 +23,38 @@ __all__ = ["producer_admission", "worker_http"]
 async def test_connector_role_owns_cleanup_loop_and_drains_it_before_database(
     monkeypatch: pytest.MonkeyPatch, role: str
 ) -> None:
-    # Given a runtime with isolated resources and a cleanup operation held in flight.
+    # Given a runtime with isolated resources, a connector whose first reconcile pass fails transiently once,
+    # and a cleanup operation held in flight.
     runtime = lifecycle.Runtime()
     entered = anyio.Event()
     finished = anyio.Event()
     initializing = anyio.Event()
     initialized = anyio.Event()
     database_closed = False
+    passes: list[str] = []
+    retry_delays: list[float] = []
 
     class Connector:
-        async def start_all(self) -> None:
-            initializing.set()
-            await initialized.wait()
+        def open(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        async def reconcile_clients(self) -> None:
+            passes.append("pass")
+            if len(passes) == 1:
+                initializing.set()
+                await initialized.wait()
+                raise OSError("database briefly unavailable")
 
         async def stop_all(self) -> None:
             return None
+
+    async def pace(seconds: float) -> None:
+        if math.isinf(seconds):
+            await anyio.sleep_forever()
+        retry_delays.append(seconds)
 
     async def no_resource(*_args: object) -> None:
         return None
@@ -62,7 +81,10 @@ async def test_connector_role_owns_cleanup_loop_and_drains_it_before_database(
     monkeypatch.setattr(lifecycle, "close_redis", no_resource)
     monkeypatch.setattr(lifecycle, "close_pool", close_database)
     monkeypatch.setattr(lifecycle, "shutdown_llm_clients", no_resource)
-    monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Connector(),))
+    monkeypatch.setattr(lifecycle, "connector_managers", lambda: {"wechat": Connector()})
+    monkeypatch.setattr(
+        lifecycle, "ReconcileRuntime", partial(connectors.ReconcileRuntime, sleep=pace, interval_seconds=math.inf)
+    )
     monkeypatch.setattr(lifecycle.realtime_router, "start", no_resource)
     monkeypatch.setattr(lifecycle.realtime_router, "stop", no_resource)
     monkeypatch.setattr(runtime.proxy, "start", no_resource)
@@ -81,6 +103,14 @@ async def test_connector_role_owns_cleanup_loop_and_drains_it_before_database(
                 assert not entered.is_set()
                 initialized.set()
                 await entered.wait()
+            # Then the transient failure was retried in place and the finished setup let transfer cleanup start.
+            assert passes == ["pass", "pass"]
+            assert retry_delays == [connectors.RETRY_BASE_SECONDS]
+            setup, finite = runtime.tasks.required["wechat"]
+            assert finite
+            assert setup.done()
+            assert setup.exception() is None
+            assert not runtime.tasks.required["wechat-reconcile"][0].done()
         assert ("transfer_cleanup" in runtime.tasks.required) == (role == "connector")
     finally:
         with anyio.fail_after(1):

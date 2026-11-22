@@ -6,7 +6,6 @@ import sys
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from functools import partial
-from typing import Protocol
 
 import anyio
 from fastapi import FastAPI
@@ -19,6 +18,7 @@ from app.core.logging import configure_logging, intercept_standard_logging, logg
 from app.db.pool import close_pool, init_pool
 from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.bootstrap import bootstrap
+from app.runtime.connectors import ConnectorManager, ReconcileRuntime
 from app.runtime.diagnostics import log_bwrap_startup_status
 from app.runtime.incident_alerts import IncidentAlerts
 from app.runtime.proxy import ShadowsocksProxy
@@ -37,25 +37,20 @@ from app.services.tavily.http_client import shutdown_tavily_client
 from app.services.trigger_daemon import close_trigger_admission, drain_trigger_tasks, open_trigger_admission
 
 
-class ConnectorManager(Protocol):
-    async def start_all(self) -> None: ...
-    async def stop_all(self) -> None: ...
-
-
-def connector_managers() -> tuple[ConnectorManager, ...]:
+def connector_managers() -> dict[str, ConnectorManager]:
     from app.services.dingtalk_stream import dingtalk_stream_manager
     from app.services.discord_gateway import discord_gateway_manager
     from app.services.feishu_ws import feishu_ws_manager
     from app.services.wechat_channel import wechat_poll_manager
     from app.services.wecom_stream import wecom_stream_manager
 
-    return (
-        feishu_ws_manager,
-        dingtalk_stream_manager,
-        wecom_stream_manager,
-        wechat_poll_manager,
-        discord_gateway_manager,
-    )
+    return {
+        "feishu": feishu_ws_manager,
+        "dingtalk": dingtalk_stream_manager,
+        "wecom": wecom_stream_manager,
+        "wechat": wechat_poll_manager,
+        "discord": discord_gateway_manager,
+    }
 
 
 class Runtime:
@@ -63,7 +58,7 @@ class Runtime:
         self.tasks: OwnedTasks = OwnedTasks()
         self.incidents: IncidentAlerts = IncidentAlerts()
         self.readiness: Readiness = Readiness(self.tasks)
-        self.managers: tuple[ConnectorManager, ...] = ()
+        self.managers: dict[str, ConnectorManager] = {}
         self.proxy: ShadowsocksProxy = ShadowsocksProxy()
         self.pool_attempted: bool = False
         self.realtime_attempted: bool = False
@@ -328,7 +323,6 @@ class Runtime:
                 progress_budget_seconds=TASK_LEASE_RECOVERY_BUDGET_SECONDS,
             )
         if role_enabled(roles, "connector"):
-            from app.runtime.connectors import WeChatRuntime
             from app.services.channels.whatsapp_personal_supervisor import (
                 PROGRESS_BUDGET_SECONDS as WHATSAPP_PERSONAL_BUDGET_SECONDS,
                 personal_supervisor,
@@ -341,9 +335,10 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as TRANSFER_CLEANUP_BUDGET_SECONDS,
                 start_transfer_cleanup_reconciler,
             )
-            from app.services.wechat_channel import WeChatPollManager
 
             self.managers = connector_managers()
+            for manager in self.managers.values():
+                manager.open()
             self.tasks.start(
                 "whatsapp_personal",
                 personal_supervisor(),
@@ -357,9 +352,8 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=ZALO_PERSONAL_BUDGET_SECONDS,
             )
-            for manager in self.managers:
-                initializer = WeChatRuntime(manager, self.tasks) if isinstance(manager, WeChatPollManager) else manager
-                self.tasks.start(type(manager).__name__, initializer.start_all(), requirement="setup")
+            for name, manager in self.managers.items():
+                self.tasks.start(name, ReconcileRuntime(name, manager, self.tasks).start(), requirement="setup")
 
             async def reconcile_transfers() -> None:
                 with loop_progress().exempt(restart_on_error=False):
@@ -391,6 +385,8 @@ class Runtime:
     def begin_drain(self) -> None:
         """Fail readiness and close producer admission synchronously, before any cleanup awaits."""
         self.readiness.draining = True
+        for manager in self.managers.values():
+            manager.close()
         close_trigger_admission()
         close_heartbeat_admission()
         close_wake_admission()
@@ -411,9 +407,9 @@ class Runtime:
         await drain("route background tasks", drain_background_tasks)
         await cleanup("wrappers", self.tasks.stop)
         await cleanup("schedule executions", stop_schedule_tasks)
-        for index, manager in enumerate(self.managers):
+        for index, (name, manager) in enumerate(self.managers.items()):
             seconds = budget.slice("connector managers", parts=len(self.managers) - index)
-            await self._cleanup(type(manager).__name__, manager.stop_all, seconds)
+            await self._cleanup(name, manager.stop_all, seconds)
         await drain("trigger invocations", drain_trigger_tasks)
         await drain("heartbeats", drain_heartbeat_tasks)
         await drain("inbox wakes", drain_wake_tasks)

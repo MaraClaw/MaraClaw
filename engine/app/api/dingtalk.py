@@ -10,11 +10,13 @@ from typing import TypedDict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+from app.config import get_settings
 from app.core.domain.channels import ChannelType
 from app.core.logging import logger
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
+from app.process_roles import parse_process_roles, role_enabled
 from app.records.user import UserRecord
 from app.schemas.schemas import ChannelConfigOut
 from app.services.channels.config import get_channel_config_metadata
@@ -74,17 +76,17 @@ async def configure_dingtalk_channel(
             },
         )
         config = config or existing
+        if role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
+            from app.api.background_tasks import schedule_background_task
+            from app.services.dingtalk_stream import dingtalk_stream_manager
 
-        from app.api.background_tasks import schedule_background_task
-        from app.services.dingtalk_stream import dingtalk_stream_manager
-
-        if conn_mode == "websocket":
-            schedule_background_task(
-                dingtalk_stream_manager.start_client(agent_id, app_key, app_secret),
-                "start DingTalk stream client",
-            )
-        else:
-            schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
+            if conn_mode == "websocket":
+                schedule_background_task(
+                    dingtalk_stream_manager.start_client(agent_id, app_key, app_secret),
+                    "start DingTalk stream client",
+                )
+            else:
+                schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
 
         return channel_config_out(config)
 
@@ -99,7 +101,7 @@ async def configure_dingtalk_channel(
         }
     )
 
-    if conn_mode == "websocket":
+    if conn_mode == "websocket" and role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
         from app.api.background_tasks import schedule_background_task
         from app.services.dingtalk_stream import dingtalk_stream_manager
 
@@ -129,11 +131,11 @@ async def delete_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord 
     if not config:
         raise HTTPException(status_code=404, detail="DingTalk not configured")
     _ = await channel_config_dao.delete(record_id=config.id)
+    if role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
+        from app.api.background_tasks import schedule_background_task
+        from app.services.dingtalk_stream import dingtalk_stream_manager
 
-    from app.api.background_tasks import schedule_background_task
-    from app.services.dingtalk_stream import dingtalk_stream_manager
-
-    schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
+        schedule_background_task(dingtalk_stream_manager.stop_client(agent_id), "stop DingTalk stream client")
 
 
 # ─── Message Processing (called by Stream callback) ────

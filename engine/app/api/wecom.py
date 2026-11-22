@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from app.api.background_tasks import schedule_background_task
+from app.config import get_settings
 from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
@@ -37,6 +38,7 @@ from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_bo
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.identity_provider_dao import identity_provider_dao
+from app.process_roles import parse_process_roles, role_enabled
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
@@ -285,6 +287,8 @@ async def configure_wecom_channel(
         )
         config_out = channel_config_out(config)
 
+    if not role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
+        return config_out
     try:
         if has_ws_mode:
             schedule_background_task(
@@ -309,11 +313,9 @@ async def get_wecom_channel(
     if not config:
         raise HTTPException(status_code=404, detail="WeCom not configured")
 
+    # The connector process records stream health on the row; this route never asks a local manager.
     config_out = channel_config_out(config)
-    extra = json_object_from(config.extra_config)
-    if extra.get("connection_mode") == "websocket":
-        config_out.is_connected = wecom_stream_manager.status().get(str(agent_id), False)
-    else:
+    if json_object_from(config.extra_config).get("connection_mode") != "websocket":
         config_out.is_connected = False
     return config_out
 
@@ -332,8 +334,9 @@ async def delete_wecom_channel(agent_id: uuid.UUID, current_user: UserRecord = D
     config = await get_channel_config_metadata(agent_id, ChannelType.WECOM)
     if not config:
         raise HTTPException(status_code=404, detail="WeCom not configured")
-    await wecom_stream_manager.stop_client(agent_id)
     _ = await channel_config_dao.delete(record_id=config.id)
+    if role_enabled(parse_process_roles(get_settings().PROCESS_ROLE), "connector"):
+        await wecom_stream_manager.stop_client(agent_id)
 
 
 # ─── Event Webhook ──────────────────────────────────────

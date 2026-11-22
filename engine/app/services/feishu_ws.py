@@ -13,13 +13,14 @@ from unittest.mock import patch
 from weakref import WeakValueDictionary
 
 from app.core.domain.channels import ChannelType
-from app.core.json_types import JsonObject, json_as_str_or, json_loads_object, json_object_from
+from app.core.json_types import JsonObject, json_as_str_or, json_loads_object
 from app.core.logging import logger
-from app.dao.channel_config_dao import channel_config_dao
+from app.records.channel_config import ChannelConfigRecord
 from app.runtime.callbacks import CallbackAdmission
 from app.runtime.tasks import cancel_tasks, is_async_callback
 from app.services.channels.feishu_ws_acceptance import EventFrame, accept_event_frame
-from app.services.channels.stream_source import StreamSource, acquire_stream_source
+from app.services.channels.stream_reconcile import StreamReconciler
+from app.services.channels.stream_source import StreamSource, acquire_stream_source, connection_credentials
 
 try:
     import lark_oapi as _lark_mod
@@ -223,11 +224,21 @@ class FeishuWSManager:
         self._ping_tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._callbacks: dict[uuid.UUID, CallbackAdmission] = {}
         self._lifecycle_locks: WeakValueDictionary[uuid.UUID, asyncio.Lock] = WeakValueDictionary()
+        self._sources: dict[uuid.UUID, StreamSource] = {}
+        self._reconciler: StreamReconciler = StreamReconciler(ChannelType.FEISHU, "[Feishu WS]")
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._closing: bool = False
 
     def _is_closing(self) -> bool:
         return self._closing
+
+    def open(self) -> None:
+        """Admit client starts again; the connector runtime opens every manager when it starts."""
+        self._closing = False
+
+    def close(self) -> None:
+        """Refuse client starts from now on; draining closes before any cleanup awaits."""
+        self._closing = True
 
     def _create_event_handler(self, agent_id: uuid.UUID) -> _EventHandler:
         """Create an event dispatcher for a specific agent."""
@@ -275,18 +286,11 @@ class FeishuWSManager:
         agent_id: uuid.UUID,
         app_id: str,
         app_secret: str,
-        stop_existing: bool = True,
     ) -> None:
         async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
-            await self._start_client(agent_id, app_id, app_secret, stop_existing)
+            await self._start_client(agent_id, app_id, app_secret)
 
-    async def _start_client(
-        self,
-        agent_id: uuid.UUID,
-        app_id: str,
-        app_secret: str,
-        stop_existing: bool,
-    ) -> None:
+    async def _start_client(self, agent_id: uuid.UUID, app_id: str, app_secret: str) -> None:
         """Spawns a WebSocket client fully asynchronously inside FastAPI's loop."""
         if not _HAS_LARK:
             logger.warning("[Feishu WS] lark-oapi not installed, cannot start client")
@@ -311,10 +315,9 @@ class FeishuWSManager:
         logger.info(f"[Feishu WS] Starting async WS client for agent {agent_id} (App ID: {app_id})")
 
         self._main_loop = asyncio.get_running_loop()
-        self._closing = False
-        if stop_existing:
-            await self._stop_client(agent_id)
-        elif agent_id in self._tasks and not self._tasks[agent_id].done():
+        await self._stop_client(agent_id)
+        if self._closing:
+            logger.info(f"[Feishu WS] Manager is closing; not starting a client for agent {agent_id}")
             return
 
         try:
@@ -459,6 +462,7 @@ class FeishuWSManager:
 
         task = asyncio.create_task(_run_async_client(), name=f"feishu-ws-async-{str(agent_id)[:8]}")
         self._tasks[agent_id] = task
+        self._sources[agent_id] = source
         logger.info(f"[Feishu WS] Async WS task scheduled for agent {agent_id}")
 
     async def stop_client(self, agent_id: uuid.UUID) -> None:
@@ -467,6 +471,7 @@ class FeishuWSManager:
             await self._stop_client(agent_id)
 
     async def _stop_client(self, agent_id: uuid.UUID) -> None:
+        _ = self._sources.pop(agent_id, None)
         callbacks = self._callbacks.pop(agent_id, None)
         task = self._tasks.pop(agent_id, None)
         client = self._clients.pop(agent_id, None)
@@ -481,7 +486,7 @@ class FeishuWSManager:
                 logger.error(f"[Feishu WS] Error disconnecting client for {agent_id}: {e}")
 
     async def stop_all(self) -> None:
-        self._closing = True
+        self.close()
         for callbacks in self._callbacks.values():
             callbacks.close()
         results = await asyncio.gather(
@@ -493,22 +498,25 @@ class FeishuWSManager:
                 logger.warning("[Feishu WS] Client cleanup failed: {}", result)
         self._main_loop = None
 
-    async def start_all(self) -> None:
-        """Start WS clients for all configured Feishu agents."""
-        if not _HAS_LARK:
-            logger.info("[Feishu WS] lark-oapi not installed, skipping Feishu WS initialization")
-            return
-        logger.info("[Feishu WS] Initializing all active Feishu channels...")
-        configs = await channel_config_dao.list_configured(ChannelType.FEISHU)
+    def live_source(self, agent_id: uuid.UUID) -> StreamSource | None:
+        task = self._tasks.get(agent_id)
+        return None if task is None or task.done() else self._sources.get(agent_id)
 
-        for config in configs:
-            extra = json_object_from(config.extra_config)
-            mode = json_as_str_or(extra.get("connection_mode"), "webhook")
-            if mode == "websocket":
-                if config.app_id not in (None, "") and config.app_secret not in (None, ""):
-                    await self.start_client(config.agent_id, config.app_id, config.app_secret, stop_existing=False)
-                else:
-                    logger.warning(f"[Feishu WS] Skipping agent {config.agent_id}: missing credentials")
+    def tracked_agents(self) -> set[uuid.UUID]:
+        return set(self._tasks) | set(self._clients) | set(self._callbacks)
+
+    async def ensure_source(self, config: ChannelConfigRecord, source: StreamSource) -> None:
+        app_id, app_secret = connection_credentials(config)
+        async with self._lifecycle_locks.setdefault(config.agent_id, asyncio.Lock()):
+            if self.live_source(config.agent_id) != source:
+                await self._start_client(config.agent_id, app_id, app_secret)
+
+    async def reconcile_clients(self) -> None:
+        """One connector pass over the configured Feishu rows; without lark-oapi no client can exist."""
+        if not _HAS_LARK:
+            logger.debug("[Feishu WS] lark-oapi not installed, nothing to reconcile")
+            return
+        _ = await self._reconciler.reconcile(self)
 
     def status(self) -> dict[str, bool]:
         """Return status of all active WS tasks."""

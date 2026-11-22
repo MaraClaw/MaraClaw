@@ -2,13 +2,16 @@ import asyncio
 import threading
 import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import lark_oapi.ws.client as lark_ws_client
 import pytest
 
+from app.dao.channel_config_dao import channel_config_dao
 from app.runtime import tasks
 from app.runtime.tasks import EventTasks, OwnedTasks
 from app.services import feishu_ws
+from app.services.channels.stream_source import stream_source
 from app.services.dingtalk_stream import DingTalkStreamManager
 from app.services.feishu_ws import FeishuWSManager
 from stream_source_fixtures import connection_config
@@ -250,3 +253,47 @@ def test_feishu_initial_connect_delay_is_capped_and_jittered(
     monkeypatch.setattr(feishu_ws, "_RANDOM", SimpleNamespace(random=lambda: unit))
     # When the delay is computed, then it is the capped backoff scaled to 50-100%.
     assert feishu_ws._initial_connect_delay(attempt) == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_feishu_reconcile_starts_a_row_saved_after_boot_keeps_it_and_stops_it_once_revoked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a booted manager whose first pass found no configured rows.
+    client = FakeLarkClient(failures=0)
+    install_fake_lark(monkeypatch, client)
+    built: list[FakeLarkClient] = []
+
+    def construct(*_args: object, **_kwargs: object) -> FakeLarkClient:
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(feishu_ws, "_lark_ws_mod", SimpleNamespace(Client=construct))
+    manager, agent_id = FeishuWSManager(), uuid.uuid4()
+    config = connection_config(monkeypatch, agent_id, "feishu")
+    list_configured = AsyncMock(return_value=[])
+    monkeypatch.setattr(channel_config_dao, "list_configured", list_configured)
+    await manager.reconcile_clients()
+    assert manager.tracked_agents() == set()
+    try:
+        # When the row is saved after boot, the next pass starts its client.
+        list_configured.return_value = [config]
+        await manager.reconcile_clients()
+        await asyncio.wait_for(client.ping_started.wait(), 5)
+        assert manager.live_source(agent_id) == stream_source(config)
+        task = manager._tasks[agent_id]
+        # When later passes see the same source, they never restart it.
+        await manager.reconcile_clients()
+        await manager.reconcile_clients()
+        assert manager._tasks[agent_id] is task
+        assert len(built) == 1
+        assert client.calls == ["connect"]
+        # When the row is revoked, the next pass stops the client.
+        list_configured.return_value = []
+        await manager.reconcile_clients()
+        assert task.done()
+        assert manager.tracked_agents() == set()
+        assert client.calls.count("connect") == 1
+        assert client.calls[-1] == "disconnect"
+    finally:
+        await manager.stop_all()

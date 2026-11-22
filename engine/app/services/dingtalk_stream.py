@@ -22,6 +22,7 @@ import httpx
 from app.core.domain.channels import ChannelType
 from app.core.json_types import json_as_str, json_loads_value, json_object_from, json_object_from_response
 from app.core.logging import logger
+from app.records.channel_config import ChannelConfigRecord
 from app.records.chat_attachment import ChatAttachment
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import ReconnectBackoff
@@ -35,7 +36,13 @@ from app.services.channels.media_limits import (
     skipped_attachments_note,
     too_large_note,
 )
-from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
+from app.services.channels.stream_reconcile import StreamReconciler
+from app.services.channels.stream_source import (
+    StreamSource,
+    acquire_stream_source,
+    authorize_stream_source,
+    connection_credentials,
+)
 from app.services.channels.submissions import ChannelEvent, is_channel_event_replay
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.document_parser import MAX_INPUT_BYTES
@@ -549,7 +556,17 @@ class DingTalkStreamManager:
         self._children: CallbackAdmission = CallbackAdmission()
         self._callbacks: dict[uuid.UUID, CallbackAdmission] = {}
         self._lifecycle_locks: WeakValueDictionary[uuid.UUID, asyncio.Lock] = WeakValueDictionary()
+        self._sources: dict[uuid.UUID, StreamSource] = {}
+        self._reconciler: StreamReconciler = StreamReconciler(ChannelType.DINGTALK, "[DingTalk Stream]")
         self._closing: bool = False
+
+    def open(self) -> None:
+        """Admit client starts and callbacks again; the connector runtime opens every manager when it starts."""
+        self._closing = False
+
+    def close(self) -> None:
+        """Refuse client starts and callbacks from now on; draining closes before any cleanup awaits."""
+        self._closing = True
 
     async def _dispatch(
         self,
@@ -577,8 +594,7 @@ class DingTalkStreamManager:
         agent_id: uuid.UUID,
         app_key: str,
         app_secret: str,
-        stop_existing: bool = True,
-    ):
+    ) -> None:
         """Start a DingTalk Stream client for a specific agent."""
         if not app_key or not app_secret:
             logger.warning(f"[DingTalk Stream] Missing credentials for {agent_id}, skipping")
@@ -587,30 +603,35 @@ class DingTalkStreamManager:
         logger.info(f"[DingTalk Stream] Starting client for agent {agent_id} (AppKey: {app_key[:8]}...)")
 
         async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
-            source = await acquire_stream_source(agent_id, ChannelType.DINGTALK, (app_key, app_secret))
-            self._main_loop = asyncio.get_running_loop()
-            self._closing = False
-            existing = self._threads.get(agent_id)
-            if stop_existing or existing is None or not existing.is_alive():
-                await self._stop_client(agent_id)
-            existing = self._threads.get(agent_id)
-            if existing and existing.is_alive():
-                logger.warning("[DingTalk Stream] Existing thread still running for {}", agent_id)
-                return
+            await self._start_client(agent_id, app_key, app_secret)
 
-            stop_event = threading.Event()
-            self._stop_events[agent_id] = stop_event
-            callbacks = self._callbacks[agent_id] = CallbackAdmission()
-            self._transports[agent_id] = DingTalkTransport(stop_event)
-            thread = threading.Thread(
-                target=self._run_client_thread,
-                args=(agent_id, app_key, app_secret, stop_event, callbacks, source),
-                name=f"dingtalk-stream-{str(agent_id)[:8]}",
-                daemon=True,
-            )
-            self._threads[agent_id] = thread
-            thread.start()
-            logger.info(f"[DingTalk Stream] Client thread started for agent {agent_id}")
+    async def _start_client(self, agent_id: uuid.UUID, app_key: str, app_secret: str) -> None:
+        source = await acquire_stream_source(agent_id, ChannelType.DINGTALK, (app_key, app_secret))
+        self._main_loop = asyncio.get_running_loop()
+        await self._stop_client(agent_id)
+        existing = self._threads.get(agent_id)
+        if existing and existing.is_alive():
+            # A thread that outlived its join is still stopping; a later pass retries the stop, never a second link.
+            logger.warning("[DingTalk Stream] Previous thread for {} is still stopping; not starting another", agent_id)
+            return
+        if self._closing:
+            logger.info(f"[DingTalk Stream] Manager is closing; not starting a client for agent {agent_id}")
+            return
+
+        stop_event = threading.Event()
+        self._stop_events[agent_id] = stop_event
+        callbacks = self._callbacks[agent_id] = CallbackAdmission()
+        self._transports[agent_id] = DingTalkTransport(stop_event)
+        thread = threading.Thread(
+            target=self._run_client_thread,
+            args=(agent_id, app_key, app_secret, stop_event, callbacks, source),
+            name=f"dingtalk-stream-{str(agent_id)[:8]}",
+            daemon=True,
+        )
+        self._threads[agent_id] = thread
+        self._sources[agent_id] = source
+        thread.start()
+        logger.info(f"[DingTalk Stream] Client thread started for agent {agent_id}")
 
     def _run_client_thread(
         self,
@@ -897,6 +918,7 @@ class DingTalkStreamManager:
             await self._stop_client(agent_id)
 
     async def _stop_client(self, agent_id: uuid.UUID) -> None:
+        _ = self._sources.pop(agent_id, None)
         callbacks = self._callbacks.pop(agent_id, None)
         if callbacks:
             callbacks.close()
@@ -920,7 +942,7 @@ class DingTalkStreamManager:
         self._transports.pop(agent_id, None)
 
     async def stop_all(self) -> None:
-        self._closing = True
+        self.close()
         for callbacks in self._callbacks.values():
             callbacks.close()
         for stop_event in tuple(self._stop_events.values()):
@@ -934,25 +956,25 @@ class DingTalkStreamManager:
                 logger.warning("[DingTalk Stream] Cleanup failed: {}", result)
         self._main_loop = None
 
-    async def start_all(self):
-        """Start Stream clients for all configured DingTalk agents."""
-        logger.info("[DingTalk Stream] Initializing all active DingTalk channels...")
-        from app.dao.channel_config_dao import channel_config_dao
+    def live_source(self, agent_id: uuid.UUID) -> StreamSource | None:
+        """A thread that outlived its stop join has no callbacks left: it is stopping, not live."""
+        thread = self._threads.get(agent_id)
+        if agent_id not in self._callbacks or thread is None or not thread.is_alive():
+            return None
+        return self._sources.get(agent_id)
 
-        configs = await channel_config_dao.list_configured(ChannelType.DINGTALK)
+    def tracked_agents(self) -> set[uuid.UUID]:
+        return set(self._threads) | set(self._callbacks)
 
-        logger.info(f"[DingTalk Stream] Found {len(configs)} configured DingTalk channel(s)")
+    async def ensure_source(self, config: ChannelConfigRecord, source: StreamSource) -> None:
+        app_key, app_secret = connection_credentials(config)
+        async with self._lifecycle_locks.setdefault(config.agent_id, asyncio.Lock()):
+            if self.live_source(config.agent_id) != source:
+                await self._start_client(config.agent_id, app_key, app_secret)
 
-        for config in configs:
-            if config.app_id not in (None, "") and config.app_secret not in (None, ""):
-                await self.start_client(
-                    config.agent_id,
-                    config.app_id,
-                    config.app_secret,
-                    stop_existing=False,
-                )
-            else:
-                logger.warning(f"[DingTalk Stream] Skipping agent {config.agent_id}: missing credentials")
+    async def reconcile_clients(self) -> None:
+        """One connector pass over the configured DingTalk rows; webhook-mode rows never open a stream."""
+        _ = await self._reconciler.reconcile(self)
 
     def status(self) -> dict[str, bool]:
         """Return status of all active Stream clients."""

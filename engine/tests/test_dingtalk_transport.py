@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import dingtalk_stream
@@ -9,8 +10,11 @@ import pytest
 from websockets.asyncio.server import serve
 
 from app.api import dingtalk
+from app.core.domain.channels import ChannelType
+from app.dao.channel_config_dao import channel_config_dao
 from app.services import dingtalk_stream as dingtalk_manager
-from app.services.channels import dingtalk_stream_transport
+from app.services.channels import dingtalk_stream_transport, stream_reconcile
+from app.services.channels.stream_source import stream_source
 from app.services.dingtalk_stream import DingTalkStreamManager
 from stream_source_fixtures import connection_config
 
@@ -376,3 +380,75 @@ async def test_restart_joins_old_worker_before_replacing_its_stop_event(monkeypa
         for thread in threads:
             await asyncio.to_thread(thread.join, 1)
     assert all(not thread.is_alive() for thread in threads)
+
+
+async def test_reconcile_never_opens_a_stream_for_a_webhook_mode_row(monkeypatch):
+    # Given a configured DingTalk row in webhook mode.
+    manager, agent_id = DingTalkStreamManager(), uuid4()
+    config = connection_config(monkeypatch, agent_id, "dingtalk")
+    config.extra_config = {"connection_mode": "webhook"}
+    monkeypatch.setattr(channel_config_dao, "list_configured", AsyncMock(return_value=[config]))
+    workers = []
+    monkeypatch.setattr(manager, "_run_client_thread", lambda *args: workers.append(args))
+    # When a pass runs, Then it neither raises nor starts a thread.
+    await manager.reconcile_clients()
+    assert manager.tracked_agents() == set()
+    assert workers == []
+
+
+async def test_a_thread_that_outlives_its_stop_is_stopped_again_and_never_joined_by_a_second_connection(monkeypatch):
+    # Given a connected agent whose worker thread ignores its stop request, on a pass clock the test controls.
+    now = 0.0
+    manager, agent_id = DingTalkStreamManager(), uuid4()
+    config = connection_config(monkeypatch, agent_id, "dingtalk")
+    monkeypatch.setattr(channel_config_dao, "list_configured", AsyncMock(return_value=[config]))
+    manager._reconciler = stream_reconcile.StreamReconciler(ChannelType.DINGTALK, "[test]", clock=lambda: now)
+    stuck_release = threading.Event()
+
+    def worker(_agent_id, _app_key, app_secret, stop_event, _callbacks, _source):
+        if app_secret == "secret":
+            stuck_release.wait()
+        else:
+            stop_event.wait()
+
+    monkeypatch.setattr(manager, "_run_client_thread", worker)
+    await manager.reconcile_clients()
+    old = manager._threads[agent_id]
+    real_join, joins = old.join, []
+
+    def recorded_join(timeout=None):
+        joins.append(timeout)
+        if stuck_release.is_set():
+            real_join(timeout)
+
+    monkeypatch.setattr(old, "join", recorded_join)
+    try:
+        # When the credentials rotate and the pass's stop join ends with the old thread still alive.
+        config.app_secret = "rotated"
+        await manager.reconcile_clients()
+        # Then the agent is stopping, not live, and no second connection started beside the old thread.
+        assert len(joins) == 1
+        assert old.is_alive()
+        assert manager._threads[agent_id] is old
+        assert manager.live_source(agent_id) is None
+        # When passes come before the agent's backoff, nothing is retried; once it elapses, the stop is retried.
+        now = stream_reconcile.RETRY_BASE_SECONDS - 1
+        await manager.reconcile_clients()
+        assert len(joins) == 1
+        now = stream_reconcile.RETRY_BASE_SECONDS
+        await manager.reconcile_clients()
+        assert len(joins) == 2
+        assert manager._threads[agent_id] is old
+        # When the old thread finally exits, the next due pass finishes the stop and opens the new connection.
+        stuck_release.set()
+        now += 2 * stream_reconcile.RETRY_BASE_SECONDS
+        await manager.reconcile_clients()
+        assert len(joins) == 3
+        assert not old.is_alive()
+        assert manager._threads[agent_id] is not old
+        assert manager.live_source(agent_id) == stream_source(config)
+    finally:
+        stuck_release.set()
+        await manager.stop_all()
+        await asyncio.to_thread(real_join, 1)
+    assert not old.is_alive()

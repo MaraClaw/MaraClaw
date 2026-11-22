@@ -6,8 +6,10 @@ from fastapi import FastAPI
 from nacl.signing import SigningKey
 from tests.im_webhook_fixtures import AGENT_ID, channel_config
 
-from app.api import discord_bot, feishu, teams, whatsapp
+from app.api import background_tasks, dingtalk, discord_bot, feishu, teams, wecom, whatsapp
+from app.config import get_settings
 from app.core.security import get_current_user
+from app.dao.channel_config_dao import channel_config_dao
 
 PROVIDERS = {
     "feishu": (feishu, "channel", {"app_id": "app", "app_secret": "secret"}, "verification_token"),
@@ -145,3 +147,63 @@ async def test_connection_modes_do_not_require_webhook_credentials(monkeypatch, 
         response = await client.post(f"/api/agents/{AGENT_ID}/{endpoint}", json=payload)
     app.dependency_overrides.clear()
     assert response.status_code == 201
+
+
+STREAM_SAVES = {
+    "feishu": (
+        feishu,
+        "channel",
+        {"app_id": "app", "app_secret": "secret", "extra_config": {"connection_mode": "websocket"}},
+    ),
+    "dingtalk": (dingtalk, "dingtalk-channel", {"app_key": "app", "app_secret": "secret"}),
+    "wecom": (wecom, "wecom-channel", {"bot_id": "bot", "bot_secret": "secret"}),
+    "discord": (discord_bot, "discord-channel", {"bot_token": "token", "connection_mode": "gateway"}),
+}
+
+
+@pytest.mark.parametrize("provider", STREAM_SAVES)
+@pytest.mark.parametrize("role", ["api", "connector"])
+async def test_stream_save_and_delete_touch_clients_only_in_a_connector_process(monkeypatch, provider, role):
+    from app.services.dingtalk_stream import dingtalk_stream_manager
+    from app.services.discord_gateway import discord_gateway_manager
+    from app.services.feishu_ws import feishu_ws_manager
+    from app.services.wecom_stream import wecom_stream_manager
+
+    # Given a stream-mode row in a process running only the given role.
+    module, endpoint, payload = STREAM_SAVES[provider]
+    manager = {
+        "feishu": feishu_ws_manager,
+        "dingtalk": dingtalk_stream_manager,
+        "wecom": wecom_stream_manager,
+        "discord": discord_gateway_manager,
+    }[provider]
+    config = channel_config(provider)
+    config.extra_config = {"connection_mode": "gateway" if provider == "discord" else "websocket"}
+    monkeypatch.setattr(get_settings(), "PROCESS_ROLE", role)
+    monkeypatch.setattr(module, "check_agent_access", AsyncMock(return_value=(Mock(), None)))
+    monkeypatch.setattr(module, "is_agent_creator", lambda *_: True)
+    monkeypatch.setattr(channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    monkeypatch.setattr(channel_config_dao, "update", AsyncMock(return_value=config))
+    delete, start, stop = AsyncMock(), AsyncMock(), AsyncMock()
+    order = Mock()
+    order.attach_mock(delete, "delete")
+    order.attach_mock(start, "start")
+    order.attach_mock(stop, "stop")
+    monkeypatch.setattr(channel_config_dao, "delete", delete)
+    monkeypatch.setattr(manager, "start_client", start)
+    monkeypatch.setattr(manager, "stop_client", stop)
+    for scheduler in (feishu, wecom, background_tasks):
+        monkeypatch.setattr(scheduler, "schedule_background_task", lambda coroutine, _description: coroutine.close())
+    app = FastAPI()
+    app.include_router(module.router, prefix="/api")
+    app.dependency_overrides[get_current_user] = lambda: Mock()
+    # When the row is saved and then deleted.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        saved = await client.post(f"/api/agents/{AGENT_ID}/{endpoint}", json=payload)
+        removed = await client.delete(f"/api/agents/{AGENT_ID}/{endpoint}")
+    app.dependency_overrides.clear()
+    # Then only a connector process touches the client, and it removes the row before stopping the client.
+    assert saved.status_code == 201
+    assert removed.status_code == 204
+    calls = [name for name, _args, _kwargs in order.mock_calls]
+    assert calls == (["start", "delete", "stop"] if role == "connector" else ["delete"])

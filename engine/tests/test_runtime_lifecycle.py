@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from functools import partial
 from typing import override
 
 import anyio
@@ -37,7 +38,13 @@ class ChildManager:
         self.children: OwnedTasks = OwnedTasks()
         self.started: asyncio.Event = asyncio.Event()
 
-    async def start_all(self) -> None:
+    def open(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    async def reconcile_clients(self) -> None:
         async def child() -> None:
             self.started.set()
             try:
@@ -195,8 +202,8 @@ async def test_owned_children_stop_before_resources_across_lifespans(
 
     async def start(runtime: lifecycle.Runtime, _roles: frozenset[str]) -> None:
         runtime.pool_attempted = runtime.realtime_attempted = runtime.logging_attempted = True
-        runtime.managers = (manager,)
-        runtime.tasks.start("fake-manager", manager.start_all())
+        runtime.managers = {"child": manager}
+        runtime.tasks.start("fake-manager", manager.reconcile_clients())
         await manager.started.wait()
 
     monkeypatch.setattr(lifecycle.Runtime, "start", start)
@@ -227,8 +234,8 @@ async def test_startup_failure_or_cancellation_unwinds_children(
 
     async def start(runtime: lifecycle.Runtime, _roles: frozenset[str]) -> None:
         runtime.pool_attempted = runtime.realtime_attempted = runtime.logging_attempted = True
-        runtime.managers = (manager,)
-        runtime.tasks.start("fake-manager", manager.start_all())
+        runtime.managers = {"child": manager}
+        runtime.tasks.start("fake-manager", manager.reconcile_clients())
         await manager.started.wait()
         raise startup_error
 
@@ -431,7 +438,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(readiness, "ping_pool", probe)
     monkeypatch.setattr(readiness, "ping_redis", probe)
     manager = ChildManager(events)
-    monkeypatch.setattr(lifecycle, "connector_managers", lambda: (manager,))
+    monkeypatch.setattr(lifecycle, "connector_managers", lambda: {"child": manager})
     monkeypatch.setattr(runtime.proxy, "start", loop)
     await background_tasks.drain_background_tasks()
     # When
@@ -530,7 +537,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("zalo_personal" in names) == role_enabled(roles, "connector")
     assert ("transfer_cleanup" in names) == role_enabled(roles, "connector")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")
-    assert ("ChildManager" in names) == role_enabled(roles, "connector")
+    assert ("child" in names) == role_enabled(roles, "connector")
     budgeted: set[str] = set()
     if role_enabled(roles, "worker"):
         budgeted |= WORKER_BUDGETED_LOOPS
@@ -549,8 +556,8 @@ async def test_cancellation_of_active_lifespan_drains_children(monkeypatch: pyte
 
     async def start(runtime: lifecycle.Runtime, _roles: frozenset[str]) -> None:
         runtime.pool_attempted = runtime.realtime_attempted = runtime.logging_attempted = True
-        runtime.managers = (manager,)
-        runtime.tasks.start("fake-manager", manager.start_all())
+        runtime.managers = {"child": manager}
+        runtime.tasks.start("fake-manager", manager.reconcile_clients())
         await manager.started.wait()
 
     async def run() -> None:
@@ -587,10 +594,10 @@ async def test_route_drain_precedes_manager_and_resource_cleanup(monkeypatch, dr
     runtime = lifecycle.Runtime()
     runtime.pool_attempted = runtime.logging_attempted = True
     manager = ChildManager(events)
-    runtime.managers = (manager,)
+    runtime.managers = {"child": manager}
 
     async def configure_client() -> None:
-        await manager.start_all()
+        await manager.reconcile_clients()
 
     background_tasks.schedule_background_task(configure_client(), "configure connector")
     await manager.started.wait()
@@ -714,6 +721,45 @@ async def test_producer_gates_close_before_the_first_awaited_cleanup(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_a_reconcile_pass_in_flight_at_drain_starts_no_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a connector pass parked while acquiring the source of a configured WeCom stream.
+    from unittest.mock import AsyncMock
+
+    from app.services import wecom_stream
+    from app.services.channels import stream_source
+    from stream_source_fixtures import connection_config
+
+    manager, agent_id = wecom_stream.WeComStreamManager(), uuid.uuid4()
+    config = connection_config(monkeypatch, agent_id, "wecom")
+    monkeypatch.setattr(wecom_stream.channel_config_dao, "list_configured", AsyncMock(return_value=[config]))
+    acquiring, release = asyncio.Event(), asyncio.Event()
+
+    async def acquire(*args: object) -> stream_source.StreamSource:
+        acquiring.set()
+        await release.wait()
+        return stream_source.stream_source(config)
+
+    monkeypatch.setattr(wecom_stream, "acquire_stream_source", acquire)
+    runtime = lifecycle.Runtime()
+    runtime.managers = {"wecom": manager}
+    manager.open()
+    reconcile = asyncio.create_task(manager.reconcile_clients())
+    try:
+        await asyncio.wait_for(acquiring.wait(), 1)
+        # When draining begins before the pass resumes.
+        runtime.begin_drain()
+        release.set()
+        await asyncio.wait_for(reconcile, 1)
+        # Then the pass finishes without opening a client.
+        assert manager.tracked_agents() == set()
+        assert manager.live_source(agent_id) is None
+    finally:
+        release.set()
+        _ = await asyncio.gather(reconcile, return_exceptions=True)
+        await manager.stop_all()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failing", [None, "trigger", "heartbeat", "wake"])
 async def test_producer_drains_run_after_managers_and_before_realtime_and_pool(
     monkeypatch: pytest.MonkeyPatch, failing: str | None
@@ -725,8 +771,8 @@ async def test_producer_drains_run_after_managers_and_before_realtime_and_pool(
     runtime = lifecycle.Runtime()
     runtime.pool_attempted = runtime.realtime_attempted = runtime.logging_attempted = True
     manager = ChildManager(events)
-    runtime.managers = (manager,)
-    runtime.tasks.start("fake-manager", manager.start_all())
+    runtime.managers = {"child": manager}
+    runtime.tasks.start("fake-manager", manager.reconcile_clients())
     await manager.started.wait()
     # When
     await runtime.stop()
@@ -983,7 +1029,7 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
     # Given a connector runtime on a fake clock whose budgeted loops beat only when told to, and a WeChat
     # setup that stays unfinished so transfer cleanup is still waiting for it.
     from app.process_roles import parse_process_roles
-    from app.runtime import readiness
+    from app.runtime import connectors, readiness
     from app.runtime.tasks import loop_progress
     from app.services import audit_logger, company_transfer_cleanup, wechat_channel
     from app.services.channels import whatsapp_personal_supervisor, zalo_personal_supervisor
@@ -1024,16 +1070,26 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
             setup_entered.set()
             await setup_gate.wait()
 
-        @override
-        async def start_all(self) -> None:
-            await budgeted("wechat-reconcile")()
+    loop_paced = False
+
+    async def pace(_seconds: float) -> None:
+        # The reconcile loop sleeps before each pass, so a second sleep means its first pass beat.
+        nonlocal loop_paced
+        if loop_paced:
+            beaten.append("wechat-reconcile")
+            if len(beaten) == len(CONNECTOR_BUDGETED_LOOPS) + 1:
+                all_beaten.set()
+            await asyncio.Event().wait()
+        loop_paced = True
+        await beat.wait()
 
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", budgeted("whatsapp_personal"))
     monkeypatch.setattr(zalo_personal_supervisor, "personal_supervisor", budgeted("zalo_personal"))
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", reconcile_transfers)
     monkeypatch.setattr(whatsapp_personal_supervisor, "PROGRESS_BUDGET_SECONDS", 41.0)
     monkeypatch.setattr(company_transfer_cleanup, "PROGRESS_BUDGET_SECONDS", 42.0)
-    monkeypatch.setattr(lifecycle, "connector_managers", lambda: (Manager(),))
+    monkeypatch.setattr(lifecycle, "connector_managers", lambda: {"wechat": Manager()})
+    monkeypatch.setattr(lifecycle, "ReconcileRuntime", partial(connectors.ReconcileRuntime, sleep=pace))
     monkeypatch.setattr(audit_logger, "write_audit_log", noop)
     monkeypatch.setattr(lifecycle, "configure_logging", lambda **_kwargs: None)
     monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
@@ -1061,13 +1117,13 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
         setup_gate.set()
         await asyncio.wait_for(cleanup_entered.wait(), 5)
         assert set(progress) == {*CONNECTOR_BUDGETED_LOOPS, "wechat-reconcile"}
-        assert progress["wechat-reconcile"].budget_seconds == wechat_channel.PROGRESS_BUDGET_SECONDS
+        assert progress["wechat-reconcile"].budget_seconds == connectors.PROGRESS_BUDGET_SECONDS
         # Then the setup wait left the cleanup budget whole, and passing it makes readiness fail.
         now += 42
         assert not progress["transfer_cleanup"].stale()
         now += 1
         assert progress["transfer_cleanup"].stale()
-        now = 1000.0 + wechat_channel.PROGRESS_BUDGET_SECONDS + 1
+        now = 1000.0 + connectors.PROGRESS_BUDGET_SECONDS + 1
         assert not await runtime.readiness.check()
         # And staleness neither cancels nor restarts a loop.
         assert all(

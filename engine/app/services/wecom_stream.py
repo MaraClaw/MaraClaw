@@ -13,13 +13,23 @@ from functools import wraps
 from random import random as system_random
 from typing import Final, cast
 from unittest.mock import patch
+from weakref import WeakValueDictionary
 
 from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject, is_json_value
 from app.core.logging import logger
+from app.dao.channel_config_dao import channel_config_dao
+from app.records.channel_config import ChannelConfigRecord
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import jittered_backoff
-from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
+from app.services.channels.stream_reconcile import StreamReconciler
+from app.services.channels.stream_source import (
+    StreamSource,
+    acquire_stream_source,
+    authorize_stream_source,
+    connection_credentials,
+    desired_stream_source,
+)
 from app.services.im_sdk_types import is_object_dict
 
 _wecom_sdk_proxy_disabled = False
@@ -119,6 +129,14 @@ def _build_wecom_conv_id(sender_id: str, chat_id: str, chat_type: str) -> str:
     return f"wecom_p2p_{sender_id}"
 
 
+async def _persist_connected(config_id: uuid.UUID, connected: bool) -> None:
+    """Record health for the API status route; the next reconcile pass repairs a write that failed."""
+    try:
+        await channel_config_dao.set_connected(config_id, connected=connected)
+    except Exception as exc:
+        logger.opt(exception=exc).warning(f"[WeCom Stream] Could not record is_connected={connected} for {config_id}")
+
+
 class WeComStreamManager:
     """Manages WeCom AI Bot WebSocket clients for all agents."""
 
@@ -127,37 +145,43 @@ class WeComStreamManager:
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._connected: dict[uuid.UUID, bool] = {}
         self._callbacks: dict[uuid.UUID, CallbackAdmission] = {}
+        self._sources: dict[uuid.UUID, StreamSource] = {}
+        self._lifecycle_locks: WeakValueDictionary[uuid.UUID, asyncio.Lock] = WeakValueDictionary()
+        self._reconciler: StreamReconciler = StreamReconciler(ChannelType.WECOM, "[WeCom Stream]")
+        self._closing: bool = False
 
-    async def start_client(
-        self,
-        agent_id: uuid.UUID,
-        bot_id: str,
-        bot_secret: str,
-        stop_existing: bool = True,
-    ) -> asyncio.Task[None] | None:
+    def open(self) -> None:
+        """Admit client starts again; the connector runtime opens every manager when it starts."""
+        self._closing = False
+
+    def close(self) -> None:
+        """Refuse client starts from now on; draining closes before any cleanup awaits."""
+        self._closing = True
+
+    async def start_client(self, agent_id: uuid.UUID, bot_id: str, bot_secret: str) -> asyncio.Task[None] | None:
         """Start a WeCom AI Bot WebSocket client for a specific agent."""
         if not bot_id or not bot_secret:
             logger.warning(f"[WeCom Stream] Missing bot_id or bot_secret for {agent_id}, skipping")
             return None
 
         logger.info(f"[WeCom Stream] Starting client for agent {agent_id} (BotID: {bot_id[:12]}...)")
+        async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            return await self._start_client(agent_id, bot_id, bot_secret)
 
-        # Stop existing client if any
-        if stop_existing:
-            await self.stop_client(agent_id)
-        else:
-            existing_task = self._tasks.get(agent_id)
-            if existing_task is not None and not existing_task.done():
-                return existing_task
-
+    async def _start_client(self, agent_id: uuid.UUID, bot_id: str, bot_secret: str) -> asyncio.Task[None] | None:
+        await self._stop_client(agent_id)
         self._connected[agent_id] = False
         source = await acquire_stream_source(agent_id, ChannelType.WECOM, (bot_id, bot_secret))
+        if self._closing:
+            logger.info(f"[WeCom Stream] Manager is closing; not starting a client for agent {agent_id}")
+            return None
         callbacks = self._callbacks[agent_id] = CallbackAdmission()
         task = asyncio.create_task(
             self._run_client(agent_id, bot_id, bot_secret, callbacks, source),
             name=f"wecom-stream-{str(agent_id)[:8]}",
         )
         self._tasks[agent_id] = task
+        self._sources[agent_id] = source
 
         def observe_completion(completed_task: asyncio.Task[None]) -> None:
             if completed_task.cancelled():
@@ -209,6 +233,7 @@ class WeComStreamManager:
             async def on_disconnected(_reason: object = None) -> None:
                 if self._clients.get(agent_id) is stream_client:
                     self._connected[agent_id] = False
+                    await _persist_connected(source.config_id, False)
 
             # ── Message handler: text ──
             async def on_text(frame: _WeComFrame) -> None:
@@ -352,6 +377,7 @@ class WeComStreamManager:
                     await stream_client.connect_async()
                     if self._clients.get(agent_id) is stream_client:
                         self._connected[agent_id] = True
+                        await _persist_connected(source.config_id, True)
                     break
                 except asyncio.CancelledError:
                     raise  # Propagate cancellation
@@ -390,11 +416,17 @@ class WeComStreamManager:
             if self._tasks.get(agent_id) is task:
                 _ = self._tasks.pop(agent_id, None)
                 _ = self._connected.pop(agent_id, None)
+                _ = self._sources.pop(agent_id, None)
             if self._clients.get(agent_id) is client:
                 _ = self._clients.pop(agent_id, None)
 
     async def stop_client(self, agent_id: uuid.UUID) -> None:
         """Stop a running WebSocket client for an agent."""
+        async with self._lifecycle_locks.setdefault(agent_id, asyncio.Lock()):
+            await self._stop_client(agent_id)
+
+    async def _stop_client(self, agent_id: uuid.UUID) -> None:
+        source = self._sources.pop(agent_id, None)
         if callbacks := self._callbacks.pop(agent_id, None):
             await callbacks.stop()
         task = self._tasks.pop(agent_id, None)
@@ -410,31 +442,36 @@ class WeComStreamManager:
                 await _disconnect_client(client)
             except Exception as disconnect_error:
                 logger.warning(f"[WeCom Stream] Disconnect failed for {agent_id}: {disconnect_error}")
+        if source is not None:
+            await _persist_connected(source.config_id, False)
 
-    async def start_all(self) -> None:
-        """Start WebSocket clients for all configured WeCom agents with bot credentials."""
-        logger.info("[WeCom Stream] Initializing all active WeCom AI Bot channels...")
-        from app.dao.channel_config_dao import channel_config_dao
+    def live_source(self, agent_id: uuid.UUID) -> StreamSource | None:
+        task = self._tasks.get(agent_id)
+        return None if task is None or task.done() else self._sources.get(agent_id)
 
-        configs = await channel_config_dao.list_configured(ChannelType.WECOM)
+    def tracked_agents(self) -> set[uuid.UUID]:
+        return set(self._tasks) | set(self._clients) | set(self._callbacks)
 
-        started = 0
-        for config in configs:
-            extra = _json_object(config.extra_config)
-            bot_id = extra.get("bot_id", "")
-            bot_secret = extra.get("bot_secret", "")
-            if isinstance(bot_id, str) and isinstance(bot_secret, str) and bot_id and bot_secret:
-                _ = await self.start_client(
-                    config.agent_id,
-                    bot_id,
-                    bot_secret,
-                    stop_existing=False,
-                )
-                started += 1
+    async def ensure_source(self, config: ChannelConfigRecord, source: StreamSource) -> None:
+        bot_id, bot_secret = connection_credentials(config)
+        async with self._lifecycle_locks.setdefault(config.agent_id, asyncio.Lock()):
+            if self.live_source(config.agent_id) != source:
+                _ = await self._start_client(config.agent_id, bot_id, bot_secret)
 
-        logger.info(f"[WeCom Stream] Started {started} WeCom AI Bot client(s)")
+    async def reconcile_clients(self) -> None:
+        """One connector pass, then re-assert each row's persisted ``is_connected``, correcting a stale True."""
+        for config in await self._reconciler.reconcile(self):
+            source = desired_stream_source(config)
+            connected = (
+                source is not None
+                and self.live_source(config.agent_id) == source
+                and self._connected.get(config.agent_id, False)
+            )
+            if config.is_connected != connected:
+                await _persist_connected(config.id, connected)
 
     async def stop_all(self) -> None:
+        self.close()
         for callbacks in self._callbacks.values():
             callbacks.close()
         results = await asyncio.gather(

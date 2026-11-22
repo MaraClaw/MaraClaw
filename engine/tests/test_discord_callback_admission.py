@@ -8,6 +8,7 @@ import discord
 import pytest
 from fastapi import HTTPException
 
+from app.dao.channel_config_dao import channel_config_dao
 from app.services.channels import submissions
 from stream_source_fixtures import connection_config
 
@@ -17,7 +18,8 @@ async def test_actual_sdk_dispatch_bounds_durable_waiters_before_typing_and_rest
     from app.services import discord_gateway
 
     manager, agent_id = discord_gateway.DiscordGatewayManager(), uuid4()
-    connection_config(monkeypatch, agent_id, "discord", credential="token")
+    config = connection_config(monkeypatch, agent_id, "discord", credential="token")
+    monkeypatch.setattr(channel_config_dao, "list_configured", AsyncMock(return_value=[config]))
     connected, started, refused, release = (asyncio.Event() for _ in range(4))
     clients, entered, committed, typing, replies = [], [], [], [], []
     reply_release = asyncio.Event()
@@ -69,7 +71,7 @@ async def test_actual_sdk_dispatch_bounds_durable_waiters_before_typing_and_rest
         await asyncio.wait_for(connected.wait(), 1)
         client = clients[-1]
         runners.append(manager._tasks[agent_id])
-        await manager.start_client(agent_id, "token", stop_existing=False)
+        await manager.reconcile_clients()
         assert manager._clients[agent_id] is client
         schedule = client._schedule_event
 
@@ -180,3 +182,33 @@ async def test_connected_gateway_revokes_typing_and_error_replies_before_new_eff
     finally:
         await manager.stop_all()
         assert all(client.is_closed() for client in clients)
+
+
+async def test_a_row_switched_from_gateway_to_webhook_loses_its_gateway_client_on_the_next_pass(monkeypatch):
+    from app.services import discord_gateway
+
+    # Given a gateway client started by a connector pass.
+    manager, agent_id = discord_gateway.DiscordGatewayManager(), uuid4()
+    config = connection_config(monkeypatch, agent_id, "discord", credential="token")
+    monkeypatch.setattr(channel_config_dao, "list_configured", AsyncMock(return_value=[config]))
+    connected = asyncio.Event()
+
+    async def start(client, token, *, reconnect):
+        connected.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(discord_gateway, "_HAS_DISCORD", True)
+    monkeypatch.setattr(discord_gateway, "_get_discord_module", lambda: discord)
+    monkeypatch.setattr(discord.Client, "start", start)
+    try:
+        await manager.reconcile_clients()
+        await asyncio.wait_for(connected.wait(), 1)
+        task = manager._tasks[agent_id]
+        # When the saved row switches to webhook mode.
+        config.extra_config = {"connection_mode": "webhook"}
+        await manager.reconcile_clients()
+        # Then the next pass stops the gateway client.
+        assert task.done()
+        assert manager.tracked_agents() == set()
+    finally:
+        await manager.stop_all()
