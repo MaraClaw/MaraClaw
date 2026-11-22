@@ -3,22 +3,26 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from fastapi import HTTPException
+
 from app.core.domain.agents import AgentStatus
+from app.core.incident_reporting import report_exception
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
+from app.db.errors import overload_error
 from app.db.session import flush_request_transaction
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.services.agent_lifecycle_events import AgentStopped, publish_agent_stopped
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel
-from app.services.agent_start_reconciler import execute_start
+from app.services.agent_start_reconciler import EXPECTED_START_FAULTS, execute_start
 from app.services.agent_start_store import start_store
 from app.services.company_transfer_runtime_gate import assert_transfer_ready
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_identity import GuestOwnershipError
 from app.services.openclaw_update_exclusion import locked_fresh_agent
-from app.services.openclaw_update_gate import assert_no_active_run
+from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_no_active_run
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +89,15 @@ async def run_start(operation: AgentStartOperation, agent: AgentRecord) -> Lifec
     except GuestOwnershipError as exc:
         logger.warning("Guest start ownership refused for agent {}: {}", agent.id, exc)
         return LifecycleFailure(502, "guest_start_failed", "Guest ownership could not be verified")
+    except HTTPException, OpenClawUpdateGateError:
+        raise
+    except Exception as exc:
+        if overload_error(exc) is not None:
+            raise
+        if not isinstance(exc, EXPECTED_START_FAULTS):
+            report_exception(exc, source="runtime", operation="agent-lifecycle-start")
+        logger.warning("Guest start failed for agent {}: {}", agent.id, type(exc).__name__)
+        return LifecycleFailure(502, "guest_start_failed", "Guest could not be started")
     if not published:
         return LifecycleFailure(502, "guest_start_failed", "Guest could not be started")
     return LifecycleSuccess(agent)

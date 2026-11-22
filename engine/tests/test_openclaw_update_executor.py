@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import fcntl
 import threading
 import uuid
@@ -12,12 +11,13 @@ from pathlib import Path
 from typing import override
 
 import pytest
-from anyio import Event, create_task_group, fail_after
+from anyio import Event, create_task_group, fail_after, from_thread
+from anyio.abc import TaskStatus
 from pywhales.exceptions import DockerException
 
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
-from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal
+from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal, RunState
 from app.services import openclaw_update_executor as executor_module
 from app.services.agent_manager import guest_container_name
 from app.services.agent_setup_lock import setup_workspace_lock
@@ -351,39 +351,93 @@ async def test_a_second_worker_finding_a_terminal_run_does_nothing(h: Harness):
     assert h.docker.calls == calls_after_first
 
 
-class _PullFailsOnceOwnerIsInCutover(FakeDocker):
-    """Worker B's docker: its pull blocks (in its thread) until worker A holds the run in cutover, then fails."""
+@pytest.mark.parametrize("state", ["pending", "cutover"])
+async def test_busy_workspace_leaves_active_run_untouched(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, state: RunState
+) -> None:
+    before = replace(h.run, state=state, journal=RunJournal(old_container_id="old-id"))
+    h.store.runs[before.id] = before
+    monkeypatch.setattr(executor_module, "LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0)
+    release, processed = Event(), Event()
 
-    owner_in_cutover: threading.Event
+    async def hold_lock(*, task_status: TaskStatus[None]) -> None:
+        async with setup_workspace_lock(h.agent_dir):
+            task_status.started()
+            await release.wait()
+
+    async def process() -> None:
+        await h.executor.process(before.id)
+        processed.set()
+
+    async with create_task_group() as group:
+        await group.start(hold_lock)
+        try:
+            with fail_after(5):
+                group.start_soon(process)
+                await processed.wait()
+            assert h.stored_run == before
+            assert h.store.writes == []
+            assert h.docker.pulled == h.docker.inspected == h.docker.calls == h.manager.starts == []
+            assert h.docker.probe_clock == 0
+        finally:
+            release.set()
+
+
+class _PausedFailingPull(FakeDocker):
+    """Fail the pull only after the test lets the other worker take ownership."""
+
+    pulling: Event
+    fail_pull: threading.Event
 
     @override
     def pull(self, reference: str) -> str:
-        assert self.owner_in_cutover.wait(5)
+        self.pulled.append(reference)
+        from_thread.run_sync(self.pulling.set)
+        assert self.fail_pull.wait(5)
         raise DockerException(["docker", "pull", reference], 1)
 
 
-async def test_second_workers_failed_pull_cannot_terminate_a_run_the_first_worker_owns(h: Harness):
-    # Given worker B read the run as pending and is pulling when worker A takes it into cutover.
-    owner_in_cutover, release = threading.Event(), asyncio.Event()
-    at_publication_gate = asyncio.Event()
+@pytest.mark.parametrize("owner_finished", [False, True])
+async def test_second_workers_failed_pull_cannot_terminate_a_run_the_first_worker_owns(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, owner_finished: bool
+) -> None:
+    monkeypatch.setattr(executor_module, "LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0)
+    release, at_publication_gate, first_done, second_done = Event(), Event(), Event(), Event()
 
     async def hold_before_publication() -> None:
-        owner_in_cutover.set()
         at_publication_gate.set()
         await release.wait()
 
-    failing = _PullFailsOnceOwnerIsInCutover(containers=h.docker.containers)
-    failing.owner_in_cutover = owner_in_cutover
-    second = asyncio.create_task(UpgradeExecutor(h.store, failing, h.manager).process(h.run.id))
+    failing = _PausedFailingPull(containers=h.docker.containers)
+    failing.pulling, failing.fail_pull = Event(), threading.Event()
     h.manager.after_start = hold_before_publication
-    first = asyncio.create_task(h.executor.process(h.run.id))
-    await at_publication_gate.wait()
-    # When B's pull fails while A owns the run.
-    await second
-    # Then B did not fail A's active cutover, so A still publishes and the gate never opened early.
-    assert h.stored_run.state == "cutover"
-    release.set()
-    await first
+
+    async def process(executor: UpgradeExecutor, done: Event) -> None:
+        await executor.process(h.run.id)
+        done.set()
+
+    async with create_task_group() as group:
+        try:
+            group.start_soon(process, UpgradeExecutor(h.store, failing, h.manager), second_done)
+            with fail_after(5):
+                await failing.pulling.wait()
+                group.start_soon(process, h.executor, first_done)
+                await at_publication_gate.wait()
+                if owner_finished:
+                    release.set()
+                    await first_done.wait()
+                before = h.stored_run
+                writes_before = list(h.store.writes)
+                failing.fail_pull.set()
+                await second_done.wait()
+                assert h.stored_run == before
+                assert h.store.writes == writes_before
+                assert len(failing.pulled) == 1
+                assert failing.inspected == failing.calls == []
+        finally:
+            failing.fail_pull.set()
+            release.set()
+
     assert h.stored_run.state == "succeeded"
     assert h.stored_agent.openclaw_image_id == NEW_IMAGE
 

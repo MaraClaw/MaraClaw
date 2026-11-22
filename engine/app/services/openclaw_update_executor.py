@@ -9,6 +9,7 @@ rolled forward. A mutation is always journaled before it happens.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -25,7 +26,11 @@ from app.core.logging import logger
 from app.records.agent import AgentRecord
 from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal
 from app.services.agent_manager import guest_container_name
-from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.agent_setup_lock import (
+    LIFECYCLE_LOCK_TIMEOUT_SECONDS,
+    WorkspaceLockTimeoutError,
+    setup_workspace_lock,
+)
 from app.services.guest_identity import GuestOwnershipError, require_guest_owner
 from app.services.openclaw_update_docker import ContainerInfo
 from app.services.openclaw_update_snapshot import commit_snapshot, drop_snapshot, restore_snapshot
@@ -136,21 +141,35 @@ class UpgradeExecutor:
         run = await self.store.get_run(run_id)
         if run is None or not run.active:
             return
-        target_image: str | None = None
-        if run.state == "pending":
-            try:
-                target_image = await to_thread.run_sync(self.docker.pull, get_settings().MARACLAW_OPENCLAW_IMAGE)
-            except (ClientNotFoundError, DockerException, OSError) as exc:
-                logger.warning("[OpenClawUpdate] pull failed run={}: {}", run.id, exc)
-                # Pending-only: a concurrent worker may already own this run in cutover.
-                _ = await self.store.fail_pending(run.id, PULL_FAILED)
-                return
         agent_dir = self.manager._agent_dir(run.agent_id)
-        async with setup_workspace_lock(agent_dir):
+        lock_timeout = LIFECYCLE_LOCK_TIMEOUT_SECONDS
+        target_image: str | None = None
+        pull_failed = False
+        async with AsyncExitStack() as stack:
+            try:
+                if run.state == "pending":
+                    # Skip busy runs before Docker without holding the lock across a slow pull.
+                    async with setup_workspace_lock(agent_dir, timeout_seconds=lock_timeout):
+                        pass
+                    try:
+                        target_image = await to_thread.run_sync(
+                            self.docker.pull, get_settings().MARACLAW_OPENCLAW_IMAGE
+                        )
+                    except (ClientNotFoundError, DockerException, OSError) as exc:
+                        logger.warning("[OpenClawUpdate] pull failed run={}: {}", run.id, exc)
+                        pull_failed = True
+                await stack.enter_async_context(setup_workspace_lock(agent_dir, timeout_seconds=lock_timeout))
+            except WorkspaceLockTimeoutError:
+                logger.info("[OpenClawUpdate] skipping busy workspace run={} agent={}", run.id, run.agent_id)
+                return
             run = await self.store.get_run(run_id)
             if run is None:
                 return
-            if run.state == "cutover":
+            if pull_failed:
+                # A concurrent worker may have progressed the run during the pull.
+                if run.state == "pending":
+                    _ = await self.store.fail_pending(run.id, PULL_FAILED)
+            elif run.state == "cutover":
                 await self._rollback(run, agent_dir, INTERRUPTED)
             elif run.state == "pending" and target_image is not None:
                 await self._cutover(run, agent_dir, target_image)

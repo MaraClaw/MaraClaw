@@ -39,6 +39,7 @@ class FakeDocker:
     containers: dict[str, FakeContainer] = field(default_factory=dict[str, FakeContainer])
     pull_error: bool = False
     pulled: list[str] = field(default_factory=list[str])
+    inspected: list[str] = field(default_factory=list[str])
     ready_results: dict[str, list[bool]] = field(default_factory=dict[str, list[bool]])
     on_ready: Callable[[str], None] | None = None
     calls: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
@@ -62,6 +63,7 @@ class FakeDocker:
         return NEW_IMAGE
 
     def inspect(self, reference: str) -> ContainerInfo | None:
+        self.inspected.append(reference)
         found = self._find(reference)
         return ContainerInfo(found.id, found.name, found.image_id, found.agent_id) if found else None
 
@@ -162,6 +164,7 @@ class FakeStore:
     agents: dict[uuid.UUID, AgentRecord]
     runs: dict[uuid.UUID, OpenClawUpdateRunRecord]
     updated_at: dict[uuid.UUID, datetime] = field(default_factory=dict[uuid.UUID, datetime])
+    writes: list[uuid.UUID] = field(default_factory=list[uuid.UUID])
 
     async def list_active(self) -> list[OpenClawUpdateRunRecord]:
         return [run for run in self.runs.values() if run.active]
@@ -189,6 +192,7 @@ class FakeStore:
         return replace(agent) if agent is not None else None
 
     async def begin_cutover(self, run_id: uuid.UUID, journal: RunJournal) -> bool:
+        self.writes.append(run_id)
         run = self.runs[run_id]
         if run.state != "pending":
             return False
@@ -196,14 +200,17 @@ class FakeStore:
         return True
 
     async def set_journal(self, run_id: uuid.UUID, journal: RunJournal) -> None:
+        self.writes.append(run_id)
         self.runs[run_id] = replace(self.runs[run_id], journal=journal)
 
     async def finish_failed(self, run_id: uuid.UUID, code: str) -> None:
+        self.writes.append(run_id)
         run = self.runs[run_id]
         if run.active:
             self.runs[run_id] = replace(run, state="failed", failure_code=code)
 
     async def fail_pending(self, run_id: uuid.UUID, code: str) -> bool:
+        self.writes.append(run_id)
         run = self.runs[run_id]
         if run.state != "pending":
             return False
@@ -221,6 +228,7 @@ class FakeStore:
         image_id: str,
         keep_stopped: bool = False,
     ) -> bool:
+        self.writes.append(run_id)
         agent, run = self.agents.get(agent_id), self.runs.get(run_id)
         if (
             agent is None
@@ -243,9 +251,11 @@ class FakeStore:
         return True
 
     async def pin_image(self, agent_id: uuid.UUID, image_id: str) -> None:
+        self.writes.append(agent_id)
         if agent_id in self.agents:
             self.agents[agent_id] = replace(self.agents[agent_id], openclaw_image_id=image_id)
 
     async def mark_rollback_failed(self, agent_id: uuid.UUID, image_id: str | None) -> None:
+        self.writes.append(agent_id)
         if agent_id in self.agents:
             self.agents[agent_id] = replace(self.agents[agent_id], openclaw_image_id=image_id, status="error")

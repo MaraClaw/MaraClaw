@@ -7,12 +7,88 @@ from uuid import UUID, uuid4
 import anyio
 import pytest
 
-from app.records.openclaw_update import OpenClawUpdateRunRecord
-from app.runtime.tasks import OwnedTasks
-from app.services import openclaw_update_worker as worker
+from app.core.domain.agents import AgentStatus
+from app.records.agent import AgentRecord
+from app.records.openclaw_update import OpenClawUpdateRunRecord, RunJournal
+from app.runtime.tasks import LoopProgress, OwnedTasks
+from app.services import openclaw_update_executor as executor_module, openclaw_update_worker as worker
+from app.services.agent_manager import guest_container_name
+from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.openclaw_update_executor import UpgradeExecutor
-from openclaw_update_fakes import FakeDocker, FakeManager, FakeStore
+from openclaw_update_fakes import (
+    NEW_IMAGE,
+    OLD_IMAGE,
+    FakeContainer,
+    FakeDocker,
+    FakeManager,
+    FakeStore,
+    use_probe_clock,
+)
 from progress_fakes import FakeClock, Pacer
+
+
+async def test_busy_run_does_not_block_the_next_run_in_the_same_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    busy = OpenClawUpdateRunRecord(
+        id=uuid4(),
+        notice_id=uuid4(),
+        agent_id=uuid4(),
+        state="pending",
+        journal=RunJournal(old_container_id="busy-old"),
+    )
+    agent = AgentRecord(
+        id=uuid4(), name="Ready", creator_id=uuid4(), status=AgentStatus.RUNNING, container_id="ready-old"
+    )
+    ready = OpenClawUpdateRunRecord(id=uuid4(), notice_id=uuid4(), agent_id=agent.id, state="pending")
+    store = FakeStore({agent.id: agent}, {busy.id: busy, ready.id: ready})
+    canonical = guest_container_name(agent.id)
+    docker = FakeDocker(
+        containers={"ready-old": FakeContainer("ready-old", canonical, OLD_IMAGE, agent_id=str(agent.id))}
+    )
+    manager = FakeManager(docker, tmp_path)
+    (manager._agent_dir(agent.id) / "workspace").mkdir(parents=True)
+    use_probe_clock(monkeypatch, docker)
+    monkeypatch.setattr(executor_module, "LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0)
+    skips: list[tuple[UUID, UUID]] = []
+    crashes: list[tuple[UUID, UUID]] = []
+    monkeypatch.setattr(
+        executor_module.logger, "info", lambda _message, run_id, agent_id: skips.append((run_id, agent_id))
+    )
+    monkeypatch.setattr(
+        worker.logger, "exception", lambda _message, run_id, agent_id: crashes.append((run_id, agent_id))
+    )
+    executor = UpgradeExecutor(store, docker, manager, ready_interval=0)
+    held, release, finished = anyio.Event(), anyio.Event(), anyio.Event()
+
+    async def hold_lock() -> None:
+        async with setup_workspace_lock(manager._agent_dir(busy.agent_id)):
+            held.set()
+            await release.wait()
+
+    async def drive_pass() -> None:
+        progress = LoopProgress(worker.PROGRESS_BUDGET_SECONDS, anyio.current_time)
+        assert await worker.drive_active_runs(store, executor, progress) == 2
+        finished.set()
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(hold_lock)
+        try:
+            with anyio.fail_after(5):
+                await held.wait()
+                group.start_soon(drive_pass)
+                await finished.wait()
+            assert store.runs[busy.id] == busy
+            assert store.runs[ready.id].state == "succeeded"
+            assert set(store.writes) == {ready.id}
+            assert len(docker.pulled) == 1
+            assert "busy-old" not in docker.inspected
+            assert all("busy-old" not in target for _, target in docker.calls)
+            assert manager.starts == [(NEW_IMAGE, False)]
+            assert skips == [(busy.id, busy.agent_id)]
+            assert crashes == []
+        finally:
+            release.set()
 
 
 async def test_startup_sweep_does_not_block_active_run_polling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

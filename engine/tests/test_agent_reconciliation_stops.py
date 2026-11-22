@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -8,11 +9,13 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
+from pywhales import ClientNotFoundError
+from pywhales.client_config import ParsingError
 
 from app.core.domain.agents import AgentStatus
 from app.records.agent import AgentRecord
 from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
-from app.services import agent_deletion_cleanup, agent_stops
+from app.services import agent_deletion_cleanup, agent_stops, company_transfer_cleanup
 from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.guest_identity import GuestOwnershipError
 
@@ -35,9 +38,9 @@ async def test_stale_stop_waiting_for_start_keeps_the_new_running_guest(monkeypa
     current = stale
 
     @asynccontextmanager
-    async def observed_lock(path: Path) -> AsyncGenerator[None]:
+    async def observed_lock(path: Path, *, timeout_seconds: float) -> AsyncGenerator[None]:
         waiting.set()
-        async with setup_workspace_lock(path):
+        async with setup_workspace_lock(path, timeout_seconds=timeout_seconds):
             yield
 
     async def read(_agent_id: UUID) -> AgentRecord:
@@ -126,26 +129,90 @@ async def test_valid_or_failed_stop_retains_the_reference(monkeypatch: pytest.Mo
     clear.assert_not_awaited()
 
 
-async def test_foreign_stop_reference_does_not_abort_later_stops(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given a foreign reference followed by a healthy stopped guest.
+@pytest.mark.parametrize(
+    "fault",
+    [None, ParsingError("truncated inspect"), ClientNotFoundError("missing client"), ValueError("invalid stop")],
+)
+async def test_failed_stop_does_not_abort_later_stops_or_sweep(
+    monkeypatch: pytest.MonkeyPatch, fault: Exception | None
+) -> None:
     first, second = stopped_agent(), stopped_agent()
-    stopped: list[UUID] = []
+    processed: list[UUID | str] = []
 
     async def read(agent_id: UUID) -> AgentRecord:
         return replace(first if agent_id == first.id else second)
 
     async def stop(agent: AgentRecord) -> bool:
         if agent.id == first.id:
+            if fault is not None:
+                raise fault
             raise GuestOwnershipError(agent.id, "old", str(uuid4()))
-        stopped.append(agent.id)
+        processed.append(agent.id)
         return True
+
+    async def sweep(_now: datetime) -> None:
+        processed.append("sweep")
 
     monkeypatch.setattr(agent_stops.agent_dao, "get", read)
     monkeypatch.setattr(agent_stops.agent_manager, "stop_container", stop)
-    # When the boundary reconciles both references.
-    await agent_stops.stop_containers([first, second])
-    # Then the ownership refusal is isolated to its agent.
-    assert stopped == [second.id]
+    monkeypatch.setattr(agent_stops.agent_dao, "prepare_container_stops", AsyncMock(return_value=[first, second]))
+    monkeypatch.setattr(agent_stops, "reconcile_deletion_cleanup", AsyncMock())
+    monkeypatch.setattr(company_transfer_cleanup, "reconcile_transfer_cleanup", AsyncMock())
+    monkeypatch.setattr(agent_stops, "sweep_orphan_containers", sweep)
+
+    await agent_stops.reconcile_stopped_containers(datetime.now(UTC))
+
+    assert processed == [second.id, "sweep"]
+
+
+async def test_busy_stop_is_skipped_and_retried_without_blocking_the_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    first, second = stopped_agent(), stopped_agent()
+    rows = {agent.id: agent for agent in (first, second)}
+    attempted: list[UUID] = []
+    held, release = anyio.Event(), anyio.Event()
+
+    async def hold_lock() -> None:
+        async with setup_workspace_lock(agent_stops.agent_manager._agent_dir(first.id)):
+            held.set()
+            await release.wait()
+
+    async def prepare(_now: datetime) -> list[AgentRecord]:
+        return [replace(agent) for agent in rows.values() if agent.container_id is not None]
+
+    async def stop(agent: AgentRecord) -> bool:
+        attempted.append(agent.id)
+        agent.container_id = None
+        return True
+
+    async def clear(agent_id: UUID, reference: str) -> bool:
+        assert rows[agent_id].container_id == reference
+        rows[agent_id] = replace(rows[agent_id], container_id=None)
+        return True
+
+    sweep = AsyncMock()
+    monkeypatch.setattr(agent_stops, "LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0, raising=False)
+    monkeypatch.setattr(agent_stops.agent_dao, "get", AsyncMock(side_effect=lambda agent_id: replace(rows[agent_id])))
+    monkeypatch.setattr(agent_stops.agent_dao, "prepare_container_stops", prepare)
+    monkeypatch.setattr(agent_stops.agent_dao, "clear_missing_stopped_container", clear)
+    monkeypatch.setattr(agent_stops.agent_manager, "stop_container", stop)
+    monkeypatch.setattr(agent_stops, "reconcile_deletion_cleanup", AsyncMock())
+    monkeypatch.setattr(company_transfer_cleanup, "reconcile_transfer_cleanup", AsyncMock())
+    monkeypatch.setattr(agent_stops, "sweep_orphan_containers", sweep)
+
+    now = datetime.now(UTC)
+    with anyio.fail_after(2):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(hold_lock)
+            await held.wait()
+            await agent_stops.reconcile_stopped_containers(now)
+            assert attempted == [second.id]
+            assert (rows[first.id].status, rows[first.id].container_id) == ("stopped", "old")
+            sweep.assert_awaited_once_with(now)
+            release.set()
+
+    await agent_stops.reconcile_stopped_containers(now)
+    assert attempted == [second.id, first.id]
+    assert sweep.await_count == 2
 
 
 async def test_foreign_deleted_guest_keeps_workspace_and_continues(

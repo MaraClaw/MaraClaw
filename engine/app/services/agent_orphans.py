@@ -12,9 +12,13 @@ from app.core.logging import logger
 from app.core.row_memo import memo_drop
 from app.dao.agent_dao import agent_dao
 from app.services.agent_manager import agent_manager
-from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.agent_setup_lock import (
+    LIFECYCLE_LOCK_TIMEOUT_SECONDS,
+    WorkspaceLockTimeoutError,
+    setup_workspace_lock,
+)
 from app.services.docker_capacity import run_docker
-from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_resolutions, require_guest_owner
+from app.services.guest_identity import AGENT_LABEL, guest_resolutions, require_guest_owner
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
 
 ORPHAN_GRACE = timedelta(minutes=2)
@@ -64,43 +68,49 @@ async def sweep_orphan_containers(now: datetime) -> None:
     for container_id, agent_id in candidates.items():
         try:
             known = existing.get(agent_id)
-            if known is not None:
-                if known.container_id in (None, "", container_id):
-                    continue
-                async with setup_workspace_lock(agent_manager._agent_dir(agent_id)):
-                    memo_drop("agent", agent_id)
-                    current = await agent_dao.get(agent_id)
-                    if current is None or current.container_id in (None, "", container_id):
+            if known is not None and known.container_id in (None, "", container_id):
+                continue
+            async with setup_workspace_lock(
+                agent_manager._agent_dir(agent_id), timeout_seconds=LIFECYCLE_LOCK_TIMEOUT_SECONDS
+            ):
+                memo_drop("agent", agent_id)
+                current = await agent_dao.get(agent_id)
+                if current is None:
+                    if known is not None:
+                        continue
+                    recorded_id = None
+                else:
+                    recorded_id = current.container_id
+                    if recorded_id in (None, "", container_id):
                         continue
                     await assert_no_active_run(agent_id)
-                    candidate = await run_docker(_inspect_container, client, container_id, abandon_on_cancel=True)
-                    config = candidate.config
-                    network_settings = candidate.network_settings
-                    created = candidate.created
-                    require_guest_owner(
-                        agent_id, container_id, (config.labels or {}).get(AGENT_LABEL) if config else None
-                    )
-                    if (
-                        candidate.id != container_id
-                        or network_settings is None
-                        or network not in (network_settings.networks or {})
-                        or created is None
-                        or now - created < ORPHAN_GRACE
-                    ):
-                        continue
-                    recorded = await run_docker(
-                        _inspect_container, client, current.container_id, abandon_on_cancel=True
-                    )
+                candidate = await run_docker(_inspect_container, client, container_id, abandon_on_cancel=True)
+                config = candidate.config
+                network_settings = candidate.network_settings
+                created = candidate.created
+                require_guest_owner(agent_id, container_id, (config.labels or {}).get(AGENT_LABEL) if config else None)
+                if (
+                    candidate.id != container_id
+                    or network_settings is None
+                    or network not in (network_settings.networks or {})
+                    or created is None
+                    or now - created < ORPHAN_GRACE
+                ):
+                    continue
+                if recorded_id is not None:
+                    recorded = await run_docker(_inspect_container, client, recorded_id, abandon_on_cancel=True)
                     config = recorded.config
                     require_guest_owner(
-                        agent_id, current.container_id, (config.labels or {}).get(AGENT_LABEL) if config else None
+                        agent_id, recorded_id, (config.labels or {}).get(AGENT_LABEL) if config else None
                     )
                     if recorded.id == candidate.id:
                         continue
-                    await _remove_orphan(client, container_id, agent_id)
-            else:
                 await _remove_orphan(client, container_id, agent_id)
+        except WorkspaceLockTimeoutError:
+            logger.info(
+                "Skipping orphan container {} this pass: workspace lock is busy for agent {}", container_id, agent_id
+            )
         except NoSuchContainer, OpenClawUpdateInProgressError:
             continue
-        except (ClientNotFoundError, DockerException, GuestOwnershipError, OSError) as exc:
-            logger.warning("Orphan container cleanup failed container_id=%s: %s", container_id, exc)
+        except Exception as exc:
+            logger.warning("Orphan container cleanup failed for container {}: {}", container_id, type(exc).__name__)

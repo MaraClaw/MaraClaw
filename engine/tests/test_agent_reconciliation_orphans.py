@@ -13,7 +13,8 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
-from pywhales import DockerClient
+from pywhales import ClientNotFoundError, DockerClient
+from pywhales.client_config import ParsingError
 from pywhales.components.container import cli_wrapper as container_cli
 from pywhales.exceptions import NoSuchContainer
 
@@ -52,12 +53,15 @@ class Containers:
     def __init__(self, guests: builtins.list[Guest]) -> None:
         self.listed: builtins.list[Guest] = builtins.list(guests)
         self.inspected: dict[str, Guest] = {item.id: item for item in guests}
+        self.inspect_faults: dict[str, Exception] = {}
         self.calls: builtins.list[tuple[str, str]] = []
 
     def list(self, *, filters: Iterable[tuple[str, str]], **kwargs: Unpack[IncludeAllKeyword]) -> builtins.list[Guest]:
         return self.listed
 
     def inspect(self, reference: str) -> Guest:
+        if reference in self.inspect_faults:
+            raise self.inspect_faults[reference]
         if reference not in self.inspected:
             raise NoSuchContainer(["docker", "inspect", reference], 1)
         return self.inspected[reference]
@@ -139,12 +143,13 @@ async def test_sweep_emits_label_and_network_filters_through_the_real_wrapper(
 
 
 @pytest.mark.parametrize("vanished", [False, True])
-async def test_sweep_reads_the_inventory_from_one_batch_inspect(
+async def test_sweep_batches_inventory_and_reinspects_each_orphan_before_removing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, vanished: bool
 ) -> None:
     # Given three old guests of unknown agents, one of which may vanish right after the listing.
     client = DockerClient(client_call=[sys.executable])
     guests = [f"{index:064x}" for index in range(1, 4)]
+    owners = {reference: str(uuid4()) for reference in guests}
     gone = guests[0] if vanished else None
     commands: list[list[str]] = []
 
@@ -163,7 +168,7 @@ async def test_sweep_reads_the_inventory_from_one_batch_inspect(
                 {
                     "Id": reference,
                     "Created": (NOW - timedelta(minutes=10)).isoformat(),
-                    "Config": {"Labels": {"maraclaw.agent_id": str(uuid4())}},
+                    "Config": {"Labels": {"maraclaw.agent_id": owners[reference]}},
                     "NetworkSettings": {"Networks": {NETWORK: {}}},
                 }
                 for reference in requested
@@ -173,6 +178,9 @@ async def test_sweep_reads_the_inventory_from_one_batch_inspect(
     async def get_many(_ids: list[UUID]) -> list[AgentRecord]:
         return []
 
+    async def get(_id: UUID) -> None:
+        return None
+
     monkeypatch.setattr(container_cli, "run", run)
     monkeypatch.setattr(
         agent_orphans,
@@ -181,16 +189,16 @@ async def test_sweep_reads_the_inventory_from_one_batch_inspect(
     )
     monkeypatch.setattr(agent_orphans, "get_settings", lambda: SimpleNamespace(DOCKER_NETWORK=NETWORK))
     monkeypatch.setattr(agent_orphans.agent_dao, "get_many", get_many)
+    monkeypatch.setattr(agent_orphans.agent_dao, "get", get)
     # When the sweep inventories and removes them.
     await agent_orphans.sweep_orphan_containers(NOW)
     # Then one batch inspect serves the listing, and a vanished guest does not stop the others' cleanup.
     assert {command[-1] for command in commands if command[1:3] == ["container", "rm"]} == set(guests) - {gone}
     if not vanished:
-        assert [command[1:3] for command in commands[:3]] == [
-            ["container", "list"],
-            ["container", "inspect"],
-            ["container", "stop"],
-        ]
+        assert commands[0][1:3] == ["container", "list"]
+        inspections = [command[3:] for command in commands if command[1:3] == ["container", "inspect"]]
+        assert inspections[0] == guests
+        assert {tuple(references) for references in inspections[1:]} == {(reference,) for reference in guests}
 
 
 async def test_older_owned_duplicate_is_removed_when_the_current_guest_is_known(sweep: Sweep) -> None:
@@ -252,10 +260,25 @@ async def test_candidate_is_revalidated_after_the_batch_scan(sweep: Sweep, chang
     assert sweep.containers.calls == []
 
 
-async def test_foreign_current_reference_does_not_abort_later_owned_duplicate(sweep: Sweep) -> None:
+@pytest.mark.parametrize(
+    ("reference", "fault"),
+    [
+        ("current", None),
+        ("duplicate", ParsingError("truncated candidate inspection")),
+        ("current", ParsingError("truncated current inspection")),
+        ("current", ClientNotFoundError("missing during inspection")),
+        ("duplicate", ValueError("invalid inspect result")),
+    ],
+)
+async def test_failed_inspection_keeps_candidate_without_blocking_later_duplicates(
+    sweep: Sweep, reference: str, fault: Exception | None
+) -> None:
     # Given a first agent pointing at a foreign current guest and a second valid duplicate.
     other = replace(sweep.agent, id=uuid4(), container_id="other-current")
-    sweep.containers.inspected["current"] = guest(uuid4(), "current")
+    if fault is None:
+        sweep.containers.inspected[reference] = guest(uuid4(), reference)
+    else:
+        sweep.containers.inspect_faults[reference] = fault
     sweep.containers.listed.append(guest(other.id, "other-duplicate"))
     sweep.containers.inspected["other-duplicate"] = sweep.containers.listed[-1]
     sweep.containers.inspected["other-current"] = guest(other.id, "other-current")
@@ -271,8 +294,62 @@ async def test_foreign_current_reference_does_not_abort_later_owned_duplicate(sw
         patch.setattr(agent_orphans.agent_dao, "get", get)
         # When both agents are reconciled in one pass.
         await agent_orphans.sweep_orphan_containers(NOW)
-    # Then the foreign refusal is isolated and the later duplicate still converges.
+    # Then unsafe candidates stay untouched and the later duplicate still converges.
     assert sweep.containers.calls == [("stop", "other-duplicate"), ("remove", "other-duplicate")]
+
+
+@pytest.mark.parametrize("known", [True, False])
+async def test_busy_orphan_is_skipped_and_retried_without_blocking_the_sweep(
+    sweep: Sweep, monkeypatch: pytest.MonkeyPatch, known: bool
+) -> None:
+    later = guest(uuid4(), "later")
+    sweep.containers.listed.append(later)
+    sweep.containers.inspected[later.id] = later
+    held, release = anyio.Event(), anyio.Event()
+
+    async def hold_lock() -> None:
+        async with setup_workspace_lock(agent_orphans.agent_manager._agent_dir(sweep.agent.id)):
+            held.set()
+            await release.wait()
+
+    async def get_many(_ids: list[UUID]) -> list[AgentRecord]:
+        return [sweep.agent] if known else []
+
+    async def get(agent_id: UUID) -> AgentRecord | None:
+        return sweep.current if known and agent_id == sweep.agent.id else None
+
+    monkeypatch.setattr(agent_orphans, "LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0, raising=False)
+    monkeypatch.setattr(agent_orphans.agent_dao, "get_many", get_many)
+    monkeypatch.setattr(agent_orphans.agent_dao, "get", get)
+    with anyio.fail_after(2):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(hold_lock)
+            await held.wait()
+            await agent_orphans.sweep_orphan_containers(NOW)
+            assert sweep.containers.calls == [("stop", later.id), ("remove", later.id)]
+            sweep.containers.listed.remove(later)
+            release.set()
+
+    await agent_orphans.sweep_orphan_containers(NOW)
+    assert sweep.containers.calls[2:] == [("stop", "duplicate"), ("remove", "duplicate")]
+
+
+@pytest.mark.parametrize("row_change", ["disappeared", "published"])
+async def test_orphan_sweep_keeps_a_candidate_when_the_agent_row_changes_before_recheck(
+    sweep: Sweep, monkeypatch: pytest.MonkeyPatch, row_change: str
+) -> None:
+    async def no_prefetched_rows(_ids: list[UUID]) -> list[AgentRecord]:
+        return []
+
+    if row_change == "disappeared":
+        sweep.current = None
+    else:
+        monkeypatch.setattr(agent_orphans.agent_dao, "get_many", no_prefetched_rows)
+        sweep.current = replace(sweep.agent, container_id="duplicate")
+
+    await agent_orphans.sweep_orphan_containers(NOW)
+
+    assert sweep.containers.calls == []
 
 
 @pytest.mark.parametrize("age_seconds", [0, 119])
@@ -299,9 +376,9 @@ async def test_unpublished_guest_is_kept_when_start_publishes_under_the_flock(
     waiting = anyio.Event()
 
     @asynccontextmanager
-    async def observed_lock(path: Path) -> AsyncGenerator[None]:
+    async def observed_lock(path: Path, *, timeout_seconds: float) -> AsyncGenerator[None]:
         waiting.set()
-        async with setup_workspace_lock(path):
+        async with setup_workspace_lock(path, timeout_seconds=timeout_seconds):
             yield
 
     monkeypatch.setattr(agent_orphans, "setup_workspace_lock", observed_lock)
@@ -326,9 +403,9 @@ async def test_parked_upgrade_writer_is_excluded_after_the_sweep_waits_for_the_f
     waiting = anyio.Event()
 
     @asynccontextmanager
-    async def observed_lock(path: Path) -> AsyncGenerator[None]:
+    async def observed_lock(path: Path, *, timeout_seconds: float) -> AsyncGenerator[None]:
         waiting.set()
-        async with setup_workspace_lock(path):
+        async with setup_workspace_lock(path, timeout_seconds=timeout_seconds):
             yield
 
     monkeypatch.setattr(agent_orphans, "setup_workspace_lock", observed_lock)

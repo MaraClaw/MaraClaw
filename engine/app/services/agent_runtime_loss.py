@@ -10,10 +10,12 @@ from typing import Literal, assert_never
 from uuid import UUID, uuid5
 
 from anyio import to_thread
+from fastapi import HTTPException
 
 from app.config import get_settings
 from app.core.logging import logger
 from app.core.notification_kinds import NotificationKind
+from app.core.security import load_user_principal
 from app.dao import tenant_dao, user_dao
 from app.dao.agent_runtime_loss_dao import agent_runtime_loss_dao
 from app.dao.agent_start_dao import agent_start_dao
@@ -42,7 +44,7 @@ def recovery_snapshot_id(agent_id: UUID) -> UUID:
 
 
 async def report_runtime_loss(agent: AgentRecord, reason: RuntimeLossReason, *, image: str | None = None) -> None:
-    """Record the loss and alert every active platform admin once per loss. Never raises."""
+    """Record the loss and alert platform admins and the active creator once per loss, best effort."""
     try:
         async with committed_start_connection() as db:
             loss = await agent_runtime_loss_dao.record(
@@ -50,12 +52,23 @@ async def report_runtime_loss(agent: AgentRecord, reason: RuntimeLossReason, *, 
             )
             claimed = await agent_runtime_loss_dao.claim_notification(db, agent.id)
             pending = await agent_runtime_loss_dao.pending_messages(db, agent.id) if claimed else 0
-        if claimed:
-            # Re-reports arrive on every dispatch or start retry; log the loss once, when it is announced.
-            logger.warning("[GuestLoss] agent={} reason={} image={}", agent.id, reason, image)
-            await _notify_admins(agent, loss, pending)
     except Exception as exc:
         logger.bind(exception_type=type(exc).__name__).warning("[GuestLoss] recording failed agent={}", agent.id)
+        return
+    if not claimed:
+        return
+    # Re-reports arrive on every dispatch or start retry; log the loss once, when it is announced.
+    logger.warning("[GuestLoss] agent={} reason={} image={}", agent.id, reason, image)
+    try:
+        await _notify_admins(agent, loss, pending)
+    except Exception as exc:
+        logger.bind(exception_type=type(exc).__name__).warning("[GuestLoss] admin notification failed")
+    try:
+        await _notify_creator(agent, loss.reason)
+    except Exception as exc:
+        logger.bind(exception_type=type(exc).__name__).warning(
+            "[GuestLoss] creator notification failed agent={}", agent.id
+        )
 
 
 async def report_missing_guest(agent: AgentRecord) -> None:
@@ -155,6 +168,40 @@ async def _notify_admins(agent: AgentRecord, loss: AgentRuntimeLoss, pending: in
                 )
         except Exception as exc:
             logger.bind(exception_type=type(exc).__name__).warning("[GuestLoss] admin notification failed")
+
+
+async def _notify_creator(agent: AgentRecord, reason: RuntimeLossReason) -> None:
+    try:
+        creator = await load_user_principal(agent.creator_id, fresh=True, enforce_password_change=False)
+    except HTTPException:
+        return
+    if creator.identity is None or creator.tenant_id is None or creator.tenant_id != agent.tenant_id:
+        return
+    match reason:
+        case "container_stopped":
+            title = "Agent container stopped"
+            body = f"The container for {agent.name} stopped. Open Settings and select Start to resume it."
+        case "container_missing":
+            title = "Agent container missing"
+            body = f"The container for {agent.name} is missing. Open Settings and select Start a new container."
+        case "image_unavailable":
+            title = "Agent image unavailable"
+            body = (
+                f"The image for {agent.name} is unavailable. "
+                "Wait for the platform team to restore it before trying again in Settings."
+            )
+        case _:
+            assert_never(reason)
+    async with committed_start_connection():
+        _ = await send_notification(
+            creator.id,
+            notification_kind=NotificationKind.SYSTEM_ALERT,
+            title=title,
+            body=body,
+            link=f"/app/agents/{agent.id}/settings",
+            ref_id=agent.id,
+            sender_name="System",
+        )
 
 
 def _body(agent: AgentRecord, loss: AgentRuntimeLoss, company: str, pending: int) -> str:

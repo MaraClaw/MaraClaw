@@ -831,8 +831,8 @@ class AgentManager:
         except GuestOwnershipError as exc:
             logger.warning("Guest stop ownership refused for agent {}: {}", agent.id, exc)
             return False
-        except (ClientNotFoundError, DockerException) as e:
-            logger.error(f"Failed to stop container: {e}")
+        except Exception as exc:
+            logger.error("Failed to stop guest for agent {}: {}", agent.id, type(exc).__name__)
             return False
 
     async def remove_container(self, agent: AgentRecord) -> bool:

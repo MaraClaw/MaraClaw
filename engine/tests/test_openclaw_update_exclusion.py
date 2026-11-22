@@ -10,11 +10,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import anyio
+import httpx
 import pytest
 from fastapi import HTTPException
 
 from app.api import agents as agents_api, files as files_api
 from app.core.domain.agents import AgentStatus
+from app.main import app
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.records.user import UserRecord
@@ -83,6 +85,52 @@ async def test_shared_wait_budget_does_not_limit_the_acquired_write(gate, monkey
         await anyio.lowlevel.checkpoint()
     # Then only acquisition was bounded; the body and gate recheck completed.
     assert gate.checks == 2
+
+
+@pytest.mark.parametrize(
+    ("route", "budget"),
+    [("start", "LIFECYCLE_LOCK_TIMEOUT_SECONDS"), ("api-key", "GUEST_WRITE_LOCK_TIMEOUT_SECONDS")],
+)
+async def test_contended_workspace_routes_return_the_typed_busy_response(
+    gate: Gate, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str, budget: str
+) -> None:
+    user = UserRecord(id=uuid.uuid4())
+    agent = AgentRecord(id=uuid.uuid4(), name="Busy", creator_id=user.id)
+
+    async def authorize(_user: UserRecord, _agent_id: uuid.UUID) -> tuple[AgentRecord, str]:
+        return agent, "manage"
+
+    monkeypatch.setitem(app.dependency_overrides, agents_api.get_current_user, lambda: user)
+    monkeypatch.setattr(agents_api, "check_agent_access", authorize)
+    monkeypatch.setattr(exclusion, "check_agent_access", authorize)
+    monkeypatch.setattr(agent_lifecycle, "assert_no_active_run", gate)
+    monkeypatch.setattr(exclusion, budget, 0)
+    held, release = anyio.Event(), anyio.Event()
+
+    async def hold_lock() -> None:
+        async with setup_workspace_lock(tmp_path / str(agent.id)):
+            held.set()
+            await release.wait()
+
+    responded = anyio.Event()
+
+    async def post() -> None:
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(f"/api/agents/{agent.id}/{route}")
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "agent_workspace_busy"
+        responded.set()
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(hold_lock)
+        try:
+            with anyio.fail_after(5):
+                await held.wait()
+                group.start_soon(post)
+                await responded.wait()
+        finally:
+            release.set()
 
 
 async def test_writer_queued_behind_the_cutover_lock_rechecks_and_never_writes_into_the_snapshot_window(
@@ -275,7 +323,7 @@ async def test_start_and_stop_are_refused_while_an_upgrade_is_active(lifecycle):
     assert lifecycle.persisted == []
 
 
-async def test_reconciliation_stop_waits_for_an_in_flight_cutover(gate: Gate, tmp_path: Path, monkeypatch):
+async def test_reconciliation_stop_skips_an_in_flight_cutover(gate: Gate, tmp_path: Path, monkeypatch):
     agent = AgentRecord(
         id=uuid.uuid4(), name="A", creator_id=uuid.uuid4(), container_id="c", status=AgentStatus.STOPPED
     )
@@ -283,11 +331,22 @@ async def test_reconciliation_stop_waits_for_an_in_flight_cutover(gate: Gate, tm
     stop = AsyncMock(return_value=True)
     monkeypatch.setattr(agent_stops.agent_dao, "get", current)
     monkeypatch.setattr(agent_stops.agent_manager, "stop_container", stop)
-    async with setup_workspace_lock(tmp_path / str(agent.id)):
-        task = asyncio.create_task(agent_stops.stop_containers([agent]))
-        await _settled()
-        current.assert_not_awaited()
-        stop.assert_not_awaited()
-    await asyncio.wait_for(task, 2)
+    monkeypatch.setattr(agent_stops, "LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0, raising=False)
+    held, release = anyio.Event(), anyio.Event()
+
+    async def hold_cutover_lock() -> None:
+        async with setup_workspace_lock(tmp_path / str(agent.id)):
+            held.set()
+            await release.wait()
+
+    with anyio.fail_after(2):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(hold_cutover_lock)
+            await held.wait()
+            await agent_stops.stop_containers([agent])
+            current.assert_not_awaited()
+            stop.assert_not_awaited()
+            release.set()
+    await agent_stops.stop_containers([agent])
     current.assert_awaited_once_with(agent.id)
     stop.assert_awaited_once_with(agent)

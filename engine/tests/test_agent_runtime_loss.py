@@ -1,18 +1,21 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 from uuid import uuid4
 
 import pytest
+from anyio import get_cancelled_exc_class
 from pywhales import DockerClient
 from pywhales.exceptions import DockerException
 
 from app.core.domain.agents import AgentStatus
+from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
 from app.records.agent_runtime_loss import AgentRuntimeLoss
 from app.records.agent_start import AgentStartOperation
 from app.records.gateway_message import GatewayMessageRecord
+from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.services import (
     agent_runtime_loss as loss,
@@ -96,56 +99,207 @@ async def test_pull_failure_stays_a_generic_preflight_failure(monkeypatch):
     assert images.pulled == ["registry.example/openclaw:1"]
 
 
-@pytest.mark.parametrize("reason", ["image_unavailable", "container_stopped"])
-async def test_report_alerts_every_platform_admin_once_and_never_raises(monkeypatch, reason):
-    # Given a lost guest, two platform admins (one of whom cannot be notified) and a claim that succeeds once.
+@pytest.fixture
+def runtime_loss_report(monkeypatch):
     agent = guest()
     detected = datetime(2026, 11, 13, tzinfo=UTC)
-    recorded = AgentRuntimeLoss(agent.id, reason, agent.container_id, "sha256:gone", detected)
-    claims = iter([True, False])
+    configured_image = "configured-openclaw:latest"
+
+    def record(_db, agent_id, reason, *, recorded_container_id, image):
+        return AgentRuntimeLoss(agent_id, reason, recorded_container_id, image, detected)
+
     dao = SimpleNamespace(
-        record=AsyncMock(return_value=recorded),
-        claim_notification=AsyncMock(side_effect=lambda *_: next(claims)),
+        record=AsyncMock(side_effect=record),
+        claim_notification=AsyncMock(return_value=True),
         pending_messages=AsyncMock(return_value=3),
     )
-    admins = [UserRecord(id=uuid4()), UserRecord(id=uuid4())]
-    sent = []
-
-    async def send(user_id, **fields):
-        if user_id == admins[0].id:
-            raise RuntimeError("mail store down")
-        sent.append((user_id, fields))
-
+    creator = UserRecord(
+        id=agent.creator_id,
+        tenant_id=agent.tenant_id,
+        identity=IdentityRecord(id=uuid4(), must_change_password=True),
+    )
+    creator_lookup = AsyncMock(return_value=creator)
+    admins = AsyncMock(return_value=[])
+    send = AsyncMock()
     monkeypatch.setattr(loss, "agent_runtime_loss_dao", dao)
     monkeypatch.setattr(loss, "committed_start_connection", committed)
-    monkeypatch.setattr(loss.user_dao, "list_active_platform_admins", AsyncMock(return_value=admins))
+    monkeypatch.setattr(loss.user_dao, "get_with_identity", creator_lookup)
+    monkeypatch.setattr(loss.user_dao, "list_active_platform_admins", admins)
     monkeypatch.setattr(loss.tenant_dao, "get", AsyncMock(return_value=SimpleNamespace(name="Acme")))
+    monkeypatch.setattr(loss, "get_settings", lambda: SimpleNamespace(MARACLAW_OPENCLAW_IMAGE=configured_image))
     monkeypatch.setattr(loss, "send_notification", send)
-    # When the loss is reported twice.
-    await loss.report_runtime_loss(agent, reason, image="sha256:gone")
-    await loss.report_runtime_loss(agent, reason, image="sha256:gone")
-    # Then only the claimed report alerts, the failed recipient does not block the other, and no row targets the agent.
-    assert dao.record.await_count == 2
-    assert [user_id for user_id, _fields in sent] == [admins[1].id]
-    fields = sent[0][1]
-    assert "agent_id" not in fields
-    assert (fields["ref_id"], fields["link"], fields["sender_name"]) == (
-        agent.id,
-        f"/companies/{agent.tenant_id}",
-        "System",
+    return SimpleNamespace(
+        agent=agent,
+        creator=creator,
+        creator_lookup=creator_lookup,
+        dao=dao,
+        admins=admins,
+        send=send,
+        detected=detected,
+        configured_image=configured_image,
     )
-    assert fields["notification_kind"] == "system_alert"
-    assert len(fields["title"]) <= 200
-    assert "Pending messages: 3" in fields["body"]
-    if reason == "container_stopped":
-        assert "stopped" in fields["title"]
-        assert "stopped" in fields["body"]
-        assert "Start" in fields["body"]
-        assert "resume the existing" in fields["body"]
-        assert "start a new container" not in fields["body"]
-    # And a storage failure is contained.
-    monkeypatch.setattr(dao, "record", AsyncMock(side_effect=RuntimeError("database down")))
-    await loss.report_runtime_loss(agent, "container_missing")
+
+
+@pytest.mark.parametrize(
+    ("reason", "admin_reason", "member_action", "creator_role"),
+    [
+        (
+            "container_stopped",
+            "The agent's guest container still exists on the Docker daemon but is stopped.",
+            "select Start to resume",
+            UserRole.MEMBER,
+        ),
+        (
+            "container_missing",
+            "The agent's guest container no longer exists on the Docker daemon.",
+            "select Start a new container",
+            UserRole.MEMBER,
+        ),
+        (
+            "image_unavailable",
+            "The guest image the agent is pinned to no longer exists on the Docker daemon.",
+            "Wait for the platform team",
+            UserRole.PLATFORM_ADMIN,
+        ),
+    ],
+)
+async def test_report_alerts_creator_once_and_keeps_platform_admin_alerts(
+    runtime_loss_report, reason, admin_reason, member_action, creator_role
+):
+    # Given a loss that can be claimed once and two admins, one of whom cannot be notified.
+    report = runtime_loss_report
+    agent = report.agent
+    report.creator.role = creator_role
+    failed_admin = UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
+    admin = report.creator if report.creator.is_platform_admin else UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
+    report.admins.return_value = [failed_admin, admin]
+    report.dao.claim_notification.side_effect = [True, False]
+    image = "unavailable-openclaw:removed"
+
+    async def send(user_id, **_fields):
+        if user_id == failed_admin.id:
+            raise RuntimeError("notification store down")
+
+    report.send.side_effect = send
+    # When the loss is reported twice.
+    await loss.report_runtime_loss(agent, reason, image=image)
+    await loss.report_runtime_loss(agent, reason, image=image)
+    # Then delivery is once per role, even if both roles target the same user.
+    assert report.dao.record.await_count == 2
+    report.creator_lookup.assert_awaited_once_with(agent.creator_id, fresh=True)
+    assert report.send.await_count == 3
+    member_link = f"/app/agents/{agent.id}/settings"
+    (member_alert,) = [alert for alert in report.send.await_args_list if alert.kwargs["link"] == member_link]
+    assert member_alert.args == (agent.creator_id,)
+    assert member_alert.kwargs["notification_kind"] == "system_alert"
+    assert member_alert.kwargs["ref_id"] == agent.id
+    assert "agent_id" not in member_alert.kwargs
+    assert agent.name in member_alert.kwargs["body"]
+    assert "Settings" in member_alert.kwargs["body"]
+    assert member_action in member_alert.kwargs["body"]
+    for field in (agent.container_id, agent.openclaw_image_id, image, report.configured_image, str(agent.tenant_id)):
+        assert field not in member_alert.kwargs["title"]
+        assert field not in member_alert.kwargs["body"]
+
+    # Both admin attempts still carry the original operations alert.
+    stopped = reason == "container_stopped"
+    admin_title = f"Agent {agent.name} {'has a stopped guest container' if stopped else 'lost its guest container'}"
+    recovery = (
+        "Use Start to resume the existing guest container; pending messages are kept and will be answered once it is running."
+        if stopped
+        else "The agent manager can start a new container from the agent's settings; pending messages are kept and will be answered."
+    )
+    admin_body = (
+        f"Agent: {agent.name} ({agent.id})\nCompany: Acme ({agent.tenant_id})\nReason: {admin_reason}\n"
+        f"Recorded container: {agent.container_id}\nUnavailable image: {image}\n"
+        f"Pinned image: {agent.openclaw_image_id}\nConfigured image: {report.configured_image}\n"
+        f"Detected at: {report.detected.isoformat()}\nPending messages: 3\n\n{recovery}"
+    )
+    report.send.assert_has_awaits(
+        [
+            call(
+                recipient.id,
+                notification_kind="system_alert",
+                title=admin_title,
+                body=admin_body,
+                link=f"/companies/{agent.tenant_id}",
+                ref_id=agent.id,
+                sender_name="System",
+            )
+            for recipient in (failed_admin, admin)
+        ],
+        any_order=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("claimed", "member_active", "identity_active"),
+    [
+        pytest.param(False, True, True, id="lost-claim"),
+        pytest.param(True, False, True, id="inactive-member"),
+        pytest.param(True, True, False, id="inactive-identity"),
+        pytest.param(True, None, True, id="missing-member"),
+    ],
+)
+async def test_report_skips_creator_without_claim_or_active_principal(
+    runtime_loss_report, claimed, member_active, identity_active
+):
+    report = runtime_loss_report
+    report.dao.claim_notification.return_value = claimed
+    if member_active is None:
+        report.creator_lookup.return_value = None
+    else:
+        report.creator.is_active = member_active
+        report.creator.identity.is_active = identity_active
+    await loss.report_runtime_loss(report.agent, "container_missing")
+    report.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("change", ["other-company", "no-company", "no-identity"])
+async def test_report_skips_creator_who_cannot_reach_the_agent_company(runtime_loss_report, change):
+    report = runtime_loss_report
+    if change == "other-company":
+        report.creator.tenant_id = uuid4()
+    elif change == "no-company":
+        report.creator.tenant_id = None
+    else:
+        report.creator.identity = None
+    await loss.report_runtime_loss(report.agent, "container_missing")
+    report.send.assert_not_awaited()
+
+
+async def test_creator_notification_failure_does_not_escape_or_block_admin_alert(runtime_loss_report):
+    report = runtime_loss_report
+    admin = UserRecord(id=uuid4(), role=UserRole.PLATFORM_ADMIN)
+    report.admins.return_value = [admin]
+
+    async def send(user_id, **_fields):
+        if user_id == report.agent.creator_id:
+            raise RuntimeError("notification store down")
+
+    report.send.side_effect = send
+    await loss.report_runtime_loss(report.agent, "container_missing")
+    assert {alert.args for alert in report.send.await_args_list} == {(admin.id,), (report.agent.creator_id,)}
+
+
+async def test_admin_lookup_failure_does_not_block_creator_alert(runtime_loss_report):
+    report = runtime_loss_report
+    report.admins.side_effect = RuntimeError("admin lookup failed")
+    await loss.report_runtime_loss(report.agent, "container_missing")
+    assert [alert.args for alert in report.send.await_args_list] == [(report.agent.creator_id,)]
+
+
+async def test_creator_notification_cancellation_escapes(runtime_loss_report):
+    cancelled = get_cancelled_exc_class()
+    runtime_loss_report.send.side_effect = cancelled
+    with pytest.raises(cancelled):
+        await loss.report_runtime_loss(runtime_loss_report.agent, "container_missing")
+
+
+async def test_recording_failure_does_not_escape_or_send_alerts(runtime_loss_report):
+    runtime_loss_report.dao.record.side_effect = RuntimeError("database down")
+    await loss.report_runtime_loss(runtime_loss_report.agent, "container_missing")
+    runtime_loss_report.send.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
