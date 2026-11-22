@@ -365,7 +365,8 @@ quota_max_agents, quota_agent_ttl_hours, agents_count, effective_max_agents, cre
 
 | Method | Path | Request | Response / notes |
 |--------|------|---------|------------------|
-| `GET` | `/api/departments` | Query: `tenant_id?` | `{ departments, assignments }`; assignments retain one `{ user_id, tenant_id, department_id }` row per membership, ordered by user then department UUID. |
+| `GET` | `/api/departments` | Query: `tenant_id?` | `{ departments }` only. |
+| `GET` | `/api/departments/assignments` | Query: `tenant_id?`, repeated `user_id` (1–100 UUIDs) | Array of `{ user_id, tenant_id, department_id }` rows for the requested users in the selected tenant, ordered by user then department UUID. Unknown or foreign user IDs produce no rows; more than 100 IDs returns **422**. |
 | `POST` | `/api/departments` | `{ name }` | **201** department. Names are trimmed; duplicate case-insensitive name → **409**. |
 | `PATCH` | `/api/departments/{department_id}` | `{ name }` | Rename without changing membership rows. |
 | `GET` | `/api/departments/{department_id}/merge-preview` | Query: `destination_id`, `tenant_id?` | Source/destination, membership and eligible custom-agent `use` grant counts, and an opaque `confirmation_token`. |

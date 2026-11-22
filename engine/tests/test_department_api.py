@@ -66,11 +66,12 @@ def directory(monkeypatch):
         else:
             assignments.pop(assignment.user_id, None)
 
-    async def list_assignments(_tenant):
+    async def list_assignments_for_users(tenant_id, user_ids):
         return [
-            AssignmentOut(user_id=uid, tenant_id=tenant.id, department_id=did)
-            for uid, ids in sorted(assignments.items())
-            for did in sorted(ids)
+            AssignmentOut(user_id=uid, tenant_id=tenant_id, department_id=did)
+            for uid in sorted(set(user_ids))
+            if tenant_id == tenant.id
+            for did in sorted(assignments.get(uid, ()))
         ]
 
     async def list_for_tenant(tenant_id):
@@ -119,7 +120,7 @@ def directory(monkeypatch):
     monkeypatch.setattr(org_departments.org_department_dao, "get_many", get_departments)
     monkeypatch.setattr(org_departments.org_department_dao, "replace_assignments", replace_assignments)
     monkeypatch.setattr(org_departments.org_department_dao, "grant_agents_for_user", assigned_agents)
-    monkeypatch.setattr(departments.org_department_dao, "list_assignments", list_assignments)
+    monkeypatch.setattr(departments.org_department_dao, "list_assignments_for_users", list_assignments_for_users)
     monkeypatch.setattr(departments.org_department_dao, "list_for_tenant", list_for_tenant)
     monkeypatch.setattr(departments.org_department_dao, "list_members", list_members)
     monkeypatch.setattr(departments.org_department_dao, "create", create)
@@ -133,17 +134,32 @@ def directory(monkeypatch):
 
 
 def test_directory_and_creation_http_shapes(directory):
-    client, actor, subject, first, *_ = directory
+    client, actor, _, first, second, *_ = directory
     response = client.get(f"/api/departments?tenant_id={actor.tenant_id}")
     assert response.status_code == 200
-    assert response.json()["assignments"] == [
-        {"user_id": str(subject.id), "tenant_id": str(actor.tenant_id), "department_id": str(first.id)}
-    ]
+    assert set(response.json()) == {"departments"}
+    assert [row["id"] for row in response.json()["departments"]] == [str(first.id), str(second.id)]
     created = client.post(f"/api/departments?tenant_id={actor.tenant_id}", json={"name": "  Finance  "})
     assert created.status_code == 201
     assert created.json()["name"] == "Finance"
     assert created.json()["description"] == ""
     assert set(created.json()) == {"id", "tenant_id", "name", "description", "created_at"}
+
+
+@pytest.mark.parametrize(("count", "status"), [(100, 200), (101, 422)])
+def test_assignment_read_validates_user_page_cap(directory, count: int, status: int) -> None:
+    client, actor, subject, first, *_ = directory
+    user_ids = [subject.id, *(uuid4() for _ in range(count - 1))]
+
+    response = client.get("/api/departments/assignments", params={"user_id": list(map(str, user_ids))})
+
+    assert response.status_code == status
+    if status == 200:
+        assert response.json() == [
+            {"user_id": str(subject.id), "tenant_id": str(actor.tenant_id), "department_id": str(first.id)}
+        ]
+    else:
+        assert response.json()["detail"][0]["loc"] == ["query", "user_id"]
 
 
 @pytest.mark.parametrize("operation", ["create", "assign"])
@@ -248,7 +264,7 @@ def test_roster_is_minimal_own_tenant_and_read_only(directory, monkeypatch, role
     subject.identity = IdentityRecord(id=uuid4(), email="private@example.test")
     before = dict(rest[-1])
     mutations = AsyncMock(side_effect=AssertionError("Roster reads must not mutate or resolve grants"))
-    for name in ("create", "update", "replace_assignments", "grant_agents_for_user", "list_assignments"):
+    for name in ("create", "update", "replace_assignments", "grant_agents_for_user", "list_assignments_for_users"):
         monkeypatch.setattr(org_departments.org_department_dao, name, mutations)
     for name in ("lock_tenants", "lock_user", "lock_agent"):
         monkeypatch.setattr(org_departments, name, mutations)

@@ -117,4 +117,3 @@ class AssignmentsOut(DepartmentAssignments):
 
 class DepartmentsOut(BaseModel):
     departments: list[DepartmentOut]
-    assignments: list[AssignmentOut]

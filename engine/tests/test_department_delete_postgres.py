@@ -9,6 +9,7 @@ from app.core.permissions import check_agent_access
 from app.dao.org_department_dao import org_department_dao
 from app.db.session import transaction
 from app.records.user import UserRecord
+from app.schemas.department import AssignmentOut
 from app.services import org_departments
 from department_delete_postgres_fixtures import DepartmentStore, department_store, request
 from test_bootstrap_postgres import schema_db
@@ -30,8 +31,8 @@ async def test_delete_preserves_unrelated_grants_memberships_and_effective_acces
     assert response.status_code == 204
     assert response.content == b""
     assert await store.db.fetchall("SELECT id FROM local_departments ORDER BY id") == [{"id": store.other}]
-    assert await store.db.fetchall("SELECT user_id, department_id FROM local_department_memberships") == [
-        {"user_id": store.members[1], "department_id": store.other}
+    assert await org_department_dao.list_assignments_for_users(store.tenant, store.members) == [
+        AssignmentOut(user_id=store.members[1], tenant_id=store.tenant, department_id=store.other)
     ]
     assert {row["id"] for row in await store.db.fetchall("SELECT id FROM agent_permissions")} == {
         row["id"] for row in before

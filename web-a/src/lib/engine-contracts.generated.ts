@@ -647,7 +647,7 @@ export type DepartmentOptionsOut = z.infer<typeof DepartmentOptionsOutSchema>;
 export const DepartmentUpdateSchema = z.looseObject({ ["description"]: z.string().optional(), ["name"]: z.string().refine(value => [...value].length >= 1).refine(value => [...value].length <= 100) });
 export type DepartmentUpdate = z.infer<typeof DepartmentUpdateSchema>;
 
-export const DepartmentsOutSchema = z.looseObject({ ["assignments"]: z.array(AssignmentOutSchema), ["departments"]: z.array(DepartmentOutSchema) });
+export const DepartmentsOutSchema = z.looseObject({ ["departments"]: z.array(DepartmentOutSchema) });
 export type DepartmentsOut = z.infer<typeof DepartmentsOutSchema>;
 
 export const DingTalkExtraConfigSchema = z.looseObject({ ["agent_id"]: z.string().optional(), ["connection_mode"]: z.string().optional() });

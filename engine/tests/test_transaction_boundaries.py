@@ -208,7 +208,6 @@ async def test_crud_progresses_while_remote_io_is_blocked(
     monkeypatch.setattr(user_dao, "get_with_identity", AsyncMock(return_value=user))
     monkeypatch.setattr(departments.tenant_dao, "get", tenant_lookup)
     monkeypatch.setattr(departments.org_department_dao, "list_for_tenant", AsyncMock(return_value=[]))
-    monkeypatch.setattr(departments.org_department_dao, "list_assignments", AsyncMock(return_value=[]))
     monkeypatch.setattr(enterprise, "create_llm_client", Mock(return_value=Mock(complete=complete)))
     monkeypatch.setattr(skills, "_get_clawhub_key", AsyncMock(return_value="test-key"))
     monkeypatch.setattr(skills, "_fetch_clawhub_json", fetch_clawhub)
@@ -257,4 +256,4 @@ async def test_crud_progresses_while_remote_io_is_blocked(
     assert remote_state == [(True, 0)]
     assert crud_response is not None
     assert crud_response.status_code == 200
-    assert crud_response.json() == {"departments": [], "assignments": []}
+    assert crud_response.json() == {"departments": []}

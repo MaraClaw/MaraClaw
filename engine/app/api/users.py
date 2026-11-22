@@ -11,7 +11,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, fiel
 
 from app.api.admin_audit_dependencies import require_admin_audit_role
 from app.core.domain.agents import AgentStatus
-from app.core.domain.users import UserRole
+from app.core.domain.users import MAX_USERS_PAGE_SIZE, UserRole
 from app.core.json_types import json_as_str, object_mapping_from
 from app.core.security import decode_access_token, get_current_user, require_role, security
 from app.dao.admin_audit_dao import admin_audit_log_dao
@@ -216,7 +216,7 @@ async def list_users_page(
     tenant_id: str | None = None,
     search: str = "",
     cursor: str | None = Query(default=None, max_length=1024),
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=MAX_USERS_PAGE_SIZE),
     eligible_for: UserPageEligibility | None = Query(
         default=None, description="Keep only users the named operation can accept."
     ),

@@ -8345,13 +8345,6 @@
       },
       "DepartmentsOut": {
         "properties": {
-          "assignments": {
-            "items": {
-              "$ref": "#/components/schemas/AssignmentOut"
-            },
-            "title": "Assignments",
-            "type": "array"
-          },
           "departments": {
             "items": {
               "$ref": "#/components/schemas/DepartmentOut"
@@ -8361,8 +8354,7 @@
           }
         },
         "required": [
-          "departments",
-          "assignments"
+          "departments"
         ],
         "title": "DepartmentsOut",
         "type": "object"
@@ -38571,6 +38563,79 @@
           }
         ],
         "summary": "Create Department",
+        "tags": [
+          "departments"
+        ]
+      }
+    },
+    "/api/departments/assignments": {
+      "get": {
+        "operationId": "get_2f6170692f6465706172746d656e74732f61737369676e6d656e7473",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "User Id",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tenant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssignmentOut"
+                  },
+                  "title": "Response List Department Assignments Api Departments Assignments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Department Assignments",
         "tags": [
           "departments"
         ]

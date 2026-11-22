@@ -249,8 +249,8 @@ async def assign_departments(actor: UserRecord, assignment: AssignmentsOut) -> A
         before_ids = sorted(
             {
                 row.department_id
-                for row in await org_department_dao.list_assignments(assignment.tenant_id)
-                if row.user_id == subject.id and row.department_id is not None
+                for row in await org_department_dao.list_assignments_for_users(assignment.tenant_id, [subject.id])
+                if row.department_id is not None
             }
         )
         if before_ids == assignment.department_ids:

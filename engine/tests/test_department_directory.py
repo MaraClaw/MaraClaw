@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.api import departments
 from app.records.identity import IdentityRecord
 from app.services import org_departments
 from test_department_api import directory
@@ -49,6 +50,35 @@ def test_admin_directory_remains_denied_to_members(directory, role):
     response = client.get("/api/departments")
 
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("role", "selection", "status"),
+    [
+        ("member", "own", 403),
+        ("agent_admin", "own", 403),
+        ("org_admin", "foreign", 403),
+        ("platform_admin", "none", 422),
+        ("platform_admin", "missing", 404),
+        ("platform_admin", "own", 200),
+    ],
+)
+def test_assignment_read_resolves_admin_tenant(directory, monkeypatch, role: str, selection: str, status: int):
+    client, actor, subject, first, *_ = directory
+    actor.role = role
+    params = {"user_id": str(subject.id)}
+    if selection != "none":
+        params["tenant_id"] = str(first.tenant_id if selection == "own" else uuid4())
+    if selection == "missing":
+        monkeypatch.setattr(departments.tenant_dao, "get", AsyncMock(return_value=None))
+
+    response = client.get("/api/departments/assignments", params=params)
+
+    assert response.status_code == status
+    if status == 200:
+        assert response.json() == [
+            {"user_id": str(subject.id), "tenant_id": str(first.tenant_id), "department_id": str(first.id)}
+        ]
 
 
 def test_options_require_authentication(directory):
