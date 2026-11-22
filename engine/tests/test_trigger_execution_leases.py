@@ -932,6 +932,125 @@ async def test_invocation_returns_its_slot_once_and_an_uncertain_commit_is_not_a
     assert [type(result) for result in results] == [OperationalError if outcome == "commit_uncertain" else type(None)]
 
 
+def frozen_loop_clock(monkeypatch):
+    loop = asyncio.get_running_loop()
+    clock = loop.time()
+    monkeypatch.setattr(loop, "time", lambda: clock)
+
+    async def advance(seconds):
+        nonlocal clock
+        clock += seconds
+        timers_processed = asyncio.Event()
+        _ = loop.call_at(clock, timers_processed.set)
+        await timers_processed.wait()
+
+    return advance
+
+
+@pytest.mark.asyncio
+async def test_spent_budget_fails_owned_rows_with_timeout_while_renewals_succeed(table, monkeypatch):
+    # Given a claimed lease, an LLM call that never returns, a 150-second budget and a loop clock only the test
+    # advances
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    advance = frozen_loop_clock(monkeypatch)
+    monkeypatch.setattr(executions, "LEASE_RENEW_INTERVAL", timedelta(seconds=60))
+    monkeypatch.setattr(invoker, "get_settings", lambda: SimpleNamespace(TRIGGER_RUN_BUDGET_SECONDS=150.0))
+    renewed = asyncio.Queue()
+    renew_batch = executions.ExecutionLeaseHold._renew_batch
+
+    async def report_renewal(hold, *args):
+        await renew_batch(hold, *args)
+        renewed.put_nowait(hold.deadline)
+
+    hung = asyncio.Event()
+
+    async def llm(**_kwargs):
+        hung.set()
+        await asyncio.Event().wait()
+
+    fake_invoker(monkeypatch, trigger, llm)
+    messages = record_messages(monkeypatch)
+    original_finish = trigger_execution_dao.finish
+
+    async def finish(*args, **kwargs):
+        assert any("_heartbeat" in str(t.get_coro()) and not t.done() for t in asyncio.all_tasks())
+        return await original_finish(*args, **kwargs)
+
+    monkeypatch.setattr(executions.ExecutionLeaseHold, "_renew_batch", report_renewal)
+    monkeypatch.setattr(trigger_execution_dao, "finish", finish)
+    task = asyncio.create_task(invoker.invoke_agent_for_triggers(trigger.agent_id, [trigger]))
+    await hung.wait()
+    _ = renewed.get_nowait()
+    # When the heartbeat renews twice around the hung call and the budget then runs out
+    window = (executions.LEASE_DURATION - executions.LEASE_STOP_MARGIN).total_seconds()
+    for _ in range(2):
+        await advance(60)
+        assert await renewed.get() == asyncio.get_running_loop().time() + window
+    assert not task.done()
+    await advance(30)
+    await task
+    # Then the still-owned row fails with the timeout error, written while the heartbeat still ran, not as lease loss
+    row = table.rows[lease.execution_ids[0]]
+    assert row["status"] == "failed"
+    assert row["last_error"] == executions.RUN_TIMEOUT_ERROR
+    assert executions.RUN_TIMEOUT_ERROR != executions.LEASE_LOST_ERROR
+    assert "assistant" not in messages
+    assert not any("_heartbeat" in str(t.get_coro()) for t in asyncio.all_tasks())
+
+
+@pytest.mark.asyncio
+async def test_timed_out_invocation_keeps_its_slot_until_its_task_finishes(table, monkeypatch):
+    from app.services import trigger_daemon
+
+    # Given a two-slot process whose tick launches the real invoker over a claimed lease, and an LLM call that ignores
+    # the budget's cancellation until the test releases it
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    monkeypatch.setattr(invoker, "get_settings", lambda: SimpleNamespace(TRIGGER_RUN_BUDGET_SECONDS=30.0))
+    hung, ignored, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def llm(**_kwargs):
+        hung.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            ignored.set()
+            await release.wait()
+        return "late reply"
+
+    fake_invoker(monkeypatch, trigger, llm)
+
+    async def claim(_now, *, max_agents):
+        return {trigger.agent_id: [trigger]}, {trigger.agent_id}
+
+    async def enabled(*, after, limit):
+        return []
+
+    monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", enabled)
+    monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
+    capacity = trigger_daemon.InvocationCapacity(2)
+    monkeypatch.setattr(trigger_daemon, "_capacity", capacity)
+    await trigger_daemon._tick()
+    await hung.wait()
+    assert capacity.free == 1
+    # When the budget runs out and the invocation swallows its cancellation
+    advance = frozen_loop_clock(monkeypatch)
+    await advance(30)
+    await ignored.wait()
+    # Then its slot stays taken and its row stays leased while the task still runs
+    assert capacity.free == 1
+    assert table.rows[lease.execution_ids[0]]["status"] == "processing"
+    # When it reaches its next guarded checkpoint and its task finishes
+    release.set()
+    results = await asyncio.gather(*trigger_daemon._BACKGROUND_TASKS, return_exceptions=True)
+    # Then the timeout is written and free capacity is back at the configured limit only now
+    assert results == [None]
+    assert capacity.free == capacity.limit == 2
+    row = table.rows[lease.execution_ids[0]]
+    assert row["status"] == "failed"
+    assert row["last_error"] == executions.RUN_TIMEOUT_ERROR
+
+
 @pytest.mark.asyncio
 async def test_wake_invocation_starts_in_fresh_context(table, monkeypatch, tmp_path):
     from app.core.logging import get_trace_id, set_trace_id

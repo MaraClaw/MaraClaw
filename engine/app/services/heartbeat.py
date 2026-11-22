@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Final
 
+from app.config import get_settings
 from app.core.domain.activity import ActivityAction
 from app.core.logging import logger, new_trace_id
 from app.core.notification_kinds import NotificationKind
@@ -29,6 +30,7 @@ HEARTBEAT_INTERVAL_SECONDS = 60.0
 PROGRESS_BUDGET_SECONDS: Final = 300.0
 _HEARTBEAT_SEMAPHORE = asyncio.Semaphore(10)
 _HEARTBEAT_TASKS: set[asyncio.Task[None]] = set()
+_HEARTBEAT_IN_FLIGHT: set[uuid.UUID] = set()
 _admission = TaskAdmission("Heartbeat", _HEARTBEAT_TASKS)
 
 
@@ -197,7 +199,27 @@ def _is_in_active_hours(active_hours: str, tz_name: str = "UTC") -> bool:
         return True  # Default to active if parsing fails
 
 
-async def _execute_heartbeat(agent_id: uuid.UUID):
+def _release_heartbeat_slot(agent_id: uuid.UUID) -> None:
+    _HEARTBEAT_IN_FLIGHT.remove(agent_id)
+    _HEARTBEAT_SEMAPHORE.release()
+
+
+async def _execute_heartbeat(agent_id: uuid.UUID) -> None:
+    """Run the heartbeat with the slot reserved by its claim."""
+    try:
+        budget = get_settings().HEARTBEAT_RUN_BUDGET_SECONDS
+        try:
+            async with asyncio.timeout(budget):
+                await _run_heartbeat(agent_id)
+        except TimeoutError:
+            logger.warning(
+                "Heartbeat timed out for agent {}: reason=run_budget_exceeded budget_seconds={}", agent_id, budget
+            )
+    finally:
+        _release_heartbeat_slot(agent_id)
+
+
+async def _run_heartbeat(agent_id: uuid.UUID) -> None:
     """Execute a single heartbeat for an agent.
 
     Uses three short DB transactions to avoid holding connections
@@ -207,7 +229,6 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
       Phase 3: Write token usage → commit
     """
     _ = new_trace_id()
-    _ = await _HEARTBEAT_SEMAPHORE.acquire()
     try:
         from app.dao.activity_log_dao import agent_activity_log_dao
         from app.dao.agent_dao import agent_dao
@@ -541,8 +562,6 @@ async def _execute_heartbeat(agent_id: uuid.UUID):
 
     except Exception as e:
         logger.exception(f"Heartbeat error for agent {agent_id}: {e}")
-    finally:
-        _HEARTBEAT_SEMAPHORE.release()
 
 
 async def _claim_and_start_heartbeat(agent: AgentRecord, now: datetime, interval: timedelta) -> int:
@@ -554,17 +573,29 @@ async def _claim_and_start_heartbeat(agent: AgentRecord, now: datetime, interval
     from app.dao.agent_dao import agent_dao
     from app.services.audit_logger import write_audit_log
 
-    if not await agent_dao.claim_heartbeat(agent.id, now=now, interval=interval):
+    if agent.id in _HEARTBEAT_IN_FLIGHT or _HEARTBEAT_SEMAPHORE.locked():
         return 0
-    logger.info(f"💓 Triggering heartbeat for {agent.name}")
+    # The free-slot acquire does not yield, so the check and reservation cannot race.
+    _ = await _HEARTBEAT_SEMAPHORE.acquire()
+    _HEARTBEAT_IN_FLIGHT.add(agent.id)
+    started = False
     try:
-        await write_audit_log("heartbeat_fire", {"agent_name": agent.name}, agent_id=agent.id)
-    except Exception as e:
-        logger.warning(f"Failed to write heartbeat_fire audit log for {agent.name}: {e}")
-    task = asyncio.create_task(_execute_heartbeat(agent.id))
-    _HEARTBEAT_TASKS.add(task)
-    task.add_done_callback(_observe_heartbeat_task)
-    return 1
+        if not await agent_dao.claim_heartbeat(agent.id, now=now, interval=interval):
+            return 0
+        logger.info(f"💓 Triggering heartbeat for {agent.name}")
+        try:
+            await write_audit_log("heartbeat_fire", {"agent_name": agent.name}, agent_id=agent.id)
+        except Exception as e:
+            logger.warning(f"Failed to write heartbeat_fire audit log for {agent.name}: {e}")
+        # Enter the run's cleanup before shutdown can cancel the task.
+        task = asyncio.create_task(_execute_heartbeat(agent.id), eager_start=True)
+        started = True
+        _HEARTBEAT_TASKS.add(task)
+        task.add_done_callback(_observe_heartbeat_task)
+        return 1
+    finally:
+        if not started:
+            _release_heartbeat_slot(agent.id)
 
 
 async def _report_tick_error(error: Exception) -> None:

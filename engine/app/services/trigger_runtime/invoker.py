@@ -6,8 +6,10 @@ import json as _json
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from functools import partial
 from typing import TypedDict
 
+from app.config import get_settings
 from app.core.json_types import json_as_str, json_as_str_or, json_object_from, mapping_from_row
 from app.core.logging import logger
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
@@ -23,8 +25,10 @@ from app.services.llm.turn import TurnContext
 from app.services.llm.types import OpenAIMessage
 from app.services.trigger_runtime import (
     LEASE_LOST_ERROR,
+    RUN_TIMEOUT_ERROR,
     ExecutionLeaseHold,
     ExecutionLeaseLostError,
+    ExecutionRunTimeoutError,
     hold_trigger_execution_leases,
     mark_trigger_executions_completed,
     mark_trigger_executions_failed,
@@ -110,10 +114,17 @@ async def resolve_trigger_delivery_target(
 
 
 async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> None:
+    """Run one invocation within its run budget; a spent budget fails the still-owned rows while they renew."""
     leases = trigger_execution_leases(triggers)
     try:
         async with hold_trigger_execution_leases(leases) as hold:
-            error_text = await _run_trigger_invocation(agent_id, triggers, hold)
+            try:
+                async with hold.within_budget(get_settings().TRIGGER_RUN_BUDGET_SECONDS):
+                    error_text = await _run_trigger_invocation(agent_id, triggers, hold)
+            except ExecutionRunTimeoutError as exc:
+                logger.warning(f"Agent {agent_id} trigger invocation stopped: {exc.reason}")
+                _ = await hold.settle(partial(mark_trigger_executions_failed, leases, RUN_TIMEOUT_ERROR))
+                return
     except ExecutionLeaseLostError as exc:
         logger.warning(f"Agent {agent_id} stopped after execution lease loss: {exc.reason}")
         _ = await mark_trigger_executions_failed(leases, LEASE_LOST_ERROR)

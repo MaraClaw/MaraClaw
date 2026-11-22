@@ -2,8 +2,7 @@ import asyncio
 import contextvars
 import itertools
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import override
@@ -219,10 +218,6 @@ async def test_invocation_cancelled_after_grace_goes_to_lease_recovery(monkeypat
     started = asyncio.Event()
     settled: list[str] = []
 
-    @asynccontextmanager
-    async def hold(_leases: object) -> AsyncGenerator[None]:
-        yield
-
     async def run_forever(*_args: object) -> str | None:
         started.set()
         await asyncio.Event().wait()
@@ -236,7 +231,6 @@ async def test_invocation_cancelled_after_grace_goes_to_lease_recovery(monkeypat
         return []
 
     monkeypatch.setattr(invoker, "trigger_execution_leases", lambda _triggers: [])
-    monkeypatch.setattr(invoker, "hold_trigger_execution_leases", hold)
     monkeypatch.setattr(invoker, "_run_trigger_invocation", run_forever)
     monkeypatch.setattr(invoker, "mark_trigger_executions_failed", mark_failed)
     monkeypatch.setattr(invoker, "mark_trigger_executions_completed", mark_completed)

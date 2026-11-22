@@ -12,7 +12,7 @@ from app.dao.schedule_dao import agent_schedule_dao
 from app.db import session
 from app.services import schedule_lease
 from app.services.llm.background_guard import ScheduleLeaseLostError
-from app.services.schedule_lease import ScheduleLeaseHold
+from app.services.schedule_lease import ScheduleLeaseHold, ScheduleRunTimeoutError
 from test_schedule_dao import NOW, _next_run, _schedule, pool
 from test_scheduler import _Clock
 from test_scheduler_tasks import owner
@@ -189,6 +189,62 @@ async def test_external_cancellation_wins_when_heartbeat_also_revokes(occurrence
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 1)
     assert task.cancelled()
+
+
+@pytest.mark.parametrize("also", ["nothing", "lapse", "lease_loss", "external_cancel"])
+async def test_spent_budget_is_a_timeout_only_while_the_lease_is_owned_and_the_worker_runs(occurrence, also):
+    # Given an owned hold whose budget fires through _fire, possibly as the lease lapses, is revoked or the worker
+    # cancels the run
+    settled: list[str] = []
+    remaining_cancels: list[int] = []
+
+    async def run():
+        owner = asyncio.current_task()
+        assert owner is not None
+        try:
+            async with ScheduleLeaseHold(occurrence.id, occurrence.lease_token) as hold:
+                try:
+                    async with hold.within_budget(3600):
+                        if also == "lapse":
+                            hold.deadline = hold.loop.time()
+                        hold._fire(schedule_lease.SCHEDULE_RUN_TIMEOUT_ERROR, timed_out=True)
+                        if also == "lease_loss":
+                            hold._fire("revoked")
+                        elif also == "external_cancel":
+                            hold.owner_task.cancel()
+                        await asyncio.Event().wait()
+                except ScheduleRunTimeoutError:
+                    hold.ensure_owned()
+                    with pytest.raises(ScheduleRunTimeoutError):
+                        hold.ensure_held()
+
+                    async def write() -> str:
+                        assert hold.lock.locked()
+                        assert hold.heartbeat_task is not None
+                        assert not hold.heartbeat_task.done()
+                        return "settled"
+
+                    settled.append(await hold.settle(write))
+        finally:
+            remaining_cancels.append(owner.cancelling())
+
+    # When the run unwinds
+    task = asyncio.create_task(run())
+    outcome = (await asyncio.gather(task, return_exceptions=True))[0]
+    # Then only a spent budget alone is settled as a timeout; lost ownership stays lease loss and shutdown wins
+    if also == "nothing":
+        assert outcome is None
+        assert settled == ["settled"]
+        assert remaining_cancels == [0]
+    elif also == "external_cancel":
+        assert task.cancelled()
+        assert settled == []
+        assert remaining_cancels == [1]
+    else:
+        assert type(outcome) is ScheduleLeaseLostError
+        assert str(outcome) == ("revoked" if also == "lease_loss" else schedule_lease._EXPIRED)
+        assert settled == []
+        assert remaining_cancels == [0]
 
 
 async def test_stale_release_cannot_expire_a_reclaimed_or_started_lease(occurrence, pool):

@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -250,6 +251,87 @@ async def test_periodic_heartbeat_revocation_cancels_blocked_provider_without_hi
     assert cancelled.is_set()
     assert activities == []
     assert pool.rows[occurrence.id].pending_due_at == occurrence.pending_due_at
+
+
+async def test_periodic_spent_budget_settles_a_hung_run_once_while_renewals_succeed(occurrence, pool, monkeypatch):
+    # Given a claimed occurrence that notifies on failure, a provider that never returns, a 150-second budget and a
+    # loop clock only the test advances
+    loop = asyncio.get_running_loop()
+    clock = loop.time()
+    monkeypatch.setattr(loop, "time", lambda: clock)
+    monkeypatch.setattr(scheduler, "get_settings", lambda: SimpleNamespace(SCHEDULE_RUN_BUDGET_SECONDS=150.0))
+    renewed: asyncio.Queue[float] = asyncio.Queue()
+    renew = schedule_lease.ScheduleLeaseHold._renew
+
+    async def report_renewal(hold, *args):
+        await renew(hold, *args)
+        renewed.put_nowait(hold.deadline)
+
+    provider_hung = asyncio.Event()
+
+    async def llm(**_kwargs):
+        provider_hung.set()
+        await asyncio.Event().wait()
+
+    entries: list[dict[str, object]] = []
+
+    async def create(*, obj_in: dict[str, object]) -> None:
+        assert "pending_due_at = NULL" in pool.connections[-1].executed[-1][0]
+        assert any(
+            "ScheduleLeaseHold._heartbeat" in str(task.get_coro()) and not task.done() for task in asyncio.all_tasks()
+        )
+        entries.append(obj_in)
+
+    tenant = uuid4()
+    creator = SimpleNamespace(id=occurrence.created_by, identity=object(), tenant_id=tenant)
+    notify = AsyncMock()
+    monkeypatch.setattr(schedule_lease.ScheduleLeaseHold, "_renew", report_renewal)
+    monkeypatch.setattr("app.services.llm.call_agent_llm_with_tools", llm)
+    monkeypatch.setattr(agent_activity_log_dao, "create", create)
+    monkeypatch.setattr("app.core.security.load_user_principal", AsyncMock(return_value=creator))
+    monkeypatch.setattr(
+        "app.core.permissions.check_agent_access", AsyncMock(return_value=(SimpleNamespace(tenant_id=tenant), None))
+    )
+    monkeypatch.setattr("app.services.notification_service.send_notification", notify)
+
+    async def advance(seconds: float) -> None:
+        nonlocal clock
+        clock += seconds
+        timers_processed = asyncio.Event()
+        _ = loop.call_at(clock, timers_processed.set)
+        await timers_processed.wait()
+
+    run = asyncio.create_task(scheduler._execute_periodic_schedule(replace(occurrence, pending_notify_on_failure=True)))
+    await provider_hung.wait()
+    while not renewed.empty():
+        _ = renewed.get_nowait()
+    # When the heartbeat renews twice around the hung provider and the budget then runs out
+    window = (schedule_lease.LEASE_DURATION - schedule_lease.LEASE_STOP_MARGIN).total_seconds()
+    for _ in range(2):
+        await advance(60)
+        assert await renewed.get() == clock + window
+    assert not run.done()
+    await advance(30)
+    await run
+    # Then the run is settled once as a failed timeout while the lease was still renewing, the creator is notified,
+    # and no worker re-claims the occurrence once its lease would have lapsed
+    (entry,) = entries
+    assert entry["action_type"] == "schedule_run"
+    assert str(entry["summary"]).startswith("Scheduled task timed out")
+    detail = entry["detail_json"]
+    assert isinstance(detail, dict)
+    assert detail["status"] == "failure"
+    assert detail["error"] == schedule_lease.SCHEDULE_RUN_TIMEOUT_ERROR
+    row = pool.rows[occurrence.id]
+    assert row.pending_due_at is None
+    assert row.lease_token is None
+    assert row.run_count == occurrence.run_count + 1
+    assert row.next_run_at == NEXT
+    notify.assert_awaited_once()
+    assert notify.await_args is not None
+    assert notify.await_args.kwargs["title"] == "Scheduled run failed"
+    assert not any("ScheduleLeaseHold._heartbeat" in str(task.get_coro()) for task in asyncio.all_tasks())
+    assert await AgentScheduleDAO().claim_due(NOW + timedelta(minutes=6), _next_run) == []
 
 
 async def test_tick_releases_claim_when_shutdown_races_the_launch(pool, monkeypatch):

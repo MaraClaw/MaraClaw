@@ -248,6 +248,11 @@ class Settings(BaseSettings):
     SCHEDULE_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1, le=256)
     # Per-worker cap on concurrently running trigger invocations (claimed triggers and agent-to-agent wakes share it).
     TRIGGER_MAX_CONCURRENT_INVOCATIONS: int = Field(default=8, ge=1, le=256)
+    # Wall-clock budget of one background run. When it runs out the run stops at its next guarded checkpoint and is
+    # recorded as timed out, so a hung tool cannot hold its lease or capacity slot indefinitely.
+    SCHEDULE_RUN_BUDGET_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
+    TRIGGER_RUN_BUDGET_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
+    HEARTBEAT_RUN_BUDGET_SECONDS: float = Field(default=900.0, gt=0, le=86400, allow_inf_nan=False)
     # Trial limits for guests of system agents and of agents with no organization (every organization's agents get
     # their tier's). They apply on creation and when a stopped guest is resumed, never to running guests.
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)

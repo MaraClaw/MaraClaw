@@ -6,9 +6,11 @@ import asyncio
 import contextvars
 import time
 import uuid
-from collections.abc import Coroutine, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from types import TracebackType
 from typing import Self
 
@@ -26,12 +28,21 @@ LEASE_RENEW_INTERVAL = timedelta(seconds=60)
 LEASE_STOP_MARGIN = timedelta(seconds=60)
 LEASE_EXPIRED_ERROR = "Execution lease expired after its trigger was disabled"
 LEASE_LOST_ERROR = "Execution lease lost before the invocation finished"
+RUN_TIMEOUT_ERROR = "Trigger invocation ran out of its time budget"
 
 
 class ExecutionLeaseLostError(Exception):
     def __init__(self, reason: str) -> None:
         self.reason: str = reason
         super().__init__(reason)
+
+
+class ExecutionRunTimeoutError(ExecutionLeaseLostError):
+    """The run budget ran out while every lease was still owned.
+
+    It subclasses the lease error so every guarded checkpoint stops the invocation; only the hold owner tells them
+    apart.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,17 +162,18 @@ class ExecutionLeaseHold:
         self.wall_deadline: float = 0.0
         self.closed: bool = False
         self.fired_reason: str | None = None
+        self.timeout_reason: str | None = None
         self.heartbeat_task: asyncio.Task[None] | None = None
 
     async def __aenter__(self) -> Self:
-        if not self.leases:
-            return self
         self.loop = asyncio.get_running_loop()
         owner = asyncio.current_task()
         if owner is None:
             raise RuntimeError("Execution lease hold requires an asyncio task")
         self.owner_task = owner
         self.cancelling_baseline = owner.cancelling()
+        if not self.leases:
+            return self
         window = (LEASE_DURATION - LEASE_STOP_MARGIN).total_seconds()
         bound = self.loop.time() + window
         wall_bound = time.time() + window
@@ -173,13 +185,20 @@ class ExecutionLeaseHold:
         self.heartbeat_task = asyncio.create_task(self._heartbeat(), context=context)
         return self
 
-    def ensure_held(self) -> None:
-        if not self.leases:
-            return
+    def _lapsed(self) -> bool:
+        return bool(self.leases) and (self.loop.time() >= self.deadline or time.time() >= self.wall_deadline)
+
+    def ensure_owned(self) -> None:
+        """Raise ``ExecutionLeaseLostError`` once ownership is lost; a spent budget still owns the leases."""
         if self.fired_reason is not None:
             raise ExecutionLeaseLostError(self.fired_reason)
-        if self.loop.time() >= self.deadline or time.time() >= self.wall_deadline:
+        if self._lapsed():
             raise ExecutionLeaseLostError("lease not renewed before it could expire")
+
+    def ensure_held(self) -> None:
+        self.ensure_owned()
+        if self.timeout_reason is not None:
+            raise ExecutionRunTimeoutError(self.timeout_reason)
 
     async def _renew_batch(self, bound: float, wall_bound: float) -> None:
         try:
@@ -207,11 +226,65 @@ class ExecutionLeaseHold:
                 raise
             raise ExecutionLeaseLostError("lease not renewed before it could expire") from exc
 
-    def _fire(self, reason: str) -> None:
-        if not self.closed and self.fired_reason is None:
+    def _fire(self, reason: str, *, timed_out: bool = False) -> None:
+        """Cancel the owner once per cause: lost leases, or a budget spent while every lease is still valid."""
+        if self.closed or self.fired_reason is not None:
+            return
+        if timed_out and not self._lapsed():
+            if self.timeout_reason is not None:
+                return
+            self.timeout_reason = reason
+        else:
+            reason = "lease not renewed before it could expire" if timed_out else reason
             self.fired_reason = reason
-            logger.warning(f"Stopping trigger invocation: {reason}")
-            _ = self.owner_task.cancel()
+        logger.warning(f"Stopping trigger invocation: {reason}")
+        _ = self.owner_task.cancel()
+
+    @asynccontextmanager
+    async def within_budget(self, seconds: float) -> AsyncGenerator[None]:
+        """Stop the body through ``_fire`` after ``seconds`` and leave it with ``ExecutionRunTimeoutError``.
+
+        The heartbeat keeps renewing, so the owner can still ``settle`` the timeout. Lost leases and external
+        cancellation win over a spent budget.
+        """
+        timer = self.loop.call_later(seconds, partial(self._fire, RUN_TIMEOUT_ERROR, timed_out=True))
+        try:
+            yield
+        except BaseException as exc:
+            outcome = self._budget_exit(exc)
+            if outcome is None or outcome is exc:
+                raise
+            raise outcome from exc
+        else:
+            outcome = self._budget_exit(None)
+            if outcome is not None:
+                raise outcome
+        finally:
+            _ = timer.cancel()
+
+    def _budget_exit(self, exc: BaseException | None) -> BaseException | None:
+        """Take back the budget's own cancellation and choose what leaves the budget."""
+        if self.timeout_reason is None:
+            return exc
+        hold_cancels = self.cancelling_baseline + (0 if self.fired_reason is None else 1)
+        if self.owner_task.uncancel() > hold_cancels:
+            return exc if isinstance(exc, asyncio.CancelledError) else asyncio.CancelledError()
+        if self.fired_reason is not None:
+            return exc if exc is not None else ExecutionLeaseLostError(self.fired_reason)
+        return exc if isinstance(exc, ExecutionRunTimeoutError) else ExecutionRunTimeoutError(self.timeout_reason)
+
+    async def settle[T](self, write: Callable[[], Awaitable[T]]) -> T:
+        """Write the terminal status while the leases are owned and still renewing, then stop renewing.
+
+        The renewal lock keeps the heartbeat from renewing concurrently, so it cannot see the write as lease loss.
+        """
+        async with self.lock:
+            self.ensure_owned()
+            result = await write()
+            self.closed = True
+            if self.heartbeat_task is not None:
+                _ = self.heartbeat_task.cancel()
+        return result
 
     async def _heartbeat(self) -> None:
         while not self.closed:
