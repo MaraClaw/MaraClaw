@@ -39,8 +39,8 @@ class LaneKey:
                 return GatewayMessageRecord(message_id, self.agent_id, "")
             case str() as conversation:
                 return GatewayMessageRecord(self.agent_id, self.agent_id, "", conversation_id=conversation)
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(self.lane)
 
 
 class NativeCapacity:

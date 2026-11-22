@@ -13,11 +13,10 @@ from app.api import background_tasks, slack
 from app.api.websocket import manager
 from app.config import get_settings
 from app.services.channels import binding, slack_submissions, submissions
-from app.services.channels.binding import _publish_shared_user_message
+from app.services.channels.binding import _publish_user_message
 from app.services.openclaw_routing import PreparedOpenClawMessage
-from app.services.shared_chat import shared_session_id
 from app.services.storage_runtime import facade
-from channel_shared_postgres_fixtures import live_channel, schema_db
+from channel_shared_postgres_fixtures import canonical_sessions, live_channel, schema_db
 
 __all__ = ["live_channel", "schema_db"]
 
@@ -32,7 +31,7 @@ async def test_signed_im_attachment_persists_and_publishes_reference_once(
     monkeypatch.setattr(settings, "STORAGE_BACKEND", "local")
     monkeypatch.setattr(settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
     monkeypatch.setattr(facade, "_storage_backend", None)
-    monkeypatch.setattr(binding, "_publish_shared_user_message", _publish_shared_user_message)
+    monkeypatch.setattr(binding, "_publish_user_message", _publish_user_message)
     published = AsyncMock()
     monkeypatch.setattr(manager, "send_to_session", published)
 
@@ -91,14 +90,17 @@ async def test_signed_im_attachment_persists_and_publishes_reference_once(
     assert published.await_args is not None
     agent_id, conversation_id, event = published.await_args.args
     assert agent_id == str(live.agent.id)
+    canonical = await canonical_sessions(live)
     if is_group:
-        assert conversation_id != str(shared_session_id(live.agent.id))
+        assert conversation_id not in canonical.values()
         session = await live.db.fetchone(
             "SELECT is_group FROM chat_sessions WHERE id = %(id)s", {"id": conversation_id}
         )
         assert session == {"is_group": True}
+        assert published.await_args.kwargs == {"user_id": None}
     else:
-        assert conversation_id == str(shared_session_id(live.agent.id))
+        assert conversation_id == canonical[live.users[0]]
+        assert published.await_args.kwargs == {"user_id": str(live.users[0])}
     assert event["session_id"] == conversation_id
     assert event["role"] == "user"
     assert event["attachments"] == refs

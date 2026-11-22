@@ -1,7 +1,9 @@
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import anyio
@@ -9,6 +11,7 @@ import httpx
 import pytest
 from fastapi import Depends, FastAPI
 
+import test_openclaw_update_postgres as postgres_fixtures
 from app.api import agents as api
 from app.core import events
 from app.core.domain.agents import AgentStatus
@@ -22,6 +25,8 @@ from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, assert_start_active
 from app.services.guest_identity import GuestOwnershipError
 from app.services.guest_start import start_operation_id
+
+db = postgres_fixtures.db
 
 
 class TransactionalRuntime:
@@ -110,8 +115,16 @@ def surface(monkeypatch, tmp_path):
         return None
 
     @asynccontextmanager
-    async def lock(directory, *, shared=False):
-        async with setup_workspace_lock(directory, shared=shared):
+    async def lock(
+        agent_dir: Path,
+        *,
+        shared: bool = False,
+        timeout_seconds: float | None = None,
+        until_transaction_end: bool = False,
+    ) -> AsyncGenerator[None]:
+        async with setup_workspace_lock(
+            agent_dir, shared=shared, timeout_seconds=timeout_seconds, until_transaction_end=until_transaction_end
+        ):
             runtime.locked = True
             try:
                 yield
@@ -212,17 +225,72 @@ async def test_preflight_outcomes_do_not_persist_runtime(surface, monkeypatch, f
     monkeypatch.setattr(lifecycle.agent_manager, "start_container", fail)
     # When the request crosses the HTTP boundary.
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        if failure == "unexpected":
-            with pytest.raises(RuntimeError, match="programming failure"):
-                await client.post(f"/api/agents/{agent.id}/start")
-        else:
-            response = await client.post(f"/api/agents/{agent.id}/start")
-            assert response.status_code == (409 if failure in ("admission", "layout") else 502)
-            if failure == "layout":
-                assert response.json()["detail"]["code"] == "guest_recreation_required"
-    # Then expected refusals leave references intact; unexpected errors propagate.
+        response = await client.post(f"/api/agents/{agent.id}/start")
+    # Then each failure leaves runtime references intact and returns its HTTP outcome.
+    assert response.status_code == (409 if failure in ("admission", "layout") else 502)
+    if failure == "layout":
+        assert response.json()["detail"]["code"] == "guest_recreation_required"
+    elif failure == "unexpected":
+        assert response.json()["detail"]["code"] == "guest_start_failed"
     assert runtime.committed == agent
     assert "persist" not in runtime.events
+
+
+async def test_stop_timeout_keeps_committed_start_cancellation_and_allows_retry(surface, monkeypatch, db):
+    from app.dao.agent_start_dao import agent_start_dao
+    from app.main import app as main_app
+    from app.services.agent_lifecycle_events import AGENT_LIFECYCLE_CHANNEL
+    from app.services.agent_start_store import PostgresStartStore
+
+    app, runtime, agent = surface
+    operation = await agent_start_dao.begin(db, agent)
+    app.exception_handlers.update(main_app.exception_handlers)
+    monkeypatch.setattr(lifecycle.start_store, "cancel", PostgresStartStore().cancel)
+    monkeypatch.setattr(exclusion, "LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(lifecycle.agent_manager, "docker_client", object())
+
+    async def stop(record):
+        record.status = AgentStatus.STOPPED
+        return True
+
+    stop_guest = AsyncMock(side_effect=stop)
+    monkeypatch.setattr(lifecycle.agent_manager, "stop_container", stop_guest)
+    held, release, responded = anyio.Event(), anyio.Event(), anyio.Event()
+    path = f"/api/agents/{agent.id}/stop"
+
+    async def hold_lock():
+        async with setup_workspace_lock(lifecycle.agent_manager._agent_dir(agent.id)):
+            held.set()
+            await release.wait()
+
+    async def post_busy_stop(client):
+        response = await client.post(path)
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "agent_workspace_busy"
+        responded.set()
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        async with anyio.create_task_group() as group:
+            group.start_soon(hold_lock)
+            try:
+                with anyio.fail_after(5):
+                    await held.wait()
+                    group.start_soon(post_busy_stop, client)
+                    await responded.wait()
+                assert await agent_start_dao.get(db, agent.id) == replace(operation, state="cancelled")
+                assert runtime.committed == agent
+                assert "persist" not in runtime.events
+                assert runtime.published == []
+                stop_guest.assert_not_awaited()
+            finally:
+                release.set()
+
+        retried = await client.post(path)
+
+    assert retried.status_code == 200
+    assert (runtime.committed.status, runtime.committed.container_id) == (AgentStatus.STOPPED, agent.container_id)
+    assert [channel for channel, _ in runtime.published] == [AGENT_LIFECYCLE_CHANNEL]
+    stop_guest.assert_awaited_once()
 
 
 async def test_stop_cancels_a_slow_start_before_waiting_for_its_lock(surface, monkeypatch):
@@ -359,6 +427,60 @@ async def test_cancelled_request_drains_commit_before_releasing_lock(surface, mo
     release_at = runtime.events.index("release")
     assert runtime.events[release_at - 2 : release_at] == ["persist", "commit_locked"]
     assert runtime.committed.container_id == ("new" if operation == "start" else "old")
+
+
+@pytest.mark.parametrize(
+    ("fault", "status", "detail"),
+    [
+        ("parse", 502, "guest_start_failed"),
+        ("io", 502, "guest_start_failed"),
+        ("docker", 502, "guest_start_failed"),
+        ("unexpected", 502, "guest_start_failed"),
+        ("http", 418, "preserved HTTP error"),
+        ("overload", 503, "database connection pool timed out"),
+        ("gate", 409, "openclaw_update_in_progress"),
+    ],
+)
+async def test_start_fault_preserves_typed_errors_and_maps_runtime_faults(surface, monkeypatch, fault, status, detail):
+    from fastapi import HTTPException
+    from pywhales.client_config import ParsingError
+    from pywhales.exceptions import DockerException
+
+    from app.db.errors import PoolCheckoutTimeoutError
+    from app.main import database_overload, openclaw_update_gate
+    from app.services.openclaw_update_gate import OpenClawUpdateGateError, OpenClawUpdateInProgressError
+
+    app, runtime, agent = surface
+    errors = {
+        "parse": ParsingError("truncated inspect"),
+        "io": OSError("daemon down"),
+        "docker": DockerException(["docker", "inspect"], 1),
+        "unexpected": ValueError("setup incomplete"),
+        "http": HTTPException(418, "preserved HTTP error"),
+        "overload": PoolCheckoutTimeoutError(),
+        "gate": OpenClawUpdateInProgressError(),
+    }
+    app.add_exception_handler(PoolCheckoutTimeoutError, database_overload)
+    app.add_exception_handler(OpenClawUpdateGateError, openclaw_update_gate)
+    fail, reported = AsyncMock(), Mock()
+    monkeypatch.setattr(lifecycle.start_store, "fail", fail)
+    monkeypatch.setattr(lifecycle, "report_exception", reported)
+    monkeypatch.setattr(lifecycle.agent_manager, "start_container", AsyncMock(side_effect=errors[fault]))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/agents/{agent.id}/start")
+
+    assert response.status_code == status
+    payload = response.json()["detail"]
+    assert (payload["code"] if isinstance(payload, dict) else payload) == detail
+    assert runtime.committed == agent
+    if fault in {"parse", "unexpected"}:
+        reported.assert_called_once_with(errors[fault], source="runtime", operation="agent-lifecycle-start")
+    else:
+        reported.assert_not_called()
+    if fault == "gate":
+        fail.assert_not_awaited()
+    if status == 503:
+        assert response.headers["Retry-After"] == "5"
 
 
 async def test_docker_unavailable_preserves_idle_http_contract(surface, monkeypatch):

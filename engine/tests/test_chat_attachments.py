@@ -24,11 +24,11 @@ def attachment_file(monkeypatch, tmp_path: Path, turn) -> Path:
     return path
 
 
-async def test_attachment_commits_typed_refs_and_shared_event_unchanged(monkeypatch, turn, attachment_file):
+async def test_attachment_commits_typed_refs_and_echoes_them_to_the_owner_only(monkeypatch, turn, attachment_file):
     # Given
     state, _raw = turn
-    broadcast = AsyncMock()
-    monkeypatch.setattr(websocket.manager, "send_to_session", broadcast)
+    echo = AsyncMock()
+    monkeypatch.setattr(websocket.manager, "send_to_session", echo)
     payload = {"content": "Review this", "client_submission_id": state.submission_id, "attachments": [REF]}
     # When
     await drive_turn(monkeypatch, state, payload=payload)
@@ -38,7 +38,12 @@ async def test_attachment_commits_typed_refs_and_shared_event_unchanged(monkeypa
     assert [ref.as_dict() for ref in message.attachments] == [REF]
     assert message.content == "Review this"
     assert state.frames[0]["type"] == "turn_accepted"
-    assert broadcast.call_args.args[2]["attachments"] == [REF]
+    # The owner's other tabs get the user turn with its typed refs; no other user's socket may receive it.
+    echo.assert_awaited_once()
+    assert echo.await_args is not None
+    _agent, _session, frame = echo.await_args.args
+    assert frame["attachments"] == [REF]
+    assert echo.await_args.kwargs == {"user_id": str(state.user.id)}
     assert state.committed == ["chat", "charge", "gateway"]
 
 

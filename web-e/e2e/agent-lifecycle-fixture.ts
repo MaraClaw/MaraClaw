@@ -11,10 +11,11 @@ export const lifecyclePath = `**/api/agents/${originalAgent.id}/lifecycle`
 export async function prepareLifecycle(page: Page, initial = warningLifecycle, agent: AgentOut = originalAgent) {
   await prepareWorkspace(page)
   let lifecycle = initial
+  let current = agent
   let status = 200
   let reads = 0
   let replacementReads = 0
-  await page.route(`**/api/agents/${agent.id}`, (route) => route.fulfill({ json: agent }))
+  await page.route(`**/api/agents/${agent.id}`, (route) => route.fulfill({ json: current }))
   await page.route(`**/api/agents/${agent.id}/metrics`, (route) => route.fulfill({ json: {} }))
   await page.route('**/api/agent-deletion-requests?*', (route) => route.fulfill({ json: { items: [], next_cursor: null } }))
   await page.route(lifecyclePath, (route) => {
@@ -30,6 +31,7 @@ export async function prepareLifecycle(page: Page, initial = warningLifecycle, a
   return {
     reads: () => reads, replacementReads: () => replacementReads,
     set: (next: AgentLifecycle) => { lifecycle = next }, status: (next: number) => { status = next },
+    setAgent: (next: AgentOut) => { current = next },
   }
 }
 

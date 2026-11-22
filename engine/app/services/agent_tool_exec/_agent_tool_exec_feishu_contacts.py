@@ -10,13 +10,14 @@ from app.dao.org_member_dao import org_member_dao
 from app.dao.user_dao import user_dao
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments
+from app.services.im_sdk_types import is_object_list
 
 _cached_users: list[dict[str, str]] = []
 
 
 def _cached_user_count(facade: ModuleType) -> int:
     cached_users = getattr(facade, "_cached_users", None)
-    if isinstance(cached_users, list):
+    if is_object_list(cached_users):
         return len(cached_users)
     return len(_cached_users)
 

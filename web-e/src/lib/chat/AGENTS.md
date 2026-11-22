@@ -9,7 +9,7 @@ Scope: socket attempts, wire validation, submission identity, history merging, t
 - `live-stream.ts`: live reply correlation by gateway `turn_id`, monotonic `seq`, replacement snapshots and the last 64 completed turns. `done.message_id` remains the assistant entry identifier; a foreign completion must not clear another active stream. The store accepts chunks synchronously (`chunk()` reports whether the active turn advanced; `latest()` is the accepted state that `done` and history decisions read) and publishes `getSnapshot()` at most once per animation frame through an injectable `FrameScheduler` (default `requestAnimationFrame`); `clear` and `reset` publish at once and invalidate the pending frame.
 - `message.ts`: `ChatAttachment`, `ChatMessage`, `getChatMessageText`; message shape and attachment-aware display text.
 - `protocol.ts`: outbound types, `inboundSchema`, inbound/receipt types and `isTurnAccepted`/`isTurnRejected` guards.
-- `sessions.ts`: `isWritableSession`, `controlSessionId`; chat/control session eligibility and fallback selection.
+- `sessions.ts`: `isWritableSession`, `isOwnConversation`, `controlSessionId`; chat/control session eligibility and fallback selection.
 - `skill-mentions.ts`: `resolveSkillMentionSegments`, `findSkillMention`, `filterSkillMentions`, `insertSkillMention`, `buildSkillMentionContent`; installed-skill mention parsing and submission content.
 - `submissions.ts`: `createChatSubmissions`, `ChatSubmissions`; frozen envelopes, pending/accepted tracking and canonical session identity.
 - `transcript.ts`: `ChatLine`, `acceptSubmission`, `mergeServerHistory`, `appendCompletion`; optimistic/history reconciliation.
@@ -58,8 +58,8 @@ Scope: socket attempts, wire validation, submission identity, history merging, t
 - Recover only a matching pending, not-accepted user row; an ID-less rejection produces an onboarding notice without editing rows.
   Invalid submission IDs, submission conflicts and invalid attachments disable retry; other rejection reasons permit it.
   Restore composer text before message content; `restoreComposerDraft` prepends recovered text with a blank-line separator.
-- `isWritableSession` accepts existing `shared`/`agent` sessions or sessions with `is_group === true`.
-  `controlSessionId` keeps a writable requested ID, otherwise selects the first shared session, otherwise returns `undefined`.
+- `isWritableSession` is true only when the engine reports `SessionOut.writable`. `isOwnConversation` matches the caller's canonical row: their `user_id`, `source_channel === 'web'`, `is_primary`, not `is_group`, and writable.
+  `controlSessionId` keeps a writable requested ID, otherwise selects the caller's own conversation, otherwise returns `undefined`.
 
 ## Gotchas
 

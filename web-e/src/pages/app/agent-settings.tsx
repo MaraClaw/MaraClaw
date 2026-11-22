@@ -24,7 +24,7 @@ import { agentLifecycleKey } from '@/hooks/agent-lifecycle-options'
 import { agentUpdateKey } from '@/hooks/openclaw-update-options'
 import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
 import { getAgentMetrics, startAgent, stopAgent, updateAgent, type AgentOut } from '@/lib/workspace-api'
-import { canRequestAgentDeletion } from '@/lib/agent-lifecycle-policy'
+import { canRequestAgentDeletion, lifecycleStartBlock } from '@/lib/agent-lifecycle-policy'
 
 export function AgentSettingsPage() {
   const { t: translate, owned, formatNumber } = useTranslation()
@@ -111,7 +111,8 @@ export function AgentSettingsPage() {
             {!agent.runtime_loss ? (
               <IconTooltip label={translate("Start")}>
                 <Button size="icon" variant="outline" className="size-11" aria-label={translate("Start")}
-                  disabled={agent.status === 'running' || start.isPending || upgrading || !setup.ready || expired || !lifecycle.confirmed || !lifecycle.data?.availability.can_start}
+                  disabled={agent.status === 'running' || start.isPending || !setup.ready ||
+                    lifecycleStartBlock({ expired, upgrading, confirmed: lifecycle.confirmed, lifecycle: lifecycle.data }) !== null}
                   onClick={() => start.mutate()}>
                   <Play aria-hidden="true" /></Button>
               </IconTooltip>

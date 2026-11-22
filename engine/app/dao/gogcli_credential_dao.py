@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, final
+from collections.abc import Mapping
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -39,11 +40,11 @@ class GogcliCredentialStateDAO(BaseDAO[GogcliCredentialStateRecord]):
             )
             return GogcliCredentialStateRecord.from_row(row) if row is not None else None
 
-    async def upsert_fields(self, agent_id: UUID, fields: dict[str, Any]) -> GogcliCredentialStateRecord:
+    async def upsert_fields(self, agent_id: UUID, fields: Mapping[str, object]) -> GogcliCredentialStateRecord:
         existing = await self.get_by_agent(agent_id)
         if existing:
             return await self.update(db_obj=existing, obj_in=fields)
-        data: dict[str, Any] = {"agent_id": agent_id, **fields}
+        data: dict[str, object] = {"agent_id": agent_id, **fields}
         return await self.create(obj_in=data)
 
 

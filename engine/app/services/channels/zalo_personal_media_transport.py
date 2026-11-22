@@ -48,8 +48,8 @@ class Transfer:
                 raise MediaTransferError(frame.code)
             case MediaChunk() | MediaEnd() | MediaAck() | MediaReady():
                 return frame
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(frame)
 
 
 class MediaTransport:
@@ -125,8 +125,8 @@ class MediaTransport:
                         return bytes(data)
                     case MediaAck() | MediaReady():
                         raise MediaTransferError("invalid")
-                    case unreachable:
-                        assert_never(unreachable)
+                    case _:
+                        assert_never(frame)
 
     @asynccontextmanager
     async def stage(self, file: StoredFile, data: bytes) -> AsyncGenerator[str]:

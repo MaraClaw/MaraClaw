@@ -74,7 +74,9 @@ async def accept_google_chat_media(
             segment in (".", "..") for segment in resource.split("/")
         ):
             raise HTTPException(422, "Google Chat attachment requires its attachmentDataRef.resourceName")
-    budget, refs, parts = MediaBudget(), [], [event.text] if event.text else []
+    budget = MediaBudget()
+    refs: list[ChatAttachment] = []
+    parts = [event.text] if event.text else []
     token: str | None = None
     for item in retrieved:
         try:

@@ -71,7 +71,8 @@ async def send_chunk(
         await enqueue_media(target.destination, chunk)
         return None
     if target.mode == "personal_qr":
-        match target.provider:
+        provider = target.provider
+        match provider:
             case OutboundProvider.WHATSAPP:
                 from app.services.channels.whatsapp_personal_journal import enqueue
 
@@ -94,13 +95,14 @@ async def send_chunk(
                 from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
 
                 raise PersonalSendTerminalError("personal_provider_forbidden")
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(provider)
         return None
     app_id, app_secret = config.app_id or "", config.app_secret or ""
     provider_message_id: str | None = None
     client = outbound_client()
-    match target.provider:
+    provider = target.provider
+    match provider:
         case OutboundProvider.ZALO:
             from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
 
@@ -206,6 +208,6 @@ async def send_chunk(
             from app.services.channels.outbound_enterprise import send_enterprise_chunk
 
             await send_enterprise_chunk(client, outbound, chunk)
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(provider)
     return provider_message_id

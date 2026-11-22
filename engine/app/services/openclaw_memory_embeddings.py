@@ -60,7 +60,7 @@ def memory_search_block(config: MemoryEmbeddingConfig | None) -> JsonObject:
     ``openai-compatible`` path to nobody, so an OpenRouter endpoint is titled with ``APP_NAME`` here.
     """
     if config is None:
-        return {"enabled": True}
+        return {"enabled": True, "rememberAcrossConversations": False}
     remote: JsonObject = {"baseUrl": config.base_url, "apiKey": config.api_key}
     headers = openrouter_attribution_headers(config.base_url, config.app_name)
     if headers:
@@ -71,6 +71,7 @@ def memory_search_block(config: MemoryEmbeddingConfig | None) -> JsonObject:
         "model": config.model,
         "outputDimensionality": config.dimensions,
         "remote": remote,
+        "rememberAcrossConversations": False,
     }
 
 

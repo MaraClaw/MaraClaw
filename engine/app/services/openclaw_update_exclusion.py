@@ -22,7 +22,7 @@ from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.agent_manager import agent_manager
-from app.services.agent_setup_lock import setup_workspace_lock
+from app.services.agent_setup_lock import LIFECYCLE_LOCK_TIMEOUT_SECONDS, setup_workspace_lock
 from app.services.company_transfer_runtime_gate import assert_transfer_ready
 from app.services.openclaw_update_gate import assert_no_active_run
 
@@ -61,7 +61,7 @@ async def guest_write_exclusion(
 async def locked_fresh_agent(agent_id: UUID) -> AsyncGenerator[AgentRecord]:
     """Exclusive lifecycle section yielding the agent row re-read under the lock."""
     await assert_no_active_run(agent_id)
-    async with setup_workspace_lock(agent_manager._agent_dir(agent_id)):
+    async with setup_workspace_lock(agent_manager._agent_dir(agent_id), timeout_seconds=LIFECYCLE_LOCK_TIMEOUT_SECONDS):
         memo_drop("agent", agent_id)
         fresh = await agent_dao.get(agent_id)
         if fresh is None:

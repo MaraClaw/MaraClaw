@@ -32,6 +32,13 @@ from app.services.storage_runtime.utils import normalize_storage_key
 _PROVIDER_ERRORS = (BotoCoreError, ClientError, OSError)
 
 
+def _require_config(config: object) -> Config:
+    """``Config.merge`` comes from an untyped SDK; what it returns must still be a ``Config``."""
+    if not isinstance(config, Config):
+        raise TypeError("Invalid S3 client configuration")
+    return config
+
+
 class ManagedS3StorageBackend(S3StorageBackend):
     """Production S3 primary: the only path that may change objects under ``<agent UUID>/``.
 
@@ -43,10 +50,9 @@ class ManagedS3StorageBackend(S3StorageBackend):
     @override
     def _boto_config(self) -> Config:
         # A hidden SDK retry can land, then return a rejection from a later attempt. One attempt is classifiable.
-        config = super()._boto_config().merge(Config(retries={"total_max_attempts": 1, "mode": "standard"}))
-        if not isinstance(config, Config):
-            raise TypeError("Invalid S3 client configuration")
-        return config
+        return _require_config(
+            super()._boto_config().merge(Config(retries={"total_max_attempts": 1, "mode": "standard"}))
+        )
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
@@ -62,8 +68,8 @@ class ManagedS3StorageBackend(S3StorageBackend):
                 case Reservation():
                     await self._call(admission, lambda: S3StorageBackend.write_bytes(self, key, data, content_type))
                     await self._finish(admission, Outcome.LANDED)
-                case unreachable:
-                    assert_never(unreachable)
+                case _:
+                    assert_never(admission)
 
     @override
     async def create_bytes_if_absent(
@@ -79,8 +85,8 @@ class ManagedS3StorageBackend(S3StorageBackend):
                     raise StorageKeyPendingError
                 case Reservation():
                     return await self._create(admission, key, data, content_type)
-                case unreachable:
-                    assert_never(unreachable)
+                case _:
+                    assert_never(admission)
 
     @override
     async def create_file_if_absent(
@@ -102,8 +108,8 @@ class ManagedS3StorageBackend(S3StorageBackend):
                         return await self._create_with(
                             admission, key, lambda: self.create_from_source(key, source, content_type)
                         )
-                    case unreachable:
-                        assert_never(unreachable)
+                    case _:
+                        assert_never(admission)
             finally:
                 source.close()
 
@@ -121,8 +127,8 @@ class ManagedS3StorageBackend(S3StorageBackend):
                 case Reservation():
                     await self._call(admission, lambda: S3StorageBackend.delete(self, key))
                     await self._finish(admission, Outcome.LANDED)
-                case unreachable:
-                    assert_never(unreachable)
+                case _:
+                    assert_never(admission)
 
     @override
     async def delete_tree(self, key: str) -> None:

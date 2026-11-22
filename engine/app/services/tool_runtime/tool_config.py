@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypeIs
+from typing import TypeIs, cast
 
 from app.config import get_settings
-from app.core.json_types import JsonObject, json_object_from
+from app.core.json_types import JsonObject, is_any_list, is_str_dict, json_object_from
 from app.core.security import decrypt_data
-from app.core.tool_types import ToolConfigSchema
+from app.core.tool_types import ToolConfigField, ToolConfigSchema
 from app.dao.agent_dao import agent_dao
 from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.services.tool_config import SENSITIVE_FIELD_KEYS, get_tenant_tool_config
@@ -38,15 +38,15 @@ class ToolConfigDependencies:
 
 
 def _is_tool_config_schema(value: object) -> TypeIs[ToolConfigSchema]:
-    if not isinstance(value, dict):
+    if not is_str_dict(value):
         return False
     fields: object | None = value.get("fields")
     if fields is None:
         return True
-    if not isinstance(fields, list):
+    if not is_any_list(fields):
         return False
     return all(
-        isinstance(field, dict)
+        is_str_dict(field)
         and (field.get("key") is None or isinstance(field.get("key"), str))
         and (field.get("type") is None or isinstance(field.get("type"), str))
         for field in list[object](fields)
@@ -56,9 +56,10 @@ def _is_tool_config_schema(value: object) -> TypeIs[ToolConfigSchema]:
 def _as_tool_config_schema(value: object) -> ToolConfigSchema | None:
     if value is None:
         return None
+    candidate: object = value
     if not isinstance(value, dict):
-        value = dict[object, object](value) if isinstance(value, Mapping) else {}
-    return value if _is_tool_config_schema(value) else None
+        candidate = dict(cast("Mapping[object, object]", value)) if isinstance(value, Mapping) else {}
+    return candidate if _is_tool_config_schema(candidate) else None
 
 
 def _legacy_local_now() -> datetime:
@@ -68,7 +69,7 @@ def _legacy_local_now() -> datetime:
 
 def decrypt_sensitive_fields(
     config: JsonObject,
-    config_schema: Mapping[str, Any] | ToolConfigSchema | None = None,
+    config_schema: Mapping[str, object] | None = None,
     *,
     sensitive_field_keys: set[str] | None = None,
 ) -> JsonObject:
@@ -80,7 +81,8 @@ def decrypt_sensitive_fields(
     result = dict(config)
     sensitive_keys = set(SENSITIVE_FIELD_KEYS if sensitive_field_keys is None else sensitive_field_keys)
     if config_schema is not None and config_schema and "fields" in config_schema:
-        for field in config_schema["fields"]:
+        fields = cast("Iterable[ToolConfigField]", config_schema["fields"])
+        for field in fields:
             if field.get("type") == "password":
                 key = field.get("key")
                 if key is not None and key:

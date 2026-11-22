@@ -815,8 +815,8 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
             return await _agent_to_out(agent, current_user)
         case LifecycleFailure(status_code=code, code=error_code, message=message):
             raise HTTPException(status_code=code, detail={"code": error_code, "message": message})
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(outcome)
 
 
 @router.post("/{agent_id}/start-new-container", response_model=AgentOut)
@@ -836,8 +836,8 @@ async def start_new_agent_container_route(
             return await _agent_to_out(agent, current_user)
         case LifecycleFailure(status_code=code, code=error_code, message=message):
             raise HTTPException(status_code=code, detail={"code": error_code, "message": message})
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(outcome)
 
 
 @router.post("/{agent_id}/stop", response_model=AgentOut)
@@ -853,8 +853,8 @@ async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get
             return await _agent_to_out(agent, current_user)
         case LifecycleFailure(status_code=code, code=error_code, message=message):
             raise HTTPException(status_code=code, detail={"code": error_code, "message": message})
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(outcome)
 
 
 @router.get("/{agent_id}/approvals", response_model=None)

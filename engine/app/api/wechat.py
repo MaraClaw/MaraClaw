@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import TypedDict
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,7 +12,7 @@ from fastapi.responses import Response
 
 from app.config import get_settings
 from app.core.domain.channels import ChannelType
-from app.core.json_types import http_header, json_as_str_or, json_object_from_response
+from app.core.json_types import JsonObject, http_header, json_as_str_or, json_object_from_response
 from app.core.permissions import check_agent_access, is_agent_creator
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
@@ -99,7 +99,7 @@ async def get_wechat_qrcode_status(
 
     if payload.get("status") == "confirmed":
         existing = await get_channel_config_metadata(agent_id, ChannelType.WECHAT)
-        extra: dict[str, Any] = {
+        extra: JsonObject = {
             "bot_token": json_as_str_or(payload.get("bot_token")),
             "ilink_user_id": json_as_str_or(payload.get("ilink_user_id")),
             "baseurl": json_as_str_or(payload.get("baseurl")) or WECHAT_ILINK_BASE_URL,

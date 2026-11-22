@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import (
@@ -121,7 +121,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             )
             return [OrgMemberRecord.from_row(row) for row in rows]
 
-    async def update_fields(self, member_id: UUID, fields: Mapping[str, Any]) -> OrgMemberRecord | None:
+    async def update_fields(self, member_id: UUID, fields: Mapping[str, object]) -> OrgMemberRecord | None:
         """Update selected columns for one org member."""
         member = await self.get(member_id)
         if member is None:
@@ -172,7 +172,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         Prefers rows already linked to a platform user, then the lowest member ID.
         """
         or_parts: list[str] = []
-        params: dict[str, Any] = {"provider_id": provider_id}
+        params: dict[str, object] = {"provider_id": provider_id}
         if unionid not in (None, ""):
             or_parts.append("unionid = %(unionid)s")
             params["unionid"] = unionid
@@ -202,7 +202,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         provider_id: UUID,
         tenant_id: UUID | None = None,
     ) -> OrgMemberRecord | None:
-        params: dict[str, Any] = {"user_id": user_id, "provider_id": provider_id}
+        params: dict[str, object] = {"user_id": user_id, "provider_id": provider_id}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND tenant_id = %(tenant_id)s"
@@ -289,7 +289,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         limit: int = 100,
     ) -> list[tuple[OrgMemberRecord, str | None, str | None]]:
         """Search active identities with provider labels for contacts and OKR owners."""
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, object] = {"limit": limit}
         clauses = ["m.status = 'active'"]
         if tenant_id is not None:
             clauses.append("m.tenant_id = %(tenant_id)s")
@@ -330,7 +330,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         limit: int = 50,
     ) -> Sequence[OrgMemberRecord]:
         """Active org members for agent permission candidate picker."""
-        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+        params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit}
         search_sql = ""
         if search not in (None, ""):
             params["search"] = f"%{search}%"
@@ -362,7 +362,7 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
         Returns (member, provider_name, provider_type, linked_user_id) tuples.
         linked_user_id is only set when the platform user is active in the same tenant.
         """
-        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+        params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit}
         search_sql = ""
         if search not in (None, ""):
             params["search"] = f"%{search}%"

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.core.domain.agents import (
@@ -17,9 +16,11 @@ from app.core.domain.agents import (
     PermissionGrantScope,
 )
 from app.core.json_types import (
+    JsonObject,
+    JsonValue,
     datetime_from_row,
     int_from_row,
-    mapping_from_row,
+    json_object_from,
     str_from_row,
     uuid_from_row,
     uuid_from_row_opt,
@@ -70,7 +71,7 @@ class AgentRecord:
     openclaw_image_id: str | None = None
     primary_model_id: UUID | None = None
     fallback_model_id: UUID | None = None
-    autonomy_policy: dict[str, Any] = field(default_factory=dict[str, Any])
+    autonomy_policy: JsonObject = field(default_factory=dict[str, JsonValue])
     max_tokens_per_day: int | None = None
     max_tokens_per_month: int | None = None
     tokens_used_today: int = 0
@@ -109,7 +110,7 @@ class AgentRecord:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AgentRecord:
-        policy = mapping_from_row(row.get("autonomy_policy") or {})
+        policy = json_object_from(row.get("autonomy_policy") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             name=str_from_row(row["name"]),

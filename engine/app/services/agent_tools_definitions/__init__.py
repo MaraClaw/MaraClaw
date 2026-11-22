@@ -1,3 +1,4 @@
+from app.core.json_types import is_str_dict
 from app.core.tool_types import ToolDefinition
 from app.services.agent_tools_definitions.agentbay import AGENTBAY_AGENT_TOOLS
 from app.services.agent_tools_definitions.code_media import CODE_MEDIA_AGENT_TOOLS
@@ -81,10 +82,10 @@ _FEISHU_TOOL_NAMES: set[str] = {
 
 
 def _catalog_tool_name(tool: object) -> str:
-    if not isinstance(tool, dict):
+    if not is_str_dict(tool):
         return ""
     function = tool.get("function")
-    if not isinstance(function, dict):
+    if not is_str_dict(function):
         return ""
     name = function.get("name")
     return name if isinstance(name, str) else ""

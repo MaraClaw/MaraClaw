@@ -182,8 +182,8 @@ async def configured_outbound(agent: AgentRecord, session: ChatSessionRecord) ->
             parsed = urlsplit(endpoint)
             if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
                 raise ValueError("WeChat endpoint must be credential-free")
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(provider)
     if not destination or not external:
         raise ValueError("IM destination is unavailable")
     target = OutboundTarget(

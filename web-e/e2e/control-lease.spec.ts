@@ -14,7 +14,7 @@ async function prepareControl(page: Page) {
   await page.route(`**/api/agents/${originalAgent.id}/sessions/page?**`, (route) => route.fulfill({
     json: {
       items: [{ id: 'control-session', agent_id: originalAgent.id, user_id: originalUser.id, title: 'Control thread',
-        source_channel: 'shared', created_at: '2030-01-01T00:00:00Z' }],
+        source_channel: 'web', is_primary: true, writable: true, created_at: '2030-01-01T00:00:00Z' }],
       next_cursor: null, has_more: false,
     },
   }))

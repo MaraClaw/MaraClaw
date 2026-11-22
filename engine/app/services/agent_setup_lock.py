@@ -9,6 +9,12 @@ from typing import IO
 
 import anyio
 
+LIFECYCLE_LOCK_TIMEOUT_SECONDS = 1.0
+"""Bounded exclusive wait for lifecycle requests and worker passes that refuse or skip a busy agent.
+
+Callers that must wait, such as an OpenClaw cutover, keep the unbounded default.
+"""
+
 
 class WorkspaceLockTimeoutError(TimeoutError):
     """The workspace fence could not be acquired within its wait budget."""

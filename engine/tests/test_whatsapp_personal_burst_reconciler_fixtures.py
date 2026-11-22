@@ -14,19 +14,18 @@ from tests.test_whatsapp_personal_burst_store_fixtures import BurstDatabase, adm
 from app.db import session
 from app.db.session import transaction
 from app.records.personal_burst import PersonalBurstBatch
-from app.services.shared_chat import shared_session_id
 
 __all__ = ["burst_db", "receipt_db"]
 
 
 async def add_lane(f: BurstDatabase) -> BurstDatabase:
-    """A second agent with its own Shared lane and Personal connection, in the same disposable schema."""
+    """A second agent with its own human lane and Personal connection, in the same disposable schema."""
     agent, config = uuid4(), uuid4()
     route = f.route.model_copy(update={"config_id": config, "auth_epoch": uuid4(), "generation": uuid4()})
     scope = replace(
         f.scope,
         agent_id=agent,
-        shared_session_id=shared_session_id(agent),
+        transcript_session_id=uuid4(),
         reply_session_id=uuid4(),
         config_id=config,
         auth_epoch=route.auth_epoch,
@@ -46,8 +45,8 @@ async def add_lane(f: BurstDatabase) -> BurstDatabase:
         )
         await f.db.first.execute(
             "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, is_primary) "
-            "VALUES (%(id)s, %(agent)s, %(user)s, 'Shared', 'shared', TRUE)",
-            {"id": scope.shared_session_id, "agent": agent, "user": f.scope.sender_user_id},
+            "VALUES (%(id)s, %(agent)s, %(user)s, 'Conversation', 'web', TRUE)",
+            {"id": scope.transcript_session_id, "agent": agent, "user": f.scope.sender_user_id},
         )
         await f.db.first.execute(
             "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, external_conv_id) "

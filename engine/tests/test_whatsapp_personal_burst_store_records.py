@@ -72,7 +72,7 @@ def test_scope_equality_covers_every_fence():
     scope = PersonalBurstScope(
         agent_id=uuid4(),
         tenant_id=uuid4(),
-        shared_session_id=uuid4(),
+        transcript_session_id=uuid4(),
         reply_session_id=uuid4(),
         sender_user_id=uuid4(),
         config_id=uuid4(),
@@ -85,7 +85,7 @@ def test_scope_equality_covers_every_fence():
     assert set(params) == {
         "agent_id",
         "tenant_id",
-        "shared_session_id",
+        "transcript_session_id",
         "reply_session_id",
         "sender_user_id",
         "config_id",

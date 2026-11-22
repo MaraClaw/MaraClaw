@@ -6,9 +6,9 @@ import copy
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TypeIs
+from typing import cast
 
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import JsonObject, is_any_list, is_json_object, is_str_dict
 from app.core.logging import logger
 from app.core.tool_types import ToolDefinition, ToolParameterSchema
 from app.dao import agent_dao, agent_tool_dao, tenant_dao, tool_dao
@@ -96,35 +96,20 @@ def uses_shared_channel_presence(fn: object) -> bool:
 mark_shared_channel_presence(agent_has_feishu, agent_has_any_channel)
 
 
-def _is_json_value(value: object) -> TypeIs[JsonValue]:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return True
-    if isinstance(value, list):
-        return all(_is_json_value(item) for item in list[object](value))
-    return _is_json_object(value)
-
-
-def _is_json_object(value: object) -> TypeIs[JsonObject]:
-    if not isinstance(value, dict):
-        return False
-    mapping: dict[object, object] = dict(value)
-    return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
-
-
 def _as_tool_parameter_schema(value: object) -> ToolParameterSchema:
-    if not isinstance(value, dict):
+    if not is_str_dict(value):
         return {"type": "object", "properties": {}}
     schema_type: object | None = value.get("type")
     properties_raw: object | None = value.get("properties")
     if not isinstance(schema_type, str) or not isinstance(properties_raw, dict):
         return {"type": "object", "properties": {}}
-    properties: dict[object, object] = dict(properties_raw)
+    properties = dict(cast("dict[object, object]", properties_raw))
     narrowed_properties: dict[str, JsonObject] = {
-        key: item for key, item in properties.items() if isinstance(key, str) and _is_json_object(item)
+        key: item for key, item in properties.items() if isinstance(key, str) and is_json_object(item)
     }
     parameters: ToolParameterSchema = {"type": schema_type, "properties": narrowed_properties}
     required: object | None = value.get("required")
-    if isinstance(required, list):
+    if is_any_list(required):
         parameters["required"] = [item for item in list[object](required) if isinstance(item, str)]
     return parameters
 
@@ -214,7 +199,7 @@ async def _get_agent_tools_for_llm_bound(
                 continue
             if tool.category == "feishu" and not has_feishu:
                 continue
-            if (tool.config or {}).get("okr_agent_only") and not is_system_agent:
+            if (okr_only := (tool.config or {}).get("okr_agent_only")) is not None and okr_only and not is_system_agent:
                 continue
             if tool.name in db_tool_names:
                 logger.warning(f"[Tools] Duplicate tool name '{tool.name}' found in DB. Skipping to avoid LLM error.")

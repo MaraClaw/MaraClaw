@@ -15,7 +15,6 @@ from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.services import chat_submissions, chat_tickets
-from app.services.shared_chat import shared_session_id
 
 
 @pytest.mark.asyncio
@@ -68,7 +67,7 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
         user_id=user.id,
         tenant_id=tenant,
         agent_id=agent.id,
-        session_id=shared_session_id(agent.id),
+        session_id=uuid4(),
         auth_deadline=int(time.time()) + 3600,
         auth_generation=0,
     )
@@ -86,7 +85,7 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", AsyncMock())
     monkeypatch.setattr(chat_submissions, "enqueue_prepared_openclaw_message", dispatch)
     session = ChatSessionRecord(
-        id=handler.binding.session_id, agent_id=agent.id, user_id=user.id, source_channel="shared"
+        id=handler.binding.session_id, agent_id=agent.id, user_id=user.id, source_channel="web", is_primary=True
     )
     monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=session))
     monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock())

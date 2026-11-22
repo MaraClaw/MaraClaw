@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import cast, overload
 
-from app.core.json_types import str_findall
+from app.core.json_types import is_str_dict, str_findall
 from app.core.logging import logger
 from app.dao.base import as_uuid
 from app.records.agent import AgentRecord
@@ -334,7 +334,7 @@ def _allowed_tool_names(tools_for_llm: Sequence[Mapping[str, object]] | None) ->
     names: set[str] = set()
     for tool in tools_for_llm or []:
         function = tool.get("function")
-        if isinstance(function, dict):
+        if is_str_dict(function):
             name = function.get("name")
             if isinstance(name, str) and name.strip():
                 names.add(name.strip())
@@ -548,9 +548,7 @@ async def call_llm(
     if skip_tools:
         tools_for_llm = [FINISH_TOOL_DEFINITION]
     else:
-        from app.services.agent_tools_definitions import AGENT_TOOLS
-
-        tools_for_llm = await get_agent_tools_for_llm(agent_id) if agent_id else AGENT_TOOLS
+        tools_for_llm = await get_agent_tools_for_llm(agent_id)
     allowed_tool_names = _allowed_tool_names(tools_for_llm)
 
     # Convert messages to LLMMessage format

@@ -23,7 +23,7 @@ async def personal_owner(
     async with connection_ctx() as db:
         if authorization_only:
             await db.fetchone("SELECT id FROM tenants WHERE id=%(id)s FOR SHARE", {"id": agent.tenant_id})
-            await db.fetchone("SELECT id FROM users WHERE id=%(id)s FOR SHARE", {"id": agent.creator_id})
+            await db.fetchone("SELECT id FROM users WHERE id=%(id)s FOR KEY SHARE", {"id": agent.creator_id})
             await db.fetchone("SELECT id FROM agents WHERE id=%(id)s FOR SHARE", {"id": agent.id})
             clear_request_memo()
         else:

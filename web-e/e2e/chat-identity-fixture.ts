@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import type { ChatMessage } from '../src/lib/chat/message'
 import { DoneEventSchema } from '../src/lib/engine-contracts.generated'
+import type { UserOut } from '../src/lib/types/auth'
 import { originalAgent, originalToken, originalUser, prepareWorkspace, replacementAgent, replacementToken } from './session-fencing-fixture'
 
 export const firstSession = '387b65d4-6a8d-42f4-9677-12d4caaf6d31'
 export const secondSession = 'c47bd538-b299-41eb-b6eb-cf0c28f6bc46'
-export const archivedSession = '647085d3-c393-487c-9c9f-021a493ed319'
+export const readOnlySession = '647085d3-c393-487c-9c9f-021a493ed319'
+export const peerMember = { id: 'b1c5e7a2-6f0d-4c3e-9a41-2d8f6e5b7c90', username: 'Peer member' } as const
 export const firstMessage = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 export const secondMessage = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 export const chatPath = (session = firstSession, agent = originalAgent) => `/app/agents/${agent.id}/chat/${session}`
@@ -34,17 +36,19 @@ export async function navigateChat(page: Page, path: string) {
 
 export type SessionRow = {
   readonly id: string; readonly agent_id: string; readonly user_id: string; readonly title: string
-  readonly source_channel: string; readonly is_primary: boolean; readonly created_at: string
+  readonly source_channel: string; readonly is_primary: boolean; readonly writable: boolean; readonly created_at: string
+  readonly username?: string; readonly is_group?: boolean
   readonly last_message_at?: string; readonly message_count: number; readonly unread_count: number
 }
 export const sessionRow = (index: number, agent_id = originalAgent.id): SessionRow => ({
   id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, agent_id, user_id: originalUser.id,
-  title: `Older thread ${index}`, source_channel: 'web', is_primary: false, created_at: '2029-06-01T00:00:00Z',
+  title: `Older thread ${index}`, source_channel: 'web', is_primary: false, writable: false, created_at: '2029-06-01T00:00:00Z',
   last_message_at: new Date(Date.UTC(2029, 5, 1) - index * 60_000).toISOString(), message_count: 1, unread_count: 0,
 })
 
-export async function prepareChat(page: Page, initial: readonly ChatMessage[] = []) {
+export async function prepareChat(page: Page, initial: readonly ChatMessage[] = [], { role = originalUser.role }: { readonly role?: UserOut['role'] } = {}) {
   await prepareWorkspace(page)
+  if (role !== originalUser.role) await page.route('**/api/member/auth/me', (route) => route.fulfill({ json: { ...originalUser, role } }))
   let history = initial
   let revision = 1
   const historySnapshots = new Map([[String(revision), initial]])
@@ -77,39 +81,43 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
     const agent = path.includes(replacementAgent.id) ? replacementAgent : originalAgent
     if (path === `/api/agents/${agent.id}`) return route.fulfill({ json: { ...agent, onboarded_for_me: onboarded } })
     if (path.endsWith('/metrics')) return route.fulfill({ json: { status: agent.status, tasks: { total: 0, done: 0, pending: 0 } } })
-    const shared = {
-      id: firstSession, agent_id: agent.id, user_id: 'canonical-creator-not-viewer', title: 'Identity thread 1',
-      source_channel: 'shared', is_primary: true, created_at: '2029-01-01T00:00:00Z', message_count: history.length, unread_count: 0,
+    const own: SessionRow = {
+      id: firstSession, agent_id: agent.id, user_id: originalUser.id, title: 'Identity thread 1', source_channel: 'web',
+      is_primary: true, writable: true, created_at: '2029-01-01T00:00:00Z', message_count: history.length, unread_count: 0,
     }
     if (path.endsWith('/sessions') && route.request().method() === 'POST') {
       ensures++
-      return route.fulfill({ json: shared })
+      return route.fulfill({ json: own })
     }
     const defaults: readonly SessionRow[] = [{
-      id: archivedSession, agent_id: agent.id, user_id: originalUser.id, title: 'Archived private thread',
-      source_channel: 'web', is_primary: true, created_at: '2031-01-01T00:00:00Z', message_count: 1, unread_count: 0,
+      id: readOnlySession, agent_id: agent.id, user_id: peerMember.id, username: peerMember.username, title: 'Peer member conversation',
+      source_channel: 'web', is_primary: true, writable: false, created_at: '2031-01-01T00:00:00Z', message_count: 1, unread_count: 0,
     }, {
       id: secondSession, agent_id: agent.id, user_id: originalUser.id, title: 'Identity thread 2',
-      source_channel: 'agent', created_at: '2030-01-01T00:00:00Z', message_count: 1, unread_count: 0,
+      source_channel: 'agent', is_primary: false, writable: true, created_at: '2030-01-01T00:00:00Z', message_count: 1, unread_count: 0,
     }]
     const rows = sessionRows ?? defaults
     if (path.endsWith('/sessions/page')) {
-      // Keyset paging in the engine's shape: the shared row leads the first page only; cursors are opaque.
+      // Keyset paging in the engine's shape: the caller's own conversation leads the first page only; cursors are opaque.
+      // Only a company admin may list every member's conversations; a member sees their own, peer-agent and group rows.
       expect(route.request().method()).toBe('GET')
       const params = new URL(route.request().url()).searchParams
-      sessionRequests.push({ scope: params.get('scope'), limit: params.get('limit'), cursor: params.get('cursor') })
+      const scope = params.get('scope')
+      sessionRequests.push({ scope, limit: params.get('limit'), cursor: params.get('cursor') })
+      if (scope === 'all' && role !== 'org_admin') return route.fulfill({ status: 403, json: { detail: 'Only company admins can list every conversation' } })
+      const visible = scope === 'all' ? rows : rows.filter((row) => row.user_id === originalUser.id || row.source_channel === 'agent' || row.is_group === true)
       const limit = Number(params.get('limit'))
       const start = params.get('cursor') === null ? 0 : Number(params.get('cursor')?.replace('after-', ''))
-      const end = Math.min(rows.length, start + limit)
+      const end = Math.min(visible.length, start + limit)
       return route.fulfill({ json: {
-        items: [...(start === 0 ? [shared] : []), ...rows.slice(start, end)],
-        next_cursor: end < rows.length ? `after-${end}` : null, has_more: end < rows.length,
+        items: [...(start === 0 ? [own] : []), ...visible.slice(start, end)],
+        next_cursor: end < visible.length ? `after-${end}` : null, has_more: end < visible.length,
       } })
     }
     const lookup = /\/sessions\/([^/]+)$/.exec(path)
     if (lookup?.[1] && route.request().method() === 'GET') {
       lookups.push(lookup[1])
-      const found = [shared, ...rows].find((row) => row.id === lookup[1])
+      const found = [own, ...rows].find((row) => row.id === lookup[1])
       return found ? route.fulfill({ json: found }) : route.fulfill({ status: 404, json: { detail: 'Session not found' } })
     }
     if (path.endsWith('/messages/page')) {
@@ -117,8 +125,8 @@ export async function prepareChat(page: Page, initial: readonly ChatMessage[] = 
       expect(route.request().method()).toBe('GET')
       expect(params.get('limit')).toBe('50')
       requests++
-      const snapshot = path.includes(firstSession) ? history : path.includes(archivedSession)
-        ? [message('archive-reply', 'Authorized archived history')] : [message('other-session', 'Current second session')]
+      const snapshot = path.includes(firstSession) ? history : path.includes(readOnlySession)
+        ? [message('read-only-reply', 'Peer member history')] : [message('other-session', 'Current second session')]
       const cursor = params.get('cursor')
       const end = cursor === null ? snapshot.length : snapshot.findIndex((row) => row.entry_id === cursor)
       expect(end).toBeGreaterThanOrEqual(0)

@@ -23,8 +23,8 @@ def user_page_filter(eligible_for: UserPageEligibility | None, exclude_user_id: 
     match eligible_for:
         case UserPageEligibility.AGENT_TRANSFER:
             return UserPageFilter(eligible_roles=tuple(sorted(END_USER_ROLES)), exclude_user_id=exclude_user_id)
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(eligible_for)
 
 
 def user_page_digest(search: str, eligible_for: UserPageEligibility | None, exclude_user_id: UUID | None) -> str:

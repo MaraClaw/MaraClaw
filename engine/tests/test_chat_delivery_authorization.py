@@ -1,4 +1,4 @@
-"""Shared-session delivery authorization is cached briefly and bound to the agent ACL version."""
+"""Canonical-session delivery authorization is cached briefly and bound to the agent ACL version."""
 
 import asyncio
 import time
@@ -19,11 +19,10 @@ from app.services.realtime_runtime.chat_authorization import (
     DELIVERY_AUTHORIZATION_TTL_SECONDS,
     DeliveryVerdict,
     authorize_chat_delivery,
-    read_shared_acl_version,
+    read_delivery_acl_version,
 )
 from app.services.realtime_runtime.fanout import LOCAL_FANOUT_CONCURRENCY
 from app.services.realtime_runtime.router import RealtimeRouter
-from app.services.shared_chat import shared_session_id
 from test_chunk_live_delivery import TRANSIENT_FAILURES, Gate
 
 ALLOWED = DeliveryVerdict.ALLOWED
@@ -62,8 +61,11 @@ def env(monkeypatch: pytest.MonkeyPatch) -> Env:
     return Env(monkeypatch)
 
 
-def shared_socket(frames: list[Message] | None = None) -> tuple[WebSocket, str, str]:
-    agent_id = uuid4()
+def canonical_socket(
+    frames: list[Message] | None = None, *, authorize_deliveries: bool = True
+) -> tuple[WebSocket, str, str]:
+    """A socket bound to a session; a ticket issued for a canonical session flags its binding."""
+    agent_id, session_id = uuid4(), uuid4()
     sink = frames if frames is not None else []
 
     async def receive() -> Message:
@@ -77,11 +79,12 @@ def shared_socket(frames: list[Message] | None = None) -> tuple[WebSocket, str, 
         user_id=uuid4(),
         tenant_id=uuid4(),
         agent_id=agent_id,
-        session_id=shared_session_id(agent_id),
+        session_id=session_id,
         auth_deadline=int(time.time()) + 3600,
         auth_generation=0,
+        authorize_deliveries=authorize_deliveries,
     )
-    return socket, str(agent_id), str(shared_session_id(agent_id))
+    return socket, str(agent_id), str(session_id)
 
 
 async def check(
@@ -91,7 +94,7 @@ async def check(
 
 
 async def test_positive_result_is_reused_within_ttl_then_expires(env: Env) -> None:
-    socket, agent_id, session_id = shared_socket()
+    socket, agent_id, session_id = canonical_socket()
 
     assert [await check(socket, agent_id, session_id) for _ in range(3)] == [ALLOWED] * 3
     env.authorize.assert_awaited_once()
@@ -107,7 +110,7 @@ async def test_positive_result_is_reused_within_ttl_then_expires(env: Env) -> No
 
 
 async def test_acl_version_change_forces_reauthorization(env: Env) -> None:
-    socket, agent_id, session_id = shared_socket()
+    socket, agent_id, session_id = canonical_socket()
     assert await check(socket, agent_id, session_id) is ALLOWED
 
     env.version = "2"
@@ -119,8 +122,8 @@ async def test_acl_version_change_forces_reauthorization(env: Env) -> None:
 
 
 async def test_cache_is_per_socket(env: Env) -> None:
-    first, agent_id, session_id = shared_socket()
-    second, _, _ = shared_socket()
+    first, agent_id, session_id = canonical_socket()
+    second, _, _ = canonical_socket()
     second.state.chat_binding = first.state.chat_binding.model_copy()
 
     assert await check(first, agent_id, session_id) is ALLOWED
@@ -130,7 +133,7 @@ async def test_cache_is_per_socket(env: Env) -> None:
 
 
 async def test_negative_results_are_never_cached(env: Env) -> None:
-    socket, agent_id, session_id = shared_socket()
+    socket, agent_id, session_id = canonical_socket()
     env.revoke()
 
     assert await check(socket, agent_id, session_id) is FORBIDDEN
@@ -144,7 +147,7 @@ async def test_negative_results_are_never_cached(env: Env) -> None:
 
 
 async def test_failed_reauthorization_discards_the_previous_positive_result(env: Env) -> None:
-    socket, agent_id, session_id = shared_socket()
+    socket, agent_id, session_id = canonical_socket()
     assert await check(socket, agent_id, session_id) is ALLOWED
 
     env.version = "2"
@@ -156,18 +159,21 @@ async def test_failed_reauthorization_discards_the_previous_positive_result(env:
     assert env.authorize.await_count == 3
 
 
-async def test_non_shared_target_is_allowed_without_any_work(env: Env) -> None:
-    socket, agent_id, _ = shared_socket()
+async def test_a_socket_without_a_flagged_binding_for_the_target_is_allowed_without_any_work(env: Env) -> None:
+    socket, agent_id, session_id = canonical_socket()
+    unflagged, other_agent, other_session = canonical_socket(authorize_deliveries=False)
 
     assert await check(socket, agent_id, str(uuid4())) is ALLOWED
     assert await check(socket, agent_id, None) is ALLOWED
+    assert await check(socket, str(uuid4()), session_id) is ALLOWED
+    assert await check(unflagged, other_agent, other_session) is ALLOWED
 
     env.read_version.assert_not_awaited()
     env.authorize.assert_not_awaited()
 
 
 async def test_supplied_acl_version_replaces_the_per_socket_read(env: Env) -> None:
-    socket, agent_id, session_id = shared_socket()
+    socket, agent_id, session_id = canonical_socket()
 
     assert await check(socket, agent_id, session_id, acl_version="1") is ALLOWED
     assert await check(socket, agent_id, session_id, acl_version="1") is ALLOWED
@@ -181,15 +187,22 @@ async def test_supplied_acl_version_replaces_the_per_socket_read(env: Env) -> No
     env.read_version.assert_not_awaited()
 
 
-async def test_delivery_acl_version_is_read_once_and_only_for_a_shared_target(env: Env) -> None:
-    _, agent_id, session_id = shared_socket()
+async def test_delivery_acl_version_is_read_once_and_only_when_a_flagged_socket_is_targeted(env: Env) -> None:
+    flagged, agent_id, session_id = canonical_socket()
+    tab, _, _ = canonical_socket()
+    tab.state.chat_binding = flagged.state.chat_binding.model_copy()
+    unflagged, _, _ = canonical_socket(authorize_deliveries=False)
+    unflagged.state.chat_binding = flagged.state.chat_binding.model_copy(update={"authorize_deliveries": False})
     env.version = "9"
 
-    assert await read_shared_acl_version(agent_id, [None, str(uuid4()), session_id, session_id]) == "9"
+    targets = [(unflagged, session_id), (flagged, session_id), (tab, session_id)]
+    assert await read_delivery_acl_version(agent_id, targets) == "9"
     env.read_version.assert_awaited_once()
 
+    # Unflagged sockets, and flagged ones listed under another session, read nothing.
     env.read_version.reset_mock()
-    assert await read_shared_acl_version(agent_id, [None, str(uuid4())]) is None
+    assert await read_delivery_acl_version(agent_id, [(unflagged, session_id), (flagged, None)]) is None
+    assert await read_delivery_acl_version(agent_id, []) is None
     env.read_version.assert_not_awaited()
 
 
@@ -207,7 +220,7 @@ async def test_delivery_acl_version_is_read_once_and_only_for_a_shared_target(en
 async def test_only_401_403_and_404_revoke_and_no_failure_is_cached(
     env: Env, failure: Callable[[], Exception], verdict: DeliveryVerdict
 ) -> None:
-    socket, agent_id, session_id = shared_socket()
+    socket, agent_id, session_id = canonical_socket()
     env.authorize.side_effect = failure()
 
     assert [await check(socket, agent_id, session_id) for _ in range(2)] == [verdict] * 2
@@ -234,7 +247,7 @@ async def test_cold_decisions_never_exceed_the_fanout_bound_across_deliveries(en
 
     env.authorize.side_effect = held
     # Separate viewers, each its own decision, checked side by side as concurrent deliveries would.
-    sockets = [shared_socket() for _ in range(bound + 4)]
+    sockets = [canonical_socket() for _ in range(bound + 4)]
     checks = asyncio.gather(*(check(*socket) for socket in sockets))
     await asyncio.wait_for(gate.saturated.wait(), 5)
 
@@ -251,7 +264,7 @@ async def test_revoked_viewer_stops_receiving_after_acl_bump(
     monkeypatch: pytest.MonkeyPatch, env: Env, bumped: bool, remote: bool
 ) -> None:
     frames: list[Message] = []
-    socket, agent_id, session_id = shared_socket(frames)
+    socket, agent_id, session_id = canonical_socket(frames)
     await socket.accept()
     frames.clear()
     instance = RealtimeRouter()

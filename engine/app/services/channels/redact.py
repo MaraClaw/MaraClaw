@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
+from app.core.json_types import JsonObject, JsonValue
 from app.records.channel_config import ChannelConfigRecord
 from app.schemas.schemas import ChannelConfigOut
 
@@ -28,26 +28,26 @@ def _mask(value: str | None, *, present_label: str = "***") -> str | None:
     return present_label
 
 
-def _redact_nested(value: object) -> object:
+def _redact_nested(value: JsonValue) -> JsonValue:
     if isinstance(value, dict):
-        return redact_extra_config(dict[str, object](value))
+        return redact_extra_config(dict(value))
     if isinstance(value, list):
         return [_redact_nested(item) for item in value]
     return value
 
 
-def redact_extra_config(extra: Mapping[str, object] | None) -> dict[str, Any] | None:
+def redact_extra_config(extra: Mapping[str, JsonValue] | None) -> JsonObject | None:
     if extra is None:
         return None
     if not extra:
         return {}
-    out: dict[str, Any] = {}
+    out: JsonObject = {}
     for key, value in extra.items():
         if key in _SECRET_EXTRA_KEYS or "secret" in key.lower() or "private" in key.lower() or "token" in key.lower():
             if isinstance(value, dict):
                 # SA JSON: keep non-secret metadata only
-                secret_obj = dict[str, object](value)
-                meta: dict[str, Any] = {
+                secret_obj = dict(value)
+                meta: JsonObject = {
                     k: _redact_nested(v)
                     for k, v in secret_obj.items()
                     if k
@@ -63,7 +63,7 @@ def redact_extra_config(extra: Mapping[str, object] | None) -> dict[str, Any] | 
                     meta["credentials_configured"] = True
                 out[key] = meta
             else:
-                out[key] = True if value else None
+                out[key] = True if bool(value) else None
         else:
             out[key] = _redact_nested(value)
     return out

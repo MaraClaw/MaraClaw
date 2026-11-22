@@ -119,6 +119,9 @@ jobs:
       - name: basedpyright
         if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: uv run --extra dev basedpyright --project pyrightconfig.json
+      - name: basedpyright (tests)
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: uv run --extra dev basedpyright --project pyrightconfig.tests.json
       - name: ty
         if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: uv run --extra dev ty check --force-exclude .

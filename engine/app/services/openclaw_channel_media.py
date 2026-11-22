@@ -9,12 +9,9 @@ from app.services.agent_manager import agent_manager
 from app.services.channels.channel_media import materialize_for_guest
 from app.services.openclaw_transcript import open_transcript
 from app.services.openclaw_turns import runtime_session_key
-from app.services.shared_chat import shared_session_id
 
 
 async def channel_input(agent: AgentRecord, message: GatewayMessageRecord) -> tuple[str, str]:
-    if message.conversation_id != str(shared_session_id(agent.id)):
-        return message.content, ""
     files = await channel_event_media_dao.for_message(message.id, agent.id)
     refs = tuple([await materialize_for_guest(agent, file) for file in files])
     paths = "\n".join(f"/home/node/custom-state/{ref.path}" for ref in refs)

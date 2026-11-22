@@ -1,5 +1,5 @@
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -16,10 +16,9 @@ from app.dao.zalo_personal_auth_dao import read_auth
 from app.dao.zalo_personal_dao import claim, get_personal, reaped
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
-from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.records.outbound_plan import OutboundChunk
 from app.records.zalo_personal import ZaloConnection
-from app.services import gateway_report_relay, gateway_report_wake, quota_guard
+from app.services import gateway_report_relay, gateway_report_wake, openclaw_routing, quota_guard
 from app.services.agent_manager import agent_manager
 from app.services.channels import zalo_personal_child as child_module
 from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
@@ -29,9 +28,7 @@ from app.services.channels.zalo_personal_events import handle_frame
 from app.services.channels.zalo_personal_journal import enqueue
 from app.services.channels.zalo_personal_protocol import ChildFrame, CredsSet
 from app.services.openclaw_gateway_delivery import settle_native_report
-from app.services.openclaw_shared_dispatch import claim_ready_shared
 from app.services.organization_plans import tier_for_tenant
-from app.services.shared_chat import shared_session_id
 
 __all__ = ["channel_db", "receipt_db"]
 
@@ -99,15 +96,15 @@ async def test_pair_to_reply_relink_and_disconnect_commits_across_real_child(
                         "conversation_id": route_for(current).external_id(),
                     }
                     assert await f.db.second.fetchval("SELECT count(*) FROM channel_event_receipts") == 1
+                    canonical = await f.db.second.fetchval(
+                        "SELECT id FROM chat_sessions WHERE agent_id=%(agent)s AND user_id=%(user)s "
+                        "AND source_channel='web' AND is_primary AND NOT is_group",
+                        {"agent": owned.agent_id, "user": f.sender_id},
+                    )
+                    assert canonical is not None
                     assert await f.db.second.fetchall(
                         "SELECT user_id,content,conversation_id FROM chat_messages WHERE role='user'"
-                    ) == [
-                        {
-                            "user_id": f.sender_id,
-                            "content": "hello",
-                            "conversation_id": str(shared_session_id(owned.agent_id)),
-                        }
-                    ]
+                    ) == [{"user_id": f.sender_id, "content": "hello", "conversation_id": str(canonical)}]
                     assert await f.db.second.fetchval("SELECT messages_used FROM agent_daily_message_usage") == 1
                     assert (
                         await f.db.second.fetchval(
@@ -128,11 +125,11 @@ async def test_pair_to_reply_relink_and_disconnect_commits_across_real_child(
                         )
                         == route_for(current).external_id()
                     )
-                dispatched = await claim_ready_shared(SharedDispatchRequest(owned.agent_id, datetime.now(UTC)))
-                assert dispatched is not None
-                assert dispatched.id == gateway["id"]
                 agent = await agent_dao.get(owned.agent_id)
                 assert agent is not None
+                dispatched = await openclaw_routing._claim_wake(agent, UUID(str(gateway["id"])))
+                assert dispatched is not None
+                assert dispatched.id == gateway["id"]
                 report = await settle_native_report(
                     agent, dispatched.id, "reply", binding_id=dispatched.reply_binding_id
                 )

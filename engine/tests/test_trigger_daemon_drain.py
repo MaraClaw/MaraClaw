@@ -2,14 +2,14 @@ import asyncio
 import contextvars
 import itertools
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import override
 
 import pytest
 
+from app.core.json_types import JsonValue
 from app.records.trigger import AgentTriggerRecord
 from app.services import heartbeat, trigger_daemon
 from app.services.trigger_runtime import invoker, scan
@@ -218,10 +218,6 @@ async def test_invocation_cancelled_after_grace_goes_to_lease_recovery(monkeypat
     started = asyncio.Event()
     settled: list[str] = []
 
-    @asynccontextmanager
-    async def hold(_leases: object) -> AsyncGenerator[None]:
-        yield
-
     async def run_forever(*_args: object) -> str | None:
         started.set()
         await asyncio.Event().wait()
@@ -235,7 +231,6 @@ async def test_invocation_cancelled_after_grace_goes_to_lease_recovery(monkeypat
         return []
 
     monkeypatch.setattr(invoker, "trigger_execution_leases", lambda _triggers: [])
-    monkeypatch.setattr(invoker, "hold_trigger_execution_leases", hold)
     monkeypatch.setattr(invoker, "_run_trigger_invocation", run_forever)
     monkeypatch.setattr(invoker, "mark_trigger_executions_failed", mark_failed)
     monkeypatch.setattr(invoker, "mark_trigger_executions_completed", mark_completed)
@@ -621,7 +616,7 @@ async def test_shutdown_during_claim_returns_every_reservation_and_the_next_life
 _scan_ids = itertools.count(1)
 
 
-def scan_trigger(name: str, trigger_type: str = "poll", **config: object) -> AgentTriggerRecord:
+def scan_trigger(name: str, trigger_type: str = "poll", **config: JsonValue) -> AgentTriggerRecord:
     # Ids ascend in creation order, like the id-ordered pages the daemon reads.
     return AgentTriggerRecord(
         id=uuid.UUID(int=next(_scan_ids)),

@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.config import get_settings
+from app.core.json_types import json_object_from
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.records.identity import IdentityProviderRecord
 from app.records.sso_scan_session import SSOScanSessionRecord
@@ -20,7 +21,7 @@ def test_captured_configuration_has_no_mutable_reference_to_provider_or_adapter(
         uuid4(), "dingtalk", "DingTalk", sso_login_enabled=True, config={"nested": {"secret": "captured"}}
     )
     authority = ScanLoginAuthority.capture(scan(), provider, "captured-revision")
-    provider.config["nested"]["secret"] = "rotated"
+    json_object_from(provider.config["nested"])["secret"] = "rotated"
     adapter = authority.adapter()
     assert adapter.config == {"nested": {"secret": "captured"}}
     adapter.config["nested"] = {"secret": "adapter-mutated"}

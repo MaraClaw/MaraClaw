@@ -39,6 +39,7 @@ from app.services.channels.stream_source import StreamSource, acquire_stream_sou
 from app.services.channels.submissions import ChannelEvent, is_channel_event_replay
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.document_parser import MAX_INPUT_BYTES
+from app.services.im_sdk_types import dingtalk_chatbot_message, is_object_dict, is_object_list
 from app.services.storage import store_agent_upload
 
 DINGTALK_RECONNECT_BASE_SECONDS: Final = 2.0
@@ -73,10 +74,10 @@ class _DingTalkMessage(TypedDict, total=False):
 
 
 def _string_keyed_object(value: object) -> dict[str, object] | None:
-    if not isinstance(value, dict):
+    if not is_object_dict(value):
         return None
     result: dict[str, object] = {}
-    for raw_key, raw_item in dict[object, object](value).items():
+    for raw_key, raw_item in value.items():
         if not isinstance(raw_key, str):
             return None
         result[raw_key] = raw_item
@@ -129,10 +130,10 @@ def _parse_dingtalk_message(payload: object) -> _DingTalkMessage:
             content["duration"] = duration
 
         raw_rich_text = content_data.get("richText")
-        if isinstance(raw_rich_text, list):
+        if is_object_list(raw_rich_text):
             rich_text: list[_DingTalkRichTextItem | list[_DingTalkRichTextItem]] = []
-            for section in list[object](raw_rich_text):
-                if isinstance(section, list):
+            for section in raw_rich_text:
+                if is_object_list(section):
                     rich_text.append([item for value in section if (item := _parse_rich_text_item(value)) is not None])
                 elif (item := _parse_rich_text_item(section)) is not None:
                     rich_text.append(item)
@@ -650,13 +651,13 @@ class DingTalkStreamManager:
             """
             try:
                 # Parse the raw data
-                incoming = dingtalk_stream.ChatbotMessage.from_dict(message.data)
                 raw_data = cast("object", message.data)
-                if isinstance(raw_data, dict):
+                incoming = dingtalk_chatbot_message(raw_data)
+                if is_object_dict(raw_data):
                     parsed_data = json_object_from(raw_data)
                 elif isinstance(raw_data, (str, bytes, bytearray)):
                     loaded = json_loads_value(raw_data)
-                    if not isinstance(loaded, dict):
+                    if not is_object_dict(loaded):
                         raise TypeError("DingTalk callback payload must be an object")
                     parsed_data = json_object_from(loaded)
                 else:
@@ -676,7 +677,7 @@ class DingTalkStreamManager:
                 if msgtype == "text":
                     # Plain text: use existing logic
                     text_list_raw = incoming.get_text_list()
-                    text_list: list[str] = [str(part) for part in text_list_raw] if text_list_raw else []
+                    text_list: list[str] = [str(part) for part in text_list_raw] if text_list_raw is not None else []
                     user_text = " ".join(text_list).strip() if text_list else ""
                     if not user_text:
                         return dingtalk_stream.AckMessage.STATUS_OK, "empty message"

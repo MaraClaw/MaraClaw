@@ -29,6 +29,7 @@ from app.services.openclaw_hot_cache import (
     recently_ensured,
     set_cached_bundle,
 )
+from app.services.openclaw_human_lane import human_lane_session
 from app.services.openclaw_model_selection import (
     NoCompanyModelError,
     bundle_usable,
@@ -45,7 +46,6 @@ from app.services.openclaw_release_backoff import release_backoff
 from app.services.openclaw_shared_dispatch import claim_ready_shared
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_work_allowed
 from app.services.quota_guard import AgentExpired
-from app.services.shared_chat import shared_session_id
 from app.services.turn_timing import TurnOutcomeKind, TurnTimeline
 
 
@@ -131,13 +131,14 @@ async def enqueue_openclaw_message(
 
 
 async def _claim_wake(agent: AgentRecord, message_id: UUID) -> GatewayMessageRecord | None:
-    """Ordinary claims name a row; Shared always claims its actual ready FIFO head."""
+    """Ordinary claims name a row; a canonical session always claims the actual ready FIFO head of its human lane."""
     requested = await gateway_message_dao.get_for_agent(message_id, agent.id)
     if requested is None:
         return None
-    if requested.conversation_id != str(shared_session_id(agent.id)):
+    lane = await human_lane_session(agent.id, requested.conversation_id)
+    if lane is None:
         return await claim_ordinary_turn(agent, message_id)
-    return await claim_ready_shared(SharedDispatchRequest(agent.id, datetime.now(UTC)))
+    return await claim_ready_shared(SharedDispatchRequest(agent.id, datetime.now(UTC), lane.id))
 
 
 async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | None = None) -> None:
@@ -201,8 +202,8 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
                         result = "The agent could not complete this request."
                     case "timeout":
                         result = "The agent timed out before completing this request."
-                    case unreachable:
-                        assert_never(unreachable)
+                    case _:
+                        assert_never(status)
                 report = await settle_native_report(agent, claimed.id, result)
                 timeline.mark("settled")
                 if report is not None:
@@ -210,8 +211,8 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
                     timeline.mark("published")
             case UncertainOutcome():
                 logger.warning("[OpenClaw] admission uncertain for message {}", claimed.id)
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(outcome)
     except asyncio.CancelledError:
         outcome_kind = "cancelled"
         raise

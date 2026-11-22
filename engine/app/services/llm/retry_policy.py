@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Any, cast
+from typing import cast
 
 import httpx
 
@@ -127,8 +127,8 @@ class StreamDelivery:
         self.on_thinking: ThinkingCallback | None = self._track(on_thinking)
 
     def _track[Arg](
-        self, callback: Callable[[Arg], Coroutine[Any, Any, None]] | None
-    ) -> Callable[[Arg], Coroutine[Any, Any, None]] | None:
+        self, callback: Callable[[Arg], Coroutine[object, object, None]] | None
+    ) -> Callable[[Arg], Coroutine[object, object, None]] | None:
         if callback is None:
             return None
 

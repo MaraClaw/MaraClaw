@@ -301,6 +301,8 @@ def _build_llm_history_from_chat_messages(history_messages: Iterable[ChatMessage
         match msg.role:
             case "system" | "assistant" | "user" | "tool" as role:
                 history.append({"role": role, "content": msg.content})
+            case _:
+                pass
     return history
 
 
@@ -870,7 +872,7 @@ async def process_feishu_event(
                             _rel = str(_fp.relative_to(_ws_root / str(agent_id)))
                         except ValueError:
                             _rel = _fp.name
-                    _fallback_parts = []
+                    _fallback_parts: list[str] = []
                     if msg:
                         _fallback_parts.append(msg)
                     if _base_url:

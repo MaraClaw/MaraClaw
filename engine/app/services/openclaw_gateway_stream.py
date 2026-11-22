@@ -4,19 +4,18 @@ import asyncio
 from threading import BoundedSemaphore, Event
 from time import monotonic
 from typing import ClassVar, Literal, final
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, ValidationError
 from pywhales import InspectionPolicy, observation
 
 from app.core.logging import logger
-from app.dao.chat_dao import chat_session_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.dao.personal_burst_dispatch_dao import personal_burst_dispatch_dao
 from app.records.gateway_message import GatewayMessageRecord
 from app.services.guest_bootstrap import guarded_argv
+from app.services.openclaw_human_lane import conversation_session
 from app.services.response_identity import ResponseGuard
-from app.services.shared_chat import shared_session_id
+from app.services.shared_chat import is_canonical
 from app.services.turn_timing import TurnTimeline
 
 EXEC_POLICY = InspectionPolicy(
@@ -37,19 +36,16 @@ class GatewayDelta(BaseModel):
 
 async def streams_to_web(message: GatewayMessageRecord) -> bool:
     """Read origin before dispatch; a failed classification read must propagate."""
-    if message.conversation_id is None or message.conversation_id == "":
+    session = await conversation_session(message.agent_id, message.conversation_id)
+    if session is None:
         return False
-    if message.conversation_id == str(shared_session_id(message.agent_id)):
-        # Claim overwrites routing_reason. The retained header is the durable Personal origin.
+    if is_canonical(session):
+        # IM and Personal turns share the canonical transcript. Claim overwrites routing_reason, so the retained
+        # header is the durable Personal origin.
         if await personal_burst_dispatch_dao.get(message.id) is not None:
             return False
         return not await gateway_report_delivery_dao.has_im_origin(message.id)
-    try:
-        session_id = UUID(message.conversation_id)
-    except ValueError:
-        return False
-    session = await chat_session_dao.get(session_id)
-    return session is not None and session.agent_id == message.agent_id and session.source_channel == "web"
+    return session.source_channel == "web"
 
 
 @final

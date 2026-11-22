@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from redis.exceptions import RedisError
 
 from app.core.incident_reporting import report_exception
-from app.core.json_types import json_loads_value
+from app.core.json_types import is_str_dict, json_as_str, json_loads_value
 from app.core.logging import logger, set_trace_id
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
@@ -52,8 +52,7 @@ from app.services.realtime import realtime_router
 from app.services.realtime_runtime.chat_authorization import (
     DeliveryVerdict,
     authorize_chat_delivery,
-    is_shared_target,
-    read_shared_acl_version,
+    read_delivery_acl_version,
 )
 from app.services.realtime_runtime.contracts import RoutingOutcome
 from app.services.realtime_runtime.fanout import encode_event_text, fan_out
@@ -63,7 +62,12 @@ from app.services.realtime_runtime.router import (
     resolve_authorization_wait,
     resolve_send_timeout,
 )
-from app.services.shared_chat import is_shared_session, require_writable_session
+from app.services.shared_chat import (
+    SessionNotWritableError,
+    is_canonical,
+    read_only_refusal,
+    require_writable_session,
+)
 
 router = APIRouter(tags=["websocket"])
 
@@ -88,9 +92,9 @@ EVICTION_CLOSE_TIMEOUT_SECONDS = DEFAULT_SEND_TIMEOUT_SECONDS
 
 
 def _json_object_payload(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
+    if not is_str_dict(value):
         raise TypeError("JSON object required")
-    return {key: item for key, item in value.items() if isinstance(key, str)}
+    return {name: item for key, item in value.items() if (name := json_as_str(key)) is not None}
 
 
 def _payload_str(value: object, default: str = "") -> str:
@@ -113,7 +117,7 @@ class ConnectionManager:
         self.active_connections: dict[str, list[WebSocketConnection]] = {}
         # Consecutive send timeouts of listed sockets; a successful send, eviction or disconnect drops the entry.
         self._send_timeouts: dict[WebSocket, int] = {}
-        # Sockets withdrawn from delivery: evicted after stalling, or closed because their shared-session access ended.
+        # Sockets withdrawn from delivery: evicted after stalling, or closed because their canonical-session access ended.
         self._withdrawn: weakref.WeakSet[WebSocket] = weakref.WeakSet()
         # Presence ids of withdrawn sockets until their Redis removal finished; this instance's presence reads skip them.
         self._withdrawn_presence: set[str] = set()
@@ -176,7 +180,7 @@ class ConnectionManager:
         return True
 
     def refused(self, agent_id: str, websocket: WebSocket, close_code: int) -> None:
-        """Withdraw a socket whose shared-session access was revoked and close it with ``close_code`` (4001 or 4003).
+        """Withdraw a socket whose canonical-session access was revoked and close it with ``close_code`` (4001 or 4003).
 
         Idempotent with eviction and ``disconnect`` in any order: a socket already withdrawn, or no longer listed
         because its handler disconnected, is left alone, so it is closed at most once.
@@ -185,7 +189,7 @@ class ConnectionManager:
             return
         self._withdraw(agent_id, websocket, close_code, name="ws-revocation")
         logger.info(
-            "[WS] Closing chat socket for agent {} with {}: shared session access revoked", agent_id, close_code
+            "[WS] Closing chat socket for agent {} with {}: canonical session access revoked", agent_id, close_code
         )
 
     def _listed(self, agent_id: str, websocket: WebSocket) -> bool:
@@ -262,7 +266,7 @@ class ConnectionManager:
         Sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``. Every send is bounded: chunks get the
         same bound the publisher uses and other events the default or terminal bound, so a stalled receiver delays
         the subscriber loop by at most that bound, and only until ``STALLED_SEND_EVICTION_THRESHOLD`` timeouts in a
-        row evict it. A shared-session socket waits for its authorization decision only until
+        row evict it. A canonical-session socket waits for its authorization decision only until
         ``resolve_authorization_wait`` after that decision started: a late or transiently failed decision skips the
         socket for this event only, and a revoked one is withdrawn and closed by ``refused``.
         """
@@ -279,7 +283,7 @@ class ConnectionManager:
             report_exception(error, source="websocket", operation="pubsub-delivery")
             logger.warning(f"[WS] Failed to encode message for connected clients: {error}")
             return
-        acl_version = await read_shared_acl_version(agent_id, (sid for _, sid in targets))
+        acl_version = await read_delivery_acl_version(agent_id, targets)
         send_timeout = (
             CHUNK_SEND_TIMEOUT_SECONDS if payload.get("type") == ChatEventType.CHUNK else resolve_send_timeout(payload)
         )
@@ -356,7 +360,7 @@ class ConnectionManager:
         user_id: str | None = None,
         send_timeout: float | None = None,
     ) -> RoutingOutcome:
-        """Send only to this session, optionally restricting private-session recipients by user.
+        """Send only to this session, optionally restricting it to one user's sockets.
 
         ``send_timeout`` bounds each local socket send, nothing else (see ``RealtimeRouter.route_message``).
         """
@@ -366,7 +370,7 @@ class ConnectionManager:
             message={**serialize_chat_server_event(message)},
             local_connections=self._local_connections(agent_id),
             session_id=wanted,
-            user_id=None if is_shared_target(agent_id, wanted) else user_id,
+            user_id=user_id,
             send_timeout=send_timeout,
             observer=self,
         )
@@ -414,7 +418,7 @@ async def maybe_mark_session_read_for_active_viewer(
     except ValueError, TypeError:
         return False
     session = await chat_session_dao.get(sid)
-    if not session or is_shared_session(session):
+    if not session:
         return False
 
     if guard is not None:
@@ -580,7 +584,7 @@ class WebSocketChatHandler:
 
     async def setup(self) -> bool:
         self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
-        await chat_tickets.authorized_session(self.binding, self.user, self.agent)
+        _ = await chat_tickets.authorized_session(self.binding, self.user, self.agent)
         self.websocket.state.chat_binding = self.binding
         self.conv_id = str(self.binding.session_id)
         self.agent_name = self.agent.name
@@ -647,7 +651,7 @@ class WebSocketChatHandler:
 
             try:
                 self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
-                await chat_tickets.authorized_session(self.binding, self.user, self.agent)
+                _ = await chat_tickets.authorized_session(self.binding, self.user, self.agent)
             except HTTPException as exc:
                 await self._send_error({"type": ChatEventType.ERROR, "content": exc.detail})
                 await self._close(4001 if exc.status_code == 401 else 4003)
@@ -690,8 +694,11 @@ class WebSocketChatHandler:
             session = await chat_session_dao.get_for_agent(self.binding.session_id, self.agent_id)
             if session is None:
                 raise HTTPException(403, "Session unavailable")
-            require_writable_session(session)
-            if is_shared_session(session):
+            try:
+                require_writable_session(session, self.user.id)
+            except SessionNotWritableError as refused:
+                raise await read_only_refusal(refused) from None
+            if is_canonical(session):
                 await self._load_history()
                 self.conversation = self._build_conversation_context()
             content = "Please begin the onboarding."
@@ -735,7 +742,7 @@ class WebSocketChatHandler:
                     session = await chat_session_dao.lock_for_agent(self.binding.session_id, self.agent_id)
                     if session is None:
                         raise HTTPException(403, "Session unavailable")
-                    require_writable_session(session)
+                    require_writable_session(session, self.user.id)
                     if not await try_begin_onboarding_greeting(self.agent_id, self.user.id):
                         await _send_chat_event(
                             self.websocket, {"type": ChatEventType.ONBOARDED, "agent_id": str(self.agent_id)}
@@ -751,6 +758,8 @@ class WebSocketChatHandler:
                     {"type": ChatEventType.TURN_REJECTED, "reason": "quota_exceeded", "content": exc.message},
                 )
                 continue
+            except SessionNotWritableError as refused:
+                raise await read_only_refusal(refused) from None
             except Exception as error:
                 report_exception(error, source="websocket", operation="onboarding-turn")
                 logger.exception("[WS] Turn transaction failed")
@@ -820,8 +829,9 @@ class WebSocketChatHandler:
             if not accepted.replayed:
                 self.current_user_text = submission.content
                 self.conversation.append({"role": "user", "content": submission.content})
-                if is_shared_target(str(self.agent_id), self.conv_id):
-                    await manager.send_to_session(
+                if accepted.canonical:
+                    # Echo the turn to the owner's other tabs; only the owner's sockets may receive it.
+                    _ = await manager.send_to_session(
                         str(self.agent_id),
                         self.conv_id,
                         {
@@ -837,6 +847,7 @@ class WebSocketChatHandler:
                                 else {}
                             ),
                         },
+                        user_id=str(self.user.id),
                     )
                 await _send_chat_event(self.websocket, {"type": ChatEventType.STATUS, "content": "thinking"})
             return True

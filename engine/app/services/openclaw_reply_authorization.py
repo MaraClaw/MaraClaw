@@ -19,7 +19,7 @@ async def authorize_reply_binding(binding: OpenClawReplyBinding) -> AgentRecord 
         if agent.creator_id != binding.owner_id or agent.tenant_id != binding.tenant_id:
             return None
         session = await chat_session_dao.lock_for_agent(binding.session_id, agent.id)
-        if session is None or session.user_id != binding.user_id or session.source_channel not in ("web", "shared"):
+        if session is None or session.user_id != binding.user_id or session.source_channel != "web":
             return None
         user = await user_dao.get_with_identity(binding.user_id, fresh=True)
         if user is None or not user.is_active or user.must_change_password or user.tenant_id != binding.tenant_id:

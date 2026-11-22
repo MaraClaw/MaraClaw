@@ -36,7 +36,7 @@ def memo_set(kind: str, item_id: UUID | str | None, value: object) -> None:
         return
     store = _memo.get()
     if store is None:
-        store = {}
+        store = dict[tuple[str, str], object]()
         _ = _memo.set(store)
     store[(kind, key)] = value
 

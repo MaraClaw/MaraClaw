@@ -2,7 +2,7 @@ import time
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -18,25 +18,41 @@ from app.db.session import transaction
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
-from app.services import chat_submissions, chat_tickets
+from app.services import chat_submissions, chat_tickets, shared_chat
 from app.services.chat_submissions import ChatSubmission
-from app.services.shared_chat import shared_session_id
+from app.services.shared_chat import read_only_detail
 from app.services.storage_runtime import LocalStorageBackend
 
 pytest_plugins = ("test_chat_submission_postgres",)
 
 
-@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.fixture
+async def canonical_receipt_db(receipt_db):
+    """The receipt database's session, promoted to its owner's canonical conversation."""
+    async with transaction(receipt_db.first):
+        await receipt_db.first.execute(
+            "UPDATE chat_sessions SET is_primary = TRUE WHERE id = %(id)s", {"id": receipt_db.session_id}
+        )
+    return receipt_db
+
+
+def _session_for(source: str, agent: AgentRecord, owner_id: UUID) -> ChatSessionRecord:
+    """canonical: web + primary; web: a non-primary fixture row; agent and trigger: their own channels."""
+    return ChatSessionRecord(
+        id=uuid4(),
+        agent_id=agent.id,
+        user_id=owner_id,
+        source_channel="web" if source == "canonical" else source,
+        is_primary=source == "canonical",
+    )
+
+
+@pytest.mark.parametrize("source", ["canonical", "web", "agent", "trigger"])
 @pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])
 async def test_locked_submission_replay_access_matrix(monkeypatch, source, viewer):
     user = UserRecord(id=uuid4(), role=UserRole(viewer) if viewer not in ("owner", "creator") else UserRole.MEMBER)
     agent = AgentRecord(id=uuid4(), name="Agent", creator_id=user.id if viewer == "creator" else uuid4())
-    session = ChatSessionRecord(
-        id=shared_session_id(agent.id) if source == "shared" else uuid4(),
-        agent_id=agent.id,
-        user_id=user.id if viewer == "owner" else uuid4(),
-        source_channel=source,
-    )
+    session = _session_for(source, agent, user.id if viewer == "owner" else uuid4())
     submission = ChatSubmission(client_submission_id=uuid4(), content="existing receipt")
     receipt = ChatMessageRecord(
         id=uuid4(),
@@ -76,7 +92,7 @@ async def test_locked_submission_replay_access_matrix(monkeypatch, source, viewe
     monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", find_receipt)
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
 
-    if viewer == "member" and source != "shared":
+    if viewer not in ("owner", "org_admin"):
         with pytest.raises(HTTPException) as error:
             await chat_submissions.accept_submission(
                 submission, user=user, agent=agent, session_id=session.id, history=[]
@@ -93,28 +109,38 @@ async def test_locked_submission_replay_access_matrix(monkeypatch, source, viewe
     prepare.assert_not_awaited()
 
 
-@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.mark.parametrize("source", ["canonical", "web", "agent", "trigger"])
 @pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])
-async def test_new_submission_access_preserves_archive_write_guard(monkeypatch, source, viewer):
+async def test_new_submission_access_and_write_guard(monkeypatch, source, viewer):
     user = UserRecord(id=uuid4(), role=UserRole(viewer) if viewer not in ("owner", "creator") else UserRole.MEMBER)
     agent = AgentRecord(id=uuid4(), name="Agent", creator_id=user.id if viewer == "creator" else uuid4())
-    session = ChatSessionRecord(
-        id=shared_session_id(agent.id) if source == "shared" else uuid4(),
-        agent_id=agent.id,
-        user_id=user.id if viewer == "owner" else uuid4(),
-        source_channel=source,
+    session = _session_for(source, agent, user.id if viewer == "owner" else uuid4())
+    callers_canonical = ChatSessionRecord(
+        id=uuid4(), agent_id=agent.id, user_id=user.id, source_channel="web", is_primary=True
     )
+    state = SimpleNamespace(in_transaction=False)
 
     @asynccontextmanager
     async def connection():
-        yield
+        state.in_transaction = True
+        try:
+            yield
+        finally:
+            state.in_transaction = False
 
     async def reserve(candidate):
         return candidate
 
+    async def ensure(agent_id, user_id):
+        assert not state.in_transaction
+        assert (agent_id, user_id) == (agent.id, user.id)
+        return callers_canonical
+
+    ensure_canonical = AsyncMock(side_effect=ensure)
     prepare = AsyncMock()
     charge = AsyncMock()
     enqueue = AsyncMock()
+    monkeypatch.setattr(shared_chat, "ensure_canonical_session", ensure_canonical)
     monkeypatch.setattr(chat_submissions, "connection_ctx", connection)
     monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=session))
     monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock(return_value=session))
@@ -126,13 +152,20 @@ async def test_new_submission_access_preserves_archive_write_guard(monkeypatch, 
     monkeypatch.setattr(chat_submissions, "charge_conversation_quota", charge)
     monkeypatch.setattr(chat_submissions, "enqueue_prepared_openclaw_message", enqueue)
     submission = ChatSubmission(client_submission_id=uuid4(), content="new message")
+    writable = (viewer == "owner" and source in ("canonical", "agent")) or (viewer == "org_admin" and source == "agent")
 
-    if source == "web" or (source == "agent" and viewer == "member"):
+    if viewer not in ("owner", "org_admin") or not writable:
         with pytest.raises(HTTPException) as error:
             await chat_submissions.accept_submission(
                 submission, user=user, agent=agent, session_id=session.id, history=[]
             )
-        assert error.value.status_code == (403 if viewer == "member" else 409)
+        if viewer in ("owner", "org_admin"):
+            assert error.value.status_code == 409
+            assert error.value.detail == read_only_detail(callers_canonical.id)
+            ensure_canonical.assert_awaited_once()
+        else:
+            assert error.value.status_code == 403
+            ensure_canonical.assert_not_awaited()
         prepare.assert_not_awaited()
         charge.assert_not_awaited()
         enqueue.assert_not_awaited()
@@ -146,13 +179,14 @@ async def test_new_submission_access_preserves_archive_write_guard(monkeypatch, 
         enqueue.assert_awaited_once_with(
             prepare.return_value, sender_user_id=user.id, conversation_id=str(session.id), deduplicate=False
         )
+        ensure_canonical.assert_not_awaited()
 
 
 @pytest.mark.parametrize("with_attachments", [False, True])
-async def test_socket_receipt_reconnect_history_conflict_and_delete(
-    writable_receipt_db, monkeypatch, tmp_path, with_attachments
+async def test_socket_receipt_reconnect_history_and_conflict(
+    canonical_receipt_db, monkeypatch, tmp_path, with_attachments
 ):
-    db = writable_receipt_db
+    db = canonical_receipt_db
     binding = chat_tickets.ChatTicketBinding(
         user_id=db.user.id,
         tenant_id=uuid4(),
@@ -226,14 +260,13 @@ async def test_socket_receipt_reconnect_history_conflict_and_delete(
                 assert rows[0]["attachments"] == refs
             else:
                 assert "attachments" not in rows[0]
-            assert client.delete(session_path).status_code == 409
             socket.send_json(envelope)
             assert socket.receive_json() == accepted
         assert client.get(session_path + "/messages").status_code == 200
 
 
-async def test_enqueue_failure_rolls_back_receipt_charge_session_and_gateway(writable_receipt_db, monkeypatch):
-    db = writable_receipt_db
+async def test_enqueue_failure_rolls_back_receipt_charge_session_and_gateway(canonical_receipt_db, monkeypatch):
+    db = canonical_receipt_db
     original_enqueue = chat_submissions.enqueue_prepared_openclaw_message
 
     async def fail_after_enqueue(prepared, *, sender_user_id, conversation_id, deduplicate):

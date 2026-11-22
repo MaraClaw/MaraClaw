@@ -577,7 +577,7 @@ async def update_objective(
     if not obj:
         raise HTTPException(404, "Objective not found")
 
-    updates = {}
+    updates: dict[str, object] = {}
     if body.title is not None:
         updates["title"] = body.title
     if body.description is not None:
@@ -660,7 +660,7 @@ async def update_key_result(
         raise HTTPException(404, "Key Result not found")
     kr, _ = row
     prev_value = kr.current_value
-    updates = {}
+    updates: dict[str, object] = {}
     if body.title is not None:
         updates["title"] = body.title
     if body.target_value is not None:
@@ -1112,7 +1112,7 @@ async def members_without_okr(user: UserRecord = Depends(get_current_user)) -> M
                 }
                 for mt in missing_types:
                     display_name = _type_to_display.get(mt) or mt
-                    affected = []
+                    affected: list[str] = []
                     for ch_name, names in member_channels.items():
                         if _channel_name_to_type.get(ch_name) == mt:
                             affected.extend(names)
@@ -1193,7 +1193,7 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
             continue
         member_user_ids[org_member.id] = org_member.user_id
         if not org_member.user_id:
-            patterns = []
+            patterns: list[str] = []
             if org_member.open_id not in (None, ""):
                 patterns.append(f"feishu_p2p_{org_member.open_id}")
             if org_member.external_id not in (None, ""):
@@ -1238,7 +1238,7 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
             channel_hint = "No channel available - note this in your summary"
 
         if msgs:
-            history_lines = []
+            history_lines: list[str] = []
             for role, content, created_at in msgs:
                 ts = created_at.strftime("%m-%d %H:%M") if created_at else ""
                 speaker = "You" if role == "assistant" else org_member.name
@@ -1299,7 +1299,7 @@ async def trigger_member_outreach(user: UserRecord = Depends(get_current_user)) 
 
     # Build company OKR + KR context summary
     if company_okrs:
-        company_okr_lines = []
+        company_okr_lines: list[str] = []
         for i, co in enumerate(company_okrs, 1):
             company_okr_lines.append(f"  {i}. **{co.title}**")
             if co.description not in (None, ""):

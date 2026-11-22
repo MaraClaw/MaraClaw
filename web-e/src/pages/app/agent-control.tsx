@@ -1,6 +1,6 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import { useRef, useState, type MouseEvent } from 'react'
+import { useRef, useState, useSyncExternalStore, type MouseEvent } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -18,10 +18,11 @@ import {
   controlType,
   controlUnlock,
 } from '@/lib/control-api'
+import { authSession } from '@/lib/auth-session'
 import { listSessionsPage } from '@/lib/chat-sessions-api'
 import { controlSessionsKey } from '@/lib/chat-sessions-query'
 import { createSession, type AgentOut } from '@/lib/workspace-api'
-import { controlSessionId, isWritableSession } from '@/lib/chat/sessions'
+import { controlSessionId, isOwnConversation, isWritableSession } from '@/lib/chat/sessions'
 import { useControlLease } from './use-control-lease'
 import { ControlCaptureFields } from './control-capture-fields'
 
@@ -29,21 +30,22 @@ export function AgentControlPage() {
   const { t: translate } = useTranslation()
   const scope = useWorkspaceSession()
   const { agent } = useOutletContext<{ agent: AgentOut }>()
+  const { user } = useSyncExternalStore(authSession.subscribe, authSession.getSnapshot)
   const [params, setParams] = useSearchParams()
-  // The first page of the member's own sessions leads with the shared one and holds every session Take Control can drive.
+  // The first page of the member's own sessions leads with their own conversation and holds every session Take Control can drive.
   const sessions = useQuery({
     queryKey: controlSessionsKey(agent.id),
     queryFn: ({ signal }) => listSessionsPage(agent.id, 'mine', { owner: scope.owner, signal }),
   })
   const loadedSessions = sessions.data?.items ?? []
-  const sharedSession = useQuery({
-    queryKey: ['shared-session', agent.id], queryFn: () => createSession(agent.id),
-    enabled: sessions.isSuccess && !loadedSessions.some((session) => session.source_channel === 'shared'),
+  const ownSession = useQuery({
+    queryKey: ['own-session', agent.id], queryFn: () => createSession(agent.id),
+    enabled: sessions.isSuccess && user !== null && !loadedSessions.some((session) => isOwnConversation(session, user.id)),
   })
   const [selectedSessionId, setSessionId] = useState(params.get('session') ?? '')
   const availableSessions = loadedSessions.filter(isWritableSession)
-  if (sharedSession.data && !availableSessions.some((session) => session.id === sharedSession.data.id)) availableSessions.push(sharedSession.data)
-  const sessionId = controlSessionId(availableSessions, selectedSessionId) ?? ''
+  if (ownSession.data && !availableSessions.some((session) => session.id === ownSession.data.id)) availableSessions.push(ownSession.data)
+  const sessionId = controlSessionId(availableSessions, selectedSessionId, user?.id) ?? ''
   const [envType, setEnvType] = useState(params.get('env') ?? 'browser')
   const control = useControlLease(scope)
   const { lease, screenshot, domain, setDomain, typed, setTyped, busy, capture, setCapture, captureError } = control
@@ -120,7 +122,7 @@ export function AgentControlPage() {
   return (
     <div className="space-y-4 p-6">
       {sessions.isError ? <RequestErrorToast error={sessions.error} message="Unable to load control sessions. Try again." /> : null}
-      {sharedSession.isError ? <RequestErrorToast error={sharedSession.error} message="Unable to open the shared control session. Try again." /> : null}
+      {ownSession.isError ? <RequestErrorToast error={ownSession.error} message="Could not open your conversation." /> : null}
       <div>
         <h2 className="font-display text-lg font-semibold">{translate("Take Control")}</h2>
         <p className="text-sm text-muted-foreground">
@@ -138,7 +140,7 @@ export function AgentControlPage() {
           >
             {availableSessions.map((session) => (
               <option key={session.id} value={session.id}>
-                {session.source_channel === 'shared' ? translate("Shared conversation") : session.title}
+                {isOwnConversation(session, user?.id) ? translate("Your conversation") : session.title}
               </option>
             ))}
           </Select>

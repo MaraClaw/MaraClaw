@@ -4,9 +4,9 @@ A wake carries no data. Losing one (Redis down, no worker listening) costs at mo
 """
 
 import asyncio
-from collections.abc import Generator, Mapping
+from collections.abc import Awaitable, Generator, Mapping
 from contextlib import contextmanager, suppress
-from typing import Final
+from typing import Final, Protocol, cast
 from uuid import uuid4
 
 import anyio
@@ -21,6 +21,22 @@ _PUBLISH_TIMEOUT: Final = 2.0
 _RESUBSCRIBE_MIN: float = 1.0
 _RESUBSCRIBE_MAX: float = 30.0
 _listeners: set[asyncio.Event] = set()
+
+
+class _WakePubSub(Protocol):
+    async def subscribe(self, channel: str) -> None: ...
+
+    def get_message(
+        self, *, ignore_subscribe_messages: bool, timeout: float
+    ) -> Awaitable[Mapping[str, object] | None]: ...
+
+    async def aclose(self) -> None: ...
+
+
+class _WakeRedis(Protocol):
+    def publish(self, channel: str, message: str) -> Awaitable[int]: ...
+
+    def pubsub(self) -> _WakePubSub: ...
 
 
 @contextmanager
@@ -43,7 +59,7 @@ async def _announce() -> None:
     signal_local()
     try:
         async with asyncio.timeout(_PUBLISH_TIMEOUT):
-            _ = await (await get_redis()).publish(WAKE_CHANNEL, _ORIGIN)
+            _ = await cast("_WakeRedis", await get_redis()).publish(WAKE_CHANNEL, _ORIGIN)
     except Exception as exc:
         logger.warning("[GatewayReportRelay] wake publish failed; workers fall back to polling: {}", exc)
 
@@ -67,7 +83,7 @@ async def subscribe_wakes() -> None:
     while True:
         pubsub = None
         try:
-            pubsub = (await get_redis()).pubsub()
+            pubsub = cast("_WakeRedis", await get_redis()).pubsub()
             await pubsub.subscribe(WAKE_CHANNEL)
             if degraded:
                 logger.info("[GatewayReportRelay] wake subscription restored")

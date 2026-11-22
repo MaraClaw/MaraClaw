@@ -71,8 +71,8 @@ async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
                 _ = await to_thread.run_sync(
                     lambda: agent_manager.write_guest_config(agent, primary=primary, fallback=fallback)
                 )
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(item.choice)
         _ = await agent_dao.update(db_obj=agent, obj_in={"container_id": None, "container_port": None})
         await cleanup.record_attempt(item.agent_id, None)
     return None

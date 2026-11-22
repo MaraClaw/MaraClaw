@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from typing import ClassVar, cast, override
+from collections.abc import Mapping, Sequence
+from typing import ClassVar, override
 
 import httpx
 
 from app.core.json_types import (
     JsonObject,
+    is_any_list,
     is_json_object,
     is_str_dict,
     json_as_int,
@@ -90,7 +91,7 @@ class AnthropicClient(LLMClient):
     def _build_payload(
         self,
         messages: list[LLMMessage],
-        tools: list[ToolDefinition] | None,
+        tools: Sequence[Mapping[str, object]] | None,
         temperature: float | None,
         max_tokens: int | None,
         stream: bool = False,
@@ -116,7 +117,7 @@ class AnthropicClient(LLMClient):
         if anthropic_messages and anthropic_messages[-1]["role"] == "user":
             user_msg = anthropic_messages[-1]
             content = user_msg["content"]
-            if isinstance(content, list) and content:
+            if is_any_list(content) and content:
                 # Ensure the last block of the user message has cache_control
                 blocks: list[dict[str, object]] = [dict(block) for block in content if is_str_dict(block)]
                 if blocks:
@@ -154,7 +155,7 @@ class AnthropicClient(LLMClient):
             anthropic_tools: list[dict[str, object]] = []
             for tool in tools:
                 function = tool.get("function")
-                if cast("Mapping[str, object]", tool).get("type") == "function" and isinstance(function, dict):
+                if tool.get("type") == "function" and is_str_dict(function):
                     anthropic_tools.append(
                         {
                             "name": function.get("name", ""),

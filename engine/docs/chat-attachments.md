@@ -45,7 +45,7 @@ takes precedence when both fields are invalid.
 `turn_accepted` remains unchanged: `type`, `message_id`, `session_id`, and
 `client_submission_id`. `GET /api/agents/{agent_id}/sessions/{session_id}/messages`
 returns nonempty references unchanged as `attachments` on the persisted user
-message, including after reconnect/reload. Shared-session user `done` events
+message, including after reconnect/reload. Canonical-session user `done` events
 and native IM session user `done` events with attachments carry the same field.
 Legacy messages and empty lists omit the response field.
 References are metadata only: existing `content`, `display_content`, and legacy

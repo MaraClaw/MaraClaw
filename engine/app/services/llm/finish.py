@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
 
-from app.core.json_types import is_str_dict, json_loads_object
+from app.core.json_types import is_json_object, json_loads_object
 from app.core.tool_types import ToolDefinition
-from app.services.llm.types import LLMToolCall
+from app.services.llm.types import LLMToolCall, ToolPayload
 from app.services.tool_definition_types import BuiltinToolDefinition
 
 FINISH_TOOL_NAME = "finish"
@@ -67,11 +66,11 @@ class FinishCall:
         return self.error is None
 
 
-def parse_tool_arguments(raw_args: object) -> dict[str, Any]:
+def parse_tool_arguments(raw_args: object) -> ToolPayload:
     """Parse OpenAI-style function arguments into a dict."""
     if raw_args is None or raw_args == "":
         return {}
-    if is_str_dict(raw_args):
+    if is_json_object(raw_args):
         return raw_args
     if isinstance(raw_args, str):
         return json_loads_object(raw_args)

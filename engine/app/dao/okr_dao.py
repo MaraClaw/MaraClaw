@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import date_from_row, date_from_row_opt, datetime_from_row, uuid_from_row
@@ -128,7 +128,7 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
         self, scope: ObjectivePageScope, *, limit: int, after: ObjectivePagePosition | None = None
     ) -> Sequence[OKRObjectiveRecord]:
         """Fetch one contained, active page plus an unhydrated lookahead row."""
-        params = {
+        params: dict[str, object] = {
             "tenant_id": scope.tenant_id,
             "period_start": scope.period_start,
             "period_end": scope.period_end,
@@ -163,7 +163,7 @@ class OKRObjectiveDAO(BaseDAO[OKRObjectiveRecord]):
         exclude_archived: bool = True,
         owner_types: Sequence[str] | None = None,
     ) -> Sequence[OKRObjectiveRecord]:
-        params: dict[str, Any] = {
+        params: dict[str, object] = {
             "tenant_id": tenant_id,
             "period_start": period_start,
             "period_end": period_end,
@@ -319,7 +319,7 @@ class WorkReportDAO(BaseDAO[WorkReportRecord]):
         report_type: str | None = None,
         limit: int = 50,
     ) -> Sequence[WorkReportRecord]:
-        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+        params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit}
         type_sql = ""
         if report_type not in (None, ""):
             type_sql = " AND report_type = %(report_type)s"
@@ -501,7 +501,7 @@ class CompanyReportDAO(BaseDAO[CompanyReportRecord]):
         report_type: str | None = None,
         limit: int = 50,
     ) -> Sequence[CompanyReportRecord]:
-        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+        params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit}
         type_sql = ""
         if report_type not in (None, ""):
             type_sql = " AND report_type = %(report_type)s"

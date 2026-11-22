@@ -10,6 +10,7 @@ import httpx
 
 from app.core.json_types import (
     JsonObject,
+    is_str_dict,
     json_as_int,
     json_as_str,
     json_loads_object,
@@ -105,7 +106,7 @@ def _json_body(response: httpx.Response) -> JsonObject:
         parsed = json_value_from_response(response)
     except ValueError:
         parsed = None
-    if isinstance(parsed, dict):
+    if is_str_dict(parsed):
         return json_object_from(parsed)
     return body
 

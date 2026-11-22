@@ -42,8 +42,8 @@ async def deliver(claim: AuthEmailClaim) -> None:
         case AuthEmailKind.RESET:
             template = "password_reset"
             variables = {"reset_url": material.url}
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(claim.kind)
     subject, body = await render_email_template(
         template, {**variables, "display_name": material.display_name, "expiry_minutes": minutes}
     )
@@ -82,8 +82,8 @@ async def deliver(claim: AuthEmailClaim) -> None:
             _ = await emails.settle(claim, outcome.error or "permanent")
         case "not_configured" | "transient":
             _ = await emails.settle(claim, outcome.error or outcome.kind, retry=True)
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(outcome.kind)
 
 
 async def start_auth_email_worker() -> None:

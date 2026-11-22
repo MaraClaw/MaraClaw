@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from botocore.config import Config
 
 from app.services.storage_runtime.base import StorageBackend
+from app.services.storage_runtime.s3_types import new_s3_client
 from app.services.storage_runtime.upload_source import SizedBody
 from app.services.storage_runtime.utils import normalize_storage_key
 
@@ -135,8 +136,8 @@ class S3Connection(StorageBackend):
                 import boto3
             except ImportError as exc:
                 raise RuntimeError("boto3 is required for S3 storage backend") from exc
-            client = boto3.Session().client(
-                "s3",
+            client = new_s3_client(
+                boto3.Session(),
                 endpoint_url=self.endpoint_url,
                 aws_access_key_id=self.access_key_id,
                 aws_secret_access_key=self.secret_access_key,

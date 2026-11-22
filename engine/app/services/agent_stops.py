@@ -2,9 +2,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from pywhales import ClientNotFoundError
-from pywhales.exceptions import DockerException
-
 from app.api.background_tasks import schedule_background_task
 from app.core.logging import logger
 from app.core.row_memo import memo_drop
@@ -15,8 +12,12 @@ from app.services.agent_deletion_archive import deletion_archive_path
 from app.services.agent_deletion_cleanup import complete_deletion_cleanup, reconcile_deletion_cleanup
 from app.services.agent_manager import agent_manager
 from app.services.agent_orphans import sweep_orphan_containers
-from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
-from app.services.guest_identity import GuestOwnershipError
+from app.services.agent_setup_lock import (
+    LIFECYCLE_LOCK_TIMEOUT_SECONDS,
+    WorkspaceLockTimeoutError,
+    drain_on_cancel,
+    setup_workspace_lock,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,14 +61,18 @@ async def stop_containers(agents: Sequence[AgentRecord]) -> None:
         if agent.container_id not in (None, ""):
             try:
                 # An OpenClaw cutover holds this lock from stop to publication or rollback.
-                async with setup_workspace_lock(agent_manager._agent_dir(agent.id)):
+                async with setup_workspace_lock(
+                    agent_manager._agent_dir(agent.id), timeout_seconds=LIFECYCLE_LOCK_TIMEOUT_SECONDS
+                ):
                     memo_drop("agent", agent.id)
                     current = await agent_dao.get(agent.id)
                     if current is None or current.status != "stopped" or current.container_id in (None, ""):
                         continue
                     await _stop_and_persist_missing_container(current, current.container_id)
-            except (ClientNotFoundError, DockerException, GuestOwnershipError, OSError) as exc:
-                logger.warning("Agent container stop failed agent_id=%s: %s", agent.id, exc)
+            except WorkspaceLockTimeoutError:
+                logger.info("Skipping agent {} container stop this pass: workspace lock is busy", agent.id)
+            except Exception as exc:
+                logger.warning("Agent container stop failed for agent {}: {}", agent.id, type(exc).__name__)
 
 
 def schedule_container_stops(agents: Sequence[AgentRecord]) -> None:

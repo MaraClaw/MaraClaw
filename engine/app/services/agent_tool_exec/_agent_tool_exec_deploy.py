@@ -11,7 +11,15 @@ from typing import cast
 
 from httpx import Response
 
-from app.core.json_types import JsonObject, json_as_str, json_object_from_response, json_value_from_response
+from app.core.json_types import (
+    JsonObject,
+    is_any_list,
+    is_str_dict,
+    json_as_str,
+    json_object_from_response,
+    json_value_from_response,
+    object_list_from_row,
+)
 from app.core.logging import logger
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
@@ -33,12 +41,6 @@ def _response_mapping(response: Response) -> JsonObject:
 
 def _nested_mapping(value: object) -> Mapping[object, object]:
     return cast("Mapping[object, object]", value) if isinstance(value, dict) else {}
-
-
-def _object_items(value: object) -> list[JsonObject]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
 
 
 def _string_argument(arguments: ToolArguments, name: str, default: str = "") -> str:
@@ -205,7 +207,7 @@ async def _vercel_list_deployments(agent_id: uuid.UUID, arguments: ToolArguments
         try:
             res = await client.get(f"https://api.vercel.com/v6/deployments?projectId={project_name}", headers=headers)
             if res.status_code == 200:
-                deployments = _object_items(_response_mapping(res).get("deployments"))
+                deployments = object_list_from_row(_response_mapping(res).get("deployments"))
                 if not deployments:
                     return f"No deployments found for project '{project_name}'."
                 lines = [f"📋 **Deployments for {project_name}**:"]
@@ -246,17 +248,17 @@ async def _vercel_get_deploy_logs(agent_id: uuid.UUID, arguments: ToolArguments)
             if res.status_code == 200:
                 events_raw: object = json_value_from_response(res)
                 events: list[object] = []
-                if isinstance(events_raw, list):
+                if is_any_list(events_raw):
                     events = list(events_raw)
-                elif isinstance(events_raw, dict):
+                elif is_str_dict(events_raw):
                     nested_events = events_raw.get("events", [])
-                    if isinstance(nested_events, list):
+                    if is_any_list(nested_events):
                         events = list(nested_events)
                 if not events:
                     return f"No logs found for deployment '{deployment_id}'."
-                log_lines = []
+                log_lines: list[str] = []
                 for event in events:
-                    if not isinstance(event, dict):
+                    if not is_str_dict(event):
                         continue
                     payload = _nested_mapping(event.get("payload"))
                     text = payload.get("text", "") or event.get("text", "")

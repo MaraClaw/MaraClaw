@@ -1,6 +1,7 @@
 import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import TypedDict
 from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 
@@ -31,10 +32,26 @@ async def admin_client(admission_scenario: AdmissionScenario) -> AsyncIterator[A
         yield client
 
 
-async def rows(scenario: AdmissionScenario):
-    return await scenario.db.fetchall(
+class _IssuedCodeRow(TypedDict):
+    code: str
+    invited_email: str
+    max_uses: int
+    expires_at: datetime
+
+
+async def rows(scenario: AdmissionScenario) -> list[_IssuedCodeRow]:
+    stored = await scenario.db.fetchall(
         "SELECT code,invited_email,max_uses,expires_at FROM invitation_codes WHERE code <> 'JOIN'"
     )
+    result: list[_IssuedCodeRow] = []
+    for row in stored:
+        code, email, max_uses, expires_at = row["code"], row["invited_email"], row["max_uses"], row["expires_at"]
+        assert isinstance(code, str)
+        assert isinstance(email, str)
+        assert isinstance(max_uses, int)
+        assert isinstance(expires_at, datetime)
+        result.append(_IssuedCodeRow(code=code, invited_email=email, max_uses=max_uses, expires_at=expires_at))
+    return result
 
 
 def hours_from_now(moment: datetime) -> float:

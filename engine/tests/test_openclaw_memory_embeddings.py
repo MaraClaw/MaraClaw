@@ -14,7 +14,7 @@ from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.services import agent_manager as agent_manager_module
 from app.services.agent_manager import AgentManager
 from app.services.guest_admission import GuestStartPreflightError
-from test_agent_manager_openclaw_config import GuestSettings, RecordingDockerClient
+from test_agent_manager_openclaw_config import UPSTREAM_MEMORY_SEARCH, GuestSettings, RecordingDockerClient
 
 NAMES = ("EMBEDDING_MODEL", "EMBEDDING_DIMS", "EMBEDDING_PROVIDER_URL", "EMBEDDING_API_KEY")
 VALID = {
@@ -29,6 +29,7 @@ COMPLETE_SEARCH = {
     "model": "text-embedding-3-large",
     "outputDimensionality": 1536,
     "remote": {"baseUrl": "https://embeddings.example/v1", "apiKey": "embed-secret-key"},
+    "rememberAcrossConversations": False,
 }
 INCOMPLETE_SETS = [subset for size in range(len(NAMES)) for subset in combinations(NAMES, size)]
 
@@ -145,7 +146,21 @@ def test_any_incomplete_set_uses_upstream_defaults_and_ignores_bad_dimensions(
     config: dict[str, Any] = guest.manager._generate_openclaw_config(guest.agent, model=None)
 
     # Then
-    assert config["memory"]["search"] == {"enabled": True}
+    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
+
+
+@pytest.mark.parametrize("values", [{}, VALID], ids=["upstream-defaults", "custom-endpoint"])
+def test_memory_recall_stays_inside_the_conversation_in_both_search_branches(
+    guest: Guest, values: dict[str, str]
+) -> None:
+    # Given
+    guest.configure(values)
+
+    # When
+    config: dict[str, Any] = guest.manager._generate_openclaw_config(guest.agent, model=None)
+
+    # Then
+    assert config["memory"]["search"]["rememberAcrossConversations"] is False
 
 
 @pytest.mark.parametrize("dimensions", ["abc", "0", "-1", "1.5", "1e3", "12 34", "+7", "1_0"])
@@ -291,7 +306,7 @@ def test_removal_restores_upstream_defaults_in_persisted_config(guest: Guest, sk
     guest.manager.write_guest_config(guest.agent, primary=None)
 
     # Then
-    assert guest.search() == {"enabled": True}
+    assert guest.search() == UPSTREAM_MEMORY_SEARCH
 
 
 def test_fingerprint_hashes_embedding_values_and_logs_never_contain_them(guest: Guest) -> None:

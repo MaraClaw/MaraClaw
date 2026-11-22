@@ -5,24 +5,14 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
-from typing import Any, cast
+from typing import cast
 
 from app.core.json_types import JsonObject
 from app.core.logging import logger
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.chat_dao import chat_message_dao
 from app.db.session import connection_ctx
 from app.records.chat import ChatSessionRecord
-from app.services.shared_chat import ensure_shared_session, is_shared_session, shared_session_id
-
-
-async def get_primary_platform_session(
-    agent_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> ChatSessionRecord | None:
-    """Return the canonical first-party session, without promoting private history."""
-    del user_id
-    session = await chat_session_dao.get_for_agent(shared_session_id(agent_id), agent_id)
-    return session if session is not None and is_shared_session(session) else None
+from app.services.shared_chat import ensure_canonical_session
 
 
 async def ensure_primary_platform_session(
@@ -30,12 +20,8 @@ async def ensure_primary_platform_session(
     user_id: uuid.UUID,
     guard: Callable[[], None] | None = None,
 ) -> ChatSessionRecord:
-    """Resolve the agent's shared human session; user_id remains caller provenance only."""
-    del user_id
-    if guard is not None:
-        guard()
-        return await ensure_shared_session(agent_id, guard=guard)
-    return await ensure_shared_session(agent_id)
+    """Resolve the user's canonical conversation with the agent, creating it on first use."""
+    return await ensure_canonical_session(agent_id, user_id, guard=guard)
 
 
 async def save_tool_call_log(
@@ -53,7 +39,7 @@ async def save_tool_call_log(
     if not conversation_id:
         return
 
-    payload: dict[str, Any] = {
+    payload: JsonObject = {
         "name": tool_name,
         "args": arguments or {},
         "status": status,

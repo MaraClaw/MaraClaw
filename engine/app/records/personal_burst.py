@@ -35,7 +35,7 @@ class PersonalBurstScope:
 
     agent_id: UUID
     tenant_id: UUID
-    shared_session_id: UUID
+    transcript_session_id: UUID
     reply_session_id: UUID
     sender_user_id: UUID
     config_id: UUID
@@ -49,7 +49,7 @@ class PersonalBurstScope:
         return {
             "agent_id": self.agent_id,
             "tenant_id": self.tenant_id,
-            "shared_session_id": self.shared_session_id,
+            "transcript_session_id": self.transcript_session_id,
             "reply_session_id": self.reply_session_id,
             "sender_user_id": self.sender_user_id,
             "config_id": self.config_id,
@@ -65,7 +65,7 @@ class PersonalBurstScope:
         return cls(
             agent_id=uuid_from_row(row["agent_id"]),
             tenant_id=uuid_from_row(row["tenant_id"]),
-            shared_session_id=uuid_from_row(row["shared_session_id"]),
+            transcript_session_id=uuid_from_row(row["transcript_session_id"]),
             reply_session_id=uuid_from_row(row["reply_session_id"]),
             sender_user_id=uuid_from_row(row["sender_user_id"]),
             config_id=uuid_from_row(row["config_id"]),
@@ -163,7 +163,7 @@ class PersonalBurstBatch:
 
 @dataclass(frozen=True, slots=True)
 class PersonalBurstTail:
-    """The actual last pending shared gateway row; ``batch`` is ``None`` for web/legacy/other entries."""
+    """The actual last pending gateway row of the transcript lane; ``batch`` is ``None`` for web/legacy/other entries."""
 
     gateway_id: UUID
     created_at: datetime
@@ -172,10 +172,10 @@ class PersonalBurstTail:
 
 @dataclass(frozen=True, slots=True)
 class PersonalBurstHead:
-    """The actual oldest pending shared gateway row, gated by DB-time readiness (never filtered out).
+    """The actual oldest pending gateway row of the transcript lane, gated by DB-time readiness (never filtered out).
 
     ``due`` is True for legacy rows (no header), sealed batches and collecting batches past ``ready_at``.
-    ``active`` is True while a delivered shared turn is still unreported (shared lane is single-flight).
+    ``active`` is True while a delivered turn of this lane is still unreported (each human lane is single-flight).
     """
 
     gateway_id: UUID

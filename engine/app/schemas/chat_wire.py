@@ -5,12 +5,12 @@ extension fields from streaming/tool producers; their event tags are still close
 """
 
 from enum import StrEnum
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, TypeGuard
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, JsonValue, Tag, TypeAdapter, model_validator
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, is_str_dict
 
 
 class ChatEventType(StrEnum):
@@ -101,13 +101,13 @@ class StringErrorEvent(_ChatEvent[Literal[ChatEventType.ERROR]]):
     content: str
 
 
-class ArchivedSessionDetail(_WireModel):
-    reason: Literal["session_archived"]
+class ReadOnlySessionDetail(_WireModel):
+    reason: Literal["session_read_only"]
     session_id: UUID
 
 
-class ArchivedSessionErrorEvent(_ChatEvent[Literal[ChatEventType.ERROR]]):
-    content: ArchivedSessionDetail
+class ReadOnlySessionErrorEvent(_ChatEvent[Literal[ChatEventType.ERROR]]):
+    content: ReadOnlySessionDetail
 
 
 class ChatAttachmentReference(_WireModel):
@@ -194,10 +194,14 @@ class WorkspaceDraftEvent(_ProgressEvent[Literal[ChatEventType.WORKSPACE_DRAFT]]
     name: str | None = None
 
 
+def _is_chat_event(value: object) -> TypeGuard[_ChatEvent[str]]:
+    return isinstance(value, _ChatEvent)
+
+
 def _event_tag(value: object) -> str | None:
-    if isinstance(value, dict):
+    if is_str_dict(value):
         tag = value.get("type")
-    elif isinstance(value, _ChatEvent):
+    elif _is_chat_event(value):
         tag = value.type
     else:
         return None
@@ -213,7 +217,7 @@ type ChatServerEvent = Annotated[
         CorrelatedTurnRejectedEvent | OnboardingTurnRejectedEvent | InvalidSubmissionRejectedEvent,
         Tag(ChatEventType.TURN_REJECTED),
     ]
-    | Annotated[StringErrorEvent | ArchivedSessionErrorEvent, Tag(ChatEventType.ERROR)]
+    | Annotated[StringErrorEvent | ReadOnlySessionErrorEvent, Tag(ChatEventType.ERROR)]
     | Annotated[DoneEvent, Tag(ChatEventType.DONE)]
     | Annotated[OnboardedEvent, Tag(ChatEventType.ONBOARDED)]
     | Annotated[TriggerNotificationEvent, Tag(ChatEventType.TRIGGER_NOTIFICATION)]

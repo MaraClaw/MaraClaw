@@ -6,14 +6,15 @@ Templates come from ``agent_templates/<slug>/``: each folder ships
 """
 
 from pathlib import Path
+from typing import cast
 
 import yaml
 
-from app.core.json_types import yaml_load_object
+from app.core.json_types import is_str_dict, yaml_load_object
 from app.core.logging import logger
 from app.dao import agent_template_dao
 from app.db.session import connection_ctx
-from app.services.service_contracts import TemplateSeed
+from app.services.service_contracts import TemplateMetadata, TemplateSeed
 
 # Each folder under ``agent_templates/`` ships:
 #   meta.yaml       - name, description, icon, category, capability_bullets,
@@ -50,17 +51,19 @@ def _load_folder_templates() -> list[TemplateSeed]:
             continue
 
         try:
-            meta_raw = yaml_load_object(meta_path.read_text(encoding="utf-8")) or {}
-            meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
+            meta_raw = yaml_load_object(meta_path.read_text(encoding="utf-8"))
+            meta_map = dict(meta_raw) if meta_raw and is_str_dict(meta_raw) else {}
         except yaml.YAMLError as exc:
             logger.error(f"[TemplateSeeder] {slug_dir.name}/meta.yaml parse error: {exc}")
             continue
 
-        missing = _REQUIRED_META_FIELDS - meta.keys()
+        missing = _REQUIRED_META_FIELDS - meta_map.keys()
         if missing:
             logger.error(f"[TemplateSeeder] {slug_dir.name}/meta.yaml missing fields: {sorted(missing)}, skipping")
             continue
 
+        # The bundled catalog declares the field types; retain the existing presence-only check.
+        meta = cast("TemplateMetadata", meta_map)
         soul_template = soul_path.read_text(encoding="utf-8")
         bootstrap_content = bootstrap_path.read_text(encoding="utf-8") if bootstrap_path.exists() else None
 

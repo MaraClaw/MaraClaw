@@ -21,11 +21,13 @@ from tests.personal_burst_fixtures import (
 )
 
 from app.core.json_types import uuid_from_row
+from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
 from app.dao.personal_burst_dao import personal_burst_dao
 from app.db.session import transaction
 from app.services.channels.personal_burst_outcome import PersonalAccepted, PersonalReplayed
 from app.services.channels.submissions import AcceptedChannelEvent, ChannelEventConflictError, accept_channel_event
+from app.services.openclaw_gateway_stream import streams_to_web
 
 __all__ = ["channel_db", "linked", "receipt_db"]
 
@@ -37,7 +39,11 @@ async def test_first_original_is_admitted_with_individual_records_and_deferred_r
 
     # Then one pending reserved-marker anchor holds the raw text without any model selection.
     anchor = (await rows(linked, "SELECT * FROM gateway_messages"))[0]
-    assert (anchor["status"], anchor["conversation_id"], anchor["content"]) == ("pending", str(linked.shared), "first")
+    assert (anchor["status"], anchor["conversation_id"], anchor["content"]) == (
+        "pending",
+        str(linked.transcript),
+        "first",
+    )
     assert (anchor["routing_reason"], anchor["selected_slot"], anchor["guest_model_ref"]) == (
         "whatsapp_burst",
         None,
@@ -47,7 +53,7 @@ async def test_first_original_is_admitted_with_individual_records_and_deferred_r
     # And the receipt, transcript row, member link, single charge and reply intent each exist once.
     member = (await rows(linked, "SELECT * FROM personal_burst_inputs"))[0]
     transcript = await rows(linked, "SELECT id, content, conversation_id FROM chat_messages WHERE role = 'user'")
-    assert [(r["content"], r["conversation_id"]) for r in transcript] == [("first", str(linked.shared))]
+    assert [(r["content"], r["conversation_id"]) for r in transcript] == [("first", str(linked.transcript))]
     assert (member["outcome"], member["ordinal"], member["text"], member["chat_message_id"]) == (
         "accepted",
         1,
@@ -62,6 +68,33 @@ async def test_first_original_is_admitted_with_individual_records_and_deferred_r
     assert await scalar(linked, "SELECT count(*) FROM gateway_report_deliveries WHERE destination_kind = 'im'") == 1
     window = await scalar(linked, "SELECT EXTRACT(EPOCH FROM ready_at - first_at)::float8 FROM personal_burst_batches")
     assert window == LIMITS.quiet_seconds
+    assert await scalar(linked, "SELECT transcript_session_id FROM personal_burst_batches") == linked.transcript
+    assert await scalar(linked, "SELECT count(*) FROM chat_sessions WHERE source_channel = 'shared'") == 0
+
+
+async def test_personal_anchor_never_streams_to_web_unlike_a_web_turn_on_the_same_conversation(linked: LinkedBurst):
+    # Given a Personal anchor and a web turn, both in the owner's canonical conversation.
+    accepted = (await submit(linked, "n1", "first")).personal
+    assert isinstance(accepted, PersonalAccepted)
+    async with transaction(linked.f.db.first):
+        created = await personal_burst_dao.next_created_at(linked.owner.agent_id, linked.transcript)
+        web = await gateway_message_dao.create(
+            obj_in={
+                "agent_id": linked.owner.agent_id,
+                "sender_user_id": linked.f.db.user.id,
+                "conversation_id": str(linked.transcript),
+                "content": "web turn",
+                "status": "pending",
+                "routing_reason": "web",
+                "created_at": created,
+            }
+        )
+        # When the stream classification reads each row.
+        personal_anchor = await gateway_message_dao.get_for_agent(accepted.gateway_id, linked.owner.agent_id)
+        assert personal_anchor is not None
+        streams = (await streams_to_web(personal_anchor), await streams_to_web(web))
+    # Then only the web turn streams to the owner's browser.
+    assert streams == (False, True)
 
 
 async def test_burst_of_distinct_and_equal_texts_joins_one_anchor_with_one_charge_each(linked: LinkedBurst):
@@ -125,7 +158,7 @@ async def test_intervening_web_anchor_is_a_batch_barrier(linked: LinkedBurst):
     # Given a collecting batch followed by a web turn on the same shared lane.
     _ = await submit(linked, "n1", "first")
     async with transaction(linked.f.db.first):
-        at = await personal_burst_dao.next_created_at(linked.f.db.agent.id, linked.shared)
+        at = await personal_burst_dao.next_created_at(linked.f.db.agent.id, linked.transcript)
         await linked.f.db.first.execute(
             "INSERT INTO gateway_messages (id, agent_id, sender_user_id, conversation_id, content, status, created_at) "
             "VALUES (%(id)s, %(agent)s, %(user)s, %(conv)s, 'web turn', 'pending', %(at)s)",
@@ -133,7 +166,7 @@ async def test_intervening_web_anchor_is_a_batch_barrier(linked: LinkedBurst):
                 "id": uuid4(),
                 "agent": linked.f.db.agent.id,
                 "user": linked.f.db.user.id,
-                "conv": str(linked.shared),
+                "conv": str(linked.transcript),
                 "at": at,
             },
         )
@@ -191,7 +224,9 @@ async def test_concurrent_originals_serialize_behind_the_shared_lane_lock(linked
 
     async def contender() -> None:
         async with transaction(first_db):
-            await first_db.execute("SELECT id FROM chat_sessions WHERE id = %(id)s FOR UPDATE", {"id": linked.shared})
+            await first_db.execute(
+                "SELECT id FROM chat_sessions WHERE id = %(id)s FOR UPDATE", {"id": linked.transcript}
+            )
             held.set()
             await release.wait()
 

@@ -30,7 +30,7 @@ def _list_files(ws: Path, rel_path: str, tenant_id: str | None = None, *, worksp
     if not target.exists():
         return f"Directory not found: {rel_path or '/'}"
 
-    items = []
+    items: list[str] = []
     if not rel_path:
         enterprise_dir = (
             workspace_root / f"enterprise_info_{tenant_id}"

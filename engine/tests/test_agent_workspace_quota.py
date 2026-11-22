@@ -919,7 +919,7 @@ async def test_a_personal_original_for_an_over_agent_is_a_quota_rejection_that_c
         route=PersonalRoute(
             config_id=uuid4(), auth_epoch=uuid4(), generation=uuid4(), account_id="account", self_jid="self"
         ),
-        shared_session_id=uuid4(),
+        transcript_session_id=uuid4(),
         reply_session_id=uuid4(),
     )
 

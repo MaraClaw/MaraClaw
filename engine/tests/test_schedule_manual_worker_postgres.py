@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -15,6 +16,7 @@ from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
 from app.services import schedule_manual, scheduler, scheduler_tasks
 from app.services.llm.background_guard import BackgroundCallGuard, BackgroundCallOutcome
+from app.services.schedule_lease import SCHEDULE_RUN_TIMEOUT_ERROR
 from app.services.schedule_manual_control import cancel_manual_run
 from test_schedule_occurrence_postgres import (
     accept_claim,
@@ -246,6 +248,38 @@ async def test_live_execution_failure_finishes_once_with_history(
     history = await agent_activity_log_dao.list_schedule_history(manual_schedule.agent_id, manual_schedule.id)
     assert len(history) == 1
     assert history[0].detail_json["status"] == "failure"
+
+
+async def test_live_spent_budget_finishes_a_hung_manual_run_once_as_a_failure(
+    manual_schedule: AgentScheduleRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an accepted manual run whose provider never returns, under a 30-second run budget.
+    claim = await accept_claim(manual_schedule)
+    hung = asyncio.Event()
+
+    async def provider(**_kwargs: object) -> None:
+        hung.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(schedule_manual, "call_agent_llm_with_tools", provider)
+    monkeypatch.setattr(schedule_manual, "get_settings", lambda: SimpleNamespace(SCHEDULE_RUN_BUDGET_SECONDS=30.0))
+    run = asyncio.create_task(schedule_manual.execute_manual_run(claim))
+    await hung.wait()
+    # When the loop clock moves past the budget, short of the next renewal and of the lease window.
+    loop = asyncio.get_running_loop()
+    monotonic = loop.time
+    monkeypatch.setattr(loop, "time", lambda: monotonic() + 31)
+    await run
+    # Then the run finishes once as a failure with the timeout error, and recovery finds nothing to run again.
+    finished = await runs.get(claim.id)
+    assert finished is not None
+    assert finished.outcome == "failure"
+    assert finished.lease_token is None
+    assert await runs.claim_pending(datetime.now(UTC) + timedelta(minutes=6)) == []
+    (entry,) = await agent_activity_log_dao.list_schedule_history(manual_schedule.agent_id, manual_schedule.id)
+    assert entry.detail_json is not None
+    assert entry.detail_json["status"] == "failure"
+    assert entry.detail_json["error"] == SCHEDULE_RUN_TIMEOUT_ERROR
 
 
 async def test_live_terminal_history_failure_rolls_back_then_recovers(

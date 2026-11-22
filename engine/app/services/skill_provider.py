@@ -9,6 +9,8 @@ from fastapi import HTTPException
 
 from app.core.json_types import (
     JsonValue,
+    is_any_list,
+    is_str_dict,
     json_object_from,
     json_value_from_response,
     mapping_from_row,
@@ -174,7 +176,7 @@ async def fetch_clawhub_json(
                 last_error = f"ClawHub rate limit exceeded at {base_url}"
             elif response.status_code == 200 and "json" in response.headers.get("content-type", ""):
                 raw = json_value_from_response(response)
-                if not isinstance(raw, dict):
+                if not is_str_dict(raw):
                     last_error = f"ClawHub API returned invalid JSON payload from {base_url}"
                     continue
                 payload = _parse_clawhub_payload(json_object_from(raw))
@@ -208,7 +210,7 @@ def parse_skill_md_frontmatter(content: str) -> SkillFrontmatter:
         loaded = yaml_load_object(match.group(1))
     except Exception:
         return {}
-    if not isinstance(loaded, dict):
+    if not is_str_dict(loaded):
         return {}
     frontmatter: SkillFrontmatter = {}
     loaded_map = mapping_from_row(loaded)
@@ -251,17 +253,13 @@ async def fetch_github_directory(
             raise HTTPException(502, f"GitHub API error: {response.status_code}")
         raw_items = json_value_from_response(response)
         items: list[object] = (
-            [raw_items]
-            if isinstance(raw_items, dict)
-            else list[object](raw_items)
-            if isinstance(raw_items, list)
-            else []
+            [raw_items] if is_str_dict(raw_items) else list[object](raw_items) if is_any_list(raw_items) else []
         )
         if not isinstance(raw_items, (dict, list)):
             raise HTTPException(502, "GitHub API returned invalid payload")
         parsed_items: list[GitHubDirectoryItem] = []
         for item_raw in items:
-            if not isinstance(item_raw, dict):
+            if not is_str_dict(item_raw):
                 raise HTTPException(502, "GitHub API returned invalid payload")
             item = json_object_from(item_raw)
             name, item_type, item_path, item_url = item.get("name"), item.get("type"), item.get("path"), item.get("url")
@@ -301,7 +299,7 @@ async def fetch_github_directory(
                     download = await client.get(item["url"])
                 if download.status_code == 200:
                     raw_file_obj = json_value_from_response(download)
-                    if not isinstance(raw_file_obj, dict):
+                    if not is_str_dict(raw_file_obj):
                         raise HTTPException(502, "GitHub API returned invalid payload")
                     raw_file = json_object_from(raw_file_obj)
                     encoded = raw_file.get("content", "")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.core.json_types import int_from_row
@@ -81,7 +81,7 @@ class AgentTemplateDAO(BaseDAO[AgentTemplateRecord]):
             return [AgentTemplateRecord.from_row(row) for row in rows]
 
     async def list_ordered_by_name(self, *, category: str | None = None) -> Sequence[AgentTemplateRecord]:
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         category_sql = ""
         if category not in (None, ""):
             category_sql = " WHERE category = %(category)s"

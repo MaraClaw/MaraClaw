@@ -16,7 +16,6 @@ from app.api import chat_sessions, websocket
 from app.core.domain.agents import AgentType
 from app.records.chat import ChatSessionRecord
 from app.services import chat_tickets as tickets
-from app.services.shared_chat import shared_session_id
 
 
 class TicketRedis:
@@ -74,7 +73,11 @@ def context(monkeypatch):
     monkeypatch.setattr(
         tickets.chat_session_dao,
         "get_for_agent",
-        AsyncMock(return_value=SimpleNamespace(user_id=binding.user_id, source_channel="web")),
+        AsyncMock(
+            return_value=ChatSessionRecord(
+                id=binding.session_id, agent_id=binding.agent_id, user_id=binding.user_id, source_channel="web"
+            )
+        ),
     )
     monkeypatch.setattr(websocket.manager, "connect", AsyncMock())
     monkeypatch.setattr(websocket.manager, "disconnect", AsyncMock())
@@ -224,7 +227,7 @@ async def test_malformed_membership_generation_is_rejected_and_consumed(context,
     assert retry.value.status_code == 400
 
 
-@pytest.mark.parametrize("source", ["web", "agent", "shared"])
+@pytest.mark.parametrize("source", ["web", "canonical", "agent"])
 @pytest.mark.parametrize("viewer", ["owner", "member", "creator", "platform_admin", "org_admin", "agent_admin"])
 async def test_ticket_session_access_matrix(context, monkeypatch, source, viewer):
     redis, binding, user, agent = context
@@ -232,22 +235,24 @@ async def test_ticket_session_access_matrix(context, monkeypatch, source, viewer
         agent.creator_id = user.id
     elif viewer != "owner":
         user.role = viewer
-    if source == "shared":
-        binding.session_id = shared_session_id(agent.id)
     session = ChatSessionRecord(
         id=binding.session_id,
         agent_id=agent.id,
         user_id=user.id if viewer == "owner" else uuid.uuid4(),
-        source_channel=source,
+        source_channel="web" if source == "canonical" else source,
+        is_primary=source == "canonical",
     )
     monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=session))
-    if viewer == "member" and source != "shared":
+    if viewer not in ("owner", "org_admin"):
         with pytest.raises(HTTPException) as error:
             await tickets.issue(binding)
         assert error.value.status_code == 403
         assert not redis.values
     else:
         issued = await tickets.issue(binding)
+        ((stored, _),) = redis.values.values()
+        # Only a canonical session's ticket makes its socket authorize every delivery.
+        assert tickets.ChatTicketBinding.model_validate_json(stored).authorize_deliveries is (source == "canonical")
         app = FastAPI()
         app.include_router(websocket.router)
         with (
@@ -259,19 +264,36 @@ async def test_ticket_session_access_matrix(context, monkeypatch, source, viewer
             assert ws.receive_json() == {"type": "connected", "session_id": str(session.id)}
             ws.send_json({"content": "invalid submission UUID"})
             assert ws.receive_json()["reason"] == "invalid_submission_id"
+        connect = websocket.manager.connect
+        assert isinstance(connect, AsyncMock)
+        assert connect.await_args is not None
+        socket_binding = connect.await_args.args[1].state.chat_binding
+        assert socket_binding.authorize_deliveries is (source == "canonical")
         with pytest.raises(HTTPException) as error:
             await tickets.redeem(issued.ticket)
         assert error.value.status_code == 400
 
 
+@pytest.mark.parametrize("canonical", [False, True])
+async def test_issue_sets_the_delivery_flag_from_the_session_not_the_caller(context, monkeypatch, canonical):
+    redis, binding, user, agent = context
+    session = ChatSessionRecord(
+        id=binding.session_id, agent_id=agent.id, user_id=user.id, source_channel="web", is_primary=canonical
+    )
+    monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=session))
+
+    _ = await tickets.issue(binding.model_copy(update={"authorize_deliveries": not canonical}))
+
+    ((stored, _),) = redis.values.values()
+    assert tickets.ChatTicketBinding.model_validate_json(stored).authorize_deliveries is canonical
+
+
 @pytest.mark.parametrize("source", ["web", "agent"])
 @pytest.mark.parametrize("phase", ["setup", "message"])
-@pytest.mark.parametrize("revocation", ["role", "creator", "agent_access"])
+@pytest.mark.parametrize("revocation", ["role", "agent_access"])
 async def test_socket_uses_fresh_session_privileges(context, monkeypatch, source, phase, revocation):
     _, binding, user, agent = context
-    user.role = "org_admin" if revocation != "creator" else "member"
-    if revocation == "creator":
-        agent.creator_id = user.id
+    user.role = "org_admin"
     session = ChatSessionRecord(id=binding.session_id, agent_id=agent.id, user_id=uuid.uuid4(), source_channel=source)
     monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=session))
     issued = await tickets.issue(binding)
@@ -434,6 +456,41 @@ async def test_deleted_session_is_not_replaced(context, monkeypatch):
         await tickets.authorized_session(binding, user, agent)
     assert error.value.status_code == 403
     creator.assert_not_awaited()
+
+
+async def test_ticket_without_a_session_resolves_the_callers_canonical_conversation(context, monkeypatch):
+    # Given a ticket request that names no session.
+    _, binding, user, agent = context
+    canonical = ChatSessionRecord(
+        id=uuid.uuid4(), agent_id=agent.id, user_id=user.id, source_channel="web", is_primary=True
+    )
+    ensure = AsyncMock(return_value=canonical)
+    monkeypatch.setattr(tickets, "ensure_primary_platform_session", ensure)
+    # When the ticket is created and redeemed.
+    issued = await tickets.create(
+        tickets.ChatTicketRequest(agent_id=agent.id), user, binding.auth_deadline, binding.auth_generation, 0
+    )
+    # Then it is bound to the caller's own canonical session.
+    ensure.assert_awaited_once_with(agent.id, user.id)
+    assert issued.session_id == canonical.id
+    assert (await tickets.redeem(issued.ticket)).session_id == canonical.id
+
+
+async def test_ticket_naming_a_session_never_creates_a_conversation(context, monkeypatch):
+    _, binding, user, agent = context
+    ensure = AsyncMock()
+    monkeypatch.setattr(tickets, "ensure_primary_platform_session", ensure)
+
+    issued = await tickets.create(
+        tickets.ChatTicketRequest(agent_id=agent.id, session_id=binding.session_id),
+        user,
+        binding.auth_deadline,
+        binding.auth_generation,
+        0,
+    )
+
+    assert issued.session_id == binding.session_id
+    ensure.assert_not_awaited()
 
 
 @pytest.mark.parametrize(("status", "close_code"), [(401, 4001), (403, 4003), (503, 1011)])

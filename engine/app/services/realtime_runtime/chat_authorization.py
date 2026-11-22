@@ -1,4 +1,4 @@
-"""Shared-session delivery authorization: one tracked decision per identity, waited on within a bound per event."""
+"""Canonical-session delivery authorization: one tracked decision per identity, waited on within a bound per event."""
 
 import asyncio
 import contextvars
@@ -21,7 +21,6 @@ from app.db.session import connection_ctx
 from app.runtime.shutdown_budget import join
 from app.services import chat_tickets
 from app.services.realtime_runtime.fanout import LOCAL_FANOUT_CONCURRENCY
-from app.services.shared_chat import shared_session_id
 
 DELIVERY_AUTHORIZATION_TTL_SECONDS = 5.0
 # Failures of what a decision reads through, not of the viewer's access: they skip one event and keep the socket.
@@ -31,11 +30,9 @@ _clock: Callable[[], float] = time.monotonic
 
 
 class DeliveryVerdict(Enum):
-    """What the shared-session check decided for one socket and one event."""
+    """What the delivery check decided for one socket and one event."""
 
     ALLOWED = "allowed"
-    # The socket holds no binding for this agent's shared session: not a viewer, passed over without a trace.
-    NOT_VIEWER = "not_viewer"
     # No decision within this event's wait, or a transient failure: only this event misses the socket, which stays open.
     SKIPPED = "skipped"
     # 401 or an expired binding: the viewer's authentication is gone.
@@ -121,14 +118,14 @@ class _Decisions:
             except HTTPException as exc:
                 verdict = _REVOCATIONS.get(exc.status_code, DeliveryVerdict.SKIPPED)
                 if verdict is DeliveryVerdict.SKIPPED:
-                    logger.warning("[Realtime] Shared chat authorization unavailable: status {}", exc.status_code)
+                    logger.warning("[Realtime] Chat delivery authorization unavailable: status {}", exc.status_code)
                 return verdict
             except TRANSIENT_AUTHORIZATION_ERRORS as exc:
-                logger.warning("[Realtime] Shared chat authorization failed transiently: {}", type(exc).__name__)
+                logger.warning("[Realtime] Chat delivery authorization failed transiently: {}", type(exc).__name__)
                 return DeliveryVerdict.SKIPPED
             except Exception as exc:
                 report_exception(exc, source="realtime", operation="shared-chat-authorization")
-                logger.warning("[Realtime] Shared chat authorization failed: {}", type(exc).__name__)
+                logger.warning("[Realtime] Chat delivery authorization failed: {}", type(exc).__name__)
                 return DeliveryVerdict.SKIPPED
         return DeliveryVerdict.ALLOWED
 
@@ -158,23 +155,32 @@ async def cancel_pending_decisions() -> None:
         registry.pending.clear()
         for decision in decisions:
             _ = decision.task.cancel()
-        await join([decision.task for decision in decisions], "Shared chat authorization")
+        await join([decision.task for decision in decisions], "Chat delivery authorization")
 
 
-def is_shared_target(agent_id: str, session_id: str | None) -> bool:
-    try:
-        return UUID(session_id or "") == shared_session_id(UUID(agent_id))
-    except ValueError:
-        return False
+def _authorizing_binding(
+    websocket: WebSocket, agent_id: str, session_id: str | None
+) -> chat_tickets.ChatTicketBinding | None:
+    """The socket's binding if its ticket, issued for this agent's canonical ``session_id``, authorizes deliveries."""
+    binding = getattr(websocket.state, "chat_binding", None)
+    if (
+        isinstance(binding, chat_tickets.ChatTicketBinding)
+        and binding.authorize_deliveries
+        and str(binding.agent_id) == agent_id
+        and str(binding.session_id) == session_id
+    ):
+        return binding
+    return None
 
 
-async def read_shared_acl_version(agent_id: str, session_ids: Iterable[str | None]) -> str | None:
-    """Read the agent ACL version once for a delivery, and only if some target is the shared session.
+async def read_delivery_acl_version(agent_id: str, targets: Iterable[tuple[WebSocket, str | None]]) -> str | None:
+    """Read the agent ACL version once for a delivery, and only if some target socket authorizes its deliveries.
 
-    Ordinary sessions never authorize against the ACL, so they gain no Redis read. Pass the result to
-    ``authorize_chat_delivery`` for every socket of the delivery, before any of them authorizes.
+    Only a socket bound to a canonical session authorizes against the ACL, so a delivery reaching none gains no Redis
+    read. Pass the result to ``authorize_chat_delivery`` for every socket of the delivery, before any of them
+    authorizes.
     """
-    if not any(is_shared_target(agent_id, session_id) for session_id in set(session_ids)):
+    if all(_authorizing_binding(websocket, agent_id, session_id) is None for websocket, session_id in targets):
         return None
     return await access_cache.read_acl_version(UUID(agent_id))
 
@@ -187,12 +193,12 @@ async def authorize_chat_delivery(
     *,
     wait_seconds: float,
 ) -> DeliveryVerdict:
-    """Decide whether a Shared-session event may be sent to this socket, waiting at most ``wait_seconds`` counted from
-    the start of the decision it joins.
+    """Decide whether a canonical-session event may be sent to this socket, waiting at most ``wait_seconds`` counted
+    from the start of the decision it joins.
 
-    Ordinary sessions are allowed without any work. A shared-session socket needs its ``ChatTicketBinding`` for this
-    exact agent and session (``NOT_VIEWER`` otherwise) and a binding still inside its own deadline
-    (``UNAUTHENTICATED`` otherwise). A positive decision remembered on the socket for
+    A socket is allowed without any work unless its ``ChatTicketBinding`` is for this exact agent and session and
+    carries ``authorize_deliveries``, which ``chat_tickets.issue`` sets for a canonical session. Such a socket needs a
+    binding still inside its own deadline (``UNAUTHENTICATED`` otherwise). A positive decision remembered on the socket for
     ``DELIVERY_AUTHORIZATION_TTL_SECONDS``, and only while the agent ACL version (``access_cache.read_acl_version``) is
     unchanged, then allows it: a revocation that bumps the version takes effect on the next event, and one that does not
     (a session token generation change, an agent expiry) can keep delivering for up to that TTL.
@@ -203,16 +209,12 @@ async def authorize_chat_delivery(
     401 means ``UNAUTHENTICATED`` and 403 or 404 ``FORBIDDEN``; every other failure is ``SKIPPED``. Only positive
     decisions are remembered.
 
-    ``acl_version`` is the value ``read_shared_acl_version`` read once for the whole delivery; without it the version
-    is read here.
+    ``acl_version`` is the value ``read_delivery_acl_version`` read once for the whole delivery; without it the
+    version is read here.
     """
-    if not is_shared_target(agent_id, session_id):
+    binding = _authorizing_binding(websocket, agent_id, session_id)
+    if binding is None:
         return DeliveryVerdict.ALLOWED
-    binding = getattr(websocket.state, "chat_binding", None)
-    if not isinstance(binding, chat_tickets.ChatTicketBinding):
-        return DeliveryVerdict.NOT_VIEWER
-    if str(binding.agent_id) != agent_id or str(binding.session_id) != session_id:
-        return DeliveryVerdict.NOT_VIEWER
     if chat_tickets.is_expired(binding):
         return DeliveryVerdict.UNAUTHENTICATED
     # Read before deciding: a bump landing during the decision must invalidate what it caches.

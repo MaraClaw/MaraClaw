@@ -23,6 +23,7 @@ class Intake:
     root: Path
     pending: list[Coroutine[object, object, None]]
     events: list[dict[str, object]]
+    audiences: list[str | None]
 
     @property
     def agent_id(self) -> UUID:
@@ -52,6 +53,7 @@ class Intake:
 async def intake(linked, tmp_path, monkeypatch):
     pending: list[Coroutine[object, object, None]] = []
     events: list[dict[str, object]] = []
+    audiences: list[str | None] = []
     settings = get_settings().model_copy(update={"STORAGE_BACKEND": "local", "STORAGE_LOCAL_ROOT": str(tmp_path)})
     monkeypatch.setattr(facade, "_storage_backend", None)
     monkeypatch.setattr(facade, "get_settings", lambda: settings)
@@ -62,14 +64,15 @@ async def intake(linked, tmp_path, monkeypatch):
         else:
             coroutine.close()
 
-    async def publish(_agent_id, _session_id, event):
+    async def publish(_agent_id, _session_id, event, user_id=None):
         events.append(event)
+        audiences.append(user_id)
 
     monkeypatch.setattr(background_tasks, "schedule_background_task", schedule)
     monkeypatch.setattr(manager, "send_to_session", publish)
     await init_pool(conninfo=linked.f.db.conninfo, min_size=1, max_size=4)
     try:
-        yield Intake(linked, tmp_path, pending, events)
+        yield Intake(linked, tmp_path, pending, events, audiences)
     finally:
         for coroutine in pending:
             coroutine.close()

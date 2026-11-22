@@ -14,7 +14,7 @@ finalization without inserting a second assistant. Its completion notification u
 the original source turn ID and the existing assistant ID. It never replays native
 input. Exact evidence and authorization are specified in
 [`shared-openclaw-runtime.md`](shared-openclaw-runtime.md).
-Other destinations are inferred at completion; shared human IM turns persist
+Other destinations are inferred at completion; human-lane IM turns persist
 their independent provider intent atomically at enqueue. Claims require a completed
 source message, so accepted pending turns cannot send early. Worker-enabled processes
 run `gateway_report_relay` under `Runtime.tasks`; API-only and connector-only

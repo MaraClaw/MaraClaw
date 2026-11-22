@@ -42,7 +42,7 @@ def _search_files(
     except re.error as error:
         return f"Invalid regex pattern: {error}"
 
-    results = []
+    results: list[str] = []
     total_matches = 0
     files_searched = 0
     root = ws_for_relative.resolve()
@@ -138,7 +138,7 @@ def _find_files(
         return f"No files matching pattern: {pattern}"
 
     matches.sort(key=lambda item_path: item_path.stat().st_mtime if item_path.exists() else 0, reverse=True)
-    results = []
+    results: list[str] = []
     dir_count = 0
     file_count = 0
     for match in matches[:100]:

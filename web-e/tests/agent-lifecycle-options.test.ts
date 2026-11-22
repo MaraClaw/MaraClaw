@@ -30,8 +30,18 @@ const polls: ReadonlyArray<{ readonly change: string; readonly previous: AgentLi
     next: { ...idle, start: null, runtime: { ...idle.runtime, recorded_status: 'running' } }, refreshed: true },
   { change: 'no start or recorded status change', previous: idle, next: { ...idle, as_of: '2030-01-01T00:00:02Z' }, refreshed: false },
 ]
+const settled: AgentLifecycle = { ...idle, start: null }
+const loss = { reason: 'container_missing', detected_at: '2030-01-01T00:00:00Z' } as const
+const lost: AgentLifecycle = { ...settled, runtime: { ...settled.runtime, loss } }
+const lossPolls: typeof polls = [
+  { change: 'a runtime loss appearing', previous: settled, next: lost, refreshed: true },
+  { change: 'a runtime loss clearing', previous: lost, next: { ...settled, runtime: { ...settled.runtime, loss: null } }, refreshed: true },
+  { change: 'a runtime loss detected again', previous: lost,
+    next: { ...lost, runtime: { ...lost.runtime, loss: { ...loss, detected_at: '2030-01-01T00:05:00Z' } } }, refreshed: true },
+  { change: 'the same runtime loss', previous: lost, next: { ...lost, as_of: '2030-01-01T00:00:02Z' }, refreshed: false },
+]
 
-for (const { change, previous, next, refreshed } of polls) {
+for (const { change, previous, next, refreshed } of [...polls, ...lossPolls]) {
   test(`lifecycle poll with ${change} ${refreshed ? 'refreshes' : 'leaves'} agent caches`, async (t) => {
     // Given
     const { client, scope } = fixture()

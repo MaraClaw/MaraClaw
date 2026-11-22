@@ -23,7 +23,8 @@ async def conditional_write(
 ) -> ConditionalWriteResult:
     key = f"{managed.agent_id}/{managed.relative}"
     async with shielded():
-        match await storage._admit_write(key, managed, data):
+        admission = await storage._admit_write(key, managed, data)
+        match admission:
             case Blocked():
                 raise StorageKeyPendingError
             case Reservation() as claim:
@@ -45,8 +46,8 @@ async def conditional_write(
                 finally:
                     await storage._finish(claim, Outcome.LANDED)
                 return ConditionalWriteResult(ok=True, current_version=written)
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(admission)
 
 
 async def conditional_delete(
@@ -54,7 +55,8 @@ async def conditional_delete(
 ) -> ConditionalWriteResult:
     key = f"{managed.agent_id}/{managed.relative}"
     async with shielded():
-        match await storage._admit_delete(key, managed):
+        admission = await storage._admit_delete(key, managed)
+        match admission:
             case Blocked():
                 raise StorageKeyPendingError
             case Reservation() as claim:
@@ -72,5 +74,5 @@ async def conditional_delete(
                 finally:
                     await storage._finish(claim, Outcome.LANDED)
                 return ConditionalWriteResult(ok=True, current_version=remaining)
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(admission)

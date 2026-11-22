@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
 from app.dao.base import BaseDAO
@@ -41,7 +41,7 @@ class AdminAuditLogDAO(BaseDAO[AdminAuditLogRecord]):
         target_type: str | None = None,
         limit: int = 100,
     ) -> Sequence[AdminAuditLogRecord]:
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, object] = {"limit": limit}
         clauses: list[str] = []
         if tenant_id is not None:
             clauses.append("tenant_id = %(tenant_id)s")

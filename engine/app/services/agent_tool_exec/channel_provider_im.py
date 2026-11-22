@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from app.core.domain.channels import ChannelType
+from app.core.json_types import json_as_str_or
 from app.core.logging import logger
 from app.dao.channel_config_dao import channel_config_dao
 from app.records.org import OrgMemberRecord
@@ -36,13 +37,13 @@ async def _send_dingtalk_message(
         app_secret = config.app_secret
         if app_id in (None, "") or app_secret in (None, ""):
             return "❌ This agent has no DingTalk channel configured"
-        dingtalk_agent_id = (config.extra_config or {}).get("agent_id")
+        dingtalk_agent_id = json_as_str_or((config.extra_config or {}).get("agent_id"))
         result = await send_dingtalk_message(
             app_id=app_id,
             app_secret=app_secret,
             user_id=user_id,
             message=message_text,
-            agent_id=dingtalk_agent_id or "",
+            agent_id=dingtalk_agent_id,
         )
 
         if result.get("errcode") == 0:

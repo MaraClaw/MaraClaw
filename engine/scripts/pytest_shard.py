@@ -16,8 +16,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return
     if not isinstance(index, int) or not isinstance(count, int) or not 0 <= index < count:
         raise pytest.UsageError("Require 0 <= --test-shard-index < --test-shard-count")
-    selected = []
-    deselected = []
+    selected: list[pytest.Item] = []
+    deselected: list[pytest.Item] = []
     for item in items:
         destination = int.from_bytes(sha256(item.nodeid.encode()).digest()[:8]) % count
         (selected if destination == index else deselected).append(item)

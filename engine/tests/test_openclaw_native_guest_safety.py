@@ -12,7 +12,9 @@ from app.records.gateway_message import GatewayMessageRecord
 from app.services import openclaw_gateway_config, openclaw_gateway_rpc as rpc
 from app.services.agent_manager import agent_manager
 from guest_bootstrap_fakes import BOOTSTRAP_PENDING_EXIT, PENDING_STDERR
-from test_openclaw_gateway_rpc import running_client
+from test_openclaw_gateway_rpc import no_channel_media, running_client
+
+__all__ = ["no_channel_media"]
 
 
 @pytest.mark.parametrize(

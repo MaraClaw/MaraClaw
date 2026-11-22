@@ -1,5 +1,4 @@
 import hashlib
-from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -11,7 +10,6 @@ from app.dao.gateway_message_dao import gateway_message_dao
 from app.db.session import get_connection, transaction
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.services import openclaw_gateway_rpc, openclaw_routing, openclaw_turns
 from app.services.openclaw_gateway_rpc import UncertainOutcome
 from app.services.openclaw_shared_dispatch import claim_ready_shared
@@ -27,7 +25,7 @@ async def test_shared_wake_dispatches_fifo_head_and_retains_uncertain_claim(
 ) -> None:
     # Given a newer wake notification while older shared inputs are pending.
     db = pooled_database
-    messages = await shared_fixtures.seed_shared(db)
+    messages = await shared_fixtures.seed_human_lane(db)
     dispatched: list[GatewayMessageRecord] = []
 
     async def uncertain(
@@ -42,7 +40,7 @@ async def test_shared_wake_dispatches_fifo_head_and_retains_uncertain_claim(
     await openclaw_routing._run_inbox_wake(db.agent, messages[-1].content, messages[-1].id)
     # Then only the oldest input was dispatched, without holding database locks.
     assert [message.id for message in dispatched] == [messages[0].id]
-    assert await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC))) is None
+    assert await claim_ready_shared(shared_fixtures.human_request(messages)) is None
     async with transaction(db.second):
         head = await gateway_message_dao.get_for_agent(messages[0].id, db.agent.id)
     assert head is not None
@@ -52,7 +50,7 @@ async def test_shared_wake_dispatches_fifo_head_and_retains_uncertain_claim(
 async def test_shared_http_report_advances_queue_with_same_session_key(pooled_database: ReceiptDatabase) -> None:
     # Given the real gateway router and a real PostgreSQL shared queue.
     db = pooled_database
-    messages = await shared_fixtures.seed_shared(db)
+    messages = await shared_fixtures.seed_human_lane(db)
     key = "shared-runtime-qa-only"
     async with transaction(db.first):
         await db.first.execute(
@@ -61,7 +59,7 @@ async def test_shared_http_report_advances_queue_with_same_session_key(pooled_da
         )
     app = FastAPI()
     app.include_router(gateway.router, prefix="/api")
-    first = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    first = await claim_ready_shared(shared_fixtures.human_request(messages))
     assert first is not None
     assert first.id == messages[0].id
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://qa.local") as client:
@@ -76,7 +74,7 @@ async def test_shared_http_report_advances_queue_with_same_session_key(pooled_da
             headers={"X-Api-Key": key},
             json={"message_id": str(messages[0].id), "result": "first HTTP answer"},
         )
-    second = await claim_ready_shared(SharedDispatchRequest(db.agent.id, datetime.now(UTC)))
+    second = await claim_ready_shared(shared_fixtures.human_request(messages))
     # Then authentication fails closed and the next input uses the same native session.
     assert rejected.status_code == 401
     assert report.status_code == 200

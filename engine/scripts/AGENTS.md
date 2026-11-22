@@ -18,7 +18,7 @@ Engine-root operators, run from `engine/`. Not the same as `app/scripts/` (impor
 
 ## Workflows
 
-- `lint.sh` runs Ruff check, `ruff format --check`, `basedpyright --project pyrightconfig.json` and `ty check --force-exclude .`. It does not check contract freshness; CI's `typecheck` job also runs `python -m scripts.export_api_contracts --check`. Run the two `check_no_*.py` scripts yourself when touching imports or logging; CI does not.
+- `lint.sh` runs Ruff check, `ruff format --check`, `basedpyright --project pyrightconfig.json`, `basedpyright --project pyrightconfig.tests.json` and `ty check --force-exclude .`. It does not check contract freshness; CI's `typecheck` job also runs `python -m scripts.export_api_contracts --check`. Run the two `check_no_*.py` scripts yourself when touching imports or logging; CI does not.
 - `test.sh` selects no tests: it runs the whole `uv run --extra dev pytest` suite and measures branch coverage for exactly ten modules (`app.api.admin`, `app.api.users`, `app.api.tenants`, `app.services.admin_provisioning`, `app.services.admin_audit`, `app.services.tenant_provisioning`, `app.services.tenant_lifecycle`, `app.services.platform_admin_seeder`, `app.dao.admin_audit_dao`, `app.core.security`) with `--cov-fail-under=90`. It forwards no positional arguments, so run a single test with `uv run pytest <path>` instead. CI sets `PYTEST_ADDOPTS` for XML/HTML reports.
 - CI's `lifecycle-postgres` partitions full PostgreSQL/Redis pytest discovery across eight shards with `-p scripts.pytest_shard --test-shard-index=<0-7> --test-shard-count=8`. The database-free scoped gate remains in the separate `test` job.
 - Contract refresh: finish concurrent engine schema work, run the exporter without `--check`, then run `npm run contracts:generate` in `web-a` and `web-e`. Frontend CI runs `npm run contracts:check`. Details: `../contracts/README.md`.
@@ -30,7 +30,7 @@ Engine-root operators, run from `engine/`. Not the same as `app/scripts/` (impor
 - A new audited HTTP owner module, enum or public schema name belongs in `api_contract_registry.py`; without it the operation stays in the artifact but not in generated validators.
 - Keep `contract_codegen/` dependency-free and free of application imports.
 - Do not populate `sqlalchemy_import_allowlist.txt`, including via `check_no_new_sqlalchemy.py --write-allowlist`.
-- Scripts are in the basedpyright project (`include` has `scripts`) and may `print` (Ruff `T201` is ignored here); keep them typed.
+- Scripts are in the strict basedpyright project (`include` has `scripts`) and may `print` (Ruff `T201` is ignored here); keep them typed.
 
 The baseline is fresh-only and rerunnable, not a general upgrade mechanism. It carries eight guarded upgrades (`tasks` lease columns, `organization_admission_requests` named provisioning, `approval_requests.execution_args`, `gateway_messages.reply_binding_id`, `chat_history_changes.recorded_at`, `users.membership_generation`, the `telegram` / `zalo` channel enum labels, and the catalog-matched `gateway_report_deliveries.im_plan` v1-to-v1/v2 check), listed in `../app/scripts/AGENTS.md`. Provider organization-sync retirement removes `org_departments` and `org_members.department_id`, `department_path`, `synced_at` from new schemas only. It does not clean existing objects or data; no other upgrade patches are provided.
 

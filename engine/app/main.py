@@ -20,6 +20,7 @@ from app.process_roles import parse_process_roles, role_enabled
 from app.runtime.lifecycle import lifespan
 from app.runtime.readiness import router as readiness_router
 from app.schemas.schemas import HealthResponse
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.company_capacity import CompanyAccountLimitReachedError
 from app.services.openclaw_update_gate import OpenClawUpdateGateError
@@ -49,6 +50,14 @@ async def public_base_url_not_configured(_request: Request, exc: PublicBaseUrlNo
 @app.exception_handler(OpenClawUpdateGateError)
 async def openclaw_update_gate(_request: Request, exc: OpenClawUpdateGateError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(WorkspaceLockTimeoutError)
+async def agent_workspace_busy(_request: Request, _exc: WorkspaceLockTimeoutError) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={"detail": {"code": "agent_workspace_busy", "message": "Agent workspace is busy. Please retry."}},
+    )
 
 
 @app.exception_handler(StorageQuotaError)

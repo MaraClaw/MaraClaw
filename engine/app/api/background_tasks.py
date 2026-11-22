@@ -3,7 +3,6 @@
 import asyncio
 import contextvars
 from collections.abc import Coroutine
-from typing import Any
 
 from app.core.incident_reporting import report_exception
 from app.core.logging import get_trace_id, logger, set_trace_id
@@ -39,7 +38,7 @@ async def drain_background_tasks(grace_seconds: float = 20.0) -> None:
 
 
 def schedule_background_task(
-    coroutine: Coroutine[Any, Any, object],
+    coroutine: Coroutine[object, None, object],
     description: str,
 ) -> None:
     """Start after the caller commits, in a fresh trace-only context; drop on rollback."""

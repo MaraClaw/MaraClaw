@@ -18,7 +18,7 @@ from app.config import get_settings
 
 FILE_BYTES: Final = 256 * 1024
 CONTENT_BYTES: Final = 1024 * 1024
-SCAN_STEPS: Final = 128
+SCAN_STEPS: Final[int] = 128
 LINE_STEPS: Final = 10_000
 MAX_CURSOR_LENGTH: Final = 3 * 1024 * 1024
 CURSOR_TTL: Final = 3600
@@ -134,8 +134,8 @@ async def parse_position(raw: str | None, query: SearchQuery) -> SearchPosition:
                 if decoded.binding != binding or not 0 <= time() - decoded.started <= CURSOR_TTL:
                     raise InvalidSearchCursorError
                 position = SearchPosition.model_validate_json(await read_fragments(decoded.token), strict=True)
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(decoded)
     except InvalidToken, ValueError:
         raise InvalidSearchCursorError from None
     if position.query != query or not 0 <= time() - position.started <= CURSOR_TTL:

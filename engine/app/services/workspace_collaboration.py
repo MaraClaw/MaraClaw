@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -98,7 +99,8 @@ async def read_text_if_exists(path: Path) -> str | None:
     except OSError:
         return None
     async with aiofiles.open(path, "rb") as f:
-        data = cast("bytes", await f.read())
+        read = cast("Callable[[], Awaitable[bytes]]", f.read)
+        data = await read()
     if b"\x00" in data:
         return None
     return data.decode("utf-8", errors="replace")

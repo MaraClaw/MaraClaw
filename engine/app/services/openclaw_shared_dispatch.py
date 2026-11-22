@@ -1,7 +1,8 @@
-"""The one Shared-lane claim: native dispatch and pending recovery use ``claim_ready_shared``.
+"""The human-lane claim: native dispatch and pending recovery use ``claim_ready_shared`` for each canonical session.
 
+Every canonical (agent, user) session is its own FIFO lane; lanes of one agent run in parallel up to the agent limit.
 Order, never reversed: guest-write flock -> one short database transaction { tenant/owner/agent shared locks ->
-shared chat-session lock -> the ACTUAL oldest pending head -> (Personal batch: fresh scope, seal, route) -> guest
+canonical chat-session lock -> the ACTUAL oldest pending head -> (Personal batch: fresh scope, seal, route) -> guest
 configuration -> body/routing/delivered + batch claimed } -> COMMIT. Dispatch to the guest runs after the commit,
 holding no lock. An unready head blocks every younger row; an active (delivered, even uncertain) turn blocks the lane.
 """
@@ -37,7 +38,6 @@ from app.services.openclaw_model_selection import (
 from app.services.openclaw_shared_scope import LaneAccess, authorize_lane, stale_reason
 from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.openclaw_update_gate import assert_work_allowed
-from app.services.shared_chat import shared_session_id
 
 _MAX_PASSES = 16
 _CANCELLED = SharedClaimResult(None, "cancelled")
@@ -70,24 +70,24 @@ def _blocked(reason: SharedBlock) -> SharedClaimResult:
 
 
 async def claim_ready_shared(request: SharedDispatchRequest) -> GatewayMessageRecord | None:
-    """The claimed, committed head of the agent's Shared lane, or ``None`` (see ``claim_shared_turn``)."""
+    """The claimed, committed head of ``request.session_id``'s human lane, or ``None`` (see ``claim_shared_turn``)."""
     return (await claim_shared_turn(request)).message
 
 
 async def claim_shared_turn(request: SharedDispatchRequest) -> SharedClaimResult:
-    """Claim the actual oldest Shared head iff it is ready, in scope and routable; commit before returning."""
+    """Claim the actual oldest head of one human lane iff it is ready, in scope and routable; commit before returning."""
     if get_connection() is not None:
         raise SharedDispatchTransactionError(request.agent_id)
     try:
         async with guest_write_section(request.agent_id), connection_ctx():
             return await _claim_in_transaction(request)
     except WorkspaceLockTimeoutError:
-        logger.info("[OpenClaw] shared claim left pending for {}: guest write lock busy", request.agent_id)
+        logger.info("[OpenClaw] human lane claim left pending for {}: guest write lock busy", request.agent_id)
         return _blocked("lock_timeout")
 
 
 async def _claim_in_transaction(request: SharedDispatchRequest) -> SharedClaimResult:
-    agent_id, lane = request.agent_id, shared_session_id(request.agent_id)
+    agent_id, lane = request.agent_id, request.session_id
     # A stale fast-exit read only misses a claim; pending recovery retries under the lane lock.
     peek = await personal_burst_dispatch_dao.head(agent_id, lane)
     if peek is None:
@@ -98,7 +98,7 @@ async def _claim_in_transaction(request: SharedDispatchRequest) -> SharedClaimRe
         return _blocked("not_due")
     access = await authorize_lane(agent_id)
     await assert_work_allowed(agent_id)
-    if not await gateway_message_dao.lock_shared_lane(agent_id, lane):
+    if not await gateway_message_dao.lock_human_lane(agent_id, lane):
         return _blocked("lane_missing")
     for _ in range(_MAX_PASSES):
         step = await _claim_head(request, access, lane)
@@ -126,7 +126,7 @@ async def _claim_head(request: SharedDispatchRequest, access: LaneAccess, lane: 
 async def _drop_headless(message: GatewayMessageRecord) -> SharedClaimResult:
     """A burst marker without its header (or with a terminal one) is never a legacy ready row: fail closed."""
     _ = await gateway_message_dao.cancel_anchor(message.id, message.agent_id)
-    logger.warning("[OpenClaw] shared anchor {} cancelled: Personal burst header unavailable", message.id)
+    logger.warning("[OpenClaw] human lane anchor {} cancelled: Personal burst header unavailable", message.id)
     return _CANCELLED
 
 
@@ -212,7 +212,7 @@ async def _claim_stored(
 
 
 def _model_unavailable(message: GatewayMessageRecord, agent: AgentRecord) -> SharedClaimResult:
-    logger.warning("[OpenClaw] shared turn {} left pending for {}: model unavailable", message.id, agent.id)
+    logger.warning("[OpenClaw] human lane turn {} left pending for {}: model unavailable", message.id, agent.id)
     return _blocked("model_unavailable")
 
 
@@ -225,7 +225,7 @@ async def _deliver(
             apply_guest_model(agent, resolved.bundle, resolved.model)
         except GuestConfigWriteError:
             logger.warning(
-                "[OpenClaw] shared turn {} left pending for {}: guest config unwritten", claim.message_id, agent.id
+                "[OpenClaw] human lane turn {} left pending for {}: guest config unwritten", claim.message_id, agent.id
             )
             return _blocked("config_unwritable")
     claimed = await gateway_message_dao.claim_head(claim)

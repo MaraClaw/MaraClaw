@@ -6,12 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
 from uuid import UUID
 
 from app.core.json_types import (
+    JsonObject,
+    JsonValue,
     datetime_from_row,
-    mapping_from_row,
+    json_object_from,
     str_from_row,
     uuid_from_row,
     uuid_from_row_opt,
@@ -70,14 +71,14 @@ class IdentityProviderRecord:
     name: str
     is_active: bool = True
     sso_login_enabled: bool = False
-    config: dict[str, Any] = field(default_factory=dict[str, Any])
+    config: JsonObject = field(default_factory=dict[str, JsonValue])
     tenant_id: UUID | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> IdentityProviderRecord:
-        config = mapping_from_row(row.get("config") or {})
+        config = json_object_from(row.get("config") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             provider_type=str_from_row(row["provider_type"]),

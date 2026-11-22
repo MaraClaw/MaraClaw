@@ -8,6 +8,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Final, Literal, NoReturn, Protocol, cast
 
+from app.core.json_types import is_any_list
 from app.core.logging import logger
 from app.services.document_parser.errors import (
     DocumentParseError,
@@ -216,11 +217,9 @@ def sheets_preview_text(sheets: list[dict[str, object]], max_chars: int | None =
         if isinstance(title, str) and title:
             lines.append(f"# {title}")
         rows = sheet.get("rows")
-        if not isinstance(rows, list):
+        if not is_any_list(rows):
             continue
-        lines.extend(
-            " | ".join("" if cell is None else str(cell) for cell in row) for row in rows if isinstance(row, list)
-        )
+        lines.extend(" | ".join("" if cell is None else str(cell) for cell in row) for row in rows if is_any_list(row))
     return _bound_output("\n".join(lines), max_chars or PREVIEW_MAX_CHARS)
 
 

@@ -32,7 +32,6 @@ from app.services.openclaw_transcript import (
 )
 from app.services.quota_guard import AgentExpired
 from app.services.response_identity import ResponseGuard, response_guard
-from app.services.shared_chat import shared_session_id
 
 SWEEP_BUDGET = 2.0
 BACKSTOP = 60.0
@@ -97,7 +96,7 @@ async def _publish(binding: OpenClawReplyBinding, message: ChatMessageRecord) ->
             str(agent.id),
             str(binding.session_id),
             event,
-            user_id=None if binding.session_id == shared_session_id(agent.id) else str(binding.user_id),
+            user_id=str(binding.user_id),
             send_timeout=1.0,
         )
         await db.execute(

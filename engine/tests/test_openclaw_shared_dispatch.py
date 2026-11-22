@@ -15,13 +15,12 @@ from app.services.llm.turn import ModelBundle
 from app.services.openclaw_guest_config import GuestConfigWriteError
 from app.services.openclaw_model_selection import ResolvedModel
 from app.services.openclaw_turns import runtime_session_key
-from app.services.shared_chat import shared_session_id
 from test_db_session import _FakeRawConnection, _wrap
 
 
-def test_native_shared_session_preserves_existing_transcript_namespace() -> None:
+def test_canonical_session_web_and_im_turns_share_one_transcript_namespace() -> None:
     agent_id = uuid4()
-    conversation = str(shared_session_id(agent_id))
+    conversation = str(uuid4())
     web = GatewayMessageRecord(id=uuid4(), agent_id=agent_id, conversation_id=conversation, content="web")
     im = replace(web, id=uuid4(), content="IM")
     group = replace(web, id=uuid4(), conversation_id=str(uuid4()))

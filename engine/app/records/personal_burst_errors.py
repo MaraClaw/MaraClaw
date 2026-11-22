@@ -18,14 +18,14 @@ class PersonalBurstTransactionRequiredError(RuntimeError):
 
 @dataclass(slots=True)
 class PersonalBurstParentUnavailableError(RuntimeError):
-    """The shared chat session that serializes the lane is missing."""
+    """The transcript chat session that serializes the lane is missing."""
 
     agent_id: UUID
-    shared_session_id: UUID
+    transcript_session_id: UUID
 
     @override
     def __str__(self) -> str:
-        return f"Shared session {self.shared_session_id} is unavailable for agent {self.agent_id}"
+        return f"Transcript session {self.transcript_session_id} is unavailable for agent {self.agent_id}"
 
 
 @dataclass(slots=True)

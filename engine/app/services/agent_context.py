@@ -6,10 +6,10 @@ workspace files and composes a comprehensive system prompt.
 
 import uuid
 from pathlib import Path
-from typing import Any
 
 from app.config import get_settings
 from app.core.domain.channels import ChannelType
+from app.core.json_types import is_str_dict
 from app.core.logging import logger
 from app.services.storage import get_storage_backend, normalize_storage_key
 
@@ -308,7 +308,7 @@ When installing or importing an MCP server via `discover_resources` / `import_mc
 - Never claim an MCP server was imported unless you received a real tool result confirming success.
 """)
 
-    dynamic_parts = []
+    dynamic_parts: list[str] = []
 
     # --- Feishu Built-in Tools (only injected when agent has Feishu configured) ---
     _has_feishu = False
@@ -442,8 +442,8 @@ You have access to Atlassian tools via the Rovo MCP server. **Always call them v
                         {"tenant_id": _agent_tenant_id, "key": "company_intro"},
                     )
                 if row is not None and row.get("value"):
-                    value: Any = row["value"]
-                    content: Any = value.get("content") if isinstance(value, dict) else None
+                    value = row["value"]
+                    content = value.get("content") if is_str_dict(value) else None
                     if isinstance(content, str) and content:
                         company_intro = content.strip()
             except Exception as exc:

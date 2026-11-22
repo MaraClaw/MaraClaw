@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID, uuid4
 
 from app.core.domain.approvals import ApprovalStatus
-from app.core.json_types import int_from_row
+from app.core.json_types import JsonObject, int_from_row
 from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
 from app.records.audit import ApprovalRequestRecord
@@ -40,8 +40,8 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         *,
         agent_id: UUID,
         action_type: str,
-        details: dict[str, Any] | None = None,
-        execution_args: dict[str, Any] | None = None,
+        details: JsonObject | None = None,
+        execution_args: JsonObject | None = None,
     ) -> ApprovalRequestRecord:
         """Insert a pending approval and return the created row without its private ``execution_args``."""
         approval_id = uuid4()
@@ -97,7 +97,7 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         *,
         status: ApprovalStatus | None = None,
     ) -> Sequence[ApprovalRequestRecord]:
-        params: dict[str, Any] = {"agent_id": agent_id}
+        params: dict[str, object] = {"agent_id": agent_id}
         status_sql = ""
         if status is not None:
             status_sql = " AND status = %(status)s"
@@ -119,7 +119,7 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
         status: ApprovalStatus | None = None,
     ) -> Sequence[ApprovalRequestRecord]:
         """List approvals optionally scoped to tenant agents and/or creator."""
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         clauses: list[str] = []
         if tenant_id is not None:
             clauses.append("agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tenant_id)s)")
@@ -142,7 +142,7 @@ class ApprovalRequestDAO(BaseDAO[ApprovalRequestRecord]):
             return [ApprovalRequestRecord.from_row(row) for row in rows]
 
     async def count_pending(self, *, tenant_id: UUID | None = None) -> int:
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tenant_id)s)"

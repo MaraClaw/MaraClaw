@@ -18,6 +18,7 @@ from app.services.storage_runtime.base import (
 from app.services.storage_runtime.bounded import read_bounded
 from app.services.storage_runtime.owned_copy import materialize_copy
 from app.services.storage_runtime.s3_connection import response_version_id
+from app.services.storage_runtime.s3_types import client_error_response
 
 
 class _ResponseBody(Protocol):
@@ -34,7 +35,7 @@ def _get_response(get_object: Callable[[], Mapping[str, object]]) -> Mapping[str
     try:
         return get_object()
     except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+        if client_error_response(exc).get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
             raise FileNotFoundError from exc
         raise
 
@@ -69,7 +70,7 @@ def read_object(
     try:
         body = _open_body(get_object, range_offset)
     except ClientError as exc:
-        if range_offset is not None and exc.response.get("Error", {}).get("Code") in {
+        if range_offset is not None and client_error_response(exc).get("Error", {}).get("Code") in {
             "416",
             "InvalidRange",
             "RequestedRangeNotSatisfiable",

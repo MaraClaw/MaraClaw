@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import platform
 import threading
-from typing import TYPE_CHECKING, final
+from typing import final
 from urllib.parse import quote_plus
 
 import httpx
@@ -13,9 +13,7 @@ from websockets.asyncio.client import connect
 
 from app.core.json_types import JsonObject, json_as_str, json_loads_object, json_object_from_response
 from app.runtime.tasks import OwnedTasks
-
-if TYPE_CHECKING:
-    import dingtalk_stream
+from app.services.im_sdk_types import DingTalkClient
 
 
 @final
@@ -32,10 +30,10 @@ class DingTalkTransport:
             if self._loop is not None and self._task is not None:
                 _ = self._loop.call_soon_threadsafe(self._task.cancel)
 
-    def run(self, client: dingtalk_stream.DingTalkStreamClient) -> None:
+    def run(self, client: DingTalkClient) -> None:
         asyncio.run(self._run(client))
 
-    async def _run(self, client: dingtalk_stream.DingTalkStreamClient) -> None:
+    async def _run(self, client: DingTalkClient) -> None:
         from dingtalk_stream.version import VERSION_STRING
 
         with self._lock:

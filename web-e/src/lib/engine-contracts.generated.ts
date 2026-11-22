@@ -410,11 +410,11 @@ export type InvalidSubmissionRejectedEvent = z.infer<typeof InvalidSubmissionRej
 export const StringErrorEventSchema = z.strictObject({ ["content"]: z.string(), ["type"]: z.intersection(z.literal("error"), z.string()) });
 export type StringErrorEvent = z.infer<typeof StringErrorEventSchema>;
 
-export const ArchivedSessionDetailSchema = z.strictObject({ ["reason"]: z.intersection(z.literal("session_archived"), z.string()), ["session_id"]: z.guid() });
-export type ArchivedSessionDetail = z.infer<typeof ArchivedSessionDetailSchema>;
+export const ReadOnlySessionDetailSchema = z.strictObject({ ["reason"]: z.intersection(z.literal("session_read_only"), z.string()), ["session_id"]: z.guid() });
+export type ReadOnlySessionDetail = z.infer<typeof ReadOnlySessionDetailSchema>;
 
-export const ArchivedSessionErrorEventSchema = z.strictObject({ ["content"]: ArchivedSessionDetailSchema, ["type"]: z.intersection(z.literal("error"), z.string()) });
-export type ArchivedSessionErrorEvent = z.infer<typeof ArchivedSessionErrorEventSchema>;
+export const ReadOnlySessionErrorEventSchema = z.strictObject({ ["content"]: ReadOnlySessionDetailSchema, ["type"]: z.intersection(z.literal("error"), z.string()) });
+export type ReadOnlySessionErrorEvent = z.infer<typeof ReadOnlySessionErrorEventSchema>;
 
 export const ChatAttachmentReferenceSchema = z.strictObject({ ["name"]: z.string().refine(value => [...value].length >= 1), ["path"]: z.string().refine(value => [...value].length >= 1) });
 export type ChatAttachmentReference = z.infer<typeof ChatAttachmentReferenceSchema>;
@@ -452,7 +452,7 @@ export type AgentBayLiveEvent = z.infer<typeof AgentBayLiveEventSchema>;
 export const WorkspaceDraftEventSchema = z.looseObject({ ["content"]: z.union([z.string(), z.null()]).optional(), ["name"]: z.union([z.string(), z.null()]).optional(), ["type"]: z.intersection(z.literal("workspace_draft"), z.string()) });
 export type WorkspaceDraftEvent = z.infer<typeof WorkspaceDraftEventSchema>;
 
-export const ChatServerEventSchema = z.union([ConnectedEventSchema, TurnAcceptedEventSchema, z.union([CorrelatedTurnRejectedEventSchema, OnboardingTurnRejectedEventSchema, InvalidSubmissionRejectedEventSchema]), z.union([StringErrorEventSchema, ArchivedSessionErrorEventSchema]), DoneEventSchema, OnboardedEventSchema, TriggerNotificationEventSchema, HeartbeatEventSchema, ChunkEventSchema, TextProgressEventSchema, ToolCallEventSchema, AgentBayLiveEventSchema, WorkspaceDraftEventSchema]).refine(value => [ConnectedEventSchema, TurnAcceptedEventSchema, z.union([CorrelatedTurnRejectedEventSchema, OnboardingTurnRejectedEventSchema, InvalidSubmissionRejectedEventSchema]), z.union([StringErrorEventSchema, ArchivedSessionErrorEventSchema]), DoneEventSchema, OnboardedEventSchema, TriggerNotificationEventSchema, HeartbeatEventSchema, ChunkEventSchema, TextProgressEventSchema, ToolCallEventSchema, AgentBayLiveEventSchema, WorkspaceDraftEventSchema].filter(schema => schema.safeParse(value).success).length === 1);
+export const ChatServerEventSchema = z.union([ConnectedEventSchema, TurnAcceptedEventSchema, z.union([CorrelatedTurnRejectedEventSchema, OnboardingTurnRejectedEventSchema, InvalidSubmissionRejectedEventSchema]), z.union([StringErrorEventSchema, ReadOnlySessionErrorEventSchema]), DoneEventSchema, OnboardedEventSchema, TriggerNotificationEventSchema, HeartbeatEventSchema, ChunkEventSchema, TextProgressEventSchema, ToolCallEventSchema, AgentBayLiveEventSchema, WorkspaceDraftEventSchema]).refine(value => [ConnectedEventSchema, TurnAcceptedEventSchema, z.union([CorrelatedTurnRejectedEventSchema, OnboardingTurnRejectedEventSchema, InvalidSubmissionRejectedEventSchema]), z.union([StringErrorEventSchema, ReadOnlySessionErrorEventSchema]), DoneEventSchema, OnboardedEventSchema, TriggerNotificationEventSchema, HeartbeatEventSchema, ChunkEventSchema, TextProgressEventSchema, ToolCallEventSchema, AgentBayLiveEventSchema, WorkspaceDraftEventSchema].filter(schema => schema.safeParse(value).success).length === 1);
 export type ChatServerEvent = z.infer<typeof ChatServerEventSchema>;
 
 export const ChatTicketRequestSchema = z.looseObject({ ["agent_id"]: z.guid(), ["session_id"]: z.union([z.guid(), z.null()]).optional() });
@@ -1199,7 +1199,7 @@ export type SearchAnalyticsExportStatus = z.infer<typeof SearchAnalyticsExportSt
 export const SelectedNotificationsRequestSchema = z.looseObject({ ["ids"]: z.array(z.guid()).min(1).max(200) });
 export type SelectedNotificationsRequest = z.infer<typeof SelectedNotificationsRequestSchema>;
 
-export const SessionOutSchema = z.looseObject({ ["agent_id"]: z.string(), ["created_at"]: z.string(), ["group_name"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.string(), ["is_group"]: z.boolean().optional(), ["is_primary"]: z.boolean().optional(), ["last_message_at"]: z.union([z.string(), z.null()]).optional(), ["message_count"]: z.number().refine(Number.isInteger).optional(), ["participant_type"]: z.string().optional(), ["peer_agent_id"]: z.union([z.string(), z.null()]).optional(), ["peer_agent_name"]: z.union([z.string(), z.null()]).optional(), ["source_channel"]: z.string().optional(), ["title"]: z.string(), ["unread_count"]: z.number().refine(Number.isInteger).optional(), ["user_id"]: z.string(), ["username"]: z.union([z.string(), z.null()]).optional() });
+export const SessionOutSchema = z.looseObject({ ["agent_id"]: z.string(), ["created_at"]: z.string(), ["group_name"]: z.union([z.string(), z.null()]).optional(), ["id"]: z.string(), ["is_group"]: z.boolean().optional(), ["is_primary"]: z.boolean().optional(), ["last_message_at"]: z.union([z.string(), z.null()]).optional(), ["message_count"]: z.number().refine(Number.isInteger).optional(), ["participant_type"]: z.string().optional(), ["peer_agent_id"]: z.union([z.string(), z.null()]).optional(), ["peer_agent_name"]: z.union([z.string(), z.null()]).optional(), ["source_channel"]: z.string().optional(), ["title"]: z.string(), ["unread_count"]: z.number().refine(Number.isInteger).optional(), ["user_id"]: z.string(), ["username"]: z.union([z.string(), z.null()]).optional(), ["writable"]: z.boolean().optional() });
 export type SessionOut = z.infer<typeof SessionOutSchema>;
 
 export const SessionPageOutSchema = z.looseObject({ ["has_more"]: z.boolean(), ["items"]: z.array(SessionOutSchema), ["next_cursor"]: z.union([z.string(), z.null()]) });

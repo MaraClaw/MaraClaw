@@ -42,15 +42,15 @@ async def test_head_is_the_actual_oldest_pending_even_when_unready_and_never_fil
         legacy = await anchor(f, content="legacy")
     # When the head is read, Then the unready batch is the head (not skipped for the ready legacy row).
     async with transaction(f.db.first):
-        head = present(await dispatch.head(f.scope.agent_id, f.scope.shared_session_id))
+        head = present(await dispatch.head(f.scope.agent_id, f.scope.transcript_session_id))
     assert (head.gateway_id, head.due, head.active) == (batch.gateway_id, False, False)
     assert head.batch is not None
     # And once due it is claimable first; the legacy row retains immediate readiness behind it.
     await age(f, batch.gateway_id, 2.5)
     async with transaction(f.db.first):
-        assert present(await dispatch.head(f.scope.agent_id, f.scope.shared_session_id)).due is True
+        assert present(await dispatch.head(f.scope.agent_id, f.scope.transcript_session_id)).due is True
         await f.db.first.execute("DELETE FROM gateway_messages WHERE id = %(id)s", {"id": batch.gateway_id})
-        legacy_head = present(await dispatch.head(f.scope.agent_id, f.scope.shared_session_id))
+        legacy_head = present(await dispatch.head(f.scope.agent_id, f.scope.transcript_session_id))
     assert (legacy_head.gateway_id, legacy_head.batch, legacy_head.due) == (legacy, None, True)
 
 
@@ -60,7 +60,7 @@ async def test_head_reports_active_delivered_turn(burst_db):
     async with transaction(f.db.first):
         active = await anchor(f, content="active")
         await f.db.first.execute("UPDATE gateway_messages SET status = 'delivered' WHERE id = %(id)s", {"id": active})
-        head = present(await dispatch.head(f.scope.agent_id, f.scope.shared_session_id))
+        head = present(await dispatch.head(f.scope.agent_id, f.scope.transcript_session_id))
     assert (head.gateway_id, head.active) == (batch.gateway_id, True)
 
 
@@ -130,9 +130,9 @@ async def test_cancel_preserves_originals_quota_and_transcript_and_removes_queue
             "SELECT (SELECT count(*) FROM gateway_report_deliveries) AS intents, "
             "(SELECT count(*) FROM chat_messages WHERE conversation_id = %(c)s) AS transcript, "
             "(SELECT quota_messages_used FROM users WHERE id = %(u)s) AS quota",
-            {"c": str(f.scope.shared_session_id), "u": f.db.user.id},
+            {"c": str(f.scope.transcript_session_id), "u": f.db.user.id},
         )
-        head = await dispatch.head(f.scope.agent_id, f.scope.shared_session_id)
+        head = await dispatch.head(f.scope.agent_id, f.scope.transcript_session_id)
     # Then the row leaves the FIFO and chat history, the undelivered intent is gone, nothing is refunded.
     assert gateway == {"status": "completed", "conversation_id": None, "result": BURST_CANCELLED_RESULT}
     assert left == {"intents": 0, "transcript": 2, "quota": before["q"]}
@@ -156,12 +156,14 @@ async def test_cancel_open_filters_by_connection_and_covers_sealed_not_claimed(b
     second = await admit(f, "n2", "b")
     async with transaction(f.db.first):
         assert (
-            await dispatch.cancel_open(f.scope.agent_id, f.scope.shared_session_id, "disconnected", config_id=uuid4())
+            await dispatch.cancel_open(
+                f.scope.agent_id, f.scope.transcript_session_id, "disconnected", config_id=uuid4()
+            )
             == []
         )
-        opened = await dispatch.list_open(f.scope.agent_id, f.scope.shared_session_id)
+        opened = await dispatch.list_open(f.scope.agent_id, f.scope.transcript_session_id)
         assert [b.gateway_id for b in opened] == [first.gateway_id, second.gateway_id]
-        cancelled = await dispatch.cancel_open(f.scope.agent_id, f.scope.shared_session_id, "disconnected")
+        cancelled = await dispatch.cancel_open(f.scope.agent_id, f.scope.transcript_session_id, "disconnected")
     assert cancelled == [first.gateway_id, second.gateway_id]
 
 
@@ -197,12 +199,12 @@ async def test_sealed_batch_resumes_after_restart_from_durable_state(burst_db):
 async def test_equal_timestamps_keep_gateway_fifo_by_created_at_then_id(burst_db):
     f = burst_db
     async with transaction(f.db.first):
-        same = await personal_burst_dao.next_created_at(f.scope.agent_id, f.scope.shared_session_id)
+        same = await personal_burst_dao.next_created_at(f.scope.agent_id, f.scope.transcript_session_id)
         older, newer = sorted([await anchor(f, at=same), await anchor(f, at=same)])
         member = await receive(f, "n1", "a")
         batch = await personal_burst_dao.create_batch(newer, f.scope, member, f.limits)
-        tail = present(await personal_burst_dao.pending_tail(f.scope.agent_id, f.scope.shared_session_id))
-        head = present(await dispatch.head(f.scope.agent_id, f.scope.shared_session_id))
+        tail = present(await personal_burst_dao.pending_tail(f.scope.agent_id, f.scope.transcript_session_id))
+        head = present(await dispatch.head(f.scope.agent_id, f.scope.transcript_session_id))
     assert (tail.gateway_id, present(tail.batch).gateway_id) == (newer, batch.gateway_id)
     assert head.gateway_id == older
     # And an anchor that is not the (created_at, id) tail cannot be batched.

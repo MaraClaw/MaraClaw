@@ -42,13 +42,14 @@ async def accept_media(
         if len(data) > limit:
             raise MediaTransferError("too_large")
     except MediaTransferError as error:
-        match error.code:
+        code = error.code
+        match code:
             case "too_large":
                 pass
             case "expired" | "download_failed" | "forbidden" | "invalid" | "digest_mismatch":
                 raise HTTPException(409, "Personal WhatsApp media unavailable") from error
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(code)
         content = "\n".join(filter(None, (event.text, too_large_note(filename, limit))))
         await accept_channel_event(event, content=content, saved_content=content)
         return

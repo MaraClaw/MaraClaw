@@ -53,6 +53,7 @@ async def test_media_refs_reach_original_transcript_live_event_and_burst_model_c
         )
         assert await intake.linked.f.db.second.fetchval("SELECT count(*) FROM channel_event_receipts") == 1
     assert len(intake.events) == 1
+    assert intake.audiences == [str(intake.linked.f.db.user.id)]
     event = serialize_chat_server_event(intake.events[0])
     assert event["attachments"] == refs
     assert "original bytes" not in json.dumps(event)

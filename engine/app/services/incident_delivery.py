@@ -56,8 +56,8 @@ async def deliver_incident(report: IncidentReport) -> bool:
                         delivered = True
                     case "not_configured" | "permanent" | "transient":
                         logger.bind(outcome_kind=outcome.kind).warning("Incident email delivery unsuccessful")
-                    case unreachable:
-                        assert_never(unreachable)
+                    case _:
+                        assert_never(outcome.kind)
             except Exception as exc:
                 logger.bind(exception_type=type(exc).__name__).warning("Incident email delivery failed")
 

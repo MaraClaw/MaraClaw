@@ -18,7 +18,7 @@ from app.services import agent_manager as module
 from app.services.agent_manager import AgentManager, guest_container_name
 from app.services.guest_admission import GuestStartPreflightError
 from app.services.guest_resource_config import preserve_guest_resources
-from test_agent_manager_openclaw_config import RecordingDockerClient
+from test_agent_manager_openclaw_config import UPSTREAM_MEMORY_SEARCH, RecordingDockerClient
 
 type Writer = Literal["refresh", "recreate"]
 
@@ -175,6 +175,20 @@ async def test_platform_config_wins_over_stale_guest_settings(guest: Guest, writ
         "slots": {"memory": "memory-core"},
         "entries": {"custom": {"enabled": True}},
     }
+
+
+@pytest.mark.parametrize("writer", ["refresh", "recreate"])
+async def test_guest_cannot_widen_session_visibility(guest: Guest, writer: Writer) -> None:
+    # Given
+    guest.path.write_text(json.dumps({"tools": {"sessions": {"visibility": "all"}}}), encoding="utf-8")
+
+    # When
+    await rewrite(guest, writer)
+
+    # Then
+    stored = json_loads_object(guest.path.read_text(encoding="utf-8"))
+    tools_config = json_object_from(stored["tools"])
+    assert json_object_from(tools_config["sessions"]) == {"visibility": "self"}
 
 
 GUEST_DEFAULTS: JsonObject = {"modelPolicy": {"mode": "strict", "allow": ["openai/*"]}, "thinkingDefault": "low"}
@@ -371,7 +385,7 @@ async def test_native_memory_and_custom_data_survive_config_rewrites(
 
     # Then
     stored = json_loads_object(guest.path.read_text(encoding="utf-8"))
-    assert json_object_from(stored["memory"])["search"] == {"enabled": True}
+    assert json_object_from(stored["memory"])["search"] == UPSTREAM_MEMORY_SEARCH
     plugins: JsonObject = {"slots": {"memory": "memory-core"}}
     if config_exists:
         plugins["entries"] = previous_entries

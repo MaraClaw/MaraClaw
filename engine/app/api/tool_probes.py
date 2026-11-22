@@ -45,8 +45,8 @@ async def check_mcp_connection(
         case MCPTestRequest():
             saved = None
             url, api_key = data.server_url, data.api_key
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(data)
     try:
         server_url = await validate_public_url(url)
         client = MCPClient(server_url, api_key=api_key or None)
@@ -81,8 +81,8 @@ async def check_email_connection(
         case EmailTestRequest():
             saved = None
             config = data.config
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(data)
     try:
         result = await test_connection(config)
         if saved is not None:

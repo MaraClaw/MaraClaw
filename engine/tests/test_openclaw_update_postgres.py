@@ -32,7 +32,6 @@ from app.services.openclaw_update_gate import (
     assert_work_allowed,
 )
 from app.services.openclaw_update_store import PostgresUpgradeStore
-from app.services.shared_chat import shared_session_id
 from openclaw_update_fakes import NEW_IMAGE, OLD_IMAGE, FakeContainer, FakeDocker, FakeManager, use_probe_clock
 
 
@@ -122,14 +121,14 @@ async def one(db: DbConnection, sql: str, **params: UUID) -> object:
     return await db.fetchval(sql, params)
 
 
-async def shared_queue(db: DbConnection) -> tuple[UUID, UUID]:
+async def canonical_queue(db: DbConnection) -> tuple[UUID, UUID]:
     tenant_id = await tenant(db)
     user_id = await member(db, tenant_id)
     agent_id = await agent(db, tenant_id, user_id)
-    session_id = shared_session_id(agent_id)
+    session_id = uuid4()
     await db.execute(
-        "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel) "
-        "VALUES (%(id)s, %(agent)s, %(user)s, 'Shared', 'shared')",
+        "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, is_primary) "
+        "VALUES (%(id)s, %(agent)s, %(user)s, 'Conversation', 'web', TRUE)",
         {"id": session_id, "agent": agent_id, "user": user_id},
     )
     created_at = datetime(2026, 1, 1, tzinfo=UTC)

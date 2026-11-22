@@ -274,7 +274,7 @@ async def search_registries(query: str, max_results: int = 5, agent_id: uuid.UUI
     if not all_results:
         return f'🔍 No MCP servers found for "{query}" on Smithery or ModelScope. Try different keywords.'
 
-    results = []
+    results: list[str] = []
     for i, srv in enumerate(all_results[:max_results], 1):
         verified = " ✅" if srv["verified"] else ""
         source_tag = f"[{srv['source']}]"

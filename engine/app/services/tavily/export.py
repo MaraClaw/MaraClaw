@@ -6,7 +6,7 @@ import gzip
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Final, Protocol
+from typing import Final, Protocol, TypedDict, Unpack, cast
 from uuid import UUID, uuid4
 
 from app.config import get_settings
@@ -14,6 +14,7 @@ from app.core.logging import logger
 from app.dao.web_search_event_dao import web_search_event_dao
 from app.records.web_search_event import WebSearchEventRecord
 from app.runtime.tasks import loop_progress
+from app.services.storage_runtime.s3_types import S3ClientOptions, new_s3_client
 
 _SAFE_INSTANCE = re.compile(r"[^A-Za-z0-9._-]+")
 _CLAIM_LIMIT = 500
@@ -24,6 +25,18 @@ PROGRESS_BUDGET_SECONDS: Final = 300.0
 
 class AnalyticsObjectSink(Protocol):
     async def put(self, *, bucket: str, key: str, body: bytes, content_type: str) -> None: ...
+
+
+class _AnalyticsPutArguments(TypedDict):
+    Bucket: str
+    Key: str
+    Body: bytes
+    ContentType: str
+    ServerSideEncryption: str
+
+
+class _AnalyticsPutClient(Protocol):
+    def put_object(self, **kwargs: Unpack[_AnalyticsPutArguments]) -> object: ...
 
 
 class BotoAnalyticsSink:
@@ -37,17 +50,17 @@ class BotoAnalyticsSink:
             from botocore.config import Config
 
             settings = get_settings()
-            kwargs: dict[str, object] = {
+            options: S3ClientOptions = {
                 "region_name": settings.S3_REGION or None,
                 "config": Config(connect_timeout=5, read_timeout=30, retries={"max_attempts": 2}),
             }
             if settings.S3_ENDPOINT_URL:
-                kwargs["endpoint_url"] = settings.S3_ENDPOINT_URL
+                options["endpoint_url"] = settings.S3_ENDPOINT_URL
             if settings.S3_ACCESS_KEY_ID:
-                kwargs["aws_access_key_id"] = settings.S3_ACCESS_KEY_ID
+                options["aws_access_key_id"] = settings.S3_ACCESS_KEY_ID
             if settings.S3_SECRET_ACCESS_KEY:
-                kwargs["aws_secret_access_key"] = settings.S3_SECRET_ACCESS_KEY
-            client = boto3.client("s3", **kwargs)
+                options["aws_secret_access_key"] = settings.S3_SECRET_ACCESS_KEY
+            client = cast("_AnalyticsPutClient", new_s3_client(boto3, **options))
             client.put_object(
                 Bucket=bucket,
                 Key=key,

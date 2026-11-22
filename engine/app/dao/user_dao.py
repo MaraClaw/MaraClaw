@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, ClassVar, final, override
+from typing import ClassVar, final, override
 from uuid import UUID
 
 from app.core.cache_contracts import SessionCacheObservation
@@ -105,7 +105,7 @@ def _user_record_from_row(row: Mapping[str, object]) -> UserRecord:
     return UserRecord.from_row(row)
 
 
-def _user_from_joined_row(row: dict[str, Any]) -> UserRecord:
+def _user_from_joined_row(row: Mapping[str, object]) -> UserRecord:
     identity = None
     if row.get("i_id") is not None:
         identity = IdentityRecord.from_row(
@@ -178,7 +178,7 @@ class UserDAO(BaseDAO[UserRecord]):
     async def get_by_email_and_tenant(
         self, email: str, tenant_id: UUID | None, exclude_user_id: UUID | None = None
     ) -> UserRecord | None:
-        params: dict[str, Any] = {"email": email, "tenant_id": tenant_id}
+        params: dict[str, object] = {"email": email, "tenant_id": tenant_id}
         exclude_sql = ""
         if exclude_user_id is not None:
             exclude_sql = " AND u.id <> %(exclude_user_id)s"
@@ -196,7 +196,7 @@ class UserDAO(BaseDAO[UserRecord]):
     async def get_by_phone_and_tenant(
         self, phone: str, tenant_id: UUID | None, exclude_user_id: UUID | None = None
     ) -> UserRecord | None:
-        params: dict[str, Any] = {"phone": phone, "tenant_id": tenant_id}
+        params: dict[str, object] = {"phone": phone, "tenant_id": tenant_id}
         exclude_sql = ""
         if exclude_user_id is not None:
             exclude_sql = " AND u.id <> %(exclude_user_id)s"
@@ -422,7 +422,7 @@ class UserDAO(BaseDAO[UserRecord]):
         include_identity: bool = False,
         order_by_display_name: bool = False,
     ) -> Sequence[UserRecord]:
-        params: dict[str, Any] = {"tenant_id": tenant_id}
+        params: dict[str, object] = {"tenant_id": tenant_id}
         exclude_sql = ""
         if exclude_user_id is not None:
             exclude_sql = " AND u.id <> %(exclude_id)s"
@@ -580,7 +580,7 @@ class UserDAO(BaseDAO[UserRecord]):
             return [UserRecord.from_row(row) for row in rows]
 
     async def count_active_by_role(self, role: UserRole, *, tenant_id: UUID | None = None) -> int:
-        params: dict[str, Any] = {"role": role.value}
+        params: dict[str, object] = {"role": role.value}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND tenant_id = %(tenant_id)s"
@@ -596,7 +596,7 @@ class UserDAO(BaseDAO[UserRecord]):
         self, user_id: UUID, *, role: UserRole, tenant_id: UUID | None = None
     ) -> UserRecord | None:
         """Deactivate ``user_id`` only when another active peer of ``role`` exists."""
-        params: dict[str, Any] = {"user_id": user_id, "role": role.value}
+        params: dict[str, object] = {"user_id": user_id, "role": role.value}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND tenant_id = %(tenant_id)s"
@@ -623,13 +623,13 @@ class UserDAO(BaseDAO[UserRecord]):
                 await invalidate_tenant_agents(db, user.tenant_id)
             return user
 
-    async def list_identity_ids_for_tenant(self, tenant_id: UUID) -> list[Any]:
+    async def list_identity_ids_for_tenant(self, tenant_id: UUID) -> list[UUID]:
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT DISTINCT identity_id FROM users WHERE tenant_id = %(tenant_id)s AND identity_id IS NOT NULL",
                 {"tenant_id": tenant_id},
             )
-            return [row["identity_id"] for row in rows]
+            return uuid_list_from_rows(rows, "identity_id")
 
     async def genesis_platform_admin(self) -> UserRecord | None:
         async with self.session() as db:
@@ -681,7 +681,7 @@ class UserDAO(BaseDAO[UserRecord]):
             return value is not None
 
     async def list_for_tenant_ordered(self, tenant_id: UUID, *, include_identity: bool = True) -> Sequence[UserRecord]:
-        params: dict[str, Any] = {"tenant_id": tenant_id}
+        params: dict[str, object] = {"tenant_id": tenant_id}
         async with self.session() as db:
             if include_identity:
                 rows = await db.fetchall(
@@ -790,7 +790,7 @@ class UserDAO(BaseDAO[UserRecord]):
     async def find_by_email_or_display_name(
         self, name: str, *, tenant_id: UUID | None = None, include_identity: bool = True
     ) -> UserRecord | None:
-        params: dict[str, Any] = {"name": name, "tenant_id": tenant_id}
+        params: dict[str, object] = {"name": name, "tenant_id": tenant_id}
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
@@ -862,7 +862,7 @@ class UserDAO(BaseDAO[UserRecord]):
             return {uuid_from_row(row["id"]): _user_from_joined_row(row) for row in rows}
 
     async def count_active(self, *, tenant_id: UUID | None = None) -> int:
-        params: dict[str, Any] = {}
+        params: dict[str, object] = {}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " AND tenant_id = %(tenant_id)s"

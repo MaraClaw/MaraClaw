@@ -13,6 +13,7 @@ uv run pytest
 uv run pytest tests/test_auth.py
 uv run pytest -k "storage"
 uv run pytest -x --tb=short
+uv run --extra dev basedpyright --project pyrightconfig.tests.json   # tests at standard; run after editing tests
 bash scripts/test.sh                      # whole suite; 90% branch gate on ten admin/auth/tenant modules; no argument forwarding
 uv run pytest --cov=app --cov-fail-under=0  # optional full-app report, not the scoped gate
 node --test tests/contract_codegen.test.mjs tests/contract_public_names.test.mjs  # offline codegen; manual, not in CI
@@ -22,7 +23,7 @@ node --test tests/contract_codegen.test.mjs tests/contract_public_names.test.mjs
 ## Conventions
 
 - `asyncio_mode = "auto"` in `pyproject.toml`.
-- Fakes live in the test file (`DummyResult`, `_FakePool`, `SimpleNamespace`).
+- Fakes live in the test file (`DummyResult`, `_FakePool`, `SimpleNamespace`). Tests are basedpyright-checked at `standard` (`pyrightconfig.tests.json`): where a parameter is typed as a record or dataclass, build a real instance (a typed factory such as `UserRecord(...)`) instead of passing a `SimpleNamespace`.
 - New DB tests wrap a fake raw connection and assert SQL / `%(name)s` params. Reset `_conn_ctx` and `reset_pool_for_tests()` when touching the pool.
 - HTTP: `httpx.ASGITransport(app=app)` + `AsyncClient` when you need the stack; most tests call handlers directly.
 - Clear `app.dependency_overrides` after use. Storage tests use `tmp_path`.

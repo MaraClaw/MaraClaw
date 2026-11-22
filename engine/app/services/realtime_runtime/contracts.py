@@ -53,7 +53,7 @@ class RoutingOutcome:
 
     ``local_targets`` matched the session/user filter; sockets authorization refused or revoked count nowhere else.
     ``failed`` sends raised or timed out (including the timeout that evicted a socket); ``evicted`` sockets were
-    evicted by this delivery or found already evicted in its snapshot. ``skipped`` sockets got no shared-session
+    evicted by this delivery or found already evicted in its snapshot. ``skipped`` sockets got no canonical-session
     decision within their wait, or a decision that failed transiently, so only this event passed them by.
     ``remote_publish_errors`` counts instance channels whose ``redis.publish`` raised, and ``publication_failed`` a
     publication that raised before routing finished.
@@ -89,6 +89,6 @@ class SendObserver(Protocol):
         ...
 
     def refused(self, agent_id: str, websocket: WebSocket, close_code: int) -> None:
-        """Withdraw a socket whose shared-session access was revoked and close it with ``close_code`` (4001 or 4003)
+        """Withdraw a socket whose canonical-session access was revoked and close it with ``close_code`` (4001 or 4003)
         from a task the observer owns; never awaited by the delivery that found the revocation."""
         ...

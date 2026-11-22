@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import override
+from typing import cast, override
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import CroniterError, croniter
@@ -38,7 +38,7 @@ def next_local_run(cron_expr: str, after: datetime, timezone: str) -> datetime |
     try:
         cron = croniter(cron_expr, wall_base, max_years_between_matches=MAX_SEARCH_YEARS)
         while True:
-            wall = cron.get_next(datetime)
+            wall = cast("object", cron.get_next(datetime))
             if not isinstance(wall, datetime):
                 raise TypeError("croniter.get_next(datetime) must return a datetime")
             if wall.year > wall_base.year + MAX_SEARCH_YEARS:

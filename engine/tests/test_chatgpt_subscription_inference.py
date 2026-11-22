@@ -7,6 +7,7 @@ from tests.chatgpt_subscription_fakes import _ACCESS, _NOW, _model, _user
 
 from app.api import enterprise as enterprise_api
 from app.config import get_settings
+from app.core.json_types import is_any_list, json_object_from
 from app.core.security import encrypt_data
 
 
@@ -117,10 +118,12 @@ def test_create_llm_client_from_model_uses_codex_responses():
         None,
         16,
     )
-    assert follow["input"][0]["type"] == "reasoning"
-    assert follow["input"][0]["encrypted_content"] == "enc-reason"
-    assert follow["input"][1]["type"] == "function_call"
-    assert follow["input"][2]["type"] == "function_call_output"
+    items = follow["input"]
+    assert is_any_list(items)
+    assert json_object_from(items[0])["type"] == "reasoning"
+    assert json_object_from(items[0])["encrypted_content"] == "enc-reason"
+    assert json_object_from(items[1])["type"] == "function_call"
+    assert json_object_from(items[2])["type"] == "function_call_output"
 
 
 @pytest.mark.asyncio

@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.core.domain.channels import ChannelType
-from app.core.json_types import datetime_from_row, mapping_from_row, str_from_row, uuid_from_row
+from app.core.json_types import JsonObject, JsonValue, datetime_from_row, json_object_from, str_from_row, uuid_from_row
 
 
 @dataclass(slots=True)
@@ -26,13 +25,13 @@ class ChannelConfigRecord:
     is_configured: bool = False
     is_connected: bool = False
     last_tested_at: datetime | None = None
-    extra_config: dict[str, Any] = field(default_factory=dict[str, Any])
+    extra_config: JsonObject = field(default_factory=dict[str, JsonValue])
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> ChannelConfigRecord:
-        extra = mapping_from_row(row.get("extra_config") or {})
+        extra = json_object_from(row.get("extra_config") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),

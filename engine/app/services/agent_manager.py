@@ -22,7 +22,7 @@ from pywhales.exceptions import DockerException, NoSuchContainer
 
 from app.config import get_settings
 from app.core.domain.agents import AgentStatus
-from app.core.json_types import JsonObject, json_object_from
+from app.core.json_types import JsonObject, is_str_dict, json_object_from
 from app.core.logging import logger
 from app.core.security import decrypt_data
 from app.dao import llm_model_dao
@@ -428,7 +428,7 @@ class AgentManager:
         primary: LLMModelRecord | None,
         fallback: LLMModelRecord | None,
     ) -> str:
-        parts: list[str] = ["native-gateway-rpc-v1"]
+        parts: list[str] = ["native-gateway-rpc-v2"]
         for row in (primary, fallback):
             ref = guest_model_ref(row) or ""
             expires = getattr(row, "token_expires_at", None) if row is not None else None
@@ -568,6 +568,8 @@ class AgentManager:
                     "enabled": False,
                 },
             },
+            # Agents shared across users keep one private conversation per user: session tools see only their own.
+            "sessions": {"visibility": "self"},
         }
 
         return config
@@ -829,8 +831,8 @@ class AgentManager:
         except GuestOwnershipError as exc:
             logger.warning("Guest stop ownership refused for agent {}: {}", agent.id, exc)
             return False
-        except (ClientNotFoundError, DockerException) as e:
-            logger.error(f"Failed to stop container: {e}")
+        except Exception as exc:
+            logger.error("Failed to stop guest for agent {}: {}", agent.id, type(exc).__name__)
             return False
 
     async def remove_container(self, agent: AgentRecord) -> bool:
@@ -885,7 +887,7 @@ class AgentManager:
             status: InspectedContainerStatus = {
                 "running": bool(getattr(state, "running", False)),
                 "status": str(getattr(state, "status", None) or agent.status),
-                "ports": json_object_from(ports) if isinstance(ports, dict) else None,
+                "ports": json_object_from(ports) if is_str_dict(ports) else None,
                 "created": created_value,
             }
             return status

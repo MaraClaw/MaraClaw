@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, final, override
+from typing import ClassVar, final, override
 from uuid import UUID
 
 from app.core.json_types import int_from_row, uuid_from_row
@@ -52,7 +52,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
             return int_from_row(row["auth_generation"]) if row is not None else None
 
     @override
-    async def update(self, *, db_obj: IdentityRecord, obj_in: Mapping[str, Any]) -> IdentityRecord:
+    async def update(self, *, db_obj: IdentityRecord, obj_in: Mapping[str, object]) -> IdentityRecord:
         updated = await super().update(db_obj=db_obj, obj_in=obj_in)
         await bump_identity_session(updated.id)
         return updated
@@ -136,7 +136,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
     async def is_email_taken_in_tenant(
         self, email: str, tenant_id: UUID, *, exclude_user_id: UUID | None = None
     ) -> bool:
-        params: dict[str, Any] = {"email": email, "tenant_id": tenant_id}
+        params: dict[str, object] = {"email": email, "tenant_id": tenant_id}
         exclude_sql = ""
         if exclude_user_id is not None:
             exclude_sql = " AND u.id <> %(exclude_id)s"
@@ -152,7 +152,7 @@ class IdentityDAO(BaseDAO[IdentityRecord]):
     async def is_phone_taken_in_tenant(
         self, phone: str, tenant_id: UUID, *, exclude_user_id: UUID | None = None
     ) -> bool:
-        params: dict[str, Any] = {"phone": phone, "tenant_id": tenant_id}
+        params: dict[str, object] = {"phone": phone, "tenant_id": tenant_id}
         exclude_sql = ""
         if exclude_user_id is not None:
             exclude_sql = " AND u.id <> %(exclude_id)s"

@@ -57,8 +57,8 @@ async def deliver(claim: CredentialEmailClaim) -> None:
             else:
                 delay = timedelta(seconds=RETRY_DELAYS_SECONDS[claim.attempts - 1])
                 _ = await emails.retry(claim, error=error, available_at=min(now + delay, claim.deliver_by), now=now)
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(outcome.kind)
 
 
 async def start_organization_admission_email_worker() -> None:

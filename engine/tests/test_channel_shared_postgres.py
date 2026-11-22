@@ -5,13 +5,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api import background_tasks
-from app.services.shared_chat import shared_session_id
-from channel_shared_postgres_fixtures import live_channel, post_slack, schema_db
+from channel_shared_postgres_fixtures import canonical_sessions, live_channel, post_slack, schema_db
 
 __all__ = ["live_channel", "schema_db"]
 
 
-async def test_signed_direct_humans_share_transcript_with_distinct_reply_intents(live_channel):
+async def test_signed_direct_humans_get_their_own_canonical_transcripts_with_distinct_reply_intents(live_channel):
     # Given two linked humans who are not the agent creator.
     live = live_channel
     # When each submits a signed direct Slack event through the HTTP router.
@@ -20,13 +19,17 @@ async def test_signed_direct_humans_share_transcript_with_distinct_reply_intents
         await post_slack(live, sender="U1", text="second", channel="D1"),
     ]
     await background_tasks.drain_background_tasks()
-    # Then their persisted context is canonical while each durable reply points to its provider row.
+    # Then each human owns one private canonical conversation, and the agent creator owns none.
     assert [response.status_code for response in responses] == [200, 200]
-    canonical = str(shared_session_id(live.agent.id))
+    canonical = await canonical_sessions(live)
+    first, second = live.users[0], live.users[1]
+    assert set(canonical) == {first, second}
+    assert canonical[first] != canonical[second]
+    # And each persisted message sits in its sender's own conversation, with its reply intent aimed at the IM session.
     messages = await live.db.fetchall("SELECT user_id, conversation_id, content FROM chat_messages ORDER BY created_at")
     assert [(row["user_id"], row["conversation_id"], row["content"]) for row in messages] == [
-        (live.users[0], canonical, "first"),
-        (live.users[1], canonical, "second"),
+        (first, canonical[first], "first"),
+        (second, canonical[second], "second"),
     ]
     deliveries = await live.db.fetchall(
         "SELECT g.conversation_id, s.source_channel, s.external_conv_id "
@@ -34,16 +37,33 @@ async def test_signed_direct_humans_share_transcript_with_distinct_reply_intents
         "JOIN chat_sessions s ON s.id = d.destination_id ORDER BY g.created_at"
     )
     assert [(row["conversation_id"], row["source_channel"], row["external_conv_id"]) for row in deliveries] == [
-        (canonical, "slack", "slack_D0"),
-        (canonical, "slack", "slack_D1"),
+        (canonical[first], "slack", "slack_D0"),
+        (canonical[second], "slack", "slack_D1"),
     ]
-    sessions = await live.db.fetchall(
-        "SELECT source_channel, external_conv_id FROM chat_sessions WHERE id = %(id)s",
-        {"id": shared_session_id(live.agent.id)},
-    )
-    assert sessions == [{"source_channel": "shared", "external_conv_id": None}]
+    # And each realtime event reaches only its owner's sockets.
     assert live.published.await_count == 2
-    assert {call.args[1] for call in live.published.await_args_list} == {canonical}
+    assert {(call.args[1], call.args[3]) for call in live.published.await_args_list} == {
+        (canonical[first], str(first)),
+        (canonical[second], str(second)),
+    }
+
+
+async def test_signed_group_message_stays_in_its_group_session(live_channel):
+    # Given a linked human writing in a group channel.
+    live = live_channel
+    # When the signed group event is accepted.
+    response = await post_slack(live, text="group hello", channel="C0")
+    await background_tasks.drain_background_tasks()
+    # Then the message lives in the group's own session, no canonical conversation is opened, and nothing is pushed.
+    assert response.status_code == 200
+    messages = await live.db.fetchall("SELECT conversation_id, content FROM chat_messages")
+    assert [row["content"] for row in messages] == ["group hello"]
+    group = await live.db.fetchone(
+        "SELECT is_group, source_channel FROM chat_sessions WHERE id = %(id)s", {"id": messages[0]["conversation_id"]}
+    )
+    assert group == {"is_group": True, "source_channel": "slack"}
+    assert await canonical_sessions(live) == {}
+    live.published.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -86,12 +106,12 @@ async def test_direct_http_checks_fresh_authority_after_an_accepted_turn(live_ch
     assert counts == [{"count": 1}] * 3
 
 
-async def test_signed_unbound_direct_sender_is_acknowledged_without_shared_access(live_channel, monkeypatch):
-    # Given an unbound human and a shared-history boundary that must not be reached.
+async def test_signed_unbound_direct_sender_is_acknowledged_without_canonical_access(live_channel, monkeypatch):
+    # Given an unbound human and a history boundary that must not be reached.
     from app.dao.chat_dao import chat_message_dao
 
     live = live_channel
-    history = AsyncMock(side_effect=AssertionError("Unbound sender reached shared history"))
+    history = AsyncMock(side_effect=AssertionError("Unbound sender reached conversation history"))
     monkeypatch.setattr(chat_message_dao, "list_recent", history)
     # When the provider delivers a validly signed direct message.
     response = await post_slack(live, sender="U_UNBOUND")

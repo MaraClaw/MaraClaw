@@ -123,8 +123,8 @@ def first_period_price_usd(plan: OrganizationPlan, billing: OrganizationBillingC
             return plan.monthly_price_usd
         case OrganizationBillingCycle.ANNUAL:
             return int(plan.annual_price_usd)
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(billing)
 
 
 @overload

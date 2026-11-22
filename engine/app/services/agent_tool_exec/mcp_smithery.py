@@ -3,7 +3,7 @@
 import uuid
 from typing import cast
 
-from app.core.json_types import JsonObject, json_as_str, json_loads_value
+from app.core.json_types import JsonObject, is_str_dict, json_as_str, json_loads_value
 
 from .registry import ToolArguments, ToolArgumentValue
 
@@ -150,7 +150,7 @@ async def _execute_via_smithery_connect(
             for block in content_blocks:
                 if isinstance(block, str):
                     texts.append(block)
-                elif isinstance(block, dict):
+                elif is_str_dict(block):
                     if block.get("type") == "text":
                         text = block.get("text", "")
                         texts.append(text if isinstance(text, str) else str(text))

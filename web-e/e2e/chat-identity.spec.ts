@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { accept, chatPath, complete, firstMessage, firstSession, message, prepareChat, submitted } from './chat-identity-fixture'
+import { accept, chatPath, complete, firstMessage, firstSession, message, prepareChat, secondSession, submitted } from './chat-identity-fixture'
 import { handled, paintFrame } from './chat-stream-fixture'
 import { originalAgent } from './session-fencing-fixture'
 
@@ -123,6 +123,30 @@ test('terminal access denial cannot retry through a stopped sender', async ({ pa
   await page.screenshot({ path: testInfo.outputPath('terminal-stopped.png'), fullPage: true })
 })
 
+test('a read-only refusal on the socket stops sending and points back to your own conversation', async ({ page }) => {
+  // Given a writable peer-agent session with one sent message
+  const chat = await prepareChat(page)
+  await page.goto(chatPath(secondSession))
+  const socket = await chat.socket()
+  expect(socket.session).toBe(secondSession)
+  const composer = page.getByRole('textbox', { name: `Message ${originalAgent.name}` })
+  await composer.fill('Refused by the engine')
+  await composer.press('Enter')
+  await expect.poll(() => socket.sent.length).toBe(1)
+  // When the engine refuses the write and names the caller's own conversation rather than the active one
+  socket.route.send(JSON.stringify({ type: 'error', content: { reason: 'session_read_only', session_id: firstSession } }))
+  // Then the active session turns read-only in place and offers the way back to the caller's own conversation
+  await expect(composer).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Return to your conversation', exact: true })).toHaveAttribute('href', `/app/agents/${originalAgent.id}/chat`)
+  // And the refused message says it was not sent, with no retry into the read-only session
+  const refused = page.locator('article').filter({ hasText: 'Refused by the engine' })
+  await expect(refused.getByRole('status')).toHaveText('Message not sent. This conversation is read-only.')
+  await expect(refused.getByRole('button', { name: 'Retry this message' })).toHaveCount(0)
+  await expect(page).toHaveURL(chatPath(secondSession))
+  expect(socket.sent).toHaveLength(1)
+  expect(chat.sockets).toHaveLength(1)
+})
+
 test('file rejection retries the exact uploaded envelope after effect recreation without uploading again', async ({ page }, testInfo) => {
   const chat = await prepareChat(page)
   let uploads = 0
@@ -223,7 +247,7 @@ test('a DONE lost after a CHUNK releases the stale live turn once history ends i
 })
 
 test('a turn that keeps streaming is never released while history already ends in an assistant row', async ({ page }) => {
-  // Given a shared or trigger turn streaming after an earlier reply
+  // Given a trigger or connected-channel turn streaming into your conversation after an earlier reply
   const earlier = message('earlier-reply', 'Earlier reply already in history')
   const chat = await prepareChat(page, [earlier])
   await page.clock.install({ time: new Date('2030-01-01T00:00:00Z') })

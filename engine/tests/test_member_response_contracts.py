@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 from app.api import activity as activity_api, notification as notification_api
 from app.core.domain.activity import ActivityAction
+from app.core.domain.users import UserRole
 from app.core.notification_kinds import NotificationKind
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
@@ -138,7 +139,7 @@ async def test_activity_detail_keeps_dynamic_values_and_nullable_fields(client, 
         agent_id=AGENT_ID,
         action_type=ActivityAction.TOOL_CALL,
         summary="Summary",
-        detail_json={"nested": [None, {"timestamp": STAMP, "id": related_id}]},
+        detail_json={"nested": [None, {"timestamp": STAMP.isoformat(), "id": str(related_id)}]},
         related_id=related_id if populated else None,
         created_at=STAMP if populated else None,
     )
@@ -333,10 +334,16 @@ async def test_activity_page_enforces_access_and_authentication(app, client, mem
 
 @pytest.mark.parametrize(
     "conv_id",
-    ["web_member", "feishu_p2p_member", "slack_dm_member", "discord_room_member", "agent_peer", str(AGENT_ID)],
+    ["web_member", "feishu_p2p_member", "slack_dm_member", "discord_room_member", str(AGENT_ID)],
 )
 async def test_conversation_messages_preserve_sender_omission_and_open_roles(client, member, stub, conv_id):
-    peer = conv_id.startswith("agent_") or len(conv_id) == 36
+    peer = len(conv_id) == 36
+    if peer:
+        stub(
+            activity_api.chat_session_dao,
+            "get_for_agent_or_peer",
+            ChatSessionRecord(id=UUID(conv_id), agent_id=AGENT_ID, user_id=member.id),
+        )
     message = ChatMessageRecord(
         id=uuid4(), agent_id=AGENT_ID, user_id=member.id, role="future_role", content="[发送者: Alice (ID:1)] Hello"
     )
@@ -358,6 +365,39 @@ async def test_conversation_messages_preserve_sender_omission_and_open_roles(cli
         messages.assert_awaited_once_with(conversation_id=conv_id, limit=2)
     else:
         messages.assert_awaited_once_with(agent_id=AGENT_ID, conversation_id=conv_id, limit=2, ascending=True)
+
+
+@pytest.mark.parametrize(
+    ("role", "owner", "status"),
+    [
+        (UserRole.MEMBER, "self", 200),
+        (UserRole.MEMBER, "other", 403),
+        (UserRole.ORG_ADMIN, "other", 200),
+        (UserRole.MEMBER, None, 404),
+    ],
+)
+async def test_session_messages_are_read_only_by_their_owner_or_a_company_admin(
+    client, member, stub, role, owner, status
+):
+    member.role = role
+    session_id = uuid4()
+    session = (
+        None
+        if owner is None
+        else ChatSessionRecord(
+            id=session_id,
+            agent_id=AGENT_ID,
+            user_id=member.id if owner == "self" else uuid4(),
+            source_channel="web",
+            is_primary=True,
+        )
+    )
+    lookup = stub(activity_api.chat_session_dao, "get_for_agent_or_peer", session)
+    messages = stub(activity_api.chat_message_dao, "list_for_session", [])
+    response = await client.get(f"/api/agents/{AGENT_ID}/chat-history/{session_id}")
+    assert response.status_code == status
+    lookup.assert_awaited_once_with(session_id, AGENT_ID)
+    assert messages.await_count == (1 if status == 200 else 0)
 
 
 async def test_conversation_list_keeps_sorting_truncation_and_null_timestamp(client, member, monkeypatch, stub):

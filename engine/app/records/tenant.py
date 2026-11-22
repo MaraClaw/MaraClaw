@@ -5,14 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.core.domain.agent_sections import DEFAULT_HIDDEN_AGENT_SECTIONS, canonical_agent_sections
 from app.core.json_types import (
+    JsonObject,
     datetime_from_row,
     int_from_row,
-    mapping_from_row,
+    json_object_from,
     str_from_row,
     str_from_row_opt,
     uuid_from_row,
@@ -30,7 +30,7 @@ class TenantRecord:
     slug: str
     tier: OrganizationPlanId
     im_provider: str = "web_only"
-    im_config: dict[str, Any] | None = None
+    im_config: JsonObject | None = None
     is_active: bool = True
     created_at: datetime | None = None
     default_message_limit: int = 50
@@ -55,7 +55,7 @@ class TenantRecord:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> TenantRecord:
-        im_config = mapping_from_row(row.get("im_config")) or None
+        im_config = json_object_from(row.get("im_config")) or None
         return cls(
             id=uuid_from_row(row["id"]),
             name=str_from_row(row["name"]),

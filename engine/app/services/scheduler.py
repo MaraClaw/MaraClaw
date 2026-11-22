@@ -7,12 +7,13 @@ and executes them by calling the LLM with the schedule's instruction.
 
 import asyncio
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from functools import partial
 
 from fastapi import HTTPException
 
+from app.config import get_settings
 from app.core.domain.activity import ActivityAction
 from app.core.json_types import JsonObject
 from app.core.logging import logger, new_trace_id
@@ -92,7 +93,10 @@ async def _execute_schedule(schedule_id: uuid.UUID, agent_id: uuid.UUID, instruc
 
 
 async def _execute_periodic_schedule(schedule: AgentScheduleRecord) -> None:
-    """Run the claimed occurrence snapshot, leaving interrupted work recoverable."""
+    """Run the claimed occurrence snapshot within its run budget, leaving interrupted work recoverable.
+
+    A spent budget settles the occurrence as a failed run while the lease still renews; a lost lease only logs.
+    """
     new_trace_id()
     from app.core.notification_kinds import NotificationKind
     from app.core.permissions import check_agent_access, is_agent_expired
@@ -104,7 +108,12 @@ async def _execute_periodic_schedule(schedule: AgentScheduleRecord) -> None:
     from app.services.llm import call_agent_llm_with_tools
     from app.services.llm.background_guard import ScheduleLeaseLostError
     from app.services.notification_service import send_notification
-    from app.services.schedule_lease import ScheduleLeaseHold, in_fresh_schedule_context
+    from app.services.schedule_lease import (
+        SCHEDULE_RUN_TIMEOUT_ERROR,
+        ScheduleLeaseHold,
+        ScheduleRunTimeoutError,
+        in_fresh_schedule_context,
+    )
 
     token, instruction, due_at = schedule.lease_token, schedule.pending_instruction, schedule.pending_due_at
     if token is None or instruction is None or due_at is None:
@@ -116,88 +125,97 @@ async def _execute_periodic_schedule(schedule: AgentScheduleRecord) -> None:
         "status": "skipped",
     }
     summary = f"Scheduled task skipped: {instruction[:60]}"
+
+    async def finish(guard: Callable[[], None]) -> None:
+        guard()
+        async with connection_ctx():
+            if not await agent_schedule_dao.finish_occurrence(schedule.id, token, datetime.now(UTC)):
+                raise ScheduleLeaseLostError("Schedule occurrence ownership was revoked before finish")
+            guard()
+            _ = await agent_activity_log_dao.create(
+                obj_in={
+                    "agent_id": schedule.agent_id,
+                    "action_type": "schedule_run",
+                    "summary": summary,
+                    "detail_json": detail,
+                    "related_id": None,
+                }
+            )
+            guard()
+            if schedule.pending_notify_on_failure is True and detail["status"] == "failure":
+                try:
+                    creator = await load_user_principal(schedule.created_by, fresh=True)
+                    authorized_agent, _ = await check_agent_access(creator, schedule.agent_id, fresh=True)
+                except HTTPException:
+                    recipient = None
+                else:
+                    recipient = (
+                        creator.id
+                        if creator.identity is not None
+                        and creator.tenant_id is not None
+                        and creator.tenant_id == authorized_agent.tenant_id
+                        else None
+                    )
+                guard()
+                if recipient is not None:
+                    _ = await send_notification(
+                        user_id=recipient,
+                        notification_kind=NotificationKind.SYSTEM_ALERT,
+                        title="Scheduled run failed",
+                        body="A scheduled run failed. Open schedule history to review the run.",
+                        link=f"/app/agents/{schedule.agent_id}/schedules",
+                        ref_id=schedule.id,
+                    )
+                guard()
+
     try:
         async with ScheduleLeaseHold(schedule.id, token) as hold:
-            agent = await agent_dao.get(schedule.agent_id)
-            await hold.confirm()
-            if agent is not None and agent.status == "running" and not is_agent_expired(agent):
-                started = await in_fresh_schedule_context(
-                    agent_schedule_dao.start_occurrence(schedule.id, token, datetime.now(UTC))
-                )
-                if not started:
-                    raise ScheduleLeaseLostError("Schedule occurrence ownership was revoked before start")
-                await hold.confirm()
-                summary = f"Scheduled task failed: {instruction[:60]}"
+            try:
+                async with hold.within_budget(get_settings().SCHEDULE_RUN_BUDGET_SECONDS):
+                    agent = await agent_dao.get(schedule.agent_id)
+                    await hold.confirm()
+                    if agent is not None and agent.status == "running" and not is_agent_expired(agent):
+                        started = await in_fresh_schedule_context(
+                            agent_schedule_dao.start_occurrence(schedule.id, token, datetime.now(UTC))
+                        )
+                        if not started:
+                            raise ScheduleLeaseLostError("Schedule occurrence ownership was revoked before start")
+                        await hold.confirm()
+                        summary = f"Scheduled task failed: {instruction[:60]}"
+                        detail["status"] = "failure"
+                        try:
+                            static_prompt, dynamic_prompt = await build_agent_context(
+                                schedule.agent_id, agent.name, agent.role_description or ""
+                            )
+                            await hold.confirm()
+                            outcome = await call_agent_llm_with_tools(
+                                agent_id=schedule.agent_id,
+                                system_prompt=f"{static_prompt}\n\n{dynamic_prompt}",
+                                user_prompt=f"[Scheduled task] {instruction}",
+                                max_rounds=50,
+                                session_id=str(schedule.id),
+                                guard=hold,
+                            )
+                            await hold.confirm()
+                            detail["status"] = outcome.status
+                            detail["reply"] = outcome.content[:500]
+                            if outcome.status == "success":
+                                summary = f"Scheduled task executed: {instruction[:60]}"
+                        except ScheduleLeaseLostError:
+                            raise
+                        except Exception as exc:
+                            await hold.confirm()
+                            detail["error"] = str(exc)[:500]
+                            logger.bind(schedule_id=str(schedule.id)).exception("Periodic schedule execution failed")
+                    await hold.confirm()
+            except ScheduleRunTimeoutError:
+                summary = f"Scheduled task timed out: {instruction[:60]}"
                 detail["status"] = "failure"
-                try:
-                    static_prompt, dynamic_prompt = await build_agent_context(
-                        schedule.agent_id, agent.name, agent.role_description or ""
-                    )
-                    await hold.confirm()
-                    outcome = await call_agent_llm_with_tools(
-                        agent_id=schedule.agent_id,
-                        system_prompt=f"{static_prompt}\n\n{dynamic_prompt}",
-                        user_prompt=f"[Scheduled task] {instruction}",
-                        max_rounds=50,
-                        session_id=str(schedule.id),
-                        guard=hold,
-                    )
-                    await hold.confirm()
-                    detail["status"] = outcome.status
-                    detail["reply"] = outcome.content[:500]
-                    if outcome.status == "success":
-                        summary = f"Scheduled task executed: {instruction[:60]}"
-                except ScheduleLeaseLostError:
-                    raise
-                except Exception as exc:
-                    await hold.confirm()
-                    detail["error"] = str(exc)[:500]
-                    logger.bind(schedule_id=str(schedule.id)).exception("Periodic schedule execution failed")
-            await hold.confirm()
+                detail["error"] = SCHEDULE_RUN_TIMEOUT_ERROR
+                await hold.settle(partial(finish, hold.ensure_owned))
+                return
 
-        async def finish() -> None:
-            hold.ensure_held()
-            async with connection_ctx():
-                if not await agent_schedule_dao.finish_occurrence(schedule.id, token, datetime.now(UTC)):
-                    raise ScheduleLeaseLostError("Schedule occurrence ownership was revoked before finish")
-                hold.ensure_held()
-                _ = await agent_activity_log_dao.create(
-                    obj_in={
-                        "agent_id": schedule.agent_id,
-                        "action_type": "schedule_run",
-                        "summary": summary,
-                        "detail_json": detail,
-                        "related_id": None,
-                    }
-                )
-                hold.ensure_held()
-                if schedule.pending_notify_on_failure is True and detail["status"] == "failure":
-                    try:
-                        creator = await load_user_principal(schedule.created_by, fresh=True)
-                        authorized_agent, _ = await check_agent_access(creator, schedule.agent_id, fresh=True)
-                    except HTTPException:
-                        recipient = None
-                    else:
-                        recipient = (
-                            creator.id
-                            if creator.identity is not None
-                            and creator.tenant_id is not None
-                            and creator.tenant_id == authorized_agent.tenant_id
-                            else None
-                        )
-                    hold.ensure_held()
-                    if recipient is not None:
-                        _ = await send_notification(
-                            user_id=recipient,
-                            notification_kind=NotificationKind.SYSTEM_ALERT,
-                            title="Scheduled run failed",
-                            body="A scheduled run failed. Open schedule history to review the run.",
-                            link=f"/app/agents/{schedule.agent_id}/schedules",
-                            ref_id=schedule.id,
-                        )
-                    hold.ensure_held()
-
-        await in_fresh_schedule_context(finish())
+        await in_fresh_schedule_context(finish(hold.ensure_held))
     except ScheduleLeaseLostError as exc:
         logger.bind(schedule_id=str(schedule.id)).info("Periodic schedule stopped after lease loss: {}", exc)
     except Exception:

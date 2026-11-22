@@ -11,11 +11,11 @@ from __future__ import annotations
 import io
 import tempfile
 import zlib
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, override
+from typing import Final, Never, TypeIs, override
 
 import httpx
 
@@ -111,6 +111,10 @@ async def read_capped(response: httpx.Response, limit: int) -> bytes:
         return body.read(size)
 
 
+def _is_closable_wire(value: AsyncIterator[bytes]) -> TypeIs[AsyncGenerator[bytes, Never]]:
+    return isinstance(value, AsyncGenerator)
+
+
 async def _bounded_chunks(response: httpx.Response, chunk_size: int) -> AsyncGenerator[bytes | memoryview]:
     """Decode raw wire bytes with a hard output bound; never use an unbounded decoder flush."""
     encoding = http_header(response.headers, "content-encoding").strip().lower()
@@ -121,7 +125,7 @@ async def _bounded_chunks(response: httpx.Response, chunk_size: int) -> AsyncGen
     decoder = zlib.decompressobj(zlib.MAX_WBITS | 16 if encoding == "gzip" else zlib.MAX_WBITS)
     first_attempt = encoding == "deflate"
     wire_chunks = response.aiter_raw()
-    if not isinstance(wire_chunks, AsyncGenerator):
+    if not _is_closable_wire(wire_chunks):
         raise httpx.StreamError("Attachment raw iterator must support explicit generator cleanup")
     async with aclosing(wire_chunks) as wire:
         async for raw in wire:

@@ -1,7 +1,7 @@
 """Seed the OKR Agent on platform startup and when a tenant enables OKR."""
 
 import uuid
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from app.config import get_settings
 from app.core.domain.agents import AgentStatus, AgentType, PermissionAccessLevel, PermissionGrantScope
@@ -24,7 +24,7 @@ from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_
 from app.services.storage import get_storage_backend, store_agent_bytes
 
 
-async def _create_openclaw_seed_agent(obj_in: dict[str, Any]) -> AgentRecord:
+async def _create_openclaw_seed_agent(obj_in: dict[str, object]) -> AgentRecord:
     raw_key, key_hash = mint_openclaw_gateway_key()
     payload = {**obj_in, "agent_type": AgentType.OPENCLAW, "api_key_hash": key_hash}
     agent = await agent_dao.create(obj_in=payload)
@@ -444,7 +444,7 @@ async def _sync_okr_triggers_with_settings(agent_id: uuid.UUID, settings: OKRSet
         trigger = triggers.get(name)
         if not trigger:
             continue
-        updates: dict[str, Any] = {}
+        updates: dict[str, object] = {}
         if "config" in values and trigger.config != values["config"]:
             updates["config"] = values["config"]
         if trigger.is_enabled != values["is_enabled"]:

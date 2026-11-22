@@ -1,7 +1,7 @@
 import { useTranslation } from '@/hooks/use-translation'
 import { Button } from '@/components/ui/button'
 import type { useAgentLifecycle } from '@/hooks/use-agent-lifecycle'
-import { lifecycleBlockMessage, mcpWarningMessage, recordedStatus, startFailureMessage } from '@/lib/agent-lifecycle-policy'
+import { lifecycleBlockMessage, lifecycleStartBlock, mcpWarningMessage, recordedStatus, startFailureMessage } from '@/lib/agent-lifecycle-policy'
 import { runtimeLossSummary } from '@/lib/agent-runtime-loss'
 import { relativeTime } from '@/lib/relative-time'
 
@@ -15,7 +15,7 @@ export function AgentLifecycleStatus({ query, expired, upgrading }: {
   const lifecycle = query.data
   const start = lifecycle?.start
   const paused = !query.online || query.isPaused
-  const canStart = query.confirmed && lifecycle?.availability.can_start && !expired && !upgrading
+  const canStart = lifecycleStartBlock({ expired, upgrading, confirmed: query.confirmed, lifecycle }) === null
   return (
     <section aria-label={translate("Agent lifecycle")} className="min-h-112 space-y-3 rounded-xl border border-border p-4 text-[1.0625rem] leading-normal md:min-h-96 md:text-sm [overflow-wrap:anywhere] [&_.text-muted-foreground]:text-[0.9375rem] md:[&_.text-muted-foreground]:text-sm">
       <h2 className="font-display text-lg font-semibold md:text-base">{translate("Agent lifecycle")}</h2>

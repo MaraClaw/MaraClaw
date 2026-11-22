@@ -5,6 +5,7 @@ import base64
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Protocol, cast
 
 from app.core.json_types import JsonObject, json_as_str, json_object_from
 from app.core.logging import logger
@@ -19,6 +20,10 @@ from app.services.document_conversion.chrome_runtime import (
     wait_for_cdp,
 )
 from app.services.document_conversion.resource_policy import ResourcePolicy, weasyprint_url_fetcher
+
+
+class _WeasyPrintDocument(Protocol):
+    def write_pdf(self, target: str, /) -> bytes | None: ...
 
 
 def _json_float(value: object, default: float) -> float:
@@ -157,7 +162,7 @@ async def convert_html_to_pdf(
 
         from weasyprint import HTML
 
-        document = HTML(filename=str(src_file), url_fetcher=weasyprint_url_fetcher(policy))
+        document = cast("_WeasyPrintDocument", HTML(filename=str(src_file), url_fetcher=weasyprint_url_fetcher(policy)))
         _ = await asyncio.to_thread(document.write_pdf, str(tgt_file))
         note = f" Chrome fallback reason: {chrome_pdf_error}" if chrome_pdf_error else ""
         return f"✅ Successfully converted HTML to PDF with WeasyPrint: {target_path}.{note}"

@@ -29,8 +29,8 @@ def require_member_user(user: UserRecord) -> None:
             return
         case UserRole.PLATFORM_ADMIN:
             reject_member_audience()
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(user.role)
 
 
 async def require_member_account(user: UserRecord) -> None:

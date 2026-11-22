@@ -1,7 +1,7 @@
 """Admit one fresh Personal WhatsApp original into the burst lane (capacity, then quota, then durable acceptance).
 
 The caller owns the transaction and has already authorized, reserved the native receipt, bound the reply session
-and locked the shared transcript session. Nothing here reads, selects or writes a guest model or file.
+and locked the transcript session. Nothing here reads, selects or writes a guest model or file.
 """
 
 from typing import assert_never
@@ -38,7 +38,7 @@ async def _accept(original: PersonalOriginal) -> PersonalAccepted:
     message_id = await persist_channel_user_message(
         agent_id=original.agent.id,
         user_id=original.sender.id,
-        conversation_id=str(original.shared_session_id),
+        conversation_id=str(original.transcript_session_id),
         content=original.text if original.saved_content is None else original.saved_content,
         attachments=original.attachments,
     )
@@ -73,7 +73,7 @@ async def _charge_sender_and_agent(original: PersonalOriginal) -> bool:
 
 async def admit_personal_original(original: PersonalOriginal) -> PersonalAccepted | PersonalRejected:
     limits = personal_burst_limits()
-    usage = await personal_burst_dao.pending_usage(original.agent.id, original.shared_session_id)
+    usage = await personal_burst_dao.pending_usage(original.agent.id, original.transcript_session_id)
     verdict = usage.admission(limits, original.text_bytes)
     match verdict:
         case "oversize":
@@ -82,8 +82,8 @@ async def admit_personal_original(original: PersonalOriginal) -> PersonalAccepte
             return await reject_personal_original(original, "capacity_rejected", limits)
         case "admit":
             pass
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(verdict)
     if not await _charge_sender_and_agent(original):
         return await reject_personal_original(original, "quota_rejected", limits)
     return await _accept(original)

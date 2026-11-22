@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any, ClassVar, cast
+from collections.abc import Mapping
+from typing import ClassVar, cast
 
+from app.core.json_types import is_str_dict
 from app.core.logging import logger
 from app.dao import identity_dao, identity_provider_dao, org_member_dao, tenant_dao, user_dao
 from app.dao.base import as_uuid
@@ -94,7 +96,7 @@ class SSOService:
         provider_user_id: str,
         provider_type: str,
         tenant_id: str | None = None,
-        identity_data: dict[str, Any] | None = None,
+        identity_data: Mapping[str, object] | None = None,
         *,
         provider: IdentityProviderRecord | None = None,
     ) -> UserRecord | None:
@@ -113,19 +115,19 @@ class SSOService:
             return None
         return await user_dao.get_with_identity(member.user_id)
 
-    def _get_identity_payload(self, identity_data: dict[str, Any] | None) -> dict[str, Any]:
+    def _get_identity_payload(self, identity_data: Mapping[str, object] | None) -> Mapping[str, object]:
         if identity_data is None or not identity_data:
             return {}
         raw_data = identity_data.get("raw_data")
-        if isinstance(raw_data, dict):
-            return dict[str, Any](raw_data)
+        if is_str_dict(raw_data):
+            return dict(raw_data)
         return identity_data
 
     def _extract_identity_ids(
         self,
         provider_type: str,
         provider_user_id: str,
-        identity_data: dict[str, Any] | None,
+        identity_data: Mapping[str, object] | None,
     ) -> tuple[str | None, str | None, str | None]:
         payload = self._get_identity_payload(identity_data)
         identity_data = identity_data or {}
@@ -143,7 +145,7 @@ class SSOService:
             or identity_data.get("unionId")
         )
 
-        external_id = None
+        external_id: object = None
         if provider_type == "feishu":
             external_id = payload.get("user_id") or (identity_data or {}).get("user_id")
         elif provider_type == "dingtalk":
@@ -156,16 +158,16 @@ class SSOService:
         elif provider_type == "wecom":
             external_id = provider_user_id
 
-        open_id = cast("str", (raw_open_id or "").strip())
-        union_id = cast("str", (raw_union_id or "").strip())
-        normalized_external_id = cast("str", (external_id or "").strip())
+        open_id = cast("str", raw_open_id or "").strip()
+        union_id = cast("str", raw_union_id or "").strip()
+        normalized_external_id = cast("str", external_id or "").strip()
         return union_id or None, open_id or None, normalized_external_id or None
 
     def _identity_lookup_chain(
         self,
         provider_type: str,
         provider_user_id: str,
-        identity_data: dict[str, Any] | None,
+        identity_data: Mapping[str, object] | None,
     ) -> list[tuple[str, str]]:
         raw_union_id, raw_open_id, raw_external_id = self._extract_identity_ids(
             provider_type, provider_user_id, identity_data
@@ -191,7 +193,7 @@ class SSOService:
         provider_id: uuid.UUID,
         provider_type: str,
         provider_user_id: str,
-        identity_data: dict[str, Any] | None = None,
+        identity_data: Mapping[str, object] | None = None,
     ) -> OrgMemberRecord | None:
         for field, lookup_value in self._identity_lookup_chain(provider_type, provider_user_id, identity_data):
             member = await org_member_dao.find_active_by_provider_field(provider_id, field, lookup_value)
@@ -204,7 +206,7 @@ class SSOService:
         user_id: uuid.UUID | str,
         provider_type: str,
         provider_user_id: str,
-        identity_data: dict[str, Any] | None = None,
+        identity_data: Mapping[str, object] | None = None,
         tenant_id: str | None = None,
         *,
         provider: IdentityProviderRecord | None = None,
@@ -226,7 +228,7 @@ class SSOService:
         )
 
         if member:
-            fields: dict[str, Any] = {"user_id": uid}
+            fields: dict[str, object] = {"user_id": uid}
             if raw_external_id not in (None, "") and member.external_id in (None, ""):
                 fields["external_id"] = raw_external_id
             if raw_open_id not in (None, "") and member.open_id in (None, ""):
@@ -313,7 +315,7 @@ class SSOService:
         provider_type: str,
         provider_user_id: str,
         tenant_id: str | None = None,
-        identity_data: dict[str, Any] | None = None,
+        identity_data: Mapping[str, object] | None = None,
     ) -> UserRecord | None:
         """Check if an external identity is already linked to another user."""
         return await self.resolve_user_identity(
@@ -343,7 +345,7 @@ class SSOService:
 
         other_providers = await identity_provider_dao.list_active_sso_excluding_tenant(tenant_id)
         if other_providers:
-            conflict_names = []
+            conflict_names: list[str] = []
             for other_provider in other_providers:
                 conflict_tenant = await tenant_dao.get(other_provider.tenant_id) if other_provider.tenant_id else None
                 name = conflict_tenant.name if conflict_tenant else str(other_provider.tenant_id)

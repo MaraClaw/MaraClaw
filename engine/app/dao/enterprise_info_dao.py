@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, ClassVar, final
+from typing import ClassVar, final
 from uuid import UUID
 
+from app.core.json_types import JsonObject
 from app.dao.base import BaseDAO
 from app.records.enterprise_info import EnterpriseInfoRecord
 
@@ -44,7 +45,7 @@ class EnterpriseInfoDAO(BaseDAO[EnterpriseInfoRecord]):
         self,
         *,
         info_type: str,
-        content: dict[str, Any],
+        content: JsonObject,
         visible_roles: list[str],
         updated_by: UUID | None,
     ) -> EnterpriseInfoRecord:

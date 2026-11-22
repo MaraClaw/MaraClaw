@@ -7,10 +7,12 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.config import get_settings
+from app.dao.chat_dao import chat_session_dao
 from app.records.agent import AgentRecord
+from app.records.chat import ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
+from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.services import openclaw_native_capacity as capacity_module, openclaw_routing as routing
-from app.services.shared_chat import shared_session_id
 
 
 async def _checkpoint() -> None:
@@ -68,7 +70,9 @@ class Turns:
         return page, (self._key(page[-1]) if len(heads) > limit else None)
 
     async def lane_head(self, member: GatewayMessageRecord) -> GatewayMessageRecord | None:
-        lane = member.conversation_id or str(member.id)
+        return self.head_of(member.conversation_id or str(member.id))
+
+    def head_of(self, lane: str) -> GatewayMessageRecord | None:
         return next((row for row in self._oldest() if (row.conversation_id or str(row.id)) == lane), None)
 
     async def execute(self, _agent: AgentRecord, _text: str, message_id: UUID) -> None:
@@ -133,9 +137,9 @@ async def test_agent_parallel_limit_queues_remaining_lanes(
     assert turns.seen == [first.id, second.id, third.id]
 
 
-@pytest.mark.parametrize("shared", [False, True])
-async def test_running_lane_coalesces_wakes_and_preserves_fifo(turns: Turns, shared: bool) -> None:
-    lane = str(shared_session_id(turns.agent.id)) if shared else "ordinary"
+@pytest.mark.parametrize("canonical", [False, True])
+async def test_running_lane_coalesces_wakes_and_preserves_fifo(turns: Turns, canonical: bool) -> None:
+    lane = str(uuid4()) if canonical else "ordinary"
     first = turns.add(lane)
     turns.wake(first)
     await turns.started(first)
@@ -320,3 +324,83 @@ async def test_queue_overflow_refills_without_another_wake(turns: Turns, monkeyp
     await _join_wakes()
     assert turns.seen == [row.id for row in rows]
     assert not turns.pending
+
+
+@dataclass
+class HumanLanes:
+    """The real ``_claim_wake`` over faked rows: a canonical session claims the FIFO head of its own human lane."""
+
+    turns: Turns
+    sessions: dict[UUID, ChatSessionRecord] = field(default_factory=dict)
+    requests: list[UUID] = field(default_factory=list)
+
+    def open_lane(self) -> str:
+        session = ChatSessionRecord(uuid4(), self.turns.agent.id, uuid4(), is_primary=True)
+        self.sessions[session.id] = session
+        return str(session.id)
+
+    async def gateway_row(self, message_id: UUID, agent_id: UUID) -> GatewayMessageRecord | None:
+        assert agent_id == self.turns.agent.id
+        return next((row for row in self.turns.pending if row.id == message_id), None)
+
+    async def session(self, session_id: UUID, agent_id: UUID) -> ChatSessionRecord | None:
+        found = self.sessions.get(session_id)
+        return found if found is not None and found.agent_id == agent_id else None
+
+    async def human_claim(self, request: SharedDispatchRequest) -> GatewayMessageRecord | None:
+        assert request.agent_id == self.turns.agent.id
+        self.requests.append(request.session_id)
+        return self.turns.head_of(str(request.session_id))
+
+    async def ordinary_claim(self, _agent: AgentRecord, _message_id: UUID) -> GatewayMessageRecord | None:
+        raise AssertionError("a canonical conversation must be claimed on its human lane")
+
+    async def execute(self, agent: AgentRecord, text: str, message_id: UUID) -> None:
+        claimed = await routing._claim_wake(agent, message_id)
+        if claimed is not None:
+            await self.turns.execute(agent, text, claimed.id)
+
+
+@pytest.fixture
+def human_lanes(turns: Turns, monkeypatch: pytest.MonkeyPatch) -> HumanLanes:
+    value = HumanLanes(turns)
+    monkeypatch.setattr(routing.gateway_message_dao, "get_for_agent", value.gateway_row)
+    monkeypatch.setattr(chat_session_dao, "get_for_agent", value.session)
+    monkeypatch.setattr(routing, "claim_ready_shared", value.human_claim)
+    monkeypatch.setattr(routing, "claim_ordinary_turn", value.ordinary_claim)
+    monkeypatch.setattr(routing, "_run_inbox_wake", value.execute)
+    return value
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+async def test_canonical_lanes_overlap_stay_fifo_and_the_agent_limit_serializes_them(
+    turns: Turns, human_lanes: HumanLanes, monkeypatch: pytest.MonkeyPatch, limit: int
+) -> None:
+    # Given two users' canonical lanes of one agent, the first user with a second turn queued behind the first.
+    monkeypatch.setattr(get_settings(), "OPENCLAW_AGENT_MAX_PARALLEL_TURNS", limit)
+    alice, bob = human_lanes.open_lane(), human_lanes.open_lane()
+    alice_first, bob_first, alice_second = turns.add(alice), turns.add(bob), turns.add(alice)
+    # When the agent is woken.
+    turns.wake(alice_second)
+    await turns.started(alice_first)
+    if limit == 2:
+        # Then different users' lanes run at the same time,
+        await turns.started(bob_first)
+        assert turns.active == {alice, bob}
+    await _checkpoint()
+    # while each lane stays single-flight and FIFO,
+    assert not turns.entered[alice_second.id].is_set()
+    if limit == 1:
+        # and a limit of one runs the lanes one at a time.
+        assert not turns.entered[bob_first.id].is_set()
+    turns.release[alice_first.id].set()
+    if limit == 1:
+        await turns.started(bob_first)
+        assert not turns.entered[alice_second.id].is_set()
+        turns.release[bob_first.id].set()
+    await turns.started(alice_second)
+    for release in turns.release.values():
+        release.set()
+    await _join_wakes()
+    assert turns.seen == [alice_first.id, bob_first.id, alice_second.id]
+    assert human_lanes.requests == [UUID(alice), UUID(bob), UUID(alice)]

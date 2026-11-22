@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
-from typing import Any, ClassVar, final, override
+from typing import ClassVar, final, override
 from uuid import UUID
 
-from app.core.json_types import int_from_row
+from app.core.json_types import int_from_row, is_any_list, is_str_dict
 from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
 from app.records.focus import AgentFocusItemRecord
@@ -38,7 +38,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
     @override
     def _select_list(self, alias: str | None = None) -> str:
         # Map SQL column "metadata" into a consistent select list.
-        cols = []
+        cols: list[str] = []
         for col in self.columns:
             expr = f"{alias}.{col}" if alias not in (None, "") else col
             cols.append(expr)
@@ -53,7 +53,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
             return int_from_row(value)
 
     async def list_for_agent(self, agent_id: UUID, *, include_completed: bool = True) -> Sequence[AgentFocusItemRecord]:
-        params: dict[str, Any] = {"agent_id": agent_id}
+        params: dict[str, object] = {"agent_id": agent_id}
         completed_sql = "" if include_completed else " AND status <> 'completed'"
         async with self.session() as db:
             rows = await db.fetchall(
@@ -89,7 +89,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                 data = dict(row)
                 if "item_metadata" in data and "metadata" not in data:
                     data["metadata"] = data.pop("item_metadata")
-                params = {}
+                params: dict[str, object] = {}
                 for col in self.columns:
                     if col not in data and col != "id":
                         continue
@@ -100,7 +100,7 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
                     if col not in data:
                         continue
                     val: object = data[col]
-                    if isinstance(val, (dict, list)):
+                    if is_str_dict(val) or is_any_list(val):
                         params[col] = as_jsonb(val)
                     else:
                         params[col] = val.value if isinstance(val, StrEnum) else val
@@ -117,14 +117,14 @@ class AgentFocusItemDAO(BaseDAO[AgentFocusItemRecord]):
         return inserted
 
     @override
-    async def update(self, *, db_obj: AgentFocusItemRecord, obj_in: Mapping[str, Any]) -> AgentFocusItemRecord:
+    async def update(self, *, db_obj: AgentFocusItemRecord, obj_in: Mapping[str, object]) -> AgentFocusItemRecord:
         data = dict(obj_in)
         if "item_metadata" in data:
             data["metadata"] = data.pop("item_metadata")
         return await super().update(db_obj=db_obj, obj_in=data)
 
     @override
-    async def create(self, *, obj_in: Mapping[str, Any]) -> AgentFocusItemRecord:
+    async def create(self, *, obj_in: Mapping[str, object]) -> AgentFocusItemRecord:
         data = dict(obj_in)
         if "item_metadata" in data:
             data["metadata"] = data.pop("item_metadata")

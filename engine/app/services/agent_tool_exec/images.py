@@ -51,7 +51,7 @@ async def _upload_image(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments)
     if not private_key:
         return "❌ ImageKit Private Key not configured. Ask your admin to configure it in Enterprise Settings → Tools → Upload Image, or set it in your agent's tool config."
 
-    form_data = {}
+    form_data: dict[str, str] = {}
     file_content = None
 
     if file_path:

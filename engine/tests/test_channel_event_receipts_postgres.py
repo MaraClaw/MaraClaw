@@ -20,7 +20,6 @@ from app.services.channels import discord_media, submissions
 from app.services.channels.media_limits import skipped_attachments_note
 from app.services.channels.submissions import AcceptedChannelEvent, ChannelEventConflictError, accept_channel_event
 from app.services.quota_guard import AgentExpired, QuotaExceeded
-from app.services.shared_chat import shared_session_id
 from stream_submission_fixtures import stream_fixture
 
 
@@ -139,7 +138,7 @@ async def test_enqueue_failure_rolls_back_receipt_quota_transcript_sessions_and_
     with pytest.raises(RuntimeError, match="injected acceptance failure"):
         async with transaction(fixture.db.first):
             await accept_channel_event(fixture.event)
-    # Then nothing was accepted, including the newly created provider/shared sessions.
+    # Then nothing was accepted, including the newly created provider/canonical sessions.
     assert await counts(fixture) == {
         "receipts": 0,
         "messages": 0,
@@ -174,7 +173,7 @@ async def test_distinct_native_ids_preserve_transcript_and_reply_routing(channel
     for key in ("native-1", "native-2"):
         async with transaction(fixture.db.first):
             await accept_channel_event(replace(event, event_key=key))
-    # Then both enqueue, with the provider reply session distinct from the shared private transcript.
+    # Then both enqueue, with the provider reply session distinct from the sender's canonical transcript.
     assert await counts(fixture) == {
         "receipts": 2,
         "messages": 2,
@@ -189,11 +188,17 @@ async def test_distinct_native_ids_preserve_transcript_and_reply_routing(channel
             "FROM gateway_messages g JOIN gateway_report_deliveries d ON d.message_id = g.id "
             "JOIN chat_sessions s ON s.id = d.destination_id"
         )
+        canonical = await fixture.db.first.fetchval(
+            "SELECT id FROM chat_sessions WHERE agent_id = %(agent)s AND user_id = %(user)s "
+            "AND source_channel = 'web' AND is_primary AND NOT is_group",
+            {"agent": event.agent_id, "user": fixture.sender_id},
+        )
+        assert (canonical is None) is group
         for row in rows:
             assert row["sender_user_id"] == fixture.sender_id
             assert row["is_group"] is group
             assert row["user_id"] == (fixture.db.user.id if group and owner == "creator" else fixture.sender_id)
-            assert row["conversation_id"] == str(row["id"] if group else shared_session_id(event.agent_id))
+            assert row["conversation_id"] == str(row["id"] if group else canonical)
 
 
 async def test_replay_survives_completion_cleanup_quota_exhaustion_and_expiry(channel_db, monkeypatch):

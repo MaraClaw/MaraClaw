@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import replace
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from typing import TypedDict
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -15,21 +15,34 @@ from app.api import admin as admin_api, tenants as tenants_api, users as users_a
 from app.core.domain.agents import AgentStatus
 from app.core.domain.users import UserRole
 from app.records.agent import AgentRecord
+from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
+from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import admin_provisioning as provisioning
 from app.services.tenant_provisioning import AdminEmailTakenError
 
 
-def _user(*, role: str, user_id=None, tenant_id=None, identity=None, is_active=True, email=None, is_genesis=False):
-    return SimpleNamespace(
+def _user(
+    *,
+    role: str,
+    user_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
+    identity: IdentityRecord | None = None,
+    is_active: bool = True,
+    email: str | None = None,
+    is_genesis: bool = False,
+) -> UserRecord:
+    if email is not None:
+        identity = IdentityRecord(id=uuid.uuid4(), email=email)
+    return UserRecord(
         id=user_id or uuid.uuid4(),
-        role=role,
+        identity_id=identity.id if identity else None,
+        role=UserRole(role),
         tenant_id=tenant_id,
         identity=identity,
         display_name="Admin",
-        avatar_url=None,
         is_active=is_active,
-        email=email,
         is_genesis=is_genesis,
     )
 
@@ -78,7 +91,7 @@ async def test_create_platform_admin_provisions(monkeypatch):
         admin_api,
         "create_additional_platform_admin",
         AsyncMock(
-            return_value=SimpleNamespace(
+            return_value=provisioning.ProvisionedAdmin(
                 user=_user(role="platform_admin", user_id=new_id), admin_email="pa@example.com"
             )
         ),
@@ -112,7 +125,7 @@ async def test_create_org_admin_provisions(monkeypatch):
         users_api,
         "create_additional_org_admin",
         AsyncMock(
-            return_value=SimpleNamespace(
+            return_value=provisioning.ProvisionedAdmin(
                 user=_user(role="org_admin", user_id=new_id, tenant_id=tenant_id),
                 admin_email="oa@example.com",
             )
@@ -160,9 +173,11 @@ async def test_update_role_genesis_org_admin_can_promote(monkeypatch):
     promoted = _user(role="org_admin", tenant_id=tenant_id)
     monkeypatch.setattr(provisioning.user_dao, "update", AsyncMock(return_value=promoted))
     monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+    with patch.object(
+        provisioning,
+        "connection_ctx",
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=None)),
+    ):
         result = await provisioning.apply_user_role_change(
             actor=_user(role="org_admin", tenant_id=tenant_id, is_genesis=True),
             target=target,
@@ -185,7 +200,7 @@ async def test_assign_user_rejects_org_admin_role():
 
 @pytest.mark.asyncio
 async def test_create_additional_platform_admin_write_kwargs(monkeypatch):
-    identity = SimpleNamespace(id=uuid.uuid4())
+    identity = IdentityRecord(id=uuid.uuid4())
     user = _user(role="platform_admin")
     create_identity = AsyncMock(return_value=identity)
     create_user = AsyncMock(return_value=user)
@@ -195,9 +210,11 @@ async def test_create_additional_platform_admin_write_kwargs(monkeypatch):
     monkeypatch.setattr(provisioning.user_dao, "create", create_user)
     monkeypatch.setattr(provisioning.participant_dao, "create_for_user", AsyncMock())
 
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+    with patch.object(
+        provisioning,
+        "connection_ctx",
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=None)),
+    ):
         result = await provisioning.create_additional_platform_admin(
             admin_email="PA@Example.com",
             admin_password="temp-password",
@@ -217,7 +234,7 @@ async def test_create_additional_platform_admin_write_kwargs(monkeypatch):
 @pytest.mark.asyncio
 async def test_create_additional_org_admin_rejects_taken_email(monkeypatch):
     monkeypatch.setattr(
-        provisioning.identity_dao, "get_by_email", AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4()))
+        provisioning.identity_dao, "get_by_email", AsyncMock(return_value=IdentityRecord(id=uuid.uuid4()))
     )
     with pytest.raises(AdminEmailTakenError):
         await provisioning.create_additional_org_admin(
@@ -250,21 +267,23 @@ async def test_set_peer_admin_active_deactivates_other_platform_admin(monkeypatc
     genesis = _user(role="platform_admin")
     target = _user(role="platform_admin", is_active=True)
 
-    async def _is_genesis(user):
+    async def _is_genesis(user: UserRecord) -> bool:
         return user.id == genesis.id
 
     monkeypatch.setattr(provisioning, "is_genesis_platform_admin", _is_genesis)
     monkeypatch.setattr(
         provisioning.user_dao,
         "deactivate_unless_last_active",
-        AsyncMock(return_value=SimpleNamespace(**{**target.__dict__, "is_active": False})),
+        AsyncMock(return_value=replace(target, is_active=False)),
     )
     write_admin_audit = AsyncMock()
     monkeypatch.setattr(provisioning, "write_admin_audit", write_admin_audit)
 
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+    with patch.object(
+        provisioning,
+        "connection_ctx",
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=None)),
+    ):
         updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=False)
     assert updated.is_active is False
     write_admin_audit.assert_awaited_once()
@@ -279,7 +298,7 @@ async def test_set_peer_admin_active_rejects_genesis_org_target(monkeypatch):
     genesis = _user(role="org_admin", tenant_id=tenant_id)
     target = _user(role="org_admin", tenant_id=tenant_id)
 
-    async def _is_genesis(user):
+    async def _is_genesis(user: UserRecord) -> bool:
         return True
 
     monkeypatch.setattr(provisioning, "is_genesis_org_admin", _is_genesis)
@@ -292,7 +311,20 @@ async def test_set_peer_admin_active_rejects_genesis_org_target(monkeypatch):
 async def test_write_admin_audit_persists_actor_and_changes(monkeypatch):
     from app.services import admin_audit
 
-    create = AsyncMock()
+    class AuditPayload(TypedDict):
+        actor_id: uuid.UUID
+        actor_role: str
+        actor_email: str | None
+        action: str
+        changes: dict[str, dict[str, bool]]
+        ip_address: str | None
+
+    writes: list[AuditPayload] = []
+
+    def record_write(*, obj_in: AuditPayload) -> None:
+        writes.append(obj_in)
+
+    create = AsyncMock(side_effect=record_write)
     monkeypatch.setattr(admin_audit.admin_audit_log_dao, "create", create)
     actor = _user(role="platform_admin", email="genesis@example.com")
     target_id = uuid.uuid4()
@@ -305,7 +337,7 @@ async def test_write_admin_audit_persists_actor_and_changes(monkeypatch):
         ip_address="127.0.0.1",
     )
     assert create.await_args is not None
-    payload = create.await_args.kwargs["obj_in"]
+    payload = writes[-1]
     assert payload["actor_id"] == actor.id
     assert payload["actor_role"] == "platform_admin"
     assert payload["actor_email"] == "genesis@example.com"
@@ -352,7 +384,7 @@ async def test_apply_user_assignment_refuses_genesis_and_clears_platform_flag(mo
         )
     assert exc.value.status_code == 403
 
-    identity = SimpleNamespace(id=uuid.uuid4(), is_platform_admin=True)
+    identity = IdentityRecord(id=uuid.uuid4(), is_platform_admin=True)
     peer = _user(role="platform_admin", identity=identity, is_active=True, tenant_id=tenant_id)
     monkeypatch.setattr(provisioning.user_dao, "get_with_identity", AsyncMock(return_value=peer))
     monkeypatch.setattr("app.core.acl_locks.lock_tenants", AsyncMock())
@@ -360,15 +392,26 @@ async def test_apply_user_assignment_refuses_genesis_and_clears_platform_flag(mo
     monkeypatch.setattr(provisioning.user_dao, "count_active_by_role", AsyncMock(return_value=2))
     update_identity = AsyncMock()
     monkeypatch.setattr(provisioning.identity_dao, "update", update_identity)
+
+    class AssignmentUpdate(TypedDict):
+        tenant_id: uuid.UUID
+        role: UserRole
+        is_genesis: bool
+
+    def update_assignment(*, db_obj: UserRecord, obj_in: AssignmentUpdate) -> UserRecord:
+        return replace(db_obj, **obj_in)
+
     monkeypatch.setattr(
         provisioning.user_dao,
         "update",
-        AsyncMock(side_effect=lambda db_obj, obj_in: SimpleNamespace(**{**db_obj.__dict__, **obj_in})),
+        AsyncMock(side_effect=update_assignment),
     )
     monkeypatch.setattr(provisioning, "write_admin_audit", AsyncMock())
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+    with patch.object(
+        provisioning,
+        "connection_ctx",
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=None)),
+    ):
         updated = await provisioning.apply_user_assignment(
             actor=_user(role="platform_admin", is_genesis=True),
             target=peer,
@@ -395,8 +438,11 @@ def test_join_refuses_genesis_and_platform_admin_rewrite():
 async def test_create_additional_org_admin_unique_violation(monkeypatch):
     from app.db.errors import UniqueViolationError
 
-    tenant = SimpleNamespace(
+    tenant = TenantRecord(
         id=uuid.uuid4(),
+        name="Acme",
+        slug="acme",
+        tier=OrganizationPlanId.PRO,
         default_message_limit=50,
         default_message_period="permanent",
         default_max_agents=2,
@@ -408,13 +454,17 @@ async def test_create_additional_org_admin_unique_violation(monkeypatch):
     monkeypatch.setattr(
         provisioning.identity_dao, "create_identity", AsyncMock(side_effect=UniqueViolationError("dup"))
     )
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
-        with pytest.raises(AdminEmailTakenError):
-            await provisioning.create_additional_org_admin(
-                tenant_id=tenant.id, admin_email="oa@acme.com", admin_password="secret1"
-            )
+    with (
+        patch.object(
+            provisioning,
+            "connection_ctx",
+            return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=None)),
+        ),
+        pytest.raises(AdminEmailTakenError),
+    ):
+        await provisioning.create_additional_org_admin(
+            tenant_id=tenant.id, admin_email="oa@acme.com", admin_password="secret1"
+        )
 
 
 @pytest.mark.asyncio
@@ -477,11 +527,14 @@ async def test_set_end_user_active_org_admin_toggles_member(monkeypatch):
     monkeypatch.setattr(provisioning.agent_trigger_dao, "disable_for_creator", disable_triggers)
     monkeypatch.setattr(provisioning.agent_schedule_dao, "disable_for_creator", disable_schedules)
     monkeypatch.setattr("app.services.agent_manager.agent_manager.stop_container", stop_container)
-    with patch("app.services.admin_provisioning.connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock()
-        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.services.admin_provisioning.write_admin_audit", AsyncMock()):
-            updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+    with (
+        patch(
+            "app.services.admin_provisioning.connection_ctx",
+            return_value=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)),
+        ),
+        patch("app.services.admin_provisioning.write_admin_audit", AsyncMock()),
+    ):
+        updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
     from app.api.background_tasks import _tasks
 
     if _tasks:
@@ -509,11 +562,14 @@ async def test_set_end_user_active_platform_admin_cross_tenant(monkeypatch):
     monkeypatch.setattr(provisioning.agent_dao, "disable_for_creator", AsyncMock(return_value=[]))
     monkeypatch.setattr(provisioning.agent_trigger_dao, "disable_for_creator", AsyncMock(return_value=0))
     monkeypatch.setattr(provisioning.agent_schedule_dao, "disable_for_creator", AsyncMock(return_value=0))
-    with patch("app.services.admin_provisioning.connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock()
-        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
-        with patch("app.services.admin_provisioning.write_admin_audit", AsyncMock()):
-            updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
+    with (
+        patch(
+            "app.services.admin_provisioning.connection_ctx",
+            return_value=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)),
+        ),
+        patch("app.services.admin_provisioning.write_admin_audit", AsyncMock()),
+    ):
+        updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
     assert updated.is_active is False
 
 
@@ -524,9 +580,11 @@ async def test_set_end_user_active_is_noop_when_already_set(monkeypatch):
     target = _user(role="member", tenant_id=tenant_id, is_active=False)
     clear = AsyncMock(return_value=target)
     monkeypatch.setattr(provisioning.user_dao, "clear_suspension_mark", clear, raising=False)
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+    with patch.object(
+        provisioning,
+        "connection_ctx",
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False)),
+    ):
         updated = await provisioning.set_end_user_active(actor=actor, target=target, is_active=False)
     assert updated is target
     clear.assert_awaited_once_with(target)
@@ -542,9 +600,11 @@ async def test_repeated_peer_admin_deactivation_clears_suspension_mark(monkeypat
     clear = AsyncMock(return_value=target)
     monkeypatch.setattr(provisioning.user_dao, "clear_suspension_mark", clear, raising=False)
 
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+    with patch.object(
+        provisioning,
+        "connection_ctx",
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False)),
+    ):
         updated = await provisioning.set_peer_admin_active(actor=actor, target=target, is_active=False)
 
     assert updated is target
@@ -590,20 +650,22 @@ async def test_set_peer_admin_active_activates_inactive_platform_admin(monkeypat
     genesis = _user(role="platform_admin")
     target = _user(role="platform_admin", is_active=False)
 
-    async def _is_genesis(user):
+    async def _is_genesis(user: UserRecord) -> bool:
         return user.id == genesis.id
 
     monkeypatch.setattr(provisioning, "is_genesis_platform_admin", _is_genesis)
     monkeypatch.setattr(
         provisioning.user_dao,
         "update",
-        AsyncMock(return_value=SimpleNamespace(**{**target.__dict__, "is_active": True})),
+        AsyncMock(return_value=replace(target, is_active=True)),
     )
     write_admin_audit = AsyncMock()
     monkeypatch.setattr(provisioning, "write_admin_audit", write_admin_audit)
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=None)
+    with patch.object(
+        provisioning,
+        "connection_ctx",
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=None)),
+    ):
         updated = await provisioning.set_peer_admin_active(actor=genesis, target=target, is_active=True)
     assert updated.is_active is True
     assert write_admin_audit.await_args is not None
@@ -651,9 +713,11 @@ async def test_individual_retry_uses_locked_state_after_company_transition(
     monkeypatch.setattr(provisioning.user_dao, "update", update)
     monkeypatch.setattr(provisioning.user_dao, "deactivate_unless_last_active", deactivate)
     action = provisioning.set_peer_admin_active if role == UserRole.ORG_ADMIN else provisioning.set_end_user_active
-    with patch.object(provisioning, "connection_ctx") as ctx:
-        ctx.return_value.__aenter__ = AsyncMock(return_value=None)
-        ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+    with patch.object(
+        provisioning,
+        "connection_ctx",
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=None), __aexit__=AsyncMock(return_value=False)),
+    ):
         updated = await action(actor=actor, target=snapshot, is_active=is_active)
 
     assert updated.is_active is is_active

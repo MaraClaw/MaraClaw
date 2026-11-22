@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from app.core.json_types import JsonObject, mapping_from_row
+from app.core.json_types import JsonObject
 from app.core.logging import logger
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import connection_ctx
@@ -21,7 +21,7 @@ from app.services.trigger_runtime.queue import enqueue_trigger_execution
 
 def runtime_execution_payload(trigger: AgentTriggerRecord) -> JsonObject:
     """Capture ephemeral trigger evaluation context into an execution payload."""
-    cfg = mapping_from_row(trigger.config)
+    cfg = trigger.config
     payload: JsonObject = {}
     for key in (
         "_matched_message",

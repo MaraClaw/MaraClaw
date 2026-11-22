@@ -41,6 +41,7 @@ from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_model_selection import prepare_shared_openclaw_message
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message
 from app.services.quota_guard import charge_conversation_quota
+from app.services.shared_chat import ensure_canonical_session
 
 if TYPE_CHECKING:
     from app.records.zalo_personal import ZaloSource
@@ -71,7 +72,14 @@ class ChannelEvent:
     media: tuple[StoredFile, ...] = ()
 
     def fingerprint(self) -> str:
-        payload = [self.sender_id, self.conversation_id, self.is_group, self.kind, self.text, self.media_ids]
+        payload: list[str | bool | tuple[str, ...] | None] = [
+            self.sender_id,
+            self.conversation_id,
+            self.is_group,
+            self.kind,
+            self.text,
+            self.media_ids,
+        ]
         if self.personal_source is not None:
             payload[1] = str(self.personal_source.auth_epoch)
         if self.zalo_source is not None:
@@ -205,9 +213,24 @@ async def is_channel_event_replay(event: ChannelEvent) -> bool:
     return _matching(await channel_event_receipt_dao.find(candidate), candidate)
 
 
+async def _ensure_owner_transcript(agent_id: UUID) -> None:
+    """Create the Personal sender's canonical session before the acceptance transaction opens.
+
+    The Personal sender is the bridge owner, the agent's creator, and `personal_owner` takes FOR UPDATE on the tenant,
+    creator and agent rows until commit. A first canonical INSERT under those locks can deadlock with the same pair's
+    concurrent first INSERT elsewhere: its agent foreign-key check waits on our row lock while our INSERT waits on its
+    unique-index entry. With the row already there, `bind_channel_conversation` only reads it.
+    """
+    agent = await agent_dao.get(agent_id)
+    if agent is not None:
+        _ = await ensure_canonical_session(agent.id, agent.creator_id)
+
+
 async def accept_channel_event(
     event: ChannelEvent, *, content: str | None = None, saved_content: str | None = None
 ) -> AcceptedChannelEvent:
+    if event.personal_source is not None:
+        await _ensure_owner_transcript(event.agent_id)
     async with connection_ctx():
         agent, sender = await _authorize(event)
         source = event.personal_source
@@ -240,7 +263,7 @@ async def accept_channel_event(
                 receipt=ReceiptKey(event.config_id, event.provider, event.event_key),
                 text=event.text,
                 route=route,
-                shared_session_id=session.id,
+                transcript_session_id=session.id,
                 reply_session_id=reply.id,
                 attachments=event.attachments,
                 saved_content=saved_content,

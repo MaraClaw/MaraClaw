@@ -5,7 +5,7 @@ import os
 import shutil
 from pathlib import Path
 
-from app.core.json_types import JsonObject, JsonValue, json_as_str, json_object_from
+from app.core.json_types import JsonObject, JsonValue, is_any_list, json_as_str, json_object_from
 from app.core.logging import logger
 from app.services.document_conversion.chrome_runtime import (
     PolicedCdpSession,
@@ -54,7 +54,7 @@ def is_translucent_css_color(value: str | None) -> bool:
 
 
 def _json_objects(value: object) -> list[JsonObject]:
-    if not isinstance(value, list):
+    if not is_any_list(value):
         return []
     items: list[object] = list(value)
     return [json_object_from(item) for item in items]

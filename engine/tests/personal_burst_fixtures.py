@@ -11,7 +11,7 @@ from app.records.personal_burst import PersonalBurstLimits
 from app.records.whatsapp_personal import PersonalConnection, PersonalRoute, PersonalSource
 from app.services.channels import personal_burst_admission, submissions
 from app.services.channels.submissions import AcceptedChannelEvent, ChannelEvent, accept_channel_event
-from app.services.shared_chat import shared_session_id
+from app.services.shared_chat import ensure_canonical_session
 
 __all__ = ["channel_db", "receipt_db"]
 
@@ -29,10 +29,7 @@ LIMITS = PersonalBurstLimits(
 class LinkedBurst:
     f: ChannelDatabase
     owner: PersonalConnection
-
-    @property
-    def shared(self) -> UUID:
-        return shared_session_id(self.f.db.agent.id)
+    transcript: UUID
 
 
 def use_limits(monkeypatch: pytest.MonkeyPatch, limits: PersonalBurstLimits) -> None:
@@ -52,7 +49,8 @@ async def linked(channel_db: ChannelDatabase, monkeypatch: pytest.MonkeyPatch) -
         await channel_db.db.first.execute(
             "UPDATE users SET quota_message_limit = 100 WHERE id = %(id)s", {"id": channel_db.db.user.id}
         )
-    return LinkedBurst(channel_db, owner)
+        owner_session = await ensure_canonical_session(channel_db.db.agent.id, channel_db.db.user.id)
+    return LinkedBurst(channel_db, owner, owner_session.id)
 
 
 def event_for(owner: PersonalConnection, native: str, text: str) -> ChannelEvent:

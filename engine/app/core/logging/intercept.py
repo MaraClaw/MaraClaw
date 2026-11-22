@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import override
+from types import TracebackType
+from typing import Literal, override
 
 from app.core.logging.levels import coerce_level
 from app.core.logging.service import get_logging_service
@@ -23,6 +24,17 @@ NOISY_CONNECTION_LOGGERS = {
 }
 
 
+def _logged_exception(
+    exc_info: tuple[type[BaseException] | None, BaseException | None, TracebackType | None] | Literal[False] | None,
+) -> BaseException | None:
+    # Logger._log normalizes truthy exc_info but forwards False unchanged.
+    if exc_info is not None and exc_info is not False:
+        exc_value = exc_info[1]
+        if isinstance(exc_value, BaseException):
+            return exc_value
+    return None
+
+
 class InterceptHandler(logging.Handler):
     """Forward stdlib records without walking through logging.py frames twice."""
 
@@ -35,11 +47,7 @@ class InterceptHandler(logging.Handler):
                 f"{record.msg} [args={record.args}]" if record.args is not None and record.args else str(record.msg)
             )
 
-        exc: BaseException | None = None
-        if record.exc_info is not None and record.exc_info is not False:
-            exc_value = record.exc_info[1]
-            if isinstance(exc_value, BaseException):
-                exc = exc_value
+        exc = _logged_exception(record.exc_info)
 
         get_logging_service().emit(
             coerce_level(record.levelname),

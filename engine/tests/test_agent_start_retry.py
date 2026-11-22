@@ -3,6 +3,8 @@ from typing import Literal
 
 import anyio
 import pytest
+from pywhales import ClientNotFoundError
+from pywhales.client_config import ParsingError
 
 import test_agent_start_postgres as fixtures
 from app.dao.agent_start_dao import agent_start_dao
@@ -99,6 +101,36 @@ async def test_failed_attempts_reserve_increasing_database_backoff_before_docker
     current = await agent_start_dao.get(start_db, original.id)
     assert current is not None
     assert current.state == "pending"
+
+
+@pytest.mark.parametrize(
+    "fault", [ParsingError("truncated inspect"), ClientNotFoundError("missing client"), ValueError("setup incomplete")]
+)
+async def test_unexpected_start_failure_keeps_retryable_backoff(start_db, executor, monkeypatch, fault):
+    operation, original = await make_pending(start_db)
+    start = reconciler.agent_manager.start_container
+
+    async def fail_first(record):
+        executor.append(record.id)
+        raise fault
+
+    monkeypatch.setattr(reconciler.agent_manager, "start_container", fail_first)
+    await reconciler.reconcile_agent_starts_once()
+    metadata = await retry_metadata(start_db, operation)
+    assert (metadata.attempts, metadata.last_failure_code) == (1, "runtime_failed")
+    assert metadata.next_retry_at is not None
+    assert metadata.last_attempt_at is not None
+    assert (metadata.next_retry_at - metadata.last_attempt_at).total_seconds() == 10
+
+    await reconciler.reconcile_agent_starts_once()
+    assert executor == [original.id]
+    await due_now(start_db, operation)
+    monkeypatch.setattr(reconciler.agent_manager, "start_container", start)
+    await reconciler.reconcile_agent_starts_once()
+
+    assert executor == [original.id, original.id]
+    metadata = await retry_metadata(start_db, operation)
+    assert (metadata.attempts, metadata.next_retry_at) == (2, None)
 
 
 async def test_explicit_retry_reuses_pending_identity_and_preserves_history(start_db, executor, monkeypatch):

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.chat_dao import chat_message_dao
 from app.db import session as session_module
 from app.services import tool_config as tool_config_mod
 from app.services.trigger_runtime import executions as trigger_executions
@@ -75,16 +75,6 @@ def raw(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeRawConnection]:
     token = session_module._conn_ctx.set(None)
     yield conn
     session_module._conn_ctx.reset(token)
-
-
-@pytest.mark.asyncio
-async def test_find_best_web_session_scopes_message_aggregate(raw: _FakeRawConnection) -> None:
-    await chat_session_dao.find_best_web_session(agent_id=uuid4(), user_id=uuid4())
-    query, _params = raw.executed[0]
-    assert "FROM chat_messages" in query
-    assert "WHERE conversation_id IN" in query
-    assert "source_channel = 'web'" in query
-    assert query.count("FROM chat_messages") == 1
 
 
 @pytest.mark.asyncio

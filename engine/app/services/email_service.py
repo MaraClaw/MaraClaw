@@ -175,10 +175,12 @@ def _decode_header_value(value: str) -> str:
     result: list[str] = []
     items = list[object](decode_header(value))
     for item in items:
-        if not isinstance(item, tuple) or len(item) < 2:
+        if not isinstance(item, tuple):
             continue
-        part = item[0]
-        charset = item[1]
+        pair = cast("tuple[object, ...]", item)
+        if len(pair) < 2:
+            continue
+        part, charset = pair[0], pair[1]
         encoding = charset if isinstance(charset, str) else "utf-8"
         if isinstance(part, bytes):
             result.append(part.decode(encoding, errors="replace"))
@@ -368,7 +370,7 @@ async def read_emails(
                     first = msg_data[0] if msg_data else None
                     if not isinstance(first, tuple):
                         continue
-                    raw = first[1]
+                    raw = cast("object", first[1])
                     if not isinstance(raw, bytes):
                         raise TypeError("IMAP message payload must be bytes")
                     msg = email_lib.message_from_bytes(raw)
@@ -446,7 +448,7 @@ async def reply_email(
                 first = msg_data[0] if msg_data else None
                 if not isinstance(first, tuple) or len(first) < 2:
                     raise TypeError("IMAP message payload is missing")
-                raw = first[1]
+                raw = cast("object", first[1])
                 if not isinstance(raw, bytes):
                     raise TypeError("IMAP message payload must be bytes")
                 original = email_lib.message_from_bytes(raw)

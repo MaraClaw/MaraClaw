@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Literal
@@ -12,32 +12,42 @@ from psycopg.rows import DictRow, dict_row
 
 import test_shared_gateway_postgres as shared_fixtures
 from app.core.acl_locks import lock_tenants, lock_user
+from app.core.domain.users import UserRole
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.user_dao import user_dao
 from app.db.connection import DbConnection, Row
 from app.db.errors import LockNotAvailableError
 from app.db.session import get_connection, transaction
 from app.records.agent import AgentRecord
+from app.records.gateway_message import GatewayMessageRecord
+from app.records.openclaw_dispatch import SharedDispatchRequest
 from app.records.user import UserRecord
-from app.services import openclaw_gateway_delivery as delivery
+from app.services import chat_submissions, openclaw_gateway_delivery as delivery
+from app.services.channels.whatsapp_personal_access import personal_owner
+from app.services.channels.zalo_personal_access import zalo_owner
 from app.services.openclaw_native_claims import claim_ordinary_turn
+from app.services.openclaw_shared_dispatch import claim_ready_shared
+from app.services.shared_chat import ensure_canonical_session, read_only_detail
 from test_chat_submission_postgres import ReceiptDatabase
 
 receipt_database = shared_fixtures.receipt_database
 pooled_database = shared_fixtures.pooled_database
 
 type Operation = Literal["claim", "settle"]
-type Table = Literal["tenants", "users", "agents"]
-type RowLock = Literal["SHARE", "UPDATE"]
+type Table = Literal["tenants", "users", "agents", "chat_sessions"]
+type RowLock = Literal["SHARE", "NO KEY UPDATE", "UPDATE"]
+type OwnerLocks = Callable[..., Awaitable[tuple[AgentRecord, UserRecord]]]
 
 FINISHED: dict[Operation, str] = {"claim": "delivered", "settle": "completed"}
 LOCK_SQL: dict[tuple[Table, RowLock], str] = {
     ("tenants", "SHARE"): "SELECT id FROM tenants WHERE id = %(id)s FOR SHARE NOWAIT",
     ("tenants", "UPDATE"): "SELECT id FROM tenants WHERE id = %(id)s FOR UPDATE NOWAIT",
     ("users", "SHARE"): "SELECT id FROM users WHERE id = %(id)s FOR SHARE NOWAIT",
+    ("users", "NO KEY UPDATE"): "SELECT id FROM users WHERE id = %(id)s FOR NO KEY UPDATE NOWAIT",
     ("users", "UPDATE"): "SELECT id FROM users WHERE id = %(id)s FOR UPDATE NOWAIT",
     ("agents", "SHARE"): "SELECT id FROM agents WHERE id = %(id)s FOR SHARE NOWAIT",
     ("agents", "UPDATE"): "SELECT id FROM agents WHERE id = %(id)s FOR UPDATE NOWAIT",
+    ("chat_sessions", "UPDATE"): "SELECT id FROM chat_sessions WHERE id = %(id)s FOR UPDATE NOWAIT",
 }
 
 
@@ -191,6 +201,18 @@ async def test_lock_helpers_are_exclusive_by_default_and_shared_on_request(world
             assert not await can_lock(world, table, row_id, "UPDATE")
 
 
+@pytest.mark.parametrize("owner_locks", [personal_owner, zalo_owner], ids=["whatsapp", "zalo"])
+async def test_authorization_only_owner_locks_admit_the_quota_update_but_not_acl_mutators(
+    world: ScopeWorld, owner_locks: OwnerLocks
+) -> None:
+    # Given a transaction holding a personal channel's authorization-only locks on the creator.
+    async with transaction(world.db.first):
+        await owner_locks(world.held.id, authorization_only=True)
+        # Then the creator's quota UPDATE can take its row lock, while an ACL mutator's FOR UPDATE still cannot.
+        assert await can_lock(world, "users", world.owner.id, "NO KEY UPDATE")
+        assert not await can_lock(world, "users", world.owner.id, "UPDATE")
+
+
 @pytest.mark.parametrize("operation", ["claim", "settle"])
 @pytest.mark.parametrize("neighbour", ["sibling", "other_owner"])
 async def test_operations_for_different_agents_in_one_tenant_overlap(
@@ -289,3 +311,152 @@ async def test_claim_after_a_committing_acl_mutation_observes_it_and_refuses(wor
         (403, {"code": "agent_work_blocked", "blocking_codes": ["owner_inactive"]})
     ]
     assert await status_of(world, message) == "pending"
+
+
+@dataclass(slots=True)
+class LaneSpy:
+    """Records the agent and human-lane lock order and can hold an operation right after it locks the lane."""
+
+    gate: Gate | None = None
+    order: list[str] = field(default_factory=list)
+
+
+@pytest.fixture
+def lane_spy(monkeypatch: pytest.MonkeyPatch) -> LaneSpy:
+    spy = LaneSpy()
+    lock_lane = gateway_message_dao.lock_human_lane
+    lock_agent = delivery.lock_agent
+
+    async def locked_lane(agent_id: UUID, session_id: UUID) -> bool:
+        locked = await lock_lane(agent_id, session_id)
+        spy.order.append("lane")
+        if spy.gate is not None:
+            connection = get_connection()
+            assert connection is not None
+            spy.gate.backend_pid = connection.raw.info.backend_pid
+            spy.gate.entered.set()
+            await spy.gate.release.wait()
+        return locked
+
+    async def locked_agent(db: DbConnection, agent_id: UUID, tenant_id: UUID | None) -> None:
+        spy.order.append("agent")
+        await lock_agent(db, agent_id, tenant_id)
+
+    monkeypatch.setattr(gateway_message_dao, "lock_human_lane", locked_lane)
+    monkeypatch.setattr(delivery, "lock_agent", locked_agent)
+    return spy
+
+
+async def canonical_turn(world: ScopeWorld, operation: Operation) -> tuple[UUID, UUID]:
+    """The owner's canonical session and one turn on its human lane, queued (claim) or claimed (settle)."""
+    session = await ensure_canonical_session(world.held.id, world.owner.id)
+    values: dict[str, object] = {
+        "agent_id": world.held.id,
+        "sender_user_id": world.owner.id,
+        "conversation_id": str(session.id),
+        "content": "hello",
+        "status": "pending",
+    }
+    if operation == "settle":
+        values |= {"status": "delivered", "delivered_at": datetime.now(UTC)}
+    async with transaction(world.db.first):
+        return session.id, (await gateway_message_dao.create(obj_in=values)).id
+
+
+async def claim_lane(world: ScopeWorld, session_id: UUID, claimed: list[GatewayMessageRecord | None]) -> None:
+    claimed.append(await claim_ready_shared(SharedDispatchRequest(world.held.id, datetime.now(UTC), session_id)))
+
+
+async def test_ensure_canonical_session_finishes_while_a_claim_holds_that_human_lane(
+    world: ScopeWorld, lane_spy: LaneSpy
+) -> None:
+    # Given a claim holding the FOR UPDATE lane lock on the owner's canonical session.
+    session_id, message_id = await canonical_turn(world, "claim")
+    gate = lane_spy.gate = Gate()
+    claimed: list[GatewayMessageRecord | None] = []
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(claim_lane, world, session_id, claimed)
+            await gate.entered.wait()
+            assert not await can_lock(world, "chat_sessions", session_id, "UPDATE")
+            # When the owner's canonical session is ensured concurrently.
+            ensured = None
+            with anyio.move_on_after(5) as attempt:
+                ensured = await ensure_canonical_session(world.held.id, world.owner.id)
+            # Then it returns the same row without waiting for the claim, and the claim still completes.
+            assert not attempt.cancelled_caught, "ensure blocked behind the claim's human-lane lock"
+            assert ensured is not None
+            assert ensured.id == session_id
+            gate.release.set()
+    assert [row.id if row is not None else None for row in claimed] == [message_id]
+    assert await status_of(world, message_id) == "delivered"
+
+
+async def test_canonical_settlement_locks_the_agent_before_the_human_lane(world: ScopeWorld, lane_spy: LaneSpy) -> None:
+    # Given a claimed turn on the owner's canonical lane.
+    session_id, message_id = await canonical_turn(world, "settle")
+    gate = lane_spy.gate = Gate()
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            # When its settlement holds the lane lock.
+            tasks.start_soon(finish, "settle", world.held, message_id)
+            await gate.entered.wait()
+            # Then it took shared scope locks and the exclusive agent lock first, the same order as every claim.
+            assert lane_spy.order == ["agent", "lane"]
+            assert await can_lock(world, "tenants", world.tenant_id, "SHARE")
+            assert not await can_lock(world, "tenants", world.tenant_id, "UPDATE")
+            assert await can_lock(world, "users", world.owner.id, "SHARE")
+            assert not await can_lock(world, "agents", world.held.id, "SHARE")
+            assert not await can_lock(world, "chat_sessions", session_id, "UPDATE")
+            gate.release.set()
+    assert await status_of(world, message_id) == "completed"
+
+
+async def test_read_only_refusal_behind_a_lane_holder_returns_the_callers_canonical_session(
+    world: ScopeWorld, lane_spy: LaneSpy
+) -> None:
+    # Given a claim holding the owner's canonical lane, and a company admin who may read it but not write to it.
+    session_id, message_id = await canonical_turn(world, "claim")
+    admin = UserRecord(id=uuid4(), tenant_id=world.tenant_id, display_name="Org admin", role=UserRole.ORG_ADMIN)
+    async with transaction(world.db.first):
+        await world.db.first.execute(
+            "INSERT INTO users (id, display_name, tenant_id, role) VALUES (%(id)s, 'Org admin', %(tenant)s, 'org_admin')",
+            {"id": admin.id, "tenant": world.tenant_id},
+        )
+    gate = lane_spy.gate = Gate()
+    claimed: list[GatewayMessageRecord | None] = []
+    refusals: list[HTTPException] = []
+
+    async def submit() -> None:
+        with pytest.raises(HTTPException) as refused:
+            _ = await chat_submissions.accept_submission(
+                chat_submissions.ChatSubmission(client_submission_id=uuid4(), content="not mine"),
+                user=admin,
+                agent=world.held,
+                session_id=session_id,
+                history=[],
+            )
+        refusals.append(refused.value)
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(claim_lane, world, session_id, claimed)
+            await gate.entered.wait()
+            # When the admin submits into that session, the submission queues behind the lane lock.
+            tasks.start_soon(submit)
+            waiting = await waiters_of(world, gate.backend_pid)
+            assert len(waiting) == 1
+            assert "FROM chat_sessions" in str(waiting[0]["query"])
+            assert not refusals
+            gate.release.set()
+    # Then the refusal names the admin's own canonical session, and the claim completed.
+    canonical = await world.monitor.fetchval(
+        "SELECT id FROM chat_sessions WHERE agent_id = %(agent)s AND user_id = %(user)s "
+        "AND source_channel = 'web' AND is_primary AND NOT is_group",
+        {"agent": world.held.id, "user": admin.id},
+    )
+    assert isinstance(canonical, UUID)
+    assert canonical != session_id
+    assert [(refused.status_code, refused.detail) for refused in refusals] == [(409, read_only_detail(canonical))]
+    assert [row.id if row is not None else None for row in claimed] == [message_id]
+    assert await status_of(world, message_id) == "delivered"

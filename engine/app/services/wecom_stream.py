@@ -11,17 +11,18 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from functools import wraps
 from random import random as system_random
-from typing import Final, TypeIs, cast
+from typing import Final, cast
 from unittest.mock import patch
 
 from app.core.domain.channels import ChannelType
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import JsonObject, is_json_value
 from app.core.logging import logger
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import jittered_backoff
 from app.services.channels.stream_source import StreamSource, acquire_stream_source, authorize_stream_source
+from app.services.im_sdk_types import is_object_dict
 
-_WECOM_SDK_PROXY_DISABLED = False
+_wecom_sdk_proxy_disabled = False
 CONNECT_RETRY_BASE_SECONDS: Final = 5.0
 CONNECT_RETRY_CAP_SECONDS: Final = 120.0
 _random_source: Callable[[], float] = system_random
@@ -32,33 +33,23 @@ type _WeComClient = object
 
 
 def _json_object(value: object) -> JsonObject:
-    if not isinstance(value, dict):
+    if not is_object_dict(value):
         return {}
     result: JsonObject = {}
     for key, item in value.items():
         if not isinstance(key, str):
             continue
-        result[key] = item if _is_json_value(item) else None
+        result[key] = item if is_json_value(item) else None
     return result
-
-
-def _is_json_value(value: object) -> TypeIs[JsonValue]:
-    if value is None or isinstance(value, str | int | float | bool):
-        return True
-    if isinstance(value, list):
-        return all(_is_json_value(item) for item in value)
-    if isinstance(value, dict):
-        return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
-    return False
 
 
 def _disable_wecom_sdk_proxy() -> None:
     """Force the WeCom SDK websocket path to bypass system proxies."""
-    global _WECOM_SDK_PROXY_DISABLED
+    global _wecom_sdk_proxy_disabled
 
     import wecom_aibot_sdk.ws as sdk_ws
 
-    if _WECOM_SDK_PROXY_DISABLED:
+    if _wecom_sdk_proxy_disabled:
         return
 
     original_connect = sdk_ws.websockets.connect
@@ -71,7 +62,7 @@ def _disable_wecom_sdk_proxy() -> None:
         return connect_no_proxy
 
     _ = patch.object(sdk_ws.websockets, "connect", without_proxy(original_connect)).start()
-    _WECOM_SDK_PROXY_DISABLED = True
+    _wecom_sdk_proxy_disabled = True
 
 
 async def _await_maybe(value: object) -> object:

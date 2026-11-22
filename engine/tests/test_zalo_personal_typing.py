@@ -251,8 +251,8 @@ async def test_real_valid_peers_not_starved_by_unbound_or_stale_destinations(
             )
             await f.db.first.execute(
                 "INSERT INTO gateway_messages(id,agent_id,conversation_id,content,status,created_at) "
-                "VALUES(%(id)s,%(agent)s,'shared','work','delivered',now()-interval '1 minute')",
-                {"id": message, "agent": owned.agent_id},
+                "VALUES(%(id)s,%(agent)s,%(conversation)s,'work','delivered',now()-interval '1 minute')",
+                {"id": message, "agent": owned.agent_id, "conversation": str(uuid4())},
             )
             await f.db.first.execute(
                 "INSERT INTO gateway_report_deliveries(id,message_id,destination_kind,destination_id,tenant_id) "

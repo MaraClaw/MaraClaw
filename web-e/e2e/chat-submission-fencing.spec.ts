@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test'
 import { accept, chatPath, complete, firstSession, message, navigateChat, prepareChat, secondSession, submitted } from './chat-identity-fixture'
-import { originalAgent, replacementAgent, replacementToken, writeFromOtherTab } from './session-fencing-fixture'
+import { originalAgent, originalUser, replacementAgent, replacementToken, writeFromOtherTab } from './session-fencing-fixture'
+
+const ownSession = { id: firstSession, agent_id: originalAgent.id, user_id: originalUser.id, title: 'Identity thread 1', source_channel: 'web',
+  is_primary: true, writable: true, created_at: '2029-01-01T00:00:00Z', message_count: 0, unread_count: 0 }
 
 for (const boundary of ['owner', 'conversation', 'agent'] as const) {
   test(`unacknowledged submissions and late receipts cannot cross a retired ${boundary}`, async ({ page }) => {
@@ -96,7 +99,7 @@ for (const boundary of ['owner', 'conversation', 'effect recreation'] as const) 
   })
 }
 
-test('late shared-session ensure cannot navigate or replay across a conversation switch', async ({ page }) => {
+test('late own-session ensure cannot navigate or replay across a conversation switch', async ({ page }) => {
   const chat = await prepareChat(page)
   const requested = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
@@ -104,11 +107,11 @@ test('late shared-session ensure cannot navigate or replay across a conversation
     if (route.request().method() !== 'POST') return route.fallback()
     requested.resolve()
     await release.promise
-    await route.fulfill({ json: { id: firstSession, source_channel: 'shared' } })
+    await route.fulfill({ json: ownSession })
   })
   await page.goto(`/app/agents/${originalAgent.id}/chat`)
   await requested.promise
-  await page.getByRole('textbox', { name: `Message ${originalAgent.name}` }).fill('Queued for the shared conversation')
+  await page.getByRole('textbox', { name: `Message ${originalAgent.name}` }).fill('Queued for your conversation')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await navigateChat(page, chatPath(secondSession))
   const current = await chat.socket()
@@ -130,7 +133,7 @@ for (const retireOwner of [false, true]) {
     await page.route('**/api/agents/*/sessions', async (route) => {
       requested.resolve()
       await release.promise
-      await route.fulfill({ json: { id: firstSession, source_channel: 'shared' } })
+      await route.fulfill({ json: ownSession })
     })
     await page.goto(`/app/agents/${originalAgent.id}/chat`)
     await expect(page.getByRole('textbox', { name: `Message ${originalAgent.name}` })).toBeVisible()

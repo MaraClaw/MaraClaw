@@ -108,6 +108,9 @@ class GuestSettings:
         return getattr(self.wrapped_settings, name)
 
 
+UPSTREAM_MEMORY_SEARCH = {"enabled": True, "rememberAcrossConversations": False}
+
+
 def test_generate_openclaw_config_uses_native_keyword_memory(monkeypatch, tmp_path):
     # Given
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
@@ -119,9 +122,27 @@ def test_generate_openclaw_config_uses_native_keyword_memory(monkeypatch, tmp_pa
     config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     # Then
-    assert config["memory"]["search"] == {"enabled": True}
+    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {"slots": {"memory": "memory-core"}}
+
+
+def test_generate_openclaw_config_confines_session_tools_to_the_current_conversation(monkeypatch, tmp_path):
+    # Given
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    manager = AgentManager.__new__(AgentManager)
+    agent: Any = SimpleNamespace(id=uuid.uuid4(), name="Session Agent", creator_id=uuid.uuid4(), primary_model_id=None)
+
+    # When
+    config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
+
+    # Then
+    assert config["tools"] == {
+        "deny": ["web_search"],
+        "web": {"search": {"enabled": False}},
+        "sessions": {"visibility": "self"},
+    }
 
 
 CONTROL_UI_ORIGINS = ["http://localhost:18789", "http://127.0.0.1:18789"]
@@ -187,6 +208,32 @@ def test_write_guest_config_adds_control_ui_origins_to_legacy_config_without_rot
     assert (gateway["bind"], gateway["port"]) == ("lan", 18789)
 
 
+def test_write_guest_config_rewrites_a_guest_cached_under_the_previous_fingerprint(monkeypatch, tmp_path):
+    # Given
+    settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
+    monkeypatch.setattr(agent_manager_module, "settings", settings)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_PROXY_ENABLED", False)
+    monkeypatch.setattr(agent_manager_module.settings, "TAVILY_API_KEY", "")
+    monkeypatch.setattr(agent_manager_module, "_guest_config_fingerprints", {})
+    manager = AgentManager.__new__(AgentManager)
+    agent = AgentRecord(id=uuid.uuid4(), name="Upgraded Agent", creator_id=uuid.uuid4())
+    agent_dir = tmp_path / str(agent.id)
+    agent_dir.mkdir()
+    config_path = agent_dir / "openclaw.json"
+    config_path.write_text("{}", encoding="utf-8")
+    current = manager._guest_config_fingerprint(primary=None, fallback=None)
+    agent_manager_module._guest_config_fingerprints[str(agent.id)] = "|".join(
+        ["native-gateway-rpc-v1", *current.split("|")[1:]]
+    )
+
+    # When
+    manager.write_guest_config(agent, primary=None)
+
+    # Then
+    stored = json.loads(config_path.read_text(encoding="utf-8"))
+    assert stored["tools"]["sessions"] == {"visibility": "self"}
+
+
 def test_write_guest_config_leaves_native_transport_files_to_the_turn_path(monkeypatch, tmp_path):
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
@@ -246,7 +293,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     assert config["gateway"]["mode"] == "local"
     assert config["gateway"]["bind"] == "lan"
     assert "heartbeat" not in config["agents"]["defaults"]
-    assert config["memory"]["search"] == {"enabled": True}
+    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
 
@@ -305,7 +352,7 @@ def test_write_guest_config_refreshes_native_memory_with_empty_process_cache(mon
     # Then
     assert path == config_path
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    assert config["memory"]["search"] == {"enabled": True}
+    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {
         "slots": {"memory": "memory-core"},
@@ -575,7 +622,7 @@ async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_p
     # Then
     assert container_id == "container-1234567890"
     config = json.loads((agent_dir / "openclaw.json").read_text(encoding="utf-8"))
-    assert config["memory"]["search"] == {"enabled": True}
+    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {"slots": {"memory": "memory-core"}}
 

@@ -6,37 +6,57 @@ import { ZodError } from 'zod'
 import { authSession } from '../src/lib/auth-session.ts'
 import { getSession, listSessionsPage, SESSION_PAGE_SIZE } from '../src/lib/chat-sessions-api.ts'
 import { chatSessionKey, chatSessionsKey, controlSessionsKey, distinctSessions } from '../src/lib/chat-sessions-query.ts'
-import { controlSessionId, isWritableSession } from '../src/lib/chat/sessions.ts'
+import { controlSessionId, isOwnConversation, isWritableSession } from '../src/lib/chat/sessions.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 
-const archive = { id: 'archive', source_channel: 'web', is_primary: true, user_id: 'viewer' }
-const shared = { id: 'shared', source_channel: 'shared', is_primary: true, user_id: 'creator' }
-const peer = { id: 'peer', source_channel: 'agent' }
-const group = { id: 'group', source_channel: 'feishu', is_group: true }
+const me = 'viewer'
+const own = { id: 'own', source_channel: 'web', is_primary: true, user_id: me, writable: true }
+const colleague = { id: 'colleague', source_channel: 'web', is_primary: true, user_id: 'colleague', writable: false }
+const reply = { id: 'reply', source_channel: 'web', is_primary: false, user_id: me, writable: false }
+const peer = { id: 'peer', source_channel: 'agent', user_id: me, writable: true }
+const group = { id: 'group', source_channel: 'feishu', is_group: true, user_id: 'colleague', writable: true }
 
-test('direct control selects shared regardless of archive order, primary flag or creator provenance', () => {
-  const sessions = [archive, peer, shared]
-  const selected = controlSessionId(sessions, '')
-  assert.equal(selected, shared.id)
-  assert.equal(controlSessionId(sessions, archive.id), shared.id)
+test('Given rows from the engine, only those it marks writable accept new turns, whatever their channel', () => {
+  // Given a missing row, rows the engine refused (including a group) and an unflagged peer, then the rows it allows
+  const sessions = [undefined, colleague, reply, { ...group, writable: false }, { id: 'unflagged', source_channel: 'agent' }, own, peer, group]
+  // When
+  const writable = sessions.map(isWritableSession)
+  // Then
+  assert.deepEqual(writable, [false, false, false, false, false, true, true, true])
 })
 
-test('direct control never falls back to a private or peer session when shared is absent', () => {
-  const selected = controlSessionId([archive, peer], '')
-  assert.equal(selected, undefined)
+test('Given rows the viewer can see, only their writable canonical row is their own conversation', () => {
+  // Given / When
+  const owned = [own, reply, peer, colleague, { ...colleague, writable: true }, { ...own, writable: false }, { ...own, is_group: true }]
+    .map((session) => isOwnConversation(session, me))
+  // Then
+  assert.deepEqual(owned, [true, false, false, false, false, false, false])
+  assert.equal(isOwnConversation(own, undefined), false)
+})
+
+test('Given no usable request, direct control falls back to your own conversation regardless of order', () => {
+  // Given
+  const sessions = [colleague, reply, peer, own]
+  // When / Then
+  assert.equal(controlSessionId(sessions, '', me), own.id)
+  assert.equal(controlSessionId(sessions, colleague.id, me), own.id)
+  assert.equal(controlSessionId(sessions, reply.id, me), own.id)
+})
+
+test('Given no own conversation, direct control never falls back to a colleague, a reply row or a peer session', () => {
+  // Given / When / Then
+  assert.equal(controlSessionId([colleague, { ...colleague, id: 'writable-colleague', writable: true }, reply, peer], '', me), undefined)
+  assert.equal(controlSessionId([own], '', undefined), undefined)
 })
 
 for (const session of [peer, group]) {
-  test(`explicit ${session.id} control retains its own scope`, () => {
-    const selected = controlSessionId([archive, shared, session], session.id)
+  test(`Given an explicit writable ${session.id} session, direct control keeps its own scope`, () => {
+    // Given / When
+    const selected = controlSessionId([own, colleague, session], session.id, me)
+    // Then
     assert.equal(selected, session.id)
   })
 }
-
-test('only shared, peer and group sessions accept new turns', () => {
-  const writable = [undefined, archive, { ...archive, source_channel: 'slack' }, shared, peer, group].map(isWritableSession)
-  assert.deepEqual(writable, [false, false, false, true, true, true])
-})
 
 const agentId = '5458ec51-a954-4306-8626-68e16921d95f'
 const row = (index: number, overrides: Record<string, unknown> = {}) => ({
@@ -44,7 +64,7 @@ const row = (index: number, overrides: Record<string, unknown> = {}) => ({
   source_channel: 'web', created_at: '2030-01-01T00:00:00Z', last_message_at: null, message_count: 1, unread_count: 0,
   is_primary: false, ...overrides,
 })
-const sharedRow = row(0, { source_channel: 'shared', is_primary: true })
+const ownRow = row(0, { is_primary: true, writable: true })
 const reservedCursor = 'opaque+/=? page&scope=all'
 
 for (const cursor of [undefined, null, reservedCursor]) {
@@ -59,19 +79,19 @@ for (const cursor of [undefined, null, reservedCursor]) {
       assert.equal(init.method, 'GET')
       assert.equal(init.body, undefined)
       assert.equal(init.signal, signal)
-      return Response.json({ items: [sharedRow], next_cursor: null, has_more: false })
+      return Response.json({ items: [ownRow], next_cursor: null, has_more: false })
     })
     // When
     const page = await listSessionsPage(agentId, 'all', { cursor, signal })
     // Then
-    assert.deepEqual(page, { items: [sharedRow], next_cursor: null, has_more: false })
+    assert.deepEqual(page, { items: [ownRow], next_cursor: null, has_more: false })
   })
 }
 
 test('session pages and lookups are parsed with the generated schema, not trusted as arrays', async (context) => {
   // Given
   const bodies = [
-    [sharedRow], {}, { items: [], has_more: false }, { items: [{ ...sharedRow, id: undefined }], next_cursor: null, has_more: false },
+    [ownRow], {}, { items: [], has_more: false }, { items: [{ ...ownRow, id: undefined }], next_cursor: null, has_more: false },
     { items: [], next_cursor: 7, has_more: true }, { items: [], next_cursor: null, has_more: 'no' },
   ]
   for (const body of bodies) {
@@ -79,8 +99,8 @@ test('session pages and lookups are parsed with the generated schema, not truste
     // When / Then
     await assert.rejects(listSessionsPage(agentId, 'mine'), ZodError)
   }
-  context.mock.method(globalThis, 'fetch', async () => Response.json({ ...sharedRow, created_at: undefined }))
-  await assert.rejects(getSession(agentId, sharedRow.id), ZodError)
+  context.mock.method(globalThis, 'fetch', async () => Response.json({ ...ownRow, created_at: undefined }))
+  await assert.rejects(getSession(agentId, ownRow.id), ZodError)
 })
 
 test('a session lookup requests the encoded session path and returns the validated row', async (context) => {
@@ -122,18 +142,18 @@ test('a session page completing after the owner changes is discarded', async (co
 
 test('loaded pages flatten without repeating a row a later page moved or re-sent', () => {
   // Given a session that moved up while the user scrolled and so appears on both pages.
-  const first = { items: [sharedRow, row(1), row(2)] }
+  const first = { items: [ownRow, row(1), row(2)] }
   const second = { items: [row(2, { title: 'stale copy' }), row(3)] }
   // When
   const rows = distinctSessions([first, second])
   // Then the first copy wins, order is preserved and nothing repeats.
-  assert.deepEqual(rows.map((session) => session.id), [sharedRow, row(1), row(2), row(3)].map((session) => session.id))
+  assert.deepEqual(rows.map((session) => session.id), [ownRow, row(1), row(2), row(3)].map((session) => session.id))
   assert.equal(rows[2]?.title, 'Thread 2')
   assert.deepEqual(distinctSessions(undefined), [])
 })
 
 test('chat and Take Control keep separate caches per agent and scope', async (context) => {
-  // Given a chat list for the creator, a chat list for a member and a Take Control list on one agent.
+  // Given a chat list for an org admin, a chat list for a member and a Take Control list on one agent.
   const client = new QueryClient()
   context.after(() => client.clear())
   const keys = [chatSessionsKey(agentId, 'all'), chatSessionsKey(agentId, 'mine'), controlSessionsKey(agentId), chatSessionKey(agentId, 'x')]
@@ -160,7 +180,7 @@ test('paging an infinite chat query walks opaque cursors once and Take Control f
     const params = new URL(path, 'https://fixture.test').searchParams
     requests.push({ scope: params.get('scope'), cursor: params.get('cursor') })
     const cursor = params.get('cursor')
-    return Response.json(cursor === null ? { items: [sharedRow, row(1)], next_cursor: reservedCursor, has_more: true }
+    return Response.json(cursor === null ? { items: [ownRow, row(1)], next_cursor: reservedCursor, has_more: true }
       : cursor === reservedCursor ? { items: [row(2), row(1)], next_cursor: 'last', has_more: true }
         : { items: [row(3)], next_cursor: null, has_more: false })
   })
@@ -174,7 +194,7 @@ test('paging an infinite chat query walks opaque cursors once and Take Control f
   await client.fetchQuery({ queryKey: controlSessionsKey(agentId), queryFn: () => listSessionsPage(agentId, 'mine') })
   // Then chat advanced only with returned cursors, the repeated row collapses and Take Control never reused chat's data.
   const cached = client.getQueryData<{ pages: Awaited<ReturnType<typeof listSessionsPage>>[] }>(chatSessionsKey(agentId, 'all'))
-  assert.deepEqual(distinctSessions(cached?.pages).map((session) => session.id), [sharedRow, row(1), row(2), row(3)].map((session) => session.id))
+  assert.deepEqual(distinctSessions(cached?.pages).map((session) => session.id), [ownRow, row(1), row(2), row(3)].map((session) => session.id))
   assert.deepEqual(requests, [
     { scope: 'all', cursor: null }, { scope: 'all', cursor: reservedCursor }, { scope: 'all', cursor: 'last' }, { scope: 'mine', cursor: null },
   ])

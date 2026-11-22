@@ -2,6 +2,7 @@ import json
 import time
 import uuid
 from types import SimpleNamespace
+from typing import TypedDict
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,6 +15,14 @@ from app.services import chat_tickets, file_download_tickets, password_reset_ser
 from test_chat_tickets import TicketRedis
 
 
+class _BindingFields(TypedDict):
+    user_id: uuid.UUID
+    tenant_id: uuid.UUID
+    agent_id: uuid.UUID
+    auth_deadline: int
+    auth_generation: int
+
+
 @pytest.fixture(params=["chat", "download"])
 def transport(request, monkeypatch):
     user = SimpleNamespace(
@@ -21,7 +30,7 @@ def transport(request, monkeypatch):
         tenant_id=uuid.uuid4(),
         identity=SimpleNamespace(id=uuid.uuid4(), auth_generation=7),
     )
-    fields = {
+    fields: _BindingFields = {
         "user_id": user.id,
         "tenant_id": user.tenant_id,
         "agent_id": uuid.uuid4(),
@@ -35,7 +44,9 @@ def transport(request, monkeypatch):
         monkeypatch.setattr(
             chat_tickets.chat_session_dao,
             "get_for_agent",
-            AsyncMock(return_value=SimpleNamespace(user_id=user.id, source_channel="web")),
+            AsyncMock(
+                return_value=SimpleNamespace(user_id=user.id, source_channel="web", is_primary=True, is_group=False)
+            ),
         )
     else:
         service = file_download_tickets

@@ -401,8 +401,8 @@ async def decide(
             target = CapacityOrderStatus.APPROVED
         case ApprovalAction.REJECT:
             target = CapacityOrderStatus.REJECTED
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(action)
     async with connection_ctx() as db:
         _require_platform_admin(await _principal(reviewer_id))
         snapshot = await orders.get(order_id)

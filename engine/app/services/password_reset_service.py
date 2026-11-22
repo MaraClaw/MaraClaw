@@ -6,7 +6,7 @@ import hashlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from app.config import get_settings
 from app.core.events import get_redis
@@ -68,10 +68,11 @@ async def build_password_reset_url(raw_token: str, request: object | None = None
     frontend wins so end-user reset links land on web-e and admin links on web-a.
     """
     from fastapi import Request
+    from starlette.datastructures import State
 
     from app.services.frontend_origin import resolve_frontend_base_url
 
-    req = request if isinstance(request, Request) else None
+    req = cast("Request[State]", request) if isinstance(request, Request) else None
     base_url = await resolve_frontend_base_url(req)
     return f"{base_url}/reset-password?token={raw_token}"
 

@@ -24,8 +24,13 @@ agent expiry and charge the actual sender's conversation quota.
 Receipt reservation, transcript persistence, quota charging, guest enqueue, and the
 originating IM reply intent commit together. A failed transaction leaves the event
 retryable. Distinct native event IDs remain distinct even when text is identical.
-Direct messages retain the shared agent transcript and provider-specific reply
-session; group conversations retain their separate session routing.
+A direct message is transcribed in the linked sender's canonical session
+(`binding.bind_channel_conversation` calls `ensure_canonical_session`) and answered
+through its provider-specific reply session. Unlinked senders are rejected, and the
+user message is published to the owner only. Personal WhatsApp bursts use the
+creator's canonical session as `transcript_session_id`; `channels/submissions.py`
+ensures that session before the acceptance transaction opens. Group conversations
+retain their separate session routing.
 
 `CHANNEL_MEDIA_MAX_ATTACHMENTS` (1 to 10, default 10) bounds the attachments the engine
 fetches from one native message on Slack, Feishu, DingTalk, Google Chat, Teams, Discord,
@@ -104,16 +109,18 @@ charge. Replays do not extend collection, charge quota again, or add another mem
 The engine reserves one pending gateway turn for a contiguous, same-scope burst and
 joins its original texts with two newlines. It becomes ready after two seconds of
 quiet, with a maximum collection window of five seconds from the first member.
-Five seconds is not an execution deadline: an earlier active or uncertain shared
-turn, unavailable model, or guest update gate can still delay execution.
+Five seconds is not an execution deadline: an earlier active or uncertain turn in
+the same human lane, unavailable model, or guest update gate can still delay
+execution.
 
-There is one active shared human turn per agent. Committed immediate wakes and
-pending recovery claim the actual FIFO head through `openclaw_shared_dispatch`;
+There is one active turn per human lane (one lane per agent and user). Committed
+immediate wakes and pending recovery claim the actual FIFO head through
+`openclaw_shared_dispatch`;
 they cannot skip an unready head. A claimed turn's body and model selection are frozen. New
 arrivals form a later turn, and an intervening web entry or different sender/route
 prevents appending to an earlier burst. Admission does not rewrite guest model
 configuration; dispatch applies the selected model under guest-write exclusion
-before committing the claim. Shared uncertain deliveries are not timeout-requeued.
+before committing the claim. Uncertain deliveries are not timeout-requeued.
 
 The worker/all role owns the required `openclaw_dispatch_reconciler` loop. It scans
 pending lane heads in keyset pages of 50 at a one-second interval and uses the normal
@@ -127,7 +134,7 @@ old work to a newly linked account.
 |---|---:|---|
 | `WHATSAPP_PERSONAL_BURST_QUIET_SECONDS` | 2 | Quiet interval before a burst is ready |
 | `WHATSAPP_PERSONAL_BURST_MAX_SECONDS` | 5 | Maximum collection window |
-| `WHATSAPP_PERSONAL_BURST_PENDING_COUNT` | 50 | Pending accepted Personal originals per shared lane |
+| `WHATSAPP_PERSONAL_BURST_PENDING_COUNT` | 50 | Pending accepted Personal originals per human lane |
 | `WHATSAPP_PERSONAL_BURST_PENDING_BYTES` | 65536 | Pending original UTF-8 bytes, excluding separators |
 | `WHATSAPP_PERSONAL_BURST_BODY_BYTES` | 16384 | One joined turn's UTF-8 bytes, including separators |
 | `WHATSAPP_PERSONAL_BUSY_NOTICE_COOLDOWN_SECONDS` | 30 | Minimum interval between notices for the same frozen scope |

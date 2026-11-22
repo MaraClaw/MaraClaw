@@ -19,7 +19,7 @@ Scope: windowed transcript and live reply rendering, response copy, attachment d
 - `message-content.tsx`: `ChatMessageContent`, message text and attachment-card composition.
 - `office-viewer.ts`: `createOfficeViewer` and `NavigableOfficeViewer`, uniform Office adapter.
 - `response-copy.tsx`: `ResponseCopy`, exact source clipboard text and source-bound success/failure feedback.
-- `session-list.tsx`: `SessionList`, a collapsed `Other conversations` navigation at the top of the scrolling thread (never a header or sidebar: the chat panel must keep filling the workspace). It lists loaded sessions as links (shared first, then `username` or title) and offers Load older conversations; it renders nothing when only the shared session exists and no further page does. Data comes from the paged sessions query in `agent-chat.tsx`.
+- `session-list.tsx`: `SessionList`, a collapsed `Other conversations` navigation at the top of the scrolling thread (never a header or sidebar: the chat panel must keep filling the workspace). It lists loaded sessions as links: the caller's own conversation first, labelled `Your conversation` and linking to the default chat route, then other owners by `username` (or title) with a `Read-only` badge when the session is not writable. It offers Load older conversations and renders nothing when only the caller's own conversation is loaded and no further page exists. Data comes from the paged sessions query in `agent-chat.tsx`.
 - `skill-mention-input.tsx`: native composer and installed-skill picker; accent chips are an aria-hidden, noninteractive background mirror, never a second editor.
 - `transcript.tsx`: `ChatTranscript`, memoized rows, measured wrappers, focus registration, spacer gaps, delivery/retry state and timestamps.
 

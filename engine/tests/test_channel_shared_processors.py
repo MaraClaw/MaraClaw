@@ -182,7 +182,7 @@ async def invoke_processor(name, pipeline, *, group=False, native_id="native-id"
 
 
 @pytest.mark.parametrize("processor", PROCESSORS)
-async def test_direct_processor_uses_shared_history_and_original_reply_address(pipeline, processor):
+async def test_direct_processor_uses_sender_canonical_history_and_original_reply_address(pipeline, processor):
     # Given
     _, _, shared, route, _, history, persist, enqueue = pipeline
     # When
@@ -208,13 +208,13 @@ async def test_group_processor_preserves_legacy_provider_history(pipeline, proce
     assert history.await_args.kwargs["conversation_id"] == str(route.id)
     assert persist.await_args.kwargs["conversation_id"] == str(route.id)
     assert enqueue.await_args.kwargs["conversation_id"] == str(route.id)
-    assert isinstance(binding.ensure_shared_session, AsyncMock)
-    binding.ensure_shared_session.assert_not_awaited()
+    assert isinstance(binding.ensure_canonical_session, AsyncMock)
+    binding.ensure_canonical_session.assert_not_awaited()
 
 
 @pytest.mark.parametrize("processor", PROCESSORS)
 @pytest.mark.parametrize("rejection", ["unbound", "unauthorized"])
-async def test_rejected_processor_never_reads_or_writes_shared_context(pipeline, monkeypatch, processor, rejection):
+async def test_rejected_processor_never_reads_or_writes_canonical_context(pipeline, monkeypatch, processor, rejection):
     # Given
     *_, history, persist, enqueue = pipeline
     if rejection == "unbound":

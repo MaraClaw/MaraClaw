@@ -1,6 +1,6 @@
 import re
 from time import monotonic
-from typing import Annotated, ClassVar, Literal, TypedDict, get_args
+from typing import Annotated, ClassVar, Literal, TypedDict, TypeIs, get_args
 from uuid import UUID
 
 from cryptography.exceptions import InvalidTag
@@ -50,8 +50,12 @@ class ErrorSummary(TypedDict, total=False):
     status_code: int
 
 
+def _is_exception_group(error: BaseException) -> TypeIs[BaseExceptionGroup[BaseException]]:
+    return isinstance(error, BaseExceptionGroup)
+
+
 def error_summary(error: BaseException) -> ErrorSummary:
-    if isinstance(error, BaseExceptionGroup):
+    if _is_exception_group(error):
         return error_summary(error.exceptions[0])
     if isinstance(error, DbError):
         return error_summary(error.orig) if isinstance(error.orig, PsycopgError) else {"error_kind": "database"}

@@ -32,6 +32,7 @@ def _patch(
     status=None,
     fail="",
     insert_fails=False,
+    primary_calls=None,
 ):
     default_agent, default_target, default_rel, default_session = _objects()
     if agent is _MISSING:
@@ -49,8 +50,10 @@ def _patch(
     async def relationship_status(*_args, **_kwargs):
         return status or {"access_status": "active", "access_status_reason": None}
 
-    async def primary(*_args):
+    async def primary(*args):
         events.append("primary")
+        if primary_calls is not None:
+            primary_calls.append(args)
         return session
 
     async def mark_read(*_args, **_kwargs):
@@ -184,8 +187,17 @@ async def test_relationship_permissions_block_persistence(monkeypatch, relations
 
 async def test_persists_before_websocket_and_preserves_success_text(monkeypatch):
     events = []
+    primary_calls = []
     agent, target, relationship, session = _objects()
-    _patch(monkeypatch, events, agent=agent, target=target, relationship=relationship, session=session)
+    _patch(
+        monkeypatch,
+        events,
+        agent=agent,
+        target=target,
+        relationship=relationship,
+        session=session,
+        primary_calls=primary_calls,
+    )
 
     result = await platform_messaging._send_platform_message(
         agent.id, {"username": "alex@example.com", "message": "hello"}
@@ -193,6 +205,7 @@ async def test_persists_before_websocket_and_preserves_success_text(monkeypatch)
 
     assert result == "✅ Message sent to Alex on web platform. It has been saved to their chat history."
     assert events[-5:] == ["primary", "insert", "session_update", "read", "websocket"]
+    assert primary_calls == [(agent.id, target.id)]
     assert session.last_message_at is not None
 
 

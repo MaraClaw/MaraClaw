@@ -1,6 +1,6 @@
 import os
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import anyio
@@ -21,7 +21,7 @@ from app.records.user import UserRecord
 from app.scripts import bootstrap_db
 from app.services import chat_submissions, openclaw_routing
 from app.services.chat_submissions import AcceptedSubmission, ChatSubmission
-from app.services.shared_chat import shared_session_id
+from app.services.llm.types import OpenAIMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,13 +106,12 @@ async def receipt_db(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureReq
 @pytest.fixture
 async def writable_receipt_db(receipt_db):
     db = receipt_db
-    session_id = shared_session_id(db.agent.id)
     async with transaction(db.first):
         await db.first.execute(
-            "UPDATE chat_sessions SET id = %(shared)s, source_channel = 'shared', is_primary = TRUE WHERE id = %(old)s",
-            {"shared": session_id, "old": db.session_id},
+            "UPDATE chat_sessions SET source_channel = 'web', is_primary = TRUE WHERE id = %(id)s",
+            {"id": db.session_id},
         )
-    return replace(db, session_id=session_id)
+    return db
 
 
 @pytest.mark.parametrize("ordering", ["replay", "accept_then_delete", "delete_then_accept"])
@@ -274,3 +273,36 @@ async def test_distinct_submission_uuids_enqueue_identical_content_twice(writabl
             {"user": db.user.id},
         )
     assert counts == {"messages": 2, "enqueued": 2, "charged": 2}
+
+
+async def test_a_canonical_turn_prepares_from_the_stored_transcript(writable_receipt_db, monkeypatch):
+    # Given the owner's canonical conversation, open in two tabs whose socket histories have gone stale.
+    db = writable_receipt_db
+    histories: list[list[OpenAIMessage]] = []
+
+    async def prepare(*, agent: AgentRecord, content: str, history: list[OpenAIMessage]):
+        histories.append(list(history))
+        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "receipt-qa")
+
+    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
+    async with transaction(db.first):
+        await db.first.execute("UPDATE users SET quota_message_limit = 2 WHERE id = %(id)s", {"id": db.user.id})
+    stale: list[OpenAIMessage] = [{"role": "assistant", "content": "this socket's stale history"}]
+
+    # When the owner sends one turn from each tab.
+    accepted: list[AcceptedSubmission] = []
+    for content in ("from the first tab", "from the second tab"):
+        async with transaction(db.first):
+            accepted.append(
+                await chat_submissions.accept_submission(
+                    ChatSubmission(client_submission_id=uuid4(), content=content),
+                    user=db.user,
+                    agent=db.agent,
+                    session_id=db.session_id,
+                    history=stale,
+                )
+            )
+
+    # Then each turn is prepared from what is stored, including the other tab's turn, and is marked canonical.
+    assert histories == [[], [{"role": "user", "content": "from the first tab"}]]
+    assert [turn.canonical for turn in accepted] == [True, True]

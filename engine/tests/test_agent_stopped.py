@@ -7,6 +7,8 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import HTTPException
+from pywhales import ClientNotFoundError
+from pywhales.client_config import ParsingError
 from pywhales.exceptions import NoSuchContainer
 from redis.exceptions import RedisError
 
@@ -31,9 +33,11 @@ async def post_stop(app, agent):
 
 
 def docker_stop(monkeypatch, outcome):
-    """Drive the real manager stop with a Docker-level outcome: found/missing/no_such/ownership."""
+    """Drive the real manager stop with a Docker-level outcome."""
 
     def stop(_client, agent, **_kwargs):
+        if isinstance(outcome, Exception):
+            raise outcome
         if outcome == "no_such":
             raise NoSuchContainer(["docker", "stop"], 1)
         if outcome == "ownership":
@@ -68,19 +72,25 @@ async def test_stop_publishes_after_commit_and_before_unlock(docker, monkeypatch
     assert runtime.committed.status == "stopped"
 
 
-async def test_failed_stop_does_not_publish(docker, monkeypatch):
+@pytest.mark.parametrize(
+    "fault",
+    [
+        ParsingError("truncated inspect"),
+        ClientNotFoundError("missing client"),
+        OSError("daemon down"),
+        ValueError("invalid stop"),
+    ],
+)
+async def test_failed_stop_durably_retains_reference_without_publishing(docker, monkeypatch, fault):
     # Given Docker cannot confirm the stop.
     app, runtime, agent = docker
-
-    async def refuse(_record):
-        return False
-
-    monkeypatch.setattr(lifecycle.agent_manager, "stop_container", refuse)
+    docker_stop(monkeypatch, fault)
     # When the user stops the agent.
     response = await post_stop(app, agent)
     # Then the retained STOPPED commit still returns 502 and nothing is announced.
     assert response.status_code == 502
-    assert runtime.committed.status == "stopped"
+    assert response.json()["detail"]["code"] == "guest_stop_failed"
+    assert (runtime.committed.status, runtime.committed.container_id) == ("stopped", "old")
     assert runtime.published == []
 
 

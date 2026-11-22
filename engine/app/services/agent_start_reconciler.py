@@ -1,17 +1,19 @@
 from contextlib import suppress
+from uuid import UUID
 
 from anyio import sleep, to_thread
 from psycopg import Error as PsycopgError
 from pywhales.exceptions import DockerException, NoSuchContainer
 from redis.exceptions import RedisError
 
+from app.core.incident_reporting import report_exception
 from app.core.logging import logger
 from app.dao.agent_start_dao import agent_start_dao
 from app.db.errors import DbError
 from app.db.session import flush_request_transaction
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
-from app.runtime.tasks import loop_progress
+from app.runtime.tasks import capped_backoff, loop_progress
 from app.services.agent_manager import agent_manager
 from app.services.agent_runtime_loss import guest_published, report_runtime_loss
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_cancel, setup_workspace_lock
@@ -31,9 +33,14 @@ from app.services.guest_identity import (
 )
 from app.services.guest_image import GuestImageUnavailableError
 from app.services.guest_start import start_operation_id
-from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
+from app.services.openclaw_update_gate import (
+    OpenClawUpdateGateError,
+    OpenClawUpdateInProgressError,
+    assert_no_active_run,
+)
 
 PROGRESS_BUDGET_SECONDS = 300.0
+EXPECTED_START_FAULTS = (DbError, PsycopgError, RedisError, OSError, DockerException)
 
 
 async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, due_only: bool = False) -> bool:
@@ -57,11 +64,13 @@ async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, d
     except GuestOwnershipError:
         await start_store.fail(operation, "ownership_conflict")
         raise
-    except DockerException, OSError:
-        await start_store.fail(operation, "runtime_failed")
-        raise
     except DbError, PsycopgError, RedisError:
         await start_store.fail(operation, "publication_failed")
+        raise
+    except GuestStartStoppedError, OpenClawUpdateGateError:
+        raise
+    except Exception:
+        await start_store.fail(operation, "runtime_failed")
         raise
     if not published:
         await start_store.fail(operation, "publication_failed")
@@ -120,7 +129,7 @@ async def _settle_stopped(operation: AgentStartOperation) -> None:
     operation again: a pending one until recovery cancels it, a cancelled one until its candidate is cleaned up."""
     try:
         await _settle_unpublished(operation)
-    except (DockerException, DbError, PsycopgError, RedisError, OSError) as exc:
+    except Exception as exc:
         logger.warning("[AgentStart] Settling stopped start {} failed: {}", operation.operation_id, type(exc).__name__)
 
 
@@ -189,36 +198,48 @@ async def reconcile_agent_start(operation: AgentStartOperation, *, due_only: boo
     await drain_on_cancel(section())
 
 
-async def reconcile_agent_starts_once() -> None:
+async def reconcile_agent_starts_once(*, retrying: frozenset[UUID] = frozenset()) -> frozenset[UUID]:
     operations = await start_store.outstanding()
     if not operations:
-        loop_progress().beat()
+        # An empty due scan can mean prior failures are still backing off.
+        pending = frozenset(
+            {operation_id for operation_id in retrying if await start_store.halted(operation_id) is None}
+        )
+        if not pending:
+            loop_progress().beat()
+        return pending
+    failed = set(retrying)
     for operation in operations:
+        failed.discard(operation.operation_id)
         try:
             await reconcile_agent_start(operation, due_only=True)
         except GuestStartStoppedError as exc:
             # Superseded: already settled, with nothing failed and nothing to retry.
             logger.info("Pending guest start for agent {} ended at a checkpoint: {}", operation.agent_id, exc.reason)
             loop_progress().beat()
-        except (
-            DbError,
-            PsycopgError,
-            RedisError,
-            OSError,
-            DockerException,
-            GuestAdmissionError,
-            GuestStartPreflightError,
-            GuestOwnershipError,
-        ) as exc:
+        except (GuestAdmissionError, GuestStartPreflightError, GuestOwnershipError) as exc:
             logger.warning("Pending guest start retry failed for agent {}: {}", operation.agent_id, type(exc).__name__)
+        except Exception as exc:
+            if not isinstance(exc, EXPECTED_START_FAULTS):
+                report_exception(exc, source="runtime", operation="agent-start-reconcile-operation")
+            logger.warning("Pending guest start retry failed for agent {}: {}", operation.agent_id, type(exc).__name__)
+            if operation.state == "pending":
+                failed.add(operation.operation_id)
         else:
             loop_progress().beat()
+    return frozenset(failed)
 
 
 async def agent_start_reconciler_loop() -> None:
+    failures = 0
+    retrying: frozenset[UUID] = frozenset()
     while True:
         try:
-            await reconcile_agent_starts_once()
-        except (DbError, PsycopgError, RedisError, OSError) as exc:
+            retrying = await reconcile_agent_starts_once(retrying=retrying)
+        except Exception as exc:
             logger.warning("Pending guest start scan failed: {}", type(exc).__name__)
+            await sleep(capped_backoff(failures, base_seconds=1, cap_seconds=30))
+            failures += 1
+            continue
+        failures = 0
         await sleep(10)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import Awaitable
+from typing import Protocol
 
 import redis.asyncio as redis
 from redis.asyncio.retry import Retry
@@ -47,6 +49,15 @@ def _pool_kwargs(*, cache: bool) -> dict[str, object]:
     }
 
 
+class _RedisEventCommands(Protocol):
+    def ping(self) -> Awaitable[bool]: ...
+    def publish(self, channel: str, message: str, /) -> Awaitable[int]: ...
+
+
+def _event_commands(client: redis.Redis) -> _RedisEventCommands:
+    return client
+
+
 def _current_redis() -> redis.Redis | None:
     return _redis_client
 
@@ -54,7 +65,7 @@ def _current_redis() -> redis.Redis | None:
 async def ping_redis() -> bool:
     """Probe only the lifecycle-created durable client; never initialize from HTTP."""
     client = _current_redis()
-    return client is not None and bool(await client.ping())
+    return client is not None and bool(await _event_commands(client).ping())
 
 
 def _current_cache_redis() -> redis.Redis | None:
@@ -89,8 +100,8 @@ async def get_cache_redis() -> redis.Redis:
 
 async def publish_event(channel: str, data: JsonObject) -> None:
     """Publish an event to a Redis Pub/Sub channel."""
-    r = await get_redis()
-    _ = await r.publish(channel, json.dumps(data))
+    commands = _event_commands(await get_redis())
+    _ = await commands.publish(channel, json.dumps(data))
 
 
 async def close_redis() -> None:

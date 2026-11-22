@@ -13,7 +13,7 @@ export function historyRun(id: string, status: ScheduleHistoryItem['status'] = '
 export async function prepareHistoryNavigation(page: Page) {
   const session = {
     id: '65dc0777-401c-4432-8e29-ecb4297f6f45', agent_id: originalAgent.id, user_id: originalUser.id,
-    title: 'Shared conversation', source_channel: 'shared', is_primary: true,
+    title: 'Scheduled agent conversation', source_channel: 'web', is_primary: true, writable: true,
     created_at: '2030-01-01T00:00:00Z', message_count: 0, unread_count: 0,
   }
   await page.route(`**/api/agents/${originalAgent.id}/sessions`, (route) => {
@@ -31,7 +31,7 @@ export async function prepareHistoryNavigation(page: Page) {
   await page.route(`**/api/agents/${originalAgent.id}/sessions/page?*`, (route) => {
     expect(route.request().method()).toBe('GET')
     expect(route.request().headers().authorization).toBe(`Bearer ${originalToken}`)
-    expect(Object.fromEntries(new URL(route.request().url()).searchParams)).toEqual({ limit: '50', scope: 'all' })
+    expect(Object.fromEntries(new URL(route.request().url()).searchParams)).toEqual({ limit: '50', scope: 'mine' })
     return route.fulfill({ json: { items: [session], next_cursor: null, has_more: false } })
   })
   await page.route(`**/api/agents/${originalAgent.id}/sessions/${session.id}/messages/page?*`, (route) => {

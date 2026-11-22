@@ -30,8 +30,8 @@ async def publish_claim(claim: CacheInvalidationClaim) -> bool:
                 return bool(await client.set(claim.key, uuid4().hex, ex=3600))
             case CacheInvalidationKind.DELETE:
                 _ = await client.delete(claim.key)
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(claim.kind)
     except (RedisError, OSError) as exc:
         logger.warning("Cache invalidation replay failed: error={}", type(exc).__name__)
         return False

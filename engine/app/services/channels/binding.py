@@ -17,7 +17,7 @@ from app.records.chat_attachment import ChatAttachment
 from app.records.user import UserRecord
 from app.schemas.chat_wire import ChatEventType
 from app.services.channel_user_service import ChannelUserResolutionError, channel_user_service
-from app.services.shared_chat import ensure_shared_session, is_shared_session
+from app.services.shared_chat import ensure_canonical_session, is_canonical
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +61,7 @@ async def bind_channel_conversation(
     if tenant is None or not tenant.is_active:
         raise ChannelUserResolutionError("The sender's company is inactive.")
     await check_agent_access(principal, agent.id, fresh=True)
-    transcript = await ensure_shared_session(agent.id)
+    transcript = await ensure_canonical_session(agent.id, principal.id)
     return ChannelConversation(transcript, reply_session)
 
 
@@ -104,11 +104,12 @@ async def persist_channel_user_message(
         session = await chat_session_dao.get(UUID(conversation_id))
         if session is not None:
             await chat_session_dao.update(db_obj=session, obj_in={"last_message_at": datetime.now(UTC)})
-            if is_shared_session(session) or attachments:
+            canonical = is_canonical(session)
+            if canonical or attachments:
                 from app.api.background_tasks import schedule_background_task
 
                 schedule_background_task(
-                    _publish_shared_user_message(
+                    _publish_user_message(
                         agent_id,
                         conversation_id,
                         {
@@ -119,6 +120,7 @@ async def persist_channel_user_message(
                             "session_id": conversation_id,
                             "attachments": [ref.as_dict() for ref in attachments],
                         },
+                        str(session.user_id) if canonical else None,
                     ),
                     "Publish IM user message",
                 )
@@ -129,7 +131,9 @@ async def persist_channel_user_message(
     return message.id
 
 
-async def _publish_shared_user_message(agent_id: UUID, conversation_id: str, event: dict[str, object]) -> None:
+async def _publish_user_message(
+    agent_id: UUID, conversation_id: str, event: dict[str, object], user_id: str | None
+) -> None:
     from app.api.websocket import manager
 
-    await manager.send_to_session(str(agent_id), conversation_id, event)
+    await manager.send_to_session(str(agent_id), conversation_id, event, user_id=user_id)

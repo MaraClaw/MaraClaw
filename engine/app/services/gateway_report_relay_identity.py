@@ -42,8 +42,8 @@ async def lock_identity(claim: GatewayReportDeliveryRecord) -> None:
                         "SELECT id FROM chat_sessions WHERE id = %(id)s FOR SHARE NOWAIT",
                         {"id": claim.destination_id},
                     )
-                case unreachable:
-                    assert_never(unreachable)
+                case _:
+                    assert_never(claim.destination_kind)
             stage = "agent"
             _ = await db.fetchall(
                 "SELECT id FROM agents WHERE id = ANY(%(ids)s) ORDER BY id FOR SHARE NOWAIT",

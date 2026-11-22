@@ -5,14 +5,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from app.core.domain.triggers import TriggerExecutionStatus
 from app.core.json_types import (
+    JsonObject,
+    JsonValue,
     datetime_from_row,
     int_from_row,
-    mapping_from_row,
+    json_object_from,
     str_from_row,
     uuid_from_row,
 )
@@ -26,7 +27,7 @@ class AgentTriggerRecord:
     agent_id: UUID
     name: str = ""
     type: str = "webhook"
-    config: dict[str, Any] = field(default_factory=dict[str, Any])
+    config: JsonObject = field(default_factory=dict[str, JsonValue])
     reason: str = ""
     focus_ref: str | None = None
     is_enabled: bool = True
@@ -41,7 +42,7 @@ class AgentTriggerRecord:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AgentTriggerRecord:
-        config = mapping_from_row(row.get("config") or {})
+        config = json_object_from(row.get("config") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             agent_id=uuid_from_row(row["agent_id"]),
@@ -72,7 +73,7 @@ class TriggerExecutionRecord:
     source: str = "webhook"
     status: TriggerExecutionStatus = TriggerExecutionStatus.PENDING
     idempotency_key: str = ""
-    payload: dict[str, Any] = field(default_factory=dict[str, Any])
+    payload: JsonObject = field(default_factory=dict[str, JsonValue])
     payload_text: str = ""
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
@@ -84,7 +85,7 @@ class TriggerExecutionRecord:
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> TriggerExecutionRecord:
-        payload = mapping_from_row(row.get("payload") or {})
+        payload = json_object_from(row.get("payload") or {})
         return cls(
             id=uuid_from_row(row["id"]),
             trigger_id=uuid_from_row(row["trigger_id"]),

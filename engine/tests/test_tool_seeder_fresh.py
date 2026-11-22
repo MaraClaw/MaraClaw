@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.json_types import JsonObject
 from app.records.tool import ToolRecord
 from app.services import tool_seeder
 
@@ -155,7 +156,7 @@ async def test_seed_updates_current_metadata_and_fills_missing_config_defaults(s
 async def test_seed_preserves_explicit_image_model(store: SeedStore, name: str, model: str) -> None:
     # Given: an explicitly configured current provider tool.
     await tool_seeder.seed_builtin_tools()
-    config = {"model": model, "api_key": "", "base_url": ""}
+    config: JsonObject = {"model": model, "api_key": "", "base_url": ""}
     store.tools[name].config = config.copy()
     # When: startup reconciles the catalog.
     await tool_seeder.seed_builtin_tools()

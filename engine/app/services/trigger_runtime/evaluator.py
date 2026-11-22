@@ -15,6 +15,7 @@ from croniter import croniter
 from app.core.json_types import (
     JsonObject,
     JsonValue,
+    is_any_list,
     is_json_object,
     json_value_from_response,
     str_from_row,
@@ -55,12 +56,16 @@ def _config_number(value: JsonValue) -> int | float | None:
     return None
 
 
+def _is_dict(value: object) -> TypeIs[dict[object, object]]:
+    return isinstance(value, dict)
+
+
 def _is_json_value(value: object) -> TypeIs[JsonValue]:
     if value is None or isinstance(value, str | int | float | bool):
         return True
-    if isinstance(value, list):
+    if is_any_list(value):
         return all(_is_json_value(item) for item in value)
-    if isinstance(value, dict):
+    if _is_dict(value):
         return all(isinstance(key, str) and _is_json_value(item) for key, item in value.items())
     return False
 
@@ -68,7 +73,7 @@ def _is_json_value(value: object) -> TypeIs[JsonValue]:
 def _json_config(value: object) -> JsonObject:
     if is_json_object(value):
         return value
-    if not isinstance(value, dict):
+    if not _is_dict(value):
         return {}
     result: JsonObject = {}
     for key, item in dict[object, object](value).items():
@@ -421,9 +426,9 @@ def extract_json_path(data: object, path: str) -> object:
     parts = path.lstrip("$.").split(".")
     current: object = data
     for part in parts:
-        if isinstance(current, dict):
+        if _is_dict(current):
             current = current.get(part)
-        elif isinstance(current, list) and part.isdigit():
+        elif is_any_list(current) and part.isdigit():
             current = current[int(part)]
         else:
             return None

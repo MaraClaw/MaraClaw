@@ -194,7 +194,7 @@ class BaseSandboxBackend(ABC):
 
     def _format_result(self, result: ExecutionResult) -> str:
         """Format execution result for user display."""
-        result_parts = []
+        result_parts: list[str] = []
 
         if result.stdout.strip():
             result_parts.append(f"📤 Output:\n{result.stdout}")

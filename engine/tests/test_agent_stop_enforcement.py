@@ -76,6 +76,8 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
         container("malformed", "not-a-uuid"),
         container("detached", str(uuid4()), network=None),
     ]
+    inspected = {item.id: item for item in listed}
+    inspected["fake"] = inspected["retained"]
 
     class Containers:
         def list(self, *, filters, **kwargs: Unpack[IncludeAllKeyword]):
@@ -86,7 +88,7 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
 
         def inspect(self, reference: str) -> SimpleNamespace:
             assert threading.get_ident() != loop_thread
-            return {"fake": listed[1], "retained": listed[1]}[reference]
+            return inspected[reference]
 
         def stop(self, container_id, *, time):
             assert threading.get_ident() != loop_thread
@@ -101,7 +103,8 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
     monkeypatch.setattr(agent_dao, "prepare_container_stops", AsyncMock(return_value=[]))
     lookup = AsyncMock(return_value=[existing])
     monkeypatch.setattr(agent_dao, "get_many", lookup)
-    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=replace(existing, status="stopped")))
+    fresh_agents = {existing.id: replace(existing, status="stopped")}
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(side_effect=fresh_agents.get))
     monkeypatch.setattr(agent_orphans, "assert_no_active_run", AsyncMock())
     await agent_stops.reconcile_stopped_containers(now)
     assert calls == [("stop", "orphan"), ("remove", ["orphan"])]
@@ -112,18 +115,22 @@ async def test_reconcile_sweeps_only_old_labeled_orphans_on_this_deployment_netw
 async def test_orphan_sweep_continues_after_one_docker_failure(monkeypatch):
     now = datetime.now(UTC)
     calls = []
+    containers = {
+        name: SimpleNamespace(
+            id=name,
+            config=SimpleNamespace(labels={"maraclaw.agent_id": str(uuid4())}),
+            network_settings=SimpleNamespace(networks={"owned": {}}),
+            created=now - timedelta(minutes=5),
+        )
+        for name in ("broken", "healthy")
+    }
 
     class Containers:
         def list(self, **kwargs):
-            return [
-                SimpleNamespace(
-                    id=name,
-                    config=SimpleNamespace(labels={"maraclaw.agent_id": str(uuid4())}),
-                    network_settings=SimpleNamespace(networks={"owned": {}}),
-                    created=now - timedelta(minutes=5),
-                )
-                for name in ("broken", "healthy")
-            ]
+            return list(containers.values())
+
+        def inspect(self, reference: str) -> SimpleNamespace:
+            return containers[reference]
 
         def stop(self, container_id, **kwargs):
             if container_id == "broken":
@@ -135,6 +142,7 @@ async def test_orphan_sweep_continues_after_one_docker_failure(monkeypatch):
     monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace(container=Containers()))
     monkeypatch.setattr(agent_orphans, "get_settings", lambda: SimpleNamespace(DOCKER_NETWORK="owned"))
     monkeypatch.setattr(agent_dao, "get_many", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=None))
     await agent_orphans.sweep_orphan_containers(now)
     assert calls == ["healthy"]
 

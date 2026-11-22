@@ -15,11 +15,8 @@ from app.core.logging import logger
 
 try:
     import lark_oapi
-
-    _HAS_LARK = True
 except ImportError:
     lark_oapi = None
-    _HAS_LARK = False
 
 from app.config import get_settings
 from app.core.json_types import (
@@ -37,6 +34,8 @@ from app.records.user import UserRecord
 from app.services.channels.media_limits import read_capped
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES, MAX_INPUT_BYTES
 from app.services.im_token_cache import ImTokenKey, ImTokenRefusedError, MintedToken, get_or_mint_im_token
+
+_HAS_LARK = lark_oapi is not None
 
 
 def _is_json_object(value: object) -> TypeIs[JsonObject]:
@@ -246,7 +245,7 @@ class FeishuService:
             )
             raise RuntimeError(f"Feishu {stage} returned invalid JSON") from e
 
-        if not isinstance(raw, dict):
+        if not _is_json_object(raw):
             raise TypeError(f"Feishu {stage} returned a non-object JSON payload")
         data_obj = _json_object(raw)
         error_info = _json_object(data_obj.get("error"))

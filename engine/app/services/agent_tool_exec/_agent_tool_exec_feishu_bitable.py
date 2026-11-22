@@ -10,6 +10,7 @@ from typing import cast
 from app.core.json_types import JsonObject, JsonValue, json_loads_object, json_loads_value, object_attr
 from app.services import agent_tools
 from app.services.feishu_service import FeishuService
+from app.services.im_sdk_types import is_object_list
 
 from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
 
@@ -43,7 +44,7 @@ def _nested_mapping(value: object) -> Mapping[object, object]:
 
 
 def _object_items(value: object) -> list[JsonObject]:
-    if not isinstance(value, list):
+    if not is_object_list(value):
         return []
     return [item for item in value if isinstance(item, dict)]
 

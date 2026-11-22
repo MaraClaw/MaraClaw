@@ -77,7 +77,11 @@ async def test_browser_layout_polices_chrome_and_embeds_only_in_workspace_images
     methods = page.methods()
     assert methods[0] == "Fetch.enable"
     assert methods.index("Page.navigate") > methods.index("Fetch.enable")
-    decisions = {url: page.decisions[url]["method"] for url in sources}
+    decisions: dict[str, str] = {}
+    for url in sources:
+        method = page.decisions[url]["method"]
+        assert isinstance(method, str)
+        decisions[url] = method
     assert decisions[case.page_url("../pic.png")] == "Fetch.continueRequest"
     assert decisions[case.data_url] == "Fetch.continueRequest"
     blocked = [case.page_url(reference) for reference in case.blocked_references]

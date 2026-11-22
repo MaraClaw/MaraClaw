@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 import pytest
@@ -16,6 +16,18 @@ from app.services.llm.client_cache import reset_llm_client_cache
 from app.services.llm.http_pool import acquire_httpx
 from app.services.llm.providers.openai_compatible import OpenAICompatibleClient
 from app.services.llm.providers.openai_responses import OpenAIResponsesClient
+
+
+@dataclass(frozen=True, slots=True)
+class _CacheModel:
+    id: UUID | str
+    auth_kind: str
+    api_key_encrypted: str
+    oauth_account_id: str | None
+    provider: str
+    model: str
+    base_url: str
+    request_timeout: int
 
 
 @pytest.fixture(autouse=True)
@@ -36,10 +48,11 @@ def test_create_llm_client_reuses_same_wrapper_for_identical_config():
 
 
 def test_create_llm_client_from_model_reuses_row_and_skips_rebuild():
-    row = SimpleNamespace(
-        id=UUID("11111111-1111-1111-1111-111111111111"),
+    row_id = UUID("11111111-1111-1111-1111-111111111111")
+    row = _CacheModel(
+        id=row_id,
         auth_kind="api_key",
-        api_key_encrypted=seal_credential("key", model_key_context(None, UUID("11111111-1111-1111-1111-111111111111"))),
+        api_key_encrypted=seal_credential("key", model_key_context(None, row_id)),
         oauth_account_id=None,
         provider="openai",
         model="gpt-6.1-sol",
@@ -48,9 +61,7 @@ def test_create_llm_client_from_model_reuses_row_and_skips_rebuild():
     )
     first = create_llm_client_from_model(row)
     second = create_llm_client_from_model(row)
-    rotated = SimpleNamespace(
-        **{**row.__dict__, "api_key_encrypted": seal_credential("key-rotated", model_key_context(None, row.id))}
-    )
+    rotated = replace(row, api_key_encrypted=seal_credential("key-rotated", model_key_context(None, row_id)))
     third = create_llm_client_from_model(rotated)
     assert first is second
     assert first is not third
@@ -58,7 +69,7 @@ def test_create_llm_client_from_model_reuses_row_and_skips_rebuild():
 
 
 def test_chatgpt_subscription_cache_includes_account_and_kind():
-    row = SimpleNamespace(
+    row = _CacheModel(
         id="22222222-2222-2222-2222-222222222222",
         auth_kind="chatgpt_subscription",
         api_key_encrypted=encrypt_data("oa", get_settings().SECRET_KEY),
@@ -70,7 +81,7 @@ def test_chatgpt_subscription_cache_includes_account_and_kind():
     )
     first = create_llm_client_from_model(row)
     second = create_llm_client_from_model(row)
-    other_acct = SimpleNamespace(**{**row.__dict__, "oauth_account_id": "acct-b"})
+    other_acct = replace(row, oauth_account_id="acct-b")
     third = create_llm_client_from_model(other_acct)
     assert type(first) is OpenAIResponsesClient
     assert first is second
@@ -87,7 +98,7 @@ async def test_close_does_not_destroy_pooled_http_or_cached_wrapper():
     assert client._client is None
     again = create_llm_client("openai", "sk-live", "gpt-6.1-sol", timeout=12)
     assert again is client
-    reused = await again._get_client()
+    reused = await client._get_client()
     assert reused is http
     assert reused.is_closed is False
 

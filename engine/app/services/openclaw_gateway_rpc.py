@@ -154,8 +154,8 @@ def _parse_outcome(output: str, message_id: str) -> NativeTurnOutcome:
             if run_id is not None and run_id != message_id:
                 return UncertainOutcome(message_id, "unknown", None, "run_mismatch", timing)
             return UncertainOutcome(message_id, admission, run_id, code, timing)
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(outcome)
 
 
 def _execute(container_id: str, payload_name: str, cancel: Event) -> str:

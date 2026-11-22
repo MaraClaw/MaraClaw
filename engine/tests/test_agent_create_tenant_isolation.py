@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.core.domain.agents import AgentPermissionScope
 from app.records.user import UserRecord
 from app.schemas.schemas import AgentCreate
 from app.services import agent_provisioning
@@ -52,7 +53,9 @@ async def test_shared_provisioning_rejects_invalid_permission_users(creation, mo
     users = [] if invalid_kind == "missing" else [invalid]
     monkeypatch.setattr(agent_provisioning.user_dao, "get_many", AsyncMock(return_value=users))
     context = agent_provisioning.AgentProvisioning(store.actor, store.actor.tenant_id, None)
-    data = AgentCreate(name="Service agent", permission_scope_type="user", permission_scope_ids=[invalid.id])
+    data = AgentCreate(
+        name="Service agent", permission_scope_type=AgentPermissionScope.USER, permission_scope_ids=[invalid.id]
+    )
 
     # When it provisions an agent without passing through the HTTP handler.
     with pytest.raises(HTTPException) as error:

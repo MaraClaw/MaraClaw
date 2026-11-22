@@ -8,6 +8,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.routing import Route
 
+from app.core.json_types import is_str_dict, object_attr
 from app.core.logging import logger, set_trace_id
 from app.core.row_memo import clear_row_memo
 
@@ -39,8 +40,8 @@ def route_label(request: Request) -> str:
         return _UNMATCHED_ROUTE
     # FastAPI keeps include_router prefixes out of route.path; its effective route context has the full template.
     fastapi_scope: object = request.scope.get("fastapi")
-    context: object = fastapi_scope.get("effective_route_context") if isinstance(fastapi_scope, dict) else None
-    template: object = getattr(context, "path_format", None)
+    context: object = fastapi_scope.get("effective_route_context") if is_str_dict(fastapi_scope) else None
+    template = object_attr(context, "path_format")
     return template if isinstance(template, str) and template else route.path
 
 

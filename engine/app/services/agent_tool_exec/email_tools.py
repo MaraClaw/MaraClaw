@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, is_any_list, is_str_dict
 from app.core.tool_types import ToolConfigSchema
 
 from .registry import ToolArguments
@@ -58,9 +58,9 @@ def _decrypt_sensitive_fields(
     sensitive_keys = set(SENSITIVE_FIELD_KEYS)
     if config_schema is not None and config_schema:
         fields = config_schema.get("fields", [])
-        if isinstance(fields, list):
+        if is_any_list(fields):
             for field in fields:
-                if not isinstance(field, dict):
+                if not is_str_dict(field):
                     continue
                 if field.get("type") == "password":
                     key = field.get("key", "")

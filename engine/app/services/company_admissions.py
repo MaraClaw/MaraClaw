@@ -124,8 +124,8 @@ async def withdraw_request(request_id: UUID, applicant_id: UUID) -> CompanyAdmis
                         "decision_reason": None,
                     },
                 )
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(request.status)
 
 
 async def submit_request(
@@ -200,5 +200,5 @@ async def validate_method(user: UserRecord, target_id: UUID, method: AdmissionMe
                 raise HTTPException(403, "Verified email domain does not match the company")
         case AdmissionMethod.SSO:
             pass
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(method)

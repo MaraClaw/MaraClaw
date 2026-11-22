@@ -1335,3 +1335,70 @@ async def test_the_lock_bound_lasts_only_as_long_as_the_runs_transaction(
     assert await schema_db.fetchval("SELECT bound FROM bound_seen") == f"{bootstrap_db._LOCK_TIMEOUT_MS // 1000}s"
     async with connection_ctx() as db:
         assert await db.fetchval("SHOW lock_timeout") == "0"
+
+
+_TRANSCRIPT_COLUMNS = (
+    "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema() "
+    "AND table_name IN ('personal_burst_batches', 'personal_busy_notices') "
+    "AND column_name IN ('transcript_session_id', 'shared_session_id') ORDER BY table_name, column_name"
+)
+_TRANSCRIPT_INDEXES = (
+    "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+    "AND indexname IN ('ix_personal_burst_batches_open', 'ix_personal_busy_notices_cooldown') ORDER BY indexname"
+)
+
+
+async def test_reply_binding_accepts_only_web_sessions_and_burst_tables_name_the_transcript(
+    schema_db: DbConnection,
+) -> None:
+    # Given a fresh schema bootstrapped twice, with an owner's canonical web session and a legacy 'shared' row.
+    await bootstrap_db.main()
+    await bootstrap_db.main()
+    tenant_id, user_id, agent_id, canonical_id, shared_id = (uuid4() for _ in range(5))
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Lane', 'lane', 'ultra')", {"tenant": tenant_id}
+    )
+    await schema_db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Owner')",
+        {"user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+        "VALUES (%(agent)s, 'Lane', 'Lane', %(user)s, %(tenant)s, 1, 1, 1, 'company', 'use', 1)",
+        {"agent": agent_id, "user": user_id, "tenant": tenant_id},
+    )
+    for session_id, channel in ((canonical_id, "web"), (shared_id, "shared")):
+        await schema_db.execute(
+            "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, is_primary) "
+            "VALUES (%(session)s, %(agent)s, %(user)s, 'Conversation', %(channel)s, TRUE)",
+            {"session": session_id, "agent": agent_id, "user": user_id, "channel": channel},
+        )
+    bind = "SELECT bind_openclaw_reply(%(agent)s, %(conversation)s)"
+    # When each session is bound for a native reply.
+    bound = await schema_db.fetchval(bind, {"agent": agent_id, "conversation": str(canonical_id)})
+    refused = await schema_db.fetchval(bind, {"agent": agent_id, "conversation": str(shared_id)})
+    # Then only the web session gets a binding, owned by its user.
+    assert isinstance(bound, UUID)
+    assert refused is None
+    assert await schema_db.fetchall("SELECT id, session_id, user_id FROM openclaw_reply_bindings") == [
+        {"id": bound, "session_id": canonical_id, "user_id": user_id}
+    ]
+    # And the burst and notice tables name the transcript session, in their columns and their indexes.
+    columns = await schema_db.fetchall(_TRANSCRIPT_COLUMNS)
+    assert columns == [
+        {"table_name": "personal_burst_batches", "column_name": "transcript_session_id"},
+        {"table_name": "personal_busy_notices", "column_name": "transcript_session_id"},
+    ]
+    indexes = await schema_db.fetchall(_TRANSCRIPT_INDEXES)
+    assert [row["indexname"] for row in indexes] == [
+        "ix_personal_burst_batches_open",
+        "ix_personal_busy_notices_cooldown",
+    ]
+    assert all("transcript_session_id" in str(row["indexdef"]) for row in indexes)
+    # And a rerun changes none of it.
+    await bootstrap_db.main()
+    assert await schema_db.fetchval(bind, {"agent": agent_id, "conversation": str(canonical_id)}) == bound
+    assert await schema_db.fetchval(bind, {"agent": agent_id, "conversation": str(shared_id)}) is None
+    assert await schema_db.fetchall(_TRANSCRIPT_COLUMNS) == columns
+    assert await schema_db.fetchall(_TRANSCRIPT_INDEXES) == indexes

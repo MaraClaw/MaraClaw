@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from app.services.agentbay_client import AgentBayClient
 
 from app.config import get_settings
-from app.core.json_types import JsonObject, JsonValue
+from app.core.json_types import JsonObject, JsonValue, is_any_list, is_json_object as _is_json_object
 from app.core.tool_types import ToolConfigSchema, ToolDefinition
 from app.services.agent_tools_definitions import (
     _always_core_tools,
@@ -42,12 +42,12 @@ from app.services.tool_runtime import (
 from app.services.workspace_collaboration import normalize_workspace_path
 
 from .agent_tool_exec import (
-    _agent_tool_exec_a2a,  # noqa: F401
-    _agent_tool_exec_agentbay,  # noqa: F401
-    _agent_tool_exec_conversion,  # noqa: F401
+    _agent_tool_exec_a2a,
+    _agent_tool_exec_agentbay,
+    _agent_tool_exec_conversion,
     _agent_tool_exec_deploy,
     _agent_tool_exec_deploy_ops,
-    _agent_tool_exec_feishu,  # noqa: F401
+    _agent_tool_exec_feishu,
     _agent_tool_exec_feishu_approvals,
     _agent_tool_exec_feishu_bitable,
     _agent_tool_exec_feishu_calendar,
@@ -56,14 +56,14 @@ from .agent_tool_exec import (
     _agent_tool_exec_feishu_docs,
     _agent_tool_exec_feishu_drive,
     _agent_tool_exec_feishu_markdown,
-    _agent_tool_exec_leftover,  # noqa: F401
+    _agent_tool_exec_leftover,
     _agent_tool_exec_okr_access,
     _agent_tool_exec_okr_read,
     _agent_tool_exec_okr_reports,
     _agent_tool_exec_okr_write,
-    _agent_tool_exec_search,  # noqa: F401
-    _agent_tool_exec_storage,  # noqa: F401
-    _agent_tool_exec_triggers,  # noqa: F401
+    _agent_tool_exec_search,
+    _agent_tool_exec_storage,
+    _agent_tool_exec_triggers,
     resolve as _resolve_tool_handler,
 )
 from .agent_tool_exec._agent_tool_exec_triggers import (
@@ -121,6 +121,14 @@ __all__ = [
     "TempWorkspace",
     "TempWorkspaceManifestEntry",
     "_a2a_handle_openclaw",
+    "_agent_tool_exec_a2a",
+    "_agent_tool_exec_agentbay",
+    "_agent_tool_exec_conversion",
+    "_agent_tool_exec_feishu",
+    "_agent_tool_exec_leftover",
+    "_agent_tool_exec_search",
+    "_agent_tool_exec_storage",
+    "_agent_tool_exec_triggers",
     "_append_focus_item",
     "_build_a2a_context",
     "_collect_temp_workspace_files",
@@ -272,22 +280,6 @@ def _strip_a2a_msg_type(tools: list[ToolDefinition]) -> list[ToolDefinition]:
     return _tool_runtime_catalog.strip_a2a_msg_type(tools)
 
 
-def _is_json_value(value: object) -> TypeIs[JsonValue]:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return True
-    if isinstance(value, list):
-        items: list[object] = list(value)
-        return all(_is_json_value(item) for item in items)
-    return _is_json_object(value)
-
-
-def _is_json_object(value: object) -> TypeIs[JsonObject]:
-    if not isinstance(value, dict):
-        return False
-    mapping: dict[object, object] = dict(value)
-    return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
-
-
 def _is_catalog_tool_definition(value: object) -> TypeIs[ToolDefinition]:
     if not _is_json_object(value) or value.get("type") != "function":
         return False
@@ -309,7 +301,7 @@ def _is_catalog_tool_definition(value: object) -> TypeIs[ToolDefinition]:
 
 
 def _is_catalog_tool_definitions(value: object) -> TypeIs[list[ToolDefinition]]:
-    if not isinstance(value, list):
+    if not is_any_list(value):
         return False
     tools: list[object] = list(value)
     return all(_is_catalog_tool_definition(tool) for tool in tools)
@@ -407,9 +399,9 @@ async def _install_skill(agent_id: uuid.UUID, ws: Path, arguments: ToolParameter
 
 async def _validate_public_http_url(url: str) -> tuple[str | None, str | None]:
     result = await _call_imported_async("app.services.agent_tool_exec.web_read", "_validate_public_http_url", url)
-    if not isinstance(result, tuple) or len(result) != 2:
+    if not isinstance(result, tuple) or len(pair := cast("tuple[object, ...]", result)) != 2:
         raise TypeError("web_read._validate_public_http_url must return a two-item tuple")
-    left, right = result
+    left, right = pair
     return left if isinstance(left, str) else None, right if isinstance(right, str) else None
 
 
@@ -420,7 +412,7 @@ def _fallback_extract_visible_text(html: str) -> str:
 
 def _extract_page_links(html: str, base_url: str, limit: int = 30) -> list[str]:
     result = _call_imported("app.services.agent_tool_exec.web_read", "_extract_page_links", html, base_url, limit)
-    if not isinstance(result, list):
+    if not is_any_list(result):
         return []
     return [item for item in list[object](result) if isinstance(item, str)]
 
@@ -1469,10 +1461,7 @@ async def _get_agent_owner_info(agent_id: uuid.UUID) -> tuple[str, str]:
 
 
 def _compute_okr_period_bounds(frequency: str, length_days: int | None) -> tuple[date, date]:
-    bounds = _agent_tool_exec_okr_access._compute_okr_period_bounds(frequency, length_days)
-    if isinstance(bounds, tuple) and len(bounds) == 2 and isinstance(bounds[0], date) and isinstance(bounds[1], date):
-        return bounds[0], bounds[1]
-    raise TypeError("OKR period bounds must be a date pair")
+    return _agent_tool_exec_okr_access._compute_okr_period_bounds(frequency, length_days)
 
 
 async def _get_okr(agent_id: uuid.UUID | None, arguments: ToolParameters) -> str:

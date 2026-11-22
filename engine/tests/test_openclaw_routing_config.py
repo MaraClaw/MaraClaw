@@ -148,7 +148,7 @@ def test_unset_experiments_keep_original_generated_json_bytes(monkeypatch):
                 "modelPolicy": {"allow": ["openai/gpt-6.1-sol"]},
             }
         },
-        "memory": {"search": {"enabled": True}},
+        "memory": {"search": {"enabled": True, "rememberAcrossConversations": False}},
         "plugins": {"slots": {"memory": "memory-core"}},
         "gateway": {
             "mode": "local",
@@ -165,7 +165,11 @@ def test_unset_experiments_keep_original_generated_json_bytes(monkeypatch):
                 "tavily-crawl": {"enabled": False, "env": {}},
             },
         },
-        "tools": {"deny": ["web_search"], "web": {"search": {"enabled": False}}},
+        "tools": {
+            "deny": ["web_search"],
+            "web": {"search": {"enabled": False}},
+            "sessions": {"visibility": "self"},
+        },
     }
     assert json.dumps(actual, indent=2).encode() == json.dumps(expected, indent=2).encode()
 

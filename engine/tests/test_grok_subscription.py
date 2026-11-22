@@ -12,7 +12,9 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import enterprise as enterprise_api
+from app.core.domain.users import UserRole
 from app.records.llm import LLMModelRecord
+from app.records.user import UserRecord
 from app.services import enterprise_llm as pool, grok_oauth, grok_subscription as handoff
 from app.services.grok_oauth import (
     XAI_DEVICE_CODE_URL,
@@ -25,8 +27,8 @@ _TENANT = uuid.uuid4()
 _OTHER = uuid.uuid4()
 
 
-def _user(*, role="org_admin", tenant_id: uuid.UUID | None = _TENANT):
-    return SimpleNamespace(id=uuid.uuid4(), role=role, tenant_id=tenant_id, identity=None)
+def _user(*, role: str = "org_admin", tenant_id: uuid.UUID | None = _TENANT) -> UserRecord:
+    return UserRecord(id=uuid.uuid4(), role=UserRole(role), tenant_id=tenant_id)
 
 
 def _model(**kwargs) -> LLMModelRecord:
@@ -326,6 +328,7 @@ async def test_probe_uses_stored_subscription_secret(monkeypatch):
         current_user=_user(),
     )
     assert result["success"] is True
+    assert "reply" in result
     assert result["reply"] == "ok"
     assert captured["api_key"] == "xai-access-LIVE"
     assert captured["provider"] == "grok"

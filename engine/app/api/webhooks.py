@@ -9,15 +9,15 @@ import hmac
 import json
 import re
 import time
-from collections.abc import Awaitable
-from typing import Protocol
+from collections.abc import Awaitable, Callable
+from typing import Protocol, TypeIs
 from uuid import UUID
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.core.events import get_redis
-from app.core.json_types import int_from_row, json_loads_value
+from app.core.json_types import JsonValue, int_from_row
 from app.core.logging import logger
 from app.core.request_body import read_bounded_body
 from app.dao.agent_dao import agent_dao
@@ -38,9 +38,17 @@ class _RedisExecute(Protocol):
     def execute(self) -> Awaitable[object]: ...
 
 
+def _is_pipeline_result(value: object) -> TypeIs[list[object] | tuple[object, ...]]:
+    return isinstance(value, (list, tuple))
+
+
+def _decode_payload(payload: str, load: Callable[[str], JsonValue]) -> JsonValue:
+    return load(payload)
+
+
 async def _count_from_pipeline(pipe: _RedisExecute) -> int:
     executed: object = await pipe.execute()
-    if not isinstance(executed, (list, tuple)) or len(executed) < 3:
+    if not _is_pipeline_result(executed) or len(executed) < 3:
         # Fail closed: an unreadable pipeline result must not look like "no hits".
         return 60
     return int_from_row(list[object](executed)[2])
@@ -139,9 +147,9 @@ async def receive_webhook(token: str, request: Request) -> JSONResponse:
     try:
         payload_str = body.decode("utf-8")
         # Try to pretty-format JSON for readability
-        payload_obj = None
+        payload_obj: JsonValue = None
         try:
-            payload_obj = json_loads_value(payload_str)
+            payload_obj = _decode_payload(payload_str, json.loads)
             payload_str = json.dumps(payload_obj, ensure_ascii=False, indent=2)
         except json.JSONDecodeError:
             payload_obj = None

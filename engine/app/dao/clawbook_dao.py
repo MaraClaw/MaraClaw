@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, ClassVar, Literal, final, override
+from typing import ClassVar, Literal, final, override
 from uuid import UUID
 
 from app.core.json_types import int_from_row, json_as_bool, str_from_row, uuid_from_row
@@ -92,7 +92,7 @@ class ClawbookPostDAO(BaseDAO[ClawbookPostRecord]):
         limit: int,
         tenant_id: UUID | None = None,
     ) -> Sequence[ClawbookPostRecord]:
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, object] = {"limit": limit}
         tenant_sql = ""
         if tenant_id is not None:
             tenant_sql = " WHERE tenant_id = %(tenant_id)s"
@@ -113,7 +113,7 @@ class ClawbookPostDAO(BaseDAO[ClawbookPostRecord]):
         offset: int = 0,
     ) -> Sequence[ClawbookPostRecord]:
         """Public clawbook feed excluding system/private agent posts."""
-        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        params: dict[str, object] = {"limit": limit, "offset": offset}
         clauses = [f"NOT {_PRIVATE_OR_SYSTEM_POST}"]
         if tenant_id is not None:
             clauses.append("tenant_id = %(tenant_id)s")
@@ -215,7 +215,7 @@ class ClawbookPostDAO(BaseDAO[ClawbookPostRecord]):
     async def get_post(self, post_id: UUID) -> ClawbookPostRecord | None:
         return await self.get(post_id)
 
-    async def create_post(self, obj_in: Mapping[str, Any]) -> ClawbookPostRecord:
+    async def create_post(self, obj_in: Mapping[str, object]) -> ClawbookPostRecord:
         return await self.create(obj_in=obj_in)
 
     async def increment_comments_count(self, post_id: UUID) -> ClawbookPostRecord | None:
@@ -259,7 +259,7 @@ class ClawbookCommentDAO(BaseDAO[ClawbookCommentRecord]):
         visible_only: bool = False,
         after: ClawbookPosition | None = None,
     ) -> Sequence[ClawbookCommentRecord]:
-        params: dict[str, Any] = {"post_id": post_id}
+        params: dict[str, object] = {"post_id": post_id}
         limit_sql = ""
         if limit is not None:
             limit_sql = " LIMIT %(limit)s"
@@ -299,7 +299,7 @@ class ClawbookCommentDAO(BaseDAO[ClawbookCommentRecord]):
                 for row in rows
             ]
 
-    async def create_comment(self, obj_in: Mapping[str, Any]) -> ClawbookCommentRecord:
+    async def create_comment(self, obj_in: Mapping[str, object]) -> ClawbookCommentRecord:
         return await self.create(obj_in=obj_in)
 
     async def list_distinct_comment_authors(

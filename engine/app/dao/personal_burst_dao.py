@@ -1,6 +1,6 @@
 """Intake-side Personal burst persistence: usage, FIFO tail, guarded batch create/append.
 
-Every mutation requires the caller's owning transaction and takes the shared chat-session lock first (the same
+Every mutation requires the caller's owning transaction and takes the transcript chat-session lock first (the same
 lock claiming uses), so the tail it reads cannot change before the guarded write.
 """
 
@@ -38,7 +38,7 @@ _USAGE = """
 WITH batched AS (
     SELECT COALESCE(sum(member_count), 0)::bigint AS n, COALESCE(sum(member_bytes), 0)::bigint AS b
     FROM personal_burst_batches
-    WHERE agent_id = %(agent)s AND shared_session_id = %(session)s AND state IN ('pending', 'sealed')
+    WHERE agent_id = %(agent)s AND transcript_session_id = %(session)s AND state IN ('pending', 'sealed')
 ), legacy AS (
     SELECT count(*)::bigint AS n, COALESCE(sum(octet_length(g.content)), 0)::bigint AS b
     FROM gateway_messages g
@@ -83,15 +83,15 @@ class PersonalBurstDAO(BaseDAO[PersonalBurstBatch]):
     columns: ClassVar[tuple[str, ...]] = BATCH_COLUMNS
     record_factory = staticmethod(PersonalBurstBatch.from_row)
 
-    async def pending_usage(self, agent_id: UUID, shared_session_id: UUID) -> PendingUsage:
+    async def pending_usage(self, agent_id: UUID, transcript_session_id: UUID) -> PendingUsage:
         """Waiting Personal originals and raw bytes, excluding the in-flight (claimed) batch."""
         async with self.session() as db:
             row = await db.fetchone(
                 _USAGE,
                 {
                     "agent": agent_id,
-                    "session": shared_session_id,
-                    "conv": str(shared_session_id),
+                    "session": transcript_session_id,
+                    "conv": str(transcript_session_id),
                     "prefix": PERSONAL_ROUTE_PREFIX,
                 },
             )
@@ -99,26 +99,26 @@ class PersonalBurstDAO(BaseDAO[PersonalBurstBatch]):
             return PendingUsage(0, 0)
         return PendingUsage(int_from_row(row["count"]), int_from_row(row["bytes"]))
 
-    async def pending_tail(self, agent_id: UUID, shared_session_id: UUID) -> PersonalBurstTail | None:
-        """The actual last pending shared gateway row, whatever produced it."""
+    async def pending_tail(self, agent_id: UUID, transcript_session_id: UUID) -> PersonalBurstTail | None:
+        """The actual last pending gateway row of the transcript lane, whatever produced it."""
         async with self.session() as db:
             row = await db.fetchone(
-                "SELECT g.id, g.created_at " + _TAIL_FROM, {"agent": agent_id, "conv": str(shared_session_id)}
+                "SELECT g.id, g.created_at " + _TAIL_FROM, {"agent": agent_id, "conv": str(transcript_session_id)}
             )
         if row is None:
             return None
         gateway_id = uuid_from_row(row["id"])
         return PersonalBurstTail(gateway_id, required_datetime(row["created_at"]), await self.get(gateway_id))
 
-    async def next_created_at(self, agent_id: UUID, shared_session_id: UUID) -> datetime:
-        """``GREATEST(clock_timestamp(), tail.created_at + 1 microsecond)`` under the shared-session lock."""
+    async def next_created_at(self, agent_id: UUID, transcript_session_id: UUID) -> datetime:
+        """``GREATEST(clock_timestamp(), tail.created_at + 1 microsecond)`` under the transcript-session lock."""
         db = require_transaction("created_at reservation")
-        await require_parent_lock(db, agent_id, shared_session_id)
+        await require_parent_lock(db, agent_id, transcript_session_id)
         row = await db.fetchone(
             "SELECT GREATEST(clock_timestamp(), "
             "(SELECT max(g.created_at) FROM gateway_messages g "
             "WHERE g.agent_id = %(agent)s AND g.conversation_id = %(conv)s) + interval '1 microsecond') AS at",
-            {"agent": agent_id, "conv": str(shared_session_id)},
+            {"agent": agent_id, "conv": str(transcript_session_id)},
         )
         created = datetime_from_row(row["at"]) if row is not None else None
         if created is None:
@@ -132,13 +132,13 @@ class PersonalBurstDAO(BaseDAO[PersonalBurstBatch]):
         db = require_transaction("batch create")
         if member.text_bytes > limits.batch_bytes:
             raise PersonalBurstLimitError(member.text_bytes, limits.batch_bytes)
-        await require_parent_lock(db, scope.agent_id, scope.shared_session_id)
+        await require_parent_lock(db, scope.agent_id, scope.transcript_session_id)
         row = await db.fetchone(
             _CREATE,
             {
                 **scope.params(),
                 "gateway_id": gateway_id,
-                "conv": str(scope.shared_session_id),
+                "conv": str(scope.transcript_session_id),
                 "quiet": limits.quiet_seconds,
                 "max": limits.max_seconds,
                 "bytes": member.text_bytes,
@@ -158,8 +158,8 @@ class PersonalBurstDAO(BaseDAO[PersonalBurstBatch]):
         ``None`` means "not eligible": the caller reserves a new anchor. Capacity admission is the caller's.
         """
         db = require_transaction("member append")
-        await require_parent_lock(db, scope.agent_id, scope.shared_session_id)
-        tail = await self.pending_tail(scope.agent_id, scope.shared_session_id)
+        await require_parent_lock(db, scope.agent_id, scope.transcript_session_id)
+        tail = await self.pending_tail(scope.agent_id, scope.transcript_session_id)
         if tail is None or tail.batch is None:
             return None
         row = await db.fetchone(

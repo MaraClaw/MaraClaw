@@ -4,7 +4,8 @@ from collections.abc import AsyncIterator
 from contextvars import Context
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import httpx
@@ -17,6 +18,7 @@ from psycopg.rows import DictRow, dict_row
 from app.api import schedules
 from app.core.json_types import uuid_from_row
 from app.core.security import get_current_user, load_user_principal
+from app.dao.activity_log_dao import agent_activity_log_dao
 from app.dao.schedule_dao import agent_schedule_dao
 from app.dao.schedule_manual_run_dao import schedule_manual_run_dao
 from app.db import session as session_module
@@ -28,8 +30,10 @@ from app.records.schedule import AgentScheduleRecord
 from app.records.schedule_manual_run import ScheduleManualRunRecord
 from app.records.user import UserRecord
 from app.scripts.bootstrap_db import SCHEMA_BASELINE, _statement_bodies
+from app.services import schedule_lease, scheduler
 from schedule_occurrence_persistence_fakes import SLOT_COLUMNS
 from test_schedule_dao import NEXT, NOW, _next_run, _schedule
+from test_scheduler import _Clock
 
 
 @pytest.fixture
@@ -520,6 +524,42 @@ async def test_live_released_claim_is_taken_by_a_second_worker_without_a_duplica
         assert reloaded is not None
         assert reloaded.next_run_at == claim.next_run_at
         assert reloaded.run_count == 0
+
+
+async def test_live_spent_budget_settles_the_occurrence_so_no_worker_reclaims_it(
+    manual_schedule: AgentScheduleRecord, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a claimed occurrence of a running agent whose provider never returns, under a 30-second run budget
+    (claim,) = await agent_schedule_dao.claim_due(NOW, _next_run)
+    hung = asyncio.Event()
+
+    async def provider(**_kwargs: object) -> None:
+        hung.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(scheduler, "datetime", _Clock)
+    monkeypatch.setattr(schedule_lease, "datetime", _Clock)
+    monkeypatch.setattr(scheduler, "get_settings", lambda: SimpleNamespace(SCHEDULE_RUN_BUDGET_SECONDS=30.0))
+    monkeypatch.setattr("app.services.agent_context.build_agent_context", AsyncMock(return_value=("static", "dynamic")))
+    monkeypatch.setattr("app.services.llm.call_agent_llm_with_tools", provider)
+    run = asyncio.create_task(scheduler._execute_periodic_schedule(claim))
+    await hung.wait()
+    # When the loop clock moves past the budget, short of the next renewal and of the lease window
+    loop = asyncio.get_running_loop()
+    monotonic = loop.time
+    monkeypatch.setattr(loop, "time", lambda: monotonic() + 31)
+    await run
+    # Then PostgreSQL holds one settled, failed run, and a claim after the lease would have lapsed finds nothing
+    settled = await agent_schedule_dao.get(claim.id)
+    assert settled is not None
+    assert (settled.pending_due_at, settled.lease_token) == (None, None)
+    assert settled.run_count == claim.run_count + 1
+    assert settled.next_run_at == NEXT
+    assert await agent_schedule_dao.claim_due(NOW + timedelta(minutes=6), _next_run) == []
+    (entry,) = await agent_activity_log_dao.list_schedule_history(claim.agent_id, claim.id)
+    assert entry.detail_json is not None
+    assert entry.detail_json["status"] == "failure"
+    assert entry.detail_json["error"] == schedule_lease.SCHEDULE_RUN_TIMEOUT_ERROR
 
 
 async def test_live_release_refuses_started_and_superseded_claims(live_schedule: AgentScheduleRecord) -> None:

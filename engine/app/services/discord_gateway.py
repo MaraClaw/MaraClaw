@@ -29,16 +29,16 @@ from app.services.channels.stream_source import StreamSource, acquire_stream_sou
 from app.services.storage_runtime.quota_errors import StorageQuotaError
 
 
-class _DiscordUserLike(Protocol):
-    name: str
-    discriminator: str
-    id: int
-
-
 class _DiscordAuthorLike(Protocol):
     id: int
     name: str
-    display_name: str
+
+    @property
+    def display_name(self) -> str: ...
+
+
+class _DiscordUserLike(_DiscordAuthorLike, Protocol):
+    discriminator: str
 
 
 class _DiscordChannelLike(Protocol):
@@ -82,6 +82,10 @@ def _is_discord_intents(value: object) -> TypeIs[_DiscordIntentsLike]:
     return hasattr(value, "message_content")
 
 
+def _is_attachment_sequence(value: object) -> TypeIs[list[object] | tuple[object, ...]]:
+    return isinstance(value, (list, tuple))
+
+
 def _mod_attr(value: object, name: str) -> object:
     return list[object]((getattr(value, name, None),))[0]
 
@@ -89,11 +93,10 @@ def _mod_attr(value: object, name: str) -> object:
 _discord_mod: ModuleType | None
 try:
     import discord as _discord_mod
-
-    _HAS_DISCORD = True
 except ImportError:
     _discord_mod = None
-    _HAS_DISCORD = False
+
+_HAS_DISCORD = _discord_mod is not None
 
 if not _HAS_DISCORD:
     logger.warning(
@@ -272,7 +275,7 @@ class DiscordGatewayManager:
             if source is None:
                 raise RuntimeError("Discord connection source is required")
             raw_attachments = _mod_attr(message, "attachments")
-            items = list[object](raw_attachments) if isinstance(raw_attachments, (list, tuple)) else []
+            items = list[object](raw_attachments) if _is_attachment_sequence(raw_attachments) else []
             attachments = tuple(DiscordAttachment.model_validate(item) for item in items)
             event = ChannelEvent(
                 config_id=source.config_id,
