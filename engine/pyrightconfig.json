@@ -1,12 +1,16 @@
 {
   "include": ["app", "scripts", "check_agentbay_config.py", "test_sandbox_config.py"],
   "extraPaths": ["."],
-  "typeCheckingMode": "standard",
+  "typeCheckingMode": "strict",
   "pythonVersion": "3.14",
   "venvPath": ".",
   "venv": ".venv",
   "reportUnannotatedClassAttribute": "error",
   "reportAny": "error",
+  "reportExplicitAny": "error",
+  "reportPrivateUsage": "none",
+  "reportUnusedFunction": "none",
+  "allowedUntypedLibraries": ["agentbay", "lark_oapi", "dingtalk_stream", "wecom_aibot_sdk", "weasyprint", "boto3", "botocore"],
   "exclude": [
     "**/skill_creator_files/**",
     "**/__pycache__/**",

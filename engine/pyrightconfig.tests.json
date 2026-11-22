@@ -1,0 +1,17 @@
+{
+  "include": ["tests"],
+  "extraPaths": [".", "tests"],
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.14",
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportAny": "none",
+  "reportUnannotatedClassAttribute": "none",
+  "exclude": [
+    "**/skill_creator_files/**",
+    "**/__pycache__/**",
+    ".venv/**",
+    "agent_template/**",
+    "agent_templates/**"
+  ]
+}
