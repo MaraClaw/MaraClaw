@@ -13,6 +13,7 @@ from starlette.requests import Request
 
 from app.api import google_chat as google_chat_api
 from app.core.domain.channels import ChannelType
+from app.core.json_types import JsonObject
 from app.services.agent_tool_exec.channel_messaging import _outbound_senders
 from app.services.channels.dedup import already_processed, mark_processed, remember_if_new
 from app.services.channels.google_chat import (
@@ -81,7 +82,7 @@ def test_proactive_flags_have_outbound_senders():
 
 
 def test_parse_google_chat_message_event():
-    body = {
+    body: JsonObject = {
         "type": "MESSAGE",
         "message": {
             "name": "spaces/AAA/messages/BBB",
@@ -110,7 +111,7 @@ def test_parse_google_chat_message_event():
 
 
 def test_parse_google_chat_skips_bot_sender():
-    body = {
+    body: JsonObject = {
         "type": "MESSAGE",
         "message": {
             "text": "loop",
@@ -122,7 +123,7 @@ def test_parse_google_chat_skips_bot_sender():
 
 
 def test_parse_google_chat_room_is_group():
-    body = {
+    body: JsonObject = {
         "type": "MESSAGE",
         "message": {
             "argumentText": "standup?",
@@ -138,7 +139,7 @@ def test_parse_google_chat_room_is_group():
 
 
 def test_parse_added_to_space_with_embedded_message():
-    body = {
+    body: JsonObject = {
         "type": "ADDED_TO_SPACE",
         "space": {"name": "spaces/S1", "type": "ROOM", "displayName": "Ops"},
         "message": {
@@ -155,7 +156,7 @@ def test_parse_added_to_space_with_embedded_message():
 
 
 def test_parse_attachment_only_message():
-    body = {
+    body: JsonObject = {
         "type": "MESSAGE",
         "message": {
             "name": "spaces/S/messages/M",
@@ -203,7 +204,7 @@ def test_dedup_mark_after_success():
 
 
 def test_redact_service_account_json():
-    extra = {
+    extra: JsonObject = {
         "audience": "123",
         "service_account_json": {
             "type": "service_account",
@@ -216,6 +217,7 @@ def test_redact_service_account_json():
     assert redacted is not None
     assert redacted["audience"] == "123"
     sa = redacted["service_account_json"]
+    assert isinstance(sa, dict)
     assert sa["client_email"] == "bot@x.iam.gserviceaccount.com"
     assert sa["credentials_configured"] is True
     assert "private_key" not in sa

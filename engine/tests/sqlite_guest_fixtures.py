@@ -7,8 +7,8 @@ from collections.abc import Generator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from multiprocessing import get_context
-from multiprocessing.connection import Connection
 from pathlib import Path
+from typing import Protocol
 
 ANSWER_SECONDS = 30
 
@@ -19,7 +19,13 @@ def _status(database: sqlite3.Connection) -> str:
     return f"{integrity} {rows}"
 
 
-def _guest(path: str, channel: Connection) -> None:
+class _GuestChannel(Protocol):
+    def send(self, message: str, /) -> None: ...
+    def recv(self) -> str: ...
+    def poll(self, timeout: float, /) -> bool: ...
+
+
+def _guest(path: str, channel: _GuestChannel) -> None:
     # Autocommit with the WAL never checkpointed, so committed rows live only in the -wal file.
     database = sqlite3.connect(path, isolation_level=None)
     _ = database.execute("PRAGMA journal_mode=WAL")
@@ -37,7 +43,7 @@ def _guest(path: str, channel: Connection) -> None:
 
 @dataclass(frozen=True, slots=True)
 class SqliteGuest:
-    channel: Connection
+    channel: _GuestChannel
 
     def command(self, name: str) -> str:
         """``insert`` commits one row; both commands answer ``<integrity_check> <row count>``."""

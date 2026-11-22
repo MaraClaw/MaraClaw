@@ -166,7 +166,7 @@ async def test_primary_session_checks_guard_after_read_before_mutation(monkeypat
 
 
 def origin_trigger(agent: AgentRecord, **config: str) -> AgentTriggerRecord:
-    return AgentTriggerRecord(id=uuid4(), agent_id=agent.id, type="on_message", config=config)
+    return AgentTriggerRecord(id=uuid4(), agent_id=agent.id, type="on_message", config={**config})
 
 
 @pytest.mark.asyncio

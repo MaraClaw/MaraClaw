@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,9 +12,10 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api import tenants as tenants_api
+from app.core.domain.users import UserRole
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
-from app.services import tenant_provisioning
+from app.records.user import UserRecord
 from app.services.tenant_provisioning import (
     AdminEmailTakenError,
     ProvisionedTenant,
@@ -26,12 +26,12 @@ from app.services.tenant_provisioning import (
 PHONE = "+84912345678"
 
 
-def _platform_user():
-    return SimpleNamespace(id=uuid.uuid4(), role="platform_admin", tenant_id=None, identity=None)
+def _platform_user() -> UserRecord:
+    return UserRecord(id=uuid.uuid4(), role=UserRole.PLATFORM_ADMIN)
 
 
-def _member_user():
-    return SimpleNamespace(id=uuid.uuid4(), role="member", tenant_id=uuid.uuid4(), identity=None)
+def _member_user() -> UserRecord:
+    return UserRecord(id=uuid.uuid4(), role=UserRole.MEMBER, tenant_id=uuid.uuid4())
 
 
 def _tenant_record(*, name="Acme", slug="acme-abc123", tier=OrganizationPlanId.PRO):
@@ -66,7 +66,7 @@ async def test_create_tenant_rejects_non_platform_admin():
 @pytest.mark.asyncio
 async def test_create_tenant_provisions_org_admin(monkeypatch):
     tenant = _tenant_record(tier=OrganizationPlanId.ULTRA)
-    org_admin: Any = SimpleNamespace(id=uuid.uuid4(), role="org_admin")
+    org_admin = UserRecord(id=uuid.uuid4(), role=UserRole.ORG_ADMIN)
     provisioned = ProvisionedTenant(
         tenant=tenant,
         org_admin=org_admin,
@@ -197,7 +197,8 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
     create_user = AsyncMock(return_value=org_admin)
     monkeypatch.setattr("app.services.tenant_provisioning.identity_dao.get_by_email", AsyncMock(return_value=None))
     monkeypatch.setattr("app.services.tenant_provisioning.hash_password_async", AsyncMock(return_value="hashed"))
-    monkeypatch.setattr("app.services.tenant_provisioning.tenant_dao.create", AsyncMock(return_value=tenant))
+    create_tenant = AsyncMock(return_value=tenant)
+    monkeypatch.setattr("app.services.tenant_provisioning.tenant_dao.create", create_tenant)
     monkeypatch.setattr("app.services.tenant_provisioning.identity_dao.create_identity", create_identity)
     monkeypatch.setattr("app.services.tenant_provisioning.user_dao.create", create_user)
     monkeypatch.setattr("app.services.tenant_provisioning.participant_dao.create_for_user", AsyncMock())
@@ -224,19 +225,21 @@ async def test_create_tenant_with_org_admin_write_kwargs(monkeypatch):
 
     assert result.admin_email == "orgadmin@acme.com"
     assert result.tenant is tenant
-    create_tenant = tenant_provisioning.tenant_dao.create
     assert create_tenant.await_args is not None
     assert create_tenant.await_args.kwargs["obj_in"]["tier"] is OrganizationPlanId.MAX
     assert create_tenant.await_args.kwargs["obj_in"]["phone"] == PHONE
+    assert create_identity.await_args is not None
     kwargs = create_identity.await_args.kwargs
     assert kwargs["email"] == "orgadmin@acme.com"
     assert kwargs["must_change_password"] is True
     assert kwargs["is_platform_admin"] is False
+    assert create_user.await_args is not None
     user_kwargs = create_user.await_args.kwargs["obj_in"]
     assert user_kwargs["role"] == "org_admin"
     assert user_kwargs["registration_source"] == "platform_admin"
     assert user_kwargs["is_genesis"] is True
     bind.assert_awaited_once()
+    assert bind.await_args is not None
     assert bind.await_args.args[0].identity is identity
     claim.assert_awaited_once_with(tenant_id, "orgadmin@acme.com")
 

@@ -1,20 +1,17 @@
 import uuid
-from types import SimpleNamespace
-from typing import Any
 
 from app.api.tools import _tool_record_visible_to_agent
+from app.records.tool import AgentToolRecord, ToolRecord
 
 
-def make_tool(**overrides):
-    values = {
-        "id": uuid.uuid4(),
-        "name": "visibility_fixture",
-        "display_name": "Visibility Fixture",
-        "source": "builtin",
-        "tenant_id": None,
-    }
-    values.update(overrides)
-    return SimpleNamespace(**values)
+def make_tool(*, source: str, tenant_id: uuid.UUID | None, tool_id: uuid.UUID | None = None) -> ToolRecord:
+    return ToolRecord(
+        id=tool_id or uuid.uuid4(),
+        name="visibility_fixture",
+        display_name="Visibility Fixture",
+        source=source,
+        tenant_id=tenant_id,
+    )
 
 
 def test_builtin_tools_are_visible_across_tenants():
@@ -37,8 +34,8 @@ def test_admin_tools_are_visible_only_to_same_tenant():
 def test_agent_installed_tools_require_explicit_assignment():
     tenant_id = uuid.uuid4()
     tool_id = uuid.uuid4()
-    installed_tool = make_tool(source="agent", id=tool_id, tenant_id=uuid.uuid4())
-    assignment: Any = SimpleNamespace(agent_id=uuid.uuid4(), tool_id=tool_id)
+    installed_tool = make_tool(source="agent", tool_id=tool_id, tenant_id=uuid.uuid4())
+    assignment = AgentToolRecord(id=uuid.uuid4(), agent_id=uuid.uuid4(), tool_id=tool_id)
 
     assert _tool_record_visible_to_agent(installed_tool, tenant_id, {}) is False
     assert _tool_record_visible_to_agent(installed_tool, tenant_id, {str(tool_id): assignment}) is True

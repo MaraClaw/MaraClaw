@@ -97,7 +97,9 @@ async def test_imported_credentials_remain_callable_after_pool_restart(installat
     assert tool is not None
     assignment = await agent_tool_dao.get_assignment(agent, tool.id)
     assert assignment is not None
-    assert decrypt_data(assignment.config["api_key"], get_settings().SECRET_KEY) == key
+    encrypted_key = assignment.config["api_key"]
+    assert isinstance(encrypted_key, str)
+    assert decrypt_data(encrypted_key, get_settings().SECRET_KEY) == key
     assert key not in str(tool)
     assert "apiKey" not in (tool.mcp_server_url or "")
     # When a fresh process-equivalent pool and fresh MCP client execute the installed tool.

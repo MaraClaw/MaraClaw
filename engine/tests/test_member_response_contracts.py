@@ -139,7 +139,7 @@ async def test_activity_detail_keeps_dynamic_values_and_nullable_fields(client, 
         agent_id=AGENT_ID,
         action_type=ActivityAction.TOOL_CALL,
         summary="Summary",
-        detail_json={"nested": [None, {"timestamp": STAMP, "id": related_id}]},
+        detail_json={"nested": [None, {"timestamp": STAMP.isoformat(), "id": str(related_id)}]},
         related_id=related_id if populated else None,
         created_at=STAMP if populated else None,
     )

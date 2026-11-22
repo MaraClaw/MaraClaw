@@ -9,7 +9,7 @@ from tests.channel_submission_fixtures import channel_db, receipt_db
 from app.dao.whatsapp_personal_dao import claim, get_personal, reaped, revoke
 from app.db.errors import UniqueViolationError
 from app.db.session import transaction
-from app.records.outbound_plan import OutboundChunk, OutboundTarget
+from app.records.outbound_plan import OutboundChunk, OutboundProvider, OutboundTarget
 from app.records.whatsapp_personal import PersonalRoute
 from app.services.channels.submissions import accept_channel_event
 from app.services.channels.whatsapp_personal_control import start
@@ -188,7 +188,7 @@ def target_for(owner):
         self_jid=owner.pn_jid,
     )
     return OutboundTarget(
-        provider="whatsapp",
+        provider=OutboundProvider.WHATSAPP,
         mode="personal_qr",
         config_id=owner.config_id,
         account=(owner.account_id, str(owner.auth_epoch), str(owner.generation)),

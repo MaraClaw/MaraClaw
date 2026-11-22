@@ -4,6 +4,7 @@ from hashlib import sha256
 import httpx
 import pytest
 
+from app.core.json_types import is_json_object, json_object_from
 from app.records.outbound_plan import OutboundProvider
 from app.services.channels.outbound_errors import ProviderDeliveryError, ProviderPayloadRejectedError, retry_at
 from app.services.channels.outbound_identity import preflight_outbound
@@ -73,7 +74,9 @@ async def test_preflight_copies_credentials_and_nested_config_before_http(monkey
 
     def respond(request):
         outbound.config.app_secret = "unproved-token"
-        outbound.config.extra_config["service_account_json"]["private_key"] = "changed-key"
+        account = outbound.config.extra_config["service_account_json"]
+        assert is_json_object(account)
+        account["private_key"] = "changed-key"
         assert request.headers["Authorization"].endswith(" live-secret")
         return httpx.Response(200, json={"ok": True, "team_id": "T1", "bot_id": "B1", "id": "bot-1", "bot": True})
 
@@ -82,7 +85,7 @@ async def test_preflight_copies_credentials_and_nested_config_before_http(monkey
     proved = await preflight_outbound(outbound)
 
     assert proved.snapshot.config.app_secret == "live-secret"
-    assert proved.snapshot.config.extra_config["service_account_json"]["private_key"] == "private-key"
+    assert json_object_from(proved.snapshot.config.extra_config["service_account_json"])["private_key"] == "private-key"
     assert proved.snapshot != outbound
 
 

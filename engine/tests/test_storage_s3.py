@@ -748,7 +748,7 @@ async def test_s3_page_sends_a_bounded_delimiter_listing_and_keeps_folders_in_ke
 
 async def test_s3_page_resumes_after_a_folder_without_repeating_it_or_losing_its_next_sibling(monkeypatch):
     # Given
-    keys = dict.fromkeys(("w/a.txt", "w/a/inner.txt", "w/a/deep/more.txt", "w/a0", "w/b.txt"), 1)
+    keys: dict[str, int] = dict.fromkeys(("w/a.txt", "w/a/inner.txt", "w/a/deep/more.txt", "w/a0", "w/b.txt"), 1)
     client = PagedS3Client(keys)
     backend = s3_backend(client, monkeypatch)
     # When
@@ -765,7 +765,7 @@ async def test_s3_page_resumes_after_a_folder_without_repeating_it_or_losing_its
 
 async def test_s3_page_drops_a_folder_the_provider_returns_again_after_the_resume_marker(monkeypatch):
     # Given: a key sorting beyond the marker keeps the provider reporting the consumed folder
-    keys = dict.fromkeys(("w/a/inner.txt", "w/a/\U0010ffffz", "w/b.txt"), 1)
+    keys: dict[str, int] = dict.fromkeys(("w/a/inner.txt", "w/a/\U0010ffffz", "w/b.txt"), 1)
     backend = s3_backend(PagedS3Client(keys), monkeypatch)
     # When
     page = await backend.list_dir_page("w", limit=5, after="a/")

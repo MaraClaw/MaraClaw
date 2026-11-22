@@ -141,7 +141,7 @@ async def test_replay_returns_stored_receipt_before_any_audience_lookup(
     client: httpx.AsyncClient, member: UserRecord, submissions: AsyncMock, audience: AsyncMock
 ) -> None:
     member.role = UserRole.ORG_ADMIN
-    receipt = _receipt(member, api.BroadcastRequest(title="Update"))
+    receipt = _receipt(member, api.BroadcastRequest(title="Update", body=""))
     submissions.get_for_key.return_value = receipt
     response = await client.post(
         "/api/notifications/broadcast", json={"title": "Update"}, headers={"Idempotency-Key": "draft-1"}
@@ -164,7 +164,7 @@ async def test_mismatched_payload_is_a_conflict_distinct_from_validation(
     client: httpx.AsyncClient, member: UserRecord, submissions: AsyncMock, audience: AsyncMock, source: str
 ) -> None:
     member.role = UserRole.ORG_ADMIN
-    receipt = _receipt(member, api.BroadcastRequest(title="Original"))
+    receipt = _receipt(member, api.BroadcastRequest(title="Original", body=""))
     if source == "replay_read":
         submissions.get_for_key.return_value = receipt
     else:
@@ -186,7 +186,7 @@ async def test_first_keyed_request_claims_then_records_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     member.role = UserRole.ORG_ADMIN
-    receipt = _receipt(member, api.BroadcastRequest(title="Update"))
+    receipt = _receipt(member, api.BroadcastRequest(title="Update", body=""))
     submissions.claim.return_value = BroadcastSubmissionClaim(receipt, created=True)
     audience.return_value = [member]
     monkeypatch.setattr("app.services.notification_service.send_notification", AsyncMock())
@@ -216,7 +216,7 @@ async def test_refused_email_broadcast_releases_its_claim(
     client: httpx.AsyncClient, member: UserRecord, submissions: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     member.role = UserRole.ORG_ADMIN
-    receipt = _receipt(member, api.BroadcastRequest(title="Update", send_email=True))
+    receipt = _receipt(member, api.BroadcastRequest(title="Update", body="", send_email=True))
     submissions.claim.return_value = BroadcastSubmissionClaim(receipt, created=True)
     monkeypatch.setattr("app.services.system_email_service.resolve_email_config_async", AsyncMock(return_value=None))
     response = await client.post(
@@ -265,7 +265,7 @@ async def test_replay_conflict_and_refusal_publish_no_history(
     client: httpx.AsyncClient, member: UserRecord, submissions: AsyncMock, history: AsyncMock
 ) -> None:
     member.role = UserRole.ORG_ADMIN
-    receipt = _receipt(member, api.BroadcastRequest(title="Update"))
+    receipt = _receipt(member, api.BroadcastRequest(title="Update", body=""))
     submissions.get_for_key.return_value = receipt
     replay = await client.post(
         "/api/notifications/broadcast", json={"title": "Update"}, headers={"Idempotency-Key": "draft-1"}

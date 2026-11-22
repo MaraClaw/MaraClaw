@@ -15,6 +15,7 @@ from psycopg import AsyncConnection
 from psycopg.errors import ForeignKeyViolation, LockNotAvailable, UniqueViolation
 from psycopg.rows import DictRow
 
+from app.core.json_types import JsonObject, JsonValue
 from app.dao.trigger_dao import trigger_execution_dao
 from app.db import session as session_module
 from app.db.connection import DbConnection
@@ -36,7 +37,7 @@ class _Transaction:
         self.force_rollback = force_rollback
         self.prior_locks: set[str] = set()
         self.prior_keys: list[str] = []
-        self.prior_config: dict[str, object] = {}
+        self.prior_config: JsonObject = {}
 
     async def __aenter__(self) -> Self:
         self.prior_locks = self.raw.locks.copy()
@@ -120,7 +121,9 @@ class _Cursor:
             if current != params["expected_seq"]:
                 return
             assert isinstance(params["expected_seq"], int)
-            raw.config = {**raw.config, "_last_value": params["value"], "_poll_seq": params["expected_seq"] + 1}
+            value = params["value"]
+            assert isinstance(value, str)
+            raw.config = {**raw.config, "_last_value": value, "_poll_seq": params["expected_seq"] + 1}
             self.row = {"id": params["trigger_id"]}
             return
         raise AssertionError(f"Unexpected SQL: {sql}")
@@ -143,7 +146,7 @@ class _Raw:
         self.locks: set[str] = set()
         self.conflicts = 0
         self.keys: list[str] = []
-        self.config: dict[str, object] = {}
+        self.config: JsonObject = {}
         self.checkpoint: str | None = None
         self.updates = 0
         self.duplicate = False
@@ -414,7 +417,7 @@ class _Source:
         monkeypatch.setattr(evaluator, "validate_public_url", validate)
         monkeypatch.setattr(evaluator, "public_http_client", client)
 
-    async def tick(self, raw: _Raw, value: str, **options: object) -> None:
+    async def tick(self, raw: _Raw, value: str, **options: JsonValue) -> None:
         """One daemon tick, an hour after the last: evaluate against the stored config, then enqueue when due."""
         self.value = value
         self.now += timedelta(hours=1)

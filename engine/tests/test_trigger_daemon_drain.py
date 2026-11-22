@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import override
 
 import pytest
+from app.core.json_types import JsonValue
 
 from app.records.trigger import AgentTriggerRecord
 from app.services import heartbeat, trigger_daemon
@@ -621,7 +622,7 @@ async def test_shutdown_during_claim_returns_every_reservation_and_the_next_life
 _scan_ids = itertools.count(1)
 
 
-def scan_trigger(name: str, trigger_type: str = "poll", **config: object) -> AgentTriggerRecord:
+def scan_trigger(name: str, trigger_type: str = "poll", **config: JsonValue) -> AgentTriggerRecord:
     # Ids ascend in creation order, like the id-ordered pages the daemon reads.
     return AgentTriggerRecord(
         id=uuid.UUID(int=next(_scan_ids)),

@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from app.core.json_types import json_object_from
 from app.records.channel_config import ChannelConfigRecord
 from app.records.outbound_plan import OutboundPlan, OutboundProvider
 from app.services.channels import outbound_plan
@@ -134,4 +135,4 @@ async def test_google_private_key_rotation_preserves_same_account_target(monkeyp
 
     assert current.target == original.target
     assert current.target.thread == "spaces/one/threads/thread"
-    assert current.config.extra_config["service_account_json"]["private_key"] == "new-key"
+    assert json_object_from(current.config.extra_config["service_account_json"])["private_key"] == "new-key"

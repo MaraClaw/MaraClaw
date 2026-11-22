@@ -1,7 +1,5 @@
 import uuid
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,25 +7,23 @@ from fastapi import HTTPException
 
 from app.api import agents
 from app.core import permissions
+from app.core.domain.agents import AgentSharingMode, AgentStatus
+from app.core.domain.users import UserRole
+from app.records.agent import AgentRecord
+from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.user import UserRecord
 from app.schemas.agent_directory import AgentDirectoryPosition
 from app.services.agent_directory_cursor import AgentDirectoryCursor, parse_agent_directory_cursor
 
 
-def make_user(**overrides):
-    values = {
-        "id": uuid.uuid4(),
-        "role": "member",
-        "tenant_id": uuid.uuid4(),
-    }
-    values.update(overrides)
-    return SimpleNamespace(**values)
+def make_user(tenant_id: uuid.UUID | None, *, role: UserRole = UserRole.MEMBER) -> UserRecord:
+    return UserRecord(id=uuid.uuid4(), role=role, tenant_id=tenant_id)
 
 
 @pytest.mark.asyncio
 async def test_list_visible_agents_delegates_to_dao(monkeypatch):
-    user = make_user()
-    expected = [SimpleNamespace(id=uuid.uuid4())]
+    user = make_user(uuid.uuid4())
+    expected = [AgentRecord(id=uuid.uuid4(), name="Visible", creator_id=uuid.uuid4())]
     calls = []
 
     async def list_visible_for_user(**kwargs):
@@ -46,7 +42,7 @@ async def test_list_visible_agents_delegates_to_dao(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_list_visible_agents_accepts_explicit_tenant(monkeypatch):
-    user = make_user(role="platform_admin", tenant_id=None)
+    user = make_user(None, role=UserRole.PLATFORM_ADMIN)
     tenant_id = uuid.uuid4()
     calls = []
 
@@ -77,7 +73,7 @@ async def test_list_visible_agents_delegates_nullable_continuation(monkeypatch):
 
 @pytest.mark.parametrize("created_at", [None, datetime(2026, 1, 1, tzinfo=UTC)])
 def test_directory_cursor_preserves_nullable_position(created_at):
-    user = make_user()
+    user = make_user(uuid.uuid4())
     cursor = AgentDirectoryCursor(user_id=user.id, tenant_id=user.tenant_id, created_at=created_at, id=uuid.uuid4())
 
     parsed = parse_agent_directory_cursor(cursor.encode(), user.id, user.tenant_id)
@@ -112,23 +108,24 @@ async def test_directory_rejects_foreign_or_invalid_cursor_before_read(monkeypat
 async def test_agent_relationship_status_requires_original_creator_to_still_manage_both_agents(monkeypatch):
     tenant_id = uuid.uuid4()
     creator_id = uuid.uuid4()
-    source = SimpleNamespace(
+    source = AgentRecord(
         id=uuid.uuid4(),
         name="Source",
         creator_id=uuid.uuid4(),
-        access_mode="company",
-        status="ready",
+        access_mode=AgentSharingMode.COMPANY,
+        status=AgentStatus.RUNNING,
         tenant_id=tenant_id,
     )
-    target = SimpleNamespace(
+    target = AgentRecord(
         id=uuid.uuid4(),
         name="Target",
         creator_id=uuid.uuid4(),
-        access_mode="company",
-        status="ready",
+        access_mode=AgentSharingMode.COMPANY,
+        status=AgentStatus.RUNNING,
         tenant_id=tenant_id,
     )
-    rel: Any = SimpleNamespace(
+    rel = AgentAgentRelationshipRecord(
+        id=uuid.uuid4(),
         agent_id=source.id,
         target_agent_id=target.id,
         created_by_user_id=creator_id,
@@ -159,23 +156,24 @@ async def test_agent_relationship_status_requires_original_creator_to_still_mana
 async def test_agent_relationship_status_active_when_original_creator_still_manages_both_agents(monkeypatch):
     tenant_id = uuid.uuid4()
     creator_id = uuid.uuid4()
-    source = SimpleNamespace(
+    source = AgentRecord(
         id=uuid.uuid4(),
         name="Source",
         creator_id=uuid.uuid4(),
-        access_mode="custom",
-        status="ready",
+        access_mode=AgentSharingMode.CUSTOM,
+        status=AgentStatus.RUNNING,
         tenant_id=tenant_id,
     )
-    target = SimpleNamespace(
+    target = AgentRecord(
         id=uuid.uuid4(),
         name="Target",
         creator_id=uuid.uuid4(),
-        access_mode="private",
-        status="ready",
+        access_mode=AgentSharingMode.PRIVATE,
+        status=AgentStatus.RUNNING,
         tenant_id=tenant_id,
     )
-    rel: Any = SimpleNamespace(
+    rel = AgentAgentRelationshipRecord(
+        id=uuid.uuid4(),
         agent_id=source.id,
         target_agent_id=target.id,
         created_by_user_id=creator_id,
@@ -201,12 +199,17 @@ async def test_agent_relationship_status_active_when_original_creator_still_mana
 
 
 def test_is_agent_expired_handles_missing_attrs_flag_and_past_date():
-    assert permissions.is_agent_expired(SimpleNamespace()) is False
-    assert permissions.is_agent_expired(SimpleNamespace(is_expired=True)) is True
-    past = datetime.now(UTC) - timedelta(hours=1)
-    assert permissions.is_agent_expired(SimpleNamespace(is_expired=False, expires_at=past)) is True
-    future = datetime.now(UTC) + timedelta(hours=1)
-    assert permissions.is_agent_expired(SimpleNamespace(is_expired=False, expires_at=future)) is False
+    agent = AgentRecord(id=uuid.uuid4(), name="Expiry", creator_id=uuid.uuid4())
+    del agent.is_expired
+    del agent.expires_at
+    assert permissions.is_agent_expired(agent) is False
+    agent.is_expired = True
+    assert permissions.is_agent_expired(agent) is True
+    agent.is_expired = False
+    agent.expires_at = datetime.now(UTC) - timedelta(hours=1)
+    assert permissions.is_agent_expired(agent) is True
+    agent.expires_at = datetime.now(UTC) + timedelta(hours=1)
+    assert permissions.is_agent_expired(agent) is False
 
 
 @pytest.mark.asyncio
@@ -215,17 +218,15 @@ async def test_check_agent_access_blocks_expired_use_but_allows_manage(monkeypat
 
     access_cache.clear_request_memo()
     tenant = uuid.uuid4()
-    member = make_user(role="member", tenant_id=tenant)
-    creator = make_user(role="member", tenant_id=tenant)
-    expired = SimpleNamespace(
+    member = make_user(tenant)
+    creator = make_user(tenant)
+    expired = AgentRecord(
         id=uuid.uuid4(),
+        name="Expired",
         creator_id=creator.id,
         tenant_id=tenant,
-        access_mode="company",
-        company_access_level="use",
         is_expired=True,
-        expires_at=None,
-        status="ready",
+        status=AgentStatus.RUNNING,
     )
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=expired))
     member.is_active = creator.is_active = True

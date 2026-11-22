@@ -31,7 +31,7 @@ def wire(monkeypatch: pytest.MonkeyPatch) -> Wire:
 )
 async def test_self_hosted_health_probes_keep_the_configured_origin(wire: Wire, url: str, paths: list[str]) -> None:
     # Given: probes that fail until the last candidate answers.
-    wire.responses = [reply(404)] * (len(paths) - 1) + [reply(200, {})]
+    wire.responses = [*(reply(404) for _ in paths[1:]), reply(200, {})]
     host = url.split("/")[2]
     # When
     healthy = await build("self_hosted", url).health_check()
