@@ -202,8 +202,8 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
                         result = "The agent could not complete this request."
                     case "timeout":
                         result = "The agent timed out before completing this request."
-                    case unreachable:
-                        assert_never(unreachable)
+                    case _:
+                        assert_never(status)
                 report = await settle_native_report(agent, claimed.id, result)
                 timeline.mark("settled")
                 if report is not None:
@@ -211,8 +211,8 @@ async def _run_inbox_wake(agent: AgentRecord, _content: str, message_id: UUID | 
                     timeline.mark("published")
             case UncertainOutcome():
                 logger.warning("[OpenClaw] admission uncertain for message {}", claimed.id)
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(outcome)
     except asyncio.CancelledError:
         outcome_kind = "cancelled"
         raise

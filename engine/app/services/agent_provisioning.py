@@ -94,8 +94,8 @@ async def provision_agent(
             access_mode = AgentSharingMode.PRIVATE
         case AgentPermissionScope.CUSTOM:
             access_mode = AgentSharingMode.CUSTOM
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(scope)
     values: dict[str, object] = {
         "name": data.name,
         "role_description": data.role_description,

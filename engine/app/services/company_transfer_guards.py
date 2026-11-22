@@ -58,8 +58,8 @@ async def require_admission_transfer(user: UserRecord, target_id: UUID, transfer
         case TransferChoice.FREE:
             if transfer.free_consent_at is None:
                 raise HTTPException(409, {"code": "free_destructive_consent_required"})
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(transfer.choice)
 
 
 async def quote(user: UserRecord) -> TransferQuote:

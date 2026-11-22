@@ -348,8 +348,8 @@ async def decide(
                 result = ApprovalStatus.APPROVED
             case ApprovalAction.REJECT:
                 result = ApprovalStatus.REJECTED
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(decision.decision)
         if request.status is not ApprovalStatus.PENDING:
             if request.status is not result:
                 raise HTTPException(409, "Organization admission request already has a different decision")
@@ -387,6 +387,6 @@ async def retry_credential_email(request_id: UUID, reviewer_id: UUID) -> Organiz
                 state = await emails.requeue(request.id, now=datetime.now(UTC)) or state
             case "failed" | "pending":
                 pass
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(state.status)
         return OrganizationAdmissionView(request, state)

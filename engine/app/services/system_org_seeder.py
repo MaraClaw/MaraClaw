@@ -98,7 +98,7 @@ async def _ensure_kabers() -> TenantRecord:
         existing = await tenant_dao.update(db_obj=existing, obj_in={"is_system": True}) or existing
 
     resolved = await tenant_dao.get_default_end_user_org() or existing
-    if resolved is None or not resolved.is_active:
+    if not resolved.is_active:
         raise SystemOrgSeedError("No active default end-user organization")
     return resolved if flagged is None or flagged.id == existing.id else existing
 

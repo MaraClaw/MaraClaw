@@ -19,8 +19,8 @@ def _sanitize_detail(value: JsonValue) -> JsonValue:
             return {key.replace("\x00", "\ufffd"): _sanitize_detail(item) for key, item in value.items()}
         case int() | float() | None:
             return value
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(value)
 
 
 async def log_activity(

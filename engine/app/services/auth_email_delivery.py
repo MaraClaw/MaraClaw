@@ -76,8 +76,8 @@ async def eligible(claim: AuthEmailClaim, material: AuthEmailMaterial) -> bool:
             prefix, user_prefix = verification.EMAIL_VERIFICATION_CODE_KEY_PREFIX, verification.USER_PREFIX
         case AuthEmailKind.RESET:
             prefix, user_prefix = reset.RESET_REDIS_KEY_PREFIX, reset.USER_PREFIX
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(claim.kind)
     redis = await get_redis()
     async with redis.pipeline(transaction=True) as pipe:
         _ = pipe.get(f"{prefix}{digest}")
@@ -91,5 +91,5 @@ async def eligible(claim: AuthEmailClaim, material: AuthEmailMaterial) -> bool:
             return stored["identity_id"] == identity.id and stored["email"] == material.to_email
         case AuthEmailKind.RESET:
             return UUID(token_data) == identity.id
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(claim.kind)

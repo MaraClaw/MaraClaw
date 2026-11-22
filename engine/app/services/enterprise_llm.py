@@ -321,12 +321,7 @@ async def ensure_agent_company_models(agent: AgentRecord) -> AgentRecord:
         updates["fallback_model_id"] = fallback_next if isinstance(fallback_next, uuid.UUID) else None
     if not updates:
         return agent
-    updated = await agent_dao.update(db_obj=agent, obj_in=updates)
-    if updated is None:
-        for key, value in updates.items():
-            setattr(agent, key, value)
-        return agent
-    return updated
+    return await agent_dao.update(db_obj=agent, obj_in=updates)
 
 
 async def assert_models_in_tenant_pool(

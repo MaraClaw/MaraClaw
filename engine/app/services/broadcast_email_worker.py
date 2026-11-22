@@ -54,8 +54,8 @@ async def _deliver(claim: BroadcastEmailRecord) -> None:
                     available_at=min(now + timedelta(seconds=delay), claim.deliver_by),
                     now=now,
                 )
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(outcome.kind)
 
 
 async def start_broadcast_email_worker() -> None:

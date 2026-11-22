@@ -62,8 +62,8 @@ async def submit_transfer(
                     raise HTTPException(422, {"code": "free_destructive_consent_required"})
             case TransferChoice.PAID:
                 pass
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(selection.choice)
         active = await transfers.active_for(current.id)
         if active is not None:
             if active.target_tenant_id != target.id or active.choice != selection.choice:
@@ -116,5 +116,5 @@ async def submit_transfer(
                     db_obj=transfer, obj_in={"status": "admission_created", "admission_request_id": admission.id}
                 )
                 return admission
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(selection.choice)

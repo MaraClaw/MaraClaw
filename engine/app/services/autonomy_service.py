@@ -13,7 +13,7 @@ import uuid
 from typing import assert_never
 
 from app.core.domain.approvals import ApprovalAction, ApprovalStatus
-from app.core.json_types import JsonObject, is_str_dict, json_as_str_or, mapping_from_row, object_from_literal
+from app.core.json_types import JsonObject, is_json_object, json_as_str_or, mapping_from_row, object_from_literal
 from app.core.logging import logger
 from app.core.notification_kinds import NotificationKind
 from app.dao.agent_dao import agent_dao
@@ -118,8 +118,8 @@ class AutonomyService:
                 status = ApprovalStatus.APPROVED
             case ApprovalAction.REJECT:
                 status = ApprovalStatus.REJECTED
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(action)
 
         async with optional_connection_ctx():
             pending = await approval_request_dao.get(approval_id)
@@ -235,7 +235,7 @@ class AutonomyService:
             else:
                 arguments = args_raw
 
-            if not is_str_dict(arguments):
+            if not is_json_object(arguments):
                 return "Execution failed: approved action arguments must be a JSON object"
 
             from app.services.agent_tool_exec.dispatcher import _execute_tool_direct

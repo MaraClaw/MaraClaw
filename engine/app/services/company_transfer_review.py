@@ -86,8 +86,8 @@ async def decide_payment(request_id: UUID, reviewer_id: UUID, decision: PaymentD
                 raise HTTPException(409, "Transfer request was withdrawn")
             case TransferStatus.PAYMENT_REVIEW:
                 pass
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(request.status)
         if applicant.tenant_id != request.source_tenant_id:
             raise HTTPException(409, "Applicant membership changed")
         await require_default_source(applicant)
@@ -133,8 +133,8 @@ async def decide_payment(request_id: UUID, reviewer_id: UUID, decision: PaymentD
                         description=f"transfer admission created {admission.id}",
                     )
                 return result
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(decision.decision)
 
 
 async def withdraw_transfer(request_id: UUID, applicant_id: UUID) -> CompanyTransferRecord:
@@ -159,5 +159,5 @@ async def withdraw_transfer(request_id: UUID, applicant_id: UUID) -> CompanyTran
                 raise HTTPException(409, "Withdraw the created admission request instead")
             case TransferStatus.PAYMENT_REVIEW:
                 return await transfers.update(db_obj=request, obj_in={"status": "withdrawn"})
-            case unreachable:
-                assert_never(unreachable)
+            case _:
+                assert_never(request.status)

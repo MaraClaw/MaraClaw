@@ -131,13 +131,14 @@ async def _notify_admins(agent: AgentRecord, loss: AgentRuntimeLoss, pending: in
         except Exception as exc:
             logger.bind(exception_type=type(exc).__name__).warning("[GuestLoss] company lookup failed")
     body = _body(agent, loss, company, pending)
-    match loss.reason:
+    reason = loss.reason
+    match reason:
         case "container_stopped":
             title = f"Agent {agent.name} has a stopped guest container"[:200]
         case "container_missing" | "image_unavailable":
             title = f"Agent {agent.name} lost its guest container"[:200]
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(reason)
     link = f"/companies/{agent.tenant_id}" if agent.tenant_id is not None else None
     recipients = await user_dao.list_active_platform_admins()
     for recipient in recipients:
@@ -158,13 +159,14 @@ async def _notify_admins(agent: AgentRecord, loss: AgentRuntimeLoss, pending: in
 
 def _body(agent: AgentRecord, loss: AgentRuntimeLoss, company: str, pending: int) -> str:
     detected: datetime = loss.detected_at
-    match loss.reason:
+    reason = loss.reason
+    match reason:
         case "container_stopped":
             recovery = "Use Start to resume the existing guest container; pending messages are kept and will be answered once it is running."
         case "container_missing" | "image_unavailable":
             recovery = _RECOVERY
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(reason)
     return "\n".join(
         (
             f"Agent: {agent.name} ({agent.id})",

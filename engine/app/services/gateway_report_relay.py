@@ -242,8 +242,8 @@ async def deliver_claim(claim: GatewayReportDeliveryRecord, clock: Callable[[], 
                     await _deliver_agent(claim, clock, timing)
                 case "im":
                     await _deliver_im(claim, clock, timing)
-                case unreachable:
-                    assert_never(unreachable)
+                case _:
+                    assert_never(claim.destination_kind)
     except LostClaimError:
         timing.result = "lost"
     except PresendIdentityContentionError as error:

@@ -47,8 +47,8 @@ async def apply_disposition(request: CompanyAdmissionRecord, user: UserRecord, f
                     await migrate_agent(agent, transfer)
                 case TransferChoice.FREE:
                     await seal_agent(agent, transfer)
-                case unreachable:
-                    assert_never(unreachable)
+                case _:
+                    assert_never(transfer.choice)
             await db.execute(
                 "INSERT INTO company_transfer_runtime_cleanup(agent_id,transfer_request_id,choice) "
                 "VALUES(%(agent)s,%(request)s,%(choice)s) "

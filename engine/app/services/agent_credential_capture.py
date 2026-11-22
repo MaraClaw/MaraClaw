@@ -39,8 +39,8 @@ async def bind_capture(agent_id: UUID, capture: CredentialCapture) -> Credential
             if credential.revision != expected:
                 raise CredentialRevisionConflictError
             return CredentialRevision(credential_id, agent_id, expected)
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            assert_never(capture)
 
 
 _EXPORT_SCRIPT = r"""
