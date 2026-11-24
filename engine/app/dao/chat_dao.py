@@ -791,29 +791,31 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
         conversation_ids: Sequence[str],
         limit: int = 3,
     ) -> dict[str, list[ChatMessageRecord]]:
-        """Latest N messages for each conversation id, newest first per group."""
+        """Latest N messages per conversation, by descending creation time and ID."""
         if not conversation_ids or limit < 1:
             return {}
+        # PostgreSQL LIMIT takes a bigint; a larger bound still means all rows.
+        query_limit = min(limit, 2**63 - 1)
+        grouped: dict[str, list[ChatMessageRecord]] = {cid: [] for cid in conversation_ids}
         cols = self._select_list()
         async with self.session() as db:
             rows = await db.fetchall(
                 f"""
-                SELECT {cols} FROM (
-                    SELECT {cols},
-                           ROW_NUMBER() OVER (
-                               PARTITION BY conversation_id ORDER BY created_at DESC
-                           ) AS rn
+                SELECT latest.*
+                FROM unnest(%(ids)s::text[]) AS requested(id)
+                CROSS JOIN LATERAL (
+                    SELECT {cols}
                     FROM chat_messages
-                    WHERE conversation_id = ANY(%(ids)s)
-                ) ranked
-                WHERE rn <= %(limit)s
-                ORDER BY conversation_id, created_at DESC
+                    WHERE conversation_id = requested.id
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT %(limit)s
+                ) AS latest
+                ORDER BY latest.conversation_id, latest.created_at DESC, latest.id DESC
                 """,
-                {"ids": list(conversation_ids), "limit": limit},
+                {"ids": list(grouped), "limit": query_limit},
             )
-        grouped: dict[str, list[ChatMessageRecord]] = {cid: [] for cid in conversation_ids}
         for row in rows:
-            record = ChatMessageRecord.from_row({col: row[col] for col in self.columns})
+            record = ChatMessageRecord.from_row(row)
             grouped.setdefault(record.conversation_id, []).append(record)
         return grouped
 
