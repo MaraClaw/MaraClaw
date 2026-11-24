@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypeForm
 
 from app.api import advanced, agents, background_tasks, okr, relationships
+from app.core import permissions
 from app.core.domain.agents import AgentAccessReason, AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject
@@ -579,10 +580,12 @@ async def test_api_key_wrapper_preserves_one_time_secret_and_access_errors(
 async def test_visible_agent_aliases_keep_summary_fields_and_manage_filter(
     client: AsyncClient, actor: UserRecord, agent: AgentRecord, monkeypatch: pytest.MonkeyPatch, path: str
 ) -> None:
-    hidden = AgentRecord(uuid4(), "Unmanaged", uuid4(), tenant_id=actor.tenant_id)
+    hidden = AgentRecord(uuid4(), "Unmanaged", uuid4(), tenant_id=actor.tenant_id, access_mode=AgentSharingMode.PRIVATE)
     visible = AsyncMock(return_value=[agent, hidden])
     monkeypatch.setattr(relationships, "list_visible_agents", visible)
-    monkeypatch.setattr(relationships, "_can_manage_agent", AsyncMock(side_effect=[True, False]))
+    monkeypatch.setattr(relationships.user_dao, "get", AsyncMock(return_value=actor))
+    monkeypatch.setattr(relationships.agent_dao, "get_many", AsyncMock(return_value=[hidden, agent]))
+    monkeypatch.setattr(permissions.agent_permission_dao, "list_decision_rows", AsyncMock(return_value={}))
 
     response = await client.get(f"/api/agents/{agent.id}/relationships/{path}")
 
