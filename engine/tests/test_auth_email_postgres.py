@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from anyio import to_thread
 from cryptography.exceptions import InvalidTag
+from psycopg import OperationalError
 from pydantic import TypeAdapter
 from redis.exceptions import ConnectionError as RedisConnectionError
 from tests.auth_email_fixtures import AuthEmailScenario, MailSink, scenario, sink
@@ -19,7 +20,7 @@ from app.dao.auth_email_dao import AuthEmailDAO, auth_email_dao as emails
 from app.dao.tenant_email_dao import tenant_email_dao
 from app.dao.user_dao import user_dao
 from app.db.session import connection_ctx
-from app.records.auth_email import AuthEmailKind
+from app.records.auth_email import AuthEmailClaim, AuthEmailKind
 from app.services import auth_email_delivery as delivery, auth_email_worker as worker, password_reset_service as reset
 from app.services.email_verification_service import email_verification_service as verification
 
@@ -62,6 +63,35 @@ async def test_committed_job_survives_restart_and_delivers_original_credential(
             assert await reset.consume_password_reset_token(credential) == {"identity_id": scenario.identity.id}
         case unreachable:
             assert_never(unreachable)
+
+
+@pytest.mark.parametrize("committed", [False, True])
+async def test_settlement_connection_loss_after_loopback_smtp(
+    scenario: AuthEmailScenario, sink: MailSink, monkeypatch: pytest.MonkeyPatch, committed: bool
+) -> None:
+    job_id, _, _ = await scenario.prepare()
+    [claim] = await emails.claim_batch()
+    settle = emails.settle
+    writes: list[bool] = []
+
+    async def disconnect_once(item: AuthEmailClaim, error: str | None, *, retry: bool = False) -> bool:
+        first = not writes
+        if first and not committed:
+            writes.append(False)
+            raise OperationalError("connection lost before update")
+        updated = await settle(item, error, retry=retry)
+        writes.append(updated)
+        if first:
+            raise OperationalError("connection lost after commit")
+        return updated
+
+    monkeypatch.setattr(emails, "settle", disconnect_once)
+
+    await worker.deliver(claim)
+
+    assert writes == [committed, not committed]
+    assert [_message(raw)[0] for raw in sink.messages] == [f"<{job_id}.auth-email@maraclaw.local>"]
+    assert await scenario.state() == {"status": "sent", "last_error": None, "payload_gone": True, "attempts": 1}
 
 
 @pytest.mark.parametrize("field", ["id", "identity_id", "kind", "expires_at"])
