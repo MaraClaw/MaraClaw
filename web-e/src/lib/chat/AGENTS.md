@@ -45,7 +45,7 @@ Scope: socket attempts, wire validation, submission identity, history merging, t
   Acceptance requires a known envelope and the canonical session; history reconciliation needs user/submission/message IDs.
   On open, resend ledger-pending submissions before queued onboarding triggers; owner retirement retires the ledger and closes.
 - Attachment submissions generate a UUID, use extracted text or `[Uploaded ${filename}]`, and retain workspace path/name.
-  `display_content` and `file_name` hold the filename; freeze both attachment records and their array.
+  Without prose, `display_content` and `file_name` hold the filename. With resolved composer prose, `content` is the prose content, a blank line, then that text, and `display_content` is the prose display text; `file_name` keeps the filename. Freeze both attachment records and their array.
   `getChatMessageText` strips a matching user `[file:name]\n` prefix and hides filename-only attachment text.
 - Paged history ranges are chronological. `joinHistoryRanges(earlier, later)` keys rows by `entry_id` and prefers the newer range's row on overlap, never merging on a shared parent `message_id`, because a parent's projected siblings can span two pages.
   `refreshHistory` joins the latest window onto the retained items and keeps the retained cursor; `prependHistory` takes the older page's cursor and `has_more` and joins it ahead of the retained items.
