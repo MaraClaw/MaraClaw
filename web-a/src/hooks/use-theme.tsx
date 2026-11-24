@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from 'react'
 
+import { readPreference, writePreference } from '@/lib/preference-storage'
+
 export type Theme = 'light' | 'dark' | 'system'
 export type ResolvedTheme = 'light' | 'dark'
 
@@ -30,7 +32,7 @@ function getSystemTheme(): ResolvedTheme {
 
 function readStoredTheme(): Theme {
   if (typeof window === 'undefined') return 'system'
-  const stored = window.localStorage.getItem(STORAGE_KEY)
+  const stored = readPreference(STORAGE_KEY)
   if (stored === 'light' || stored === 'dark' || stored === 'system') return stored
   return 'system'
 }
@@ -67,7 +69,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const setTheme = useCallback((next: Theme) => {
     setThemeState(next)
-    window.localStorage.setItem(STORAGE_KEY, next)
+    writePreference(STORAGE_KEY, next)
   }, [])
 
   const toggleTheme = useCallback(() => {
