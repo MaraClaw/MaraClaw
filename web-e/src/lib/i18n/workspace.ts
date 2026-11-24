@@ -520,6 +520,7 @@ export const workspace = {
   "Sign in again to send.": "Đăng nhập lại để gửi.",
   "Chat is not connected yet. Try again in a moment.": "Trò chuyện chưa được kết nối. Hãy thử lại sau giây lát.",
   "Upload failed": "Tải lên không thành công",
+  "Uploading {name}…": "Đang tải lên {name}…",
   "This conversation is read-only.": "Cuộc trò chuyện này ở chế độ chỉ đọc.",
   "Message not sent. This conversation is read-only.": "Tin nhắn chưa được gửi. Cuộc trò chuyện này ở chế độ chỉ đọc.",
   "Return to your conversation": "Quay lại cuộc trò chuyện của bạn",

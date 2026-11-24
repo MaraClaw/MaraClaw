@@ -32,7 +32,7 @@ import { buildSkillMentionContent } from '@/lib/chat/skill-mentions'
 import type { SessionOwner } from '@/lib/auth-session'
 import { connectAgentChat, type ChatConnectionState, type ChatInbound, type ChatOutbound } from '@/lib/chat/ws-client'
 import { acceptSubmission, appendCompletion, mergeServerHistory, type ChatLine as Line } from '@/lib/chat/transcript'
-import { createChatSubmissions } from '@/lib/chat/submissions'
+import { createChatSubmissions, type ChatSubmissions } from '@/lib/chat/submissions'
 import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
 import { isOwnConversation, isWritableSession } from '@/lib/chat/sessions'
 import { ChatEventType, readOnlySessionId } from '@/lib/chat/protocol'
@@ -49,6 +49,9 @@ const THINKING_TIMEOUT_MS = 90_000
 // A live turn whose completion frame was lost is released once history ends in a reply and no chunk has arrived for this long.
 const LIVE_QUIET_MS = 15_000
 const LIVE_QUIET_CHECK_MS = 1_000
+
+// A file chosen in the composer waits for Send; it belongs to one submissions ledger (owner, agent and conversation).
+type StagedAttachment = { readonly file: File; readonly scope: ChatSubmissions }
 
 function ThinkingStatus() {
   const { t: translate } = useTranslation()
@@ -83,6 +86,10 @@ export function AgentChatPage() {
     return () => { mountedRef.current = false }
   }, [])
   const [draft, setDraft] = useState('')
+  const [attachment, setAttachment] = useState<StagedAttachment | null>(null)
+  const [uploading, setUploading] = useState<StagedAttachment | null>(null)
+  // Block duplicate sends before React renders the cleared draft, without retaining sent files.
+  const claimedAttachments = useRef(new WeakSet<StagedAttachment>())
   const [lines, setLines] = useState<Line[]>([])
   const [liveStore] = useState(createLiveStreamStore)
   useLayoutEffect(() => () => liveStore.reset(), [liveStore])
@@ -170,8 +177,16 @@ export function AgentChatPage() {
   const submissions = useMemo(() => createChatSubmissions(owner, agent.id, activeId), [owner, agent.id, activeId])
   const submissionScopeRef = useRef(submissions)
   const activeSessionRef = useRef(activeId)
+  const staged = attachment?.scope === submissions ? attachment : null
+  const sending = staged !== null && uploading === staged
   useLayoutEffect(() => {
-    if (submissionScopeRef.current !== submissions) submissionScopeRef.current.retire()
+    const previous = submissionScopeRef.current
+    if (previous !== submissions) {
+      // Only the default route's own conversation resolving carries the staged file over; any other change drops it.
+      const resolvedOwn = !sessionId && activeId !== undefined && previous.matches(owner, agent.id, undefined)
+      previous.retire()
+      setAttachment((current) => current?.scope === previous && resolvedOwn ? { file: current.file, scope: submissions } : null)
+    }
     submissionScopeRef.current = submissions
     const queued = queuedSendRef.current
     if (queued && queued.sessionId === undefined && activeSessionRef.current === undefined && !sessionId && activeId) {
@@ -200,7 +215,7 @@ export function AgentChatPage() {
         if (!mountedRef.current || submissionScopeRef.current !== submissions) submissions.retire()
       })
     }
-  }, [activeId, owner, submissions, sessionId, updateLines, liveStore])
+  }, [activeId, owner, agent.id, submissions, sessionId, updateLines, liveStore])
 
   useEffect(() => {
     if (!isCurrent() || !submissions.active || !ownSessionQuery.error || activeId || sessionId) return
@@ -492,11 +507,15 @@ export function AgentChatPage() {
     || (currentTurn.fromHistory && Boolean(currentTurn.message_id)))
 
   async function send() {
-    if (!isCurrent() || !writable || !submissions.active) return
+    if (!isCurrent() || !writable || !submissions.active || busy) return
     const text = draft.trim()
-    if (!text || busy) return
+    if (!text && !staged) return
     if (!token) {
       toast.error(translate("Sign in again to send."))
+      return
+    }
+    if (staged) {
+      await sendWithAttachment(staged)
       return
     }
     const content = buildSkillMentionContent(draft, installedSkillsQuery.data ?? [])
@@ -527,40 +546,65 @@ export function AgentChatPage() {
     sendRef.current(submission)
   }
 
-  async function onFile(file: File) {
-    if (!isCurrent() || !writable || !submissions.active || !uploadPolicy.isSuccess) return
-    if (busy) return
+  // Uploads on Send, then emits one submission carrying the typed prose and the file; a failure keeps both for another try.
+  async function sendWithAttachment(attached: StagedAttachment) {
+    if (claimedAttachments.current.has(attached)) return
+    if (!sendRef.current) {
+      toast.error(translate("Chat is not connected yet. Try again in a moment."))
+      return
+    }
+    const scope = attached.scope
+    const current = () => isCurrent() && scope.active && submissionScopeRef.current === scope
+    const snapshot = draft
+    const prose = snapshot.trim() ? buildSkillMentionContent(snapshot, installedSkillsQuery.data ?? []) : undefined
+    claimedAttachments.current.add(attached)
+    setUploading(attached)
+    setSlow(false)
+    setRetryStartedAt(null)
+    let sent = false
+    try {
+      const uploaded = await upload.mutateAsync(attached.file)
+      if (!current()) return
+      const sendFn = sendRef.current
+      if (!sendFn) {
+        toast.error(translate("Chat is not connected yet. Try again in a moment."))
+        return
+      }
+      const submission = createAttachmentSubmission(uploaded, prose)
+      const pendingLine: Line = { role: 'user', content: submission.display_content ?? submission.content, file_name: uploaded.filename,
+        attachments: submission.attachments, ...(prose ? { composerText: snapshot } : {}), pending: true,
+        client_submission_id: submission.client_submission_id, submission, delivery: 'unknown', created_at: new Date().toISOString() }
+      updateLines((prev) => [...prev, pendingLine])
+      setAttachment((staging) => staging === attached ? null : staging)
+      setDraft((text) => text === snapshot ? '' : text)
+      rejectedTurnRef.current = false
+      setBusy(true)
+      setInfo(null)
+      sendFn(submission)
+      sent = true
+    } catch (error) {
+      if (current()) toast.error(userFacingRequestError(error, translate("Upload failed")))
+    } finally {
+      if (!sent) claimedAttachments.current.delete(attached)
+      if (isCurrent()) setUploading((pending) => pending === attached ? null : pending)
+    }
+  }
+
+  function stageFile(file: File) {
+    if (!isCurrent() || !writable || !submissions.active || !uploadPolicy.isSuccess || busy || sending) return
     const limit = chatUploadLimit(file.name, uploadPolicy.data)
     if (file.size > limit) {
       toast.error(translate("File exceeds the {limit} chat upload limit.", { limit: formatUploadLimit(limit, locale) }))
       return
     }
-    if (!sendRef.current) {
-      toast.error(translate("Chat is not connected yet. Try again in a moment."))
-      return
-    }
-    setBusy(true)
-    setSlow(false)
-    setRetryStartedAt(null)
-    const uploadSession = activeSessionRef.current
-    try {
-      const uploaded = await upload.mutateAsync(file)
-      if (!isCurrent() || !submissions.active || !sendRef.current || activeSessionRef.current !== uploadSession) return
-      const submission = createAttachmentSubmission(uploaded)
-      updateLines((prev) => isCurrent() ? [
-        ...prev,
-        { role: 'user', content: uploaded.filename, file_name: uploaded.filename, attachments: submission.attachments, pending: true,
-          client_submission_id: submission.client_submission_id, submission, delivery: 'unknown', created_at: new Date().toISOString() },
-      ] : prev)
-      rejectedTurnRef.current = false
-      setBusy(true)
-      setInfo(null)
-      sendRef.current(submission)
-    } catch (error) {
-      if (!isCurrent() || !submissions.active || activeSessionRef.current !== uploadSession) return
-      setBusy(false)
-        toast.error(userFacingRequestError(error, translate("Upload failed")))
-    }
+    setAttachment({ file, scope: submissions })
+    composerRef.current?.focus()
+  }
+
+  function removeAttachment() {
+    if (!isCurrent() || sending) return
+    setAttachment(null)
+    composerRef.current?.focus()
   }
 
   const retry = useCallback((line: Line) => {
@@ -650,7 +694,18 @@ export function AgentChatPage() {
             onSend={() => { void send() }}
             skillsQuery={installedSkillsQuery}
             isCurrent={isCurrent}
-            toolbar={<div className="flex items-center justify-between gap-2 p-2">
+            toolbar={<>{staged ? <div className="flex min-w-0 items-center gap-1 px-2 pt-2">
+              <p className="flex min-w-0 items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm">
+                <Paperclip className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                <span className="min-w-0 wrap-anywhere">{staged.file.name}</span>
+              </p>
+              <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" disabled={sending}
+                title={translate("Remove {name}", { name: staged.file.name })} aria-label={translate("Remove {name}", { name: staged.file.name })}
+                onClick={removeAttachment}>
+                <X className="size-4" aria-hidden />
+              </Button>
+              <span role="status" className="sr-only">{sending ? translate("Uploading {name}…", { name: staged.file.name }) : ''}</span>
+            </div> : null}<div className="flex items-center justify-between gap-2 p-2">
               <div className="flex items-center gap-2">
                 <input
                   ref={fileInputRef}
@@ -658,16 +713,16 @@ export function AgentChatPage() {
                   className="hidden"
                   aria-label={translate("Attach a file")}
                   aria-describedby="chat-upload-policy"
-                  disabled={busy || socketStopped || !uploadPolicy.isSuccess}
+                  disabled={busy || sending || socketStopped || !uploadPolicy.isSuccess}
                   onChange={(event) => {
                     if (!isCurrent()) return
                     const file = event.target.files?.[0]
-                    if (file) void onFile(file)
+                    if (file) stageFile(file)
                     event.target.value = ''
                   }}
                 />
                 <Button type="button" variant="ghost" size="icon" className="size-11" title={translate("Attach a file")}
-                  disabled={busy || socketStopped || !uploadPolicy.isSuccess}
+                  disabled={busy || sending || socketStopped || !uploadPolicy.isSuccess}
                   onClick={() => fileInputRef.current?.click()}>
                   <Paperclip className="size-5" aria-hidden />
                   <span className="sr-only">{translate("Attach a file")}</span>
@@ -696,10 +751,10 @@ export function AgentChatPage() {
                   </Dialog.Content>
                 </Dialog.Root>
               </div>
-              <Button type="submit" disabled={busy || socketStopped || !draft.trim()}>
-                {busy ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="size-4" aria-hidden />}
+              <Button type="submit" disabled={busy || sending || socketStopped || (!draft.trim() && !staged)}>
+                {busy || sending ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="size-4" aria-hidden />}
                 {translate("Send")}</Button>
-            </div>}
+            </div></>}
           />
           <div id="chat-upload-policy" className={uploadPolicy.isSuccess ? 'sr-only' : 'mt-2 text-xs text-muted-foreground'}>
             {uploadPolicy.isError ? <div className="space-y-2">

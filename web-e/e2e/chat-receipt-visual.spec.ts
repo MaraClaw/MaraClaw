@@ -99,10 +99,15 @@ for (const width of [390, 1440, 1920]) {
         await page.route('**/api/chat/upload', (route) => route.fulfill({ json: {
           filename: 'notes.txt', extracted_text: 'Notes', workspace_path: 'uploads/notes.txt',
         } }))
-        await page.clock.setFixedTime(new Date('2030-01-01T05:07:00Z'))
+        await page.clock.setFixedTime(new Date('2030-01-01T05:06:00Z'))
         await page.goto(chatPath())
         const socket = await chat.socket()
-        await page.getByLabel('Attach a file', { exact: true }).setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('Notes') })
+        const input = page.getByLabel('Attach a file', { exact: true })
+        await expect(input).toBeEnabled()
+        await input.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('Notes') })
+        await expect(page.locator('form').getByText('notes.txt', { exact: true })).toBeVisible()
+        await page.clock.setFixedTime(new Date('2030-01-01T05:07:00Z'))
+        await page.getByRole('button', { name: 'Send', exact: true }).click()
         await expect.poll(() => socket.sent.length).toBe(1)
         const envelope = submitted(socket)
         const row = page.locator(`[data-chat-entry="${envelope.client_submission_id}"]`)

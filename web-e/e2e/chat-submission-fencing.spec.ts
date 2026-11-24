@@ -62,40 +62,45 @@ for (const boundary of ['owner', 'conversation', 'effect recreation'] as const) 
     })
     await page.goto(chatPath())
     const retired = await chat.socket()
-    await page.getByLabel('Attach a file', { exact: true }).setInputFiles({ name: 'late.txt', mimeType: 'text/plain', buffer: Buffer.from('bytes') })
-    await requested.promise
-    switch (boundary) {
-      case 'owner':
-        await writeFromOtherTab(page, replacementToken)
-        await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
-        await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
-        break
-      case 'conversation':
-        await navigateChat(page, chatPath(secondSession))
-        break
-      case 'effect recreation':
-        chat.setOnboarded(true)
-        retired.route.send(JSON.stringify({ type: 'onboarded', agent_id: originalAgent.id }))
-        break
-      default: boundary satisfies never
-    }
-    await chat.socket(1)
-    if (boundary === 'owner') await expect.poll(() => chat.tickets.find((ticket) => ticket.ticket === chat.sockets.at(-1)?.ticket)?.agent_id).toBe(replacementAgent.id)
-    const current = await chat.socket(chat.sockets.length - 1)
-    const finished = page.waitForEvent('requestfinished', { predicate: (request) => new URL(request.url()).pathname === '/api/chat/upload' })
-    release.resolve()
-    await finished
-    if (boundary === 'effect recreation') {
-      await expect.poll(() => current.sent.length).toBe(1)
-      expect(submitted(current)).toMatchObject({ content: 'Scoped uploaded content', file_name: 'late.txt', display_content: 'late.txt',
-        attachments: [{ path: 'uploads/late.txt', name: 'late.txt' }] })
-    } else {
-      complete(current.route, message('current', 'Current conversation remains usable'))
-      await expect(page.getByText('Current conversation remains usable', { exact: true })).toBeVisible()
-      expect(current.sent).toEqual([])
-      await expect(page.getByText('Scoped uploaded content', { exact: true })).toHaveCount(0)
-    }
-    expect(retired.sent).toEqual([])
+    const input = page.getByLabel('Attach a file', { exact: true })
+    await expect(input).toBeEnabled()
+    try {
+      await input.setInputFiles({ name: 'late.txt', mimeType: 'text/plain', buffer: Buffer.from('bytes') })
+      await page.getByRole('button', { name: 'Send', exact: true }).click()
+      await requested.promise
+      switch (boundary) {
+        case 'owner':
+          await writeFromOtherTab(page, replacementToken)
+          await page.getByRole('link', { name: 'Agents', exact: true }).first().click()
+          await page.getByRole('link', { name: new RegExp(replacementAgent.name) }).click()
+          break
+        case 'conversation':
+          await navigateChat(page, chatPath(secondSession))
+          break
+        case 'effect recreation':
+          chat.setOnboarded(true)
+          retired.route.send(JSON.stringify({ type: 'onboarded', agent_id: originalAgent.id }))
+          break
+        default: boundary satisfies never
+      }
+      await chat.socket(1)
+      if (boundary === 'owner') await expect.poll(() => chat.tickets.find((ticket) => ticket.ticket === chat.sockets.at(-1)?.ticket)?.agent_id).toBe(replacementAgent.id)
+      const current = await chat.socket(chat.sockets.length - 1)
+      const finished = page.waitForEvent('requestfinished', { predicate: (request) => new URL(request.url()).pathname === '/api/chat/upload' })
+      release.resolve()
+      await finished
+      if (boundary === 'effect recreation') {
+        await expect.poll(() => current.sent.length).toBe(1)
+        expect(submitted(current)).toMatchObject({ content: 'Scoped uploaded content', file_name: 'late.txt', display_content: 'late.txt',
+          attachments: [{ path: 'uploads/late.txt', name: 'late.txt' }] })
+      } else {
+        complete(current.route, message('current', 'Current conversation remains usable'))
+        await expect(page.getByText('Current conversation remains usable', { exact: true })).toBeVisible()
+        expect(current.sent).toEqual([])
+        await expect(page.getByText('Scoped uploaded content', { exact: true })).toHaveCount(0)
+      }
+      expect(retired.sent).toEqual([])
+    } finally { release.resolve() }
   })
 }
 
