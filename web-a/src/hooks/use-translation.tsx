@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { formatDistanceToNowStrict } from 'date-fns'
 import { enUS, vi } from 'date-fns/locale'
 import { languageStorageKey, localeTag, ownedTranslator, parseLocale, translate, type Locale, type OwnedTranslator, type Translator } from '@/lib/i18n'
+import { readPreference, writePreference } from '@/lib/preference-storage'
 
 type TranslationContextValue = {
   readonly locale: Locale
@@ -16,10 +17,10 @@ type TranslationContextValue = {
 const TranslationContext = createContext<TranslationContextValue | null>(null)
 
 export function TranslationProvider({ children }: { readonly children: ReactNode }) {
-  const [locale, setLocale] = useState<Locale>(() => parseLocale(localStorage.getItem(languageStorageKey)))
+  const [locale, setLocale] = useState<Locale>(() => parseLocale(readPreference(languageStorageKey)))
   useEffect(() => {
     document.documentElement.lang = locale
-    localStorage.setItem(languageStorageKey, locale)
+    writePreference(languageStorageKey, locale)
   }, [locale])
   const value = useMemo<TranslationContextValue>(() => ({
     locale, setLocale,

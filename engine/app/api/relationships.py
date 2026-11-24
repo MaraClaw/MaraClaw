@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.core.permissions import (
     check_agent_access,
+    compute_agent_access_decisions,
     evaluate_agent_relationship_statuses,
     evaluate_human_relationship_statuses,
     get_agent_access_level_for_user_id,
@@ -358,7 +359,19 @@ async def search_visible_agents(
         search=search,
         limit=50,
     )
-    agents = [agent for agent in candidates if await _can_manage_agent(current_user.id, agent)]
+    if not candidates:
+        return []
+    actor = await user_dao.get(current_user.id)
+    if actor is None or not actor.is_active or actor.tenant_id != source_agent.tenant_id:
+        return []
+    # Recheck current agent rows and grants without a per-candidate cache/DB round trip.
+    rows = {agent.id: agent for agent in await agent_dao.get_many([candidate.id for candidate in candidates])}
+    decisions = await compute_agent_access_decisions(actor, list(rows.values()))
+    agents = [
+        rows[candidate.id]
+        for candidate in candidates
+        if (decision := decisions.get(candidate.id)) is not None and decision.level == "manage"
+    ]
     return [
         {
             "id": str(agent.id),

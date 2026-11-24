@@ -31,6 +31,7 @@ test('chat never sends an upload completed after conversation retirement', async
     await fixture.socket()
     await expect(page.getByLabel('Attach a file', { exact: true })).toBeEnabled()
     await page.getByLabel('Attach a file', { exact: true }).setInputFiles({ name: 'retired.txt', mimeType: 'text/plain', buffer: Buffer.from('private') })
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
     await requested.promise
     // When
     await navigateChat(page, chatPath(secondSession))
@@ -95,6 +96,7 @@ for (const surface of ['chat', 'workspace'] as const) {
         const input = page.getByLabel(uploadLabel(surface), { exact: true })
         await expect(input).toBeEnabled()
         await input.setInputFiles({ name: 'retired.txt', mimeType: 'text/plain', buffer: Buffer.from('private bytes') })
+        if (surface === 'chat') await page.getByRole('button', { name: 'Send', exact: true }).click()
         await requested.promise
         // When
         await replaceWorkspace(page, surface)

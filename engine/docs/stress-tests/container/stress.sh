@@ -14,6 +14,7 @@ BACKLOG=${STRESS_BACKLOG:-81}
 CLIENTS=${STRESS_CLIENTS:-64}
 THREADS=${STRESS_THREADS:-8}
 DURATION=${STRESS_SECONDS:-60}
+DAILY_MESSAGE_LIMIT=${STRESS_DAILY_MESSAGE_LIMIT:?run-stress.sh supplies the fixture cap}
 FIX_INDEXES="'ix_gateway_messages_pending_order', 'ix_gateway_messages_delivered_order', 'ix_gateway_messages_agent_created',
     'ix_chat_messages_agent_conv_created'"
 export PGUSER=stress PGDATABASE=stress PGOPTIONS='-c client_min_messages=warning'
@@ -57,7 +58,7 @@ measure() {
     reconciler=$!
     mix_exit=0
     pgbench -n -M extended -c "$CLIENTS" -j "$THREADS" -T "$DURATION" -P 20 --failures-detailed \
-        -l --log-prefix="$variant-mix" -D agents="$AGENTS" \
+        -l --log-prefix="$variant-mix" -D agents="$AGENTS" -D daily_message_limit="$DAILY_MESSAGE_LIMIT" \
         -f "$DIR/bench-intake-$variant.sql@40" -f "$DIR/bench-claim-settle.sql@40" -f "$DIR/bench-history.sql@20" \
         > "$variant-mix.txt" 2>&1 || mix_exit=$?
     reconciler_exit=0
@@ -77,6 +78,10 @@ measure() {
     grep -E '^(number of (transactions actually processed|failed transactions|deadlock failures)|tps)' \
         "$OUT/$variant-mix.txt" | sed "s/^/[stress] $variant: /"
 
+    if [ "$variant" = after ]; then
+        meta 'after committed intake reservations' "(SELECT count(*) FROM chat_messages
+            WHERE client_submission_id IS NOT NULL AND content = 'bench')::text"
+    fi
     log "$variant: restoring the steady state"
     sql -f "$DIR/reset.sql"
 }
@@ -94,6 +99,9 @@ meta 'agents' "'$AGENTS'"
 meta 'completed turns and chat messages per agent' "'$HISTORY'"
 meta 'backlog phase: extra pending turns per agent' "'$BACKLOG'"
 meta 'pgbench' "'$CLIENTS clients, $THREADS threads, ${DURATION}s'"
+meta 'before intake' "'historical user-counter control'"
+meta 'after intake' "'current organization member (workspace gate and daily agent ledger)'"
+meta 'after daily agent message limit (fixture)' "'$DAILY_MESSAGE_LIMIT'"
 
 log "seed: $AGENTS agents with $HISTORY completed turns and chat messages each"
 t0=$(date +%s)

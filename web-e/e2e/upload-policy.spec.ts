@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import { mkdtemp, open, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { accept, submitted } from './chat-identity-fixture'
 import { ownedUploadBrowser } from './upload-policy-browser-fixture'
 import { openUploads, prepareUploads, selectNativeUploadFile, uploadLabel, uploadPolicy } from './upload-policy-fixture'
 import { originalAgent } from './session-fencing-fixture'
@@ -34,7 +35,9 @@ for (const surface of ['chat', 'workspace'] as const) {
             expect(fixture.uploads).toEqual([])
             expect(fixture.sockets.flatMap((socket) => socket.sent)).toEqual([])
             await expect(input).toHaveValue('')
+            if (surface === 'chat') await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
           } else {
+            if (surface === 'chat') await page.getByRole('button', { name: 'Send', exact: true }).click()
             await expect.poll(() => fixture.uploads.length).toBe(1)
             if (surface === 'chat') await expect.poll(() => fixture.sockets[0]?.sent.length).toBe(1)
             else await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Uploaded' })).toContainText('Uploaded')
@@ -98,11 +101,14 @@ for (const width of [390, 1440]) {
   }
 }
 
-test('paperclip opens the native chooser and selection submits then clears the hidden input', async ({ page }) => {
+test('paperclip opens the native chooser and stages a file for one combined send', async ({ page }, testInfo) => {
   // Given
   const fixture = await prepareUploads(page)
   await openUploads(page, 'chat')
   const socket = await fixture.socket()
+  const text = 'Please review this report.'
+  const composer = page.getByRole('textbox', { name: `Message ${originalAgent.name}` })
+  const send = page.getByRole('button', { name: 'Send', exact: true })
   const input = page.getByLabel('Attach a file', { exact: true })
   await expect(input).toHaveAttribute('type', 'file')
   await expect(input).toBeHidden()
@@ -110,13 +116,35 @@ test('paperclip opens the native chooser and selection submits then clears the h
   // When
   await page.getByRole('button', { name: 'Attach a file', exact: true }).click()
   await (await chooser).setFiles({ name: 'report.txt', mimeType: 'text/plain', buffer: Buffer.from('Report') })
-  // Then
+  // Selection keeps the file and text local until the user sends them together.
+  const staged = page.locator('form').getByText('report.txt', { exact: true })
+  await expect(staged).toBeVisible()
+  await composer.fill(text)
+  await expect(composer).toHaveValue(text)
+  await expect(input).toHaveValue('')
+  await page.screenshot({ path: testInfo.outputPath('staged-attachment.png'), fullPage: true })
+  expect(fixture.uploads).toEqual([])
+  expect(socket.sent).toEqual([])
+
+  await send.click()
+
   await expect.poll(() => fixture.uploads.length).toBe(1)
   await expect.poll(() => socket.sent.length).toBe(1)
-  await expect(page.locator('article').filter({ hasText: 'accepted.txt' })).toBeVisible()
-  await expect(input).toHaveValue('')
+  const envelope = submitted(socket)
+  expect(envelope).toMatchObject({ content: 'Please review this report.\n\nAccepted upload', display_content: text,
+    file_name: 'accepted.txt', attachments: [{ path: 'uploads/accepted.txt', name: 'accepted.txt' }] })
+  const row = page.locator('article').filter({ hasText: 'accepted.txt' })
+  await expect(row).toBeVisible()
+  await expect(row).toContainText(text)
+  await expect(row).not.toContainText('Accepted upload')
+  await expect(staged).toHaveCount(0)
+  await expect(composer).toHaveValue('')
   await expect(page.getByRole('button', { name: 'Attach a file', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+  await expect(send).toBeDisabled()
+  accept(socket, envelope.client_submission_id)
+  await expect(row.getByRole('img', { name: 'Accepted', exact: true })).toBeVisible()
+  expect(fixture.uploads).toEqual([{ path: '/api/chat/upload' }])
+  expect(fixture.sockets.flatMap((entry) => entry.sent)).toHaveLength(1)
 })
 
 for (const [filename, mimeType, size, accepted] of [
@@ -137,8 +165,10 @@ for (const [filename, mimeType, size, accepted] of [
     // When
     await page.getByLabel('Attach a file', { exact: true }).setInputFiles({ name: filename, mimeType, buffer: Buffer.alloc(size) })
     // Then
-    if (accepted) await expect.poll(() => fixture.uploads.length).toBe(1)
-    else {
+    if (accepted) {
+      await page.getByRole('button', { name: 'Send', exact: true }).click()
+      await expect.poll(() => fixture.uploads.length).toBe(1)
+    } else {
       await expect(page.locator('[data-sonner-toast]').filter({ hasText: /7 bytes/ })).toContainText(/7 bytes/)
       expect(fixture.uploads).toEqual([])
     }
@@ -197,5 +227,6 @@ for (const surface of ['chat', 'workspace'] as const) {
     } finally { release.resolve() }
     await expect(page.getByLabel(uploadLabel(surface), { exact: true })).toBeEnabled()
     expect(fixture.uploads).toEqual([])
+    if (surface === 'chat') await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
   })
 }

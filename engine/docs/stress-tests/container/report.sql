@@ -52,6 +52,7 @@ ORDER BY phase DESC, array_position(ARRAY['pending-page-1', 'pending-page-mid', 
 
 \echo
 \echo '== Mixed workload: ms per pgbench transaction (the reconciler tick includes its schedule lag)'
+\echo 'Intake: before is the historical control; after includes successful SQL iterations that replay or roll back.'
 SELECT workload, variant, count(us) AS completed,
        count(*) FILTER (WHERE t = 'deadlock') AS deadlocks,
        count(*) FILTER (WHERE us IS NULL AND t <> 'deadlock') AS other_failures,
@@ -105,7 +106,9 @@ WHERE b.variant = 'before' AND a.variant = 'after'
                 'delivered-page-1-generic', 'history', 'gateway-list')
 UNION ALL
 SELECT 6, 'no deadlocks or other failed transactions after the fix',
-       CASE WHEN count(us) > 0 AND count(*) = count(us) THEN 'PASS' ELSE 'FAIL' END,
+       CASE WHEN count(us) > 0 AND count(*) = count(us)
+                  AND (SELECT mix_exit = 0 AND reconciler_exit = 0 FROM stress_run WHERE variant = 'after')
+            THEN 'PASS' ELSE 'FAIL' END,
        format('%s completed, %s failed', count(us), count(*) - count(us))
 FROM stress_tx_parsed WHERE variant = 'after'
 UNION ALL

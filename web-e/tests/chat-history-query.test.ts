@@ -6,7 +6,7 @@ import { createSessionQueryScope, RetiredWorkspaceError } from '../src/hooks/ses
 import { authSession } from '../src/lib/auth-session.ts'
 import { chatHistoryKey, chatLatestOptions, loadEarlierHistory, retainLatestHistory, ChatHistoryCursorError } from '../src/lib/chat-history-query.ts'
 import { prependHistory, type ChatHistory } from '../src/lib/chat/history.ts'
-import { historyCursor, historyPage, historyRows, historyTarget } from './chat-history-fixture.ts'
+import { historyCursor, historyPage, historyRow, historyRows, historyTarget } from './chat-history-fixture.ts'
 
 test('a long gap resets to one bounded latest page without bridging older pages', async (context) => {
   // Given
@@ -174,4 +174,106 @@ test('the cursor advancement guard preserves retained history on repeated cursor
   context.mock.method(globalThis, 'fetch', async () => Response.json(historyPage(0, 50, historyCursor)))
   await assert.rejects(loadEarlierHistory(scope, historyTarget, new AbortController().signal), ChatHistoryCursorError)
   assert.equal(client.getQueryData(chatHistoryKey(historyTarget)), held)
+})
+
+// One parent projected into more rows than the retention budget: no page boundary may split it.
+const siblingRows = (start: number, end: number) => historyRows(start, end).map((row) => ({ ...row, message_id: historyRow(0).message_id }))
+const siblingHistory = (end = 501): ChatHistory => ({ items: siblingRows(0, end), next_cursor: historyCursor, has_more: true, revision: `revision-${end}` })
+const siblingPage = (end = 501) => ({ items: siblingRows(end - 50, end), next_cursor: `before-${end - 50}`, has_more: true, revision: `revision-${end}` })
+
+test('an unsplittable parent over the budget checkpoints the latest page once until a latest commit changes the range', async (context) => {
+  // Given
+  const client = new QueryClient()
+  context.after(() => client.clear())
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  client.setQueryData(chatHistoryKey(historyTarget), siblingHistory())
+  let end = 501
+  let pages = 0
+  context.mock.method(globalThis, 'fetch', async (path: string) => {
+    const held = new URL(path, 'https://fixture.test').searchParams.get('revision')
+    if (held === null) { pages++; return Response.json(siblingPage(end)) }
+    return Response.json(held === `revision-${end}` ? { kind: 'unchanged', revision: held } : { kind: 'delta', revision: `revision-${end}`, items: siblingRows(end - 1, end) })
+  })
+  // When
+  for (let call = 0; call < 3; call++) await retainLatestHistory(scope, historyTarget, new Set())
+  await client.fetchQuery(chatLatestOptions(scope, historyTarget))
+  await retainLatestHistory(scope, historyTarget, new Set())
+  // Then
+  assert.equal(pages, 1)
+  assert.deepEqual(client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))?.items, siblingRows(0, 501))
+  // When
+  end = 502
+  await client.fetchQuery(chatLatestOptions(scope, historyTarget))
+  for (let call = 0; call < 2; call++) await retainLatestHistory(scope, historyTarget, new Set())
+  // Then
+  assert.equal(pages, 2)
+  assert.deepEqual(client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))?.items, siblingRows(0, 502))
+})
+
+test('a failed checkpoint page settles nothing, so the next retention retries it once', async (context) => {
+  // Given
+  const client = new QueryClient()
+  context.after(() => client.clear())
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  client.setQueryData(chatHistoryKey(historyTarget), siblingHistory())
+  let pages = 0
+  context.mock.method(globalThis, 'fetch', async () => ++pages === 1 ? Response.json({}, { status: 503 }) : Response.json(siblingPage()))
+  await assert.rejects(retainLatestHistory(scope, historyTarget, new Set()))
+  // When
+  for (let call = 0; call < 2; call++) await retainLatestHistory(scope, historyTarget, new Set())
+  // Then
+  assert.equal(pages, 2)
+})
+
+test('a checkpoint page that returns after a newer latest commit neither applies to nor settles that commit', async (context) => {
+  // Given
+  const client = new QueryClient()
+  context.after(() => client.clear())
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  client.setQueryData(chatHistoryKey(historyTarget), siblingHistory())
+  const requested = Promise.withResolvers<void>()
+  const response = Promise.withResolvers<Response>()
+  let pages = 0
+  context.mock.method(globalThis, 'fetch', async (path: string) => {
+    if (new URL(path, 'https://fixture.test').searchParams.has('revision')) return Response.json({ kind: 'delta', revision: 'revision-502', items: siblingRows(501, 502) })
+    if (++pages > 1) return Response.json(siblingPage(502))
+    requested.resolve()
+    return response.promise
+  })
+  const retaining = retainLatestHistory(scope, historyTarget, new Set())
+  await requested.promise
+  await client.fetchQuery(chatLatestOptions(scope, historyTarget))
+  const newer = client.getQueryData<ChatHistory>(chatHistoryKey(historyTarget))
+  // When
+  response.resolve(Response.json(siblingPage(501)))
+  await retaining
+  // Then
+  assert.equal(client.getQueryData(chatHistoryKey(historyTarget)), newer)
+  await retainLatestHistory(scope, historyTarget, new Set())
+  assert.equal(pages, 2)
+})
+
+test('a settled checkpoint does not suppress another session or a replacement owner holding equal rows', async (context) => {
+  // Given
+  const sessions: (string | undefined)[] = []
+  context.mock.method(globalThis, 'fetch', async (path: string) => {
+    sessions.push(new URL(path, 'https://fixture.test').pathname.split('/').at(-3))
+    return Response.json(siblingPage())
+  })
+  const client = new QueryClient()
+  const replacementClient = new QueryClient()
+  context.after(() => { client.clear(); replacementClient.clear() })
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  const other = { ...historyTarget, sessionId: 'other-session' }
+  client.setQueryData(chatHistoryKey(historyTarget), siblingHistory())
+  client.setQueryData(chatHistoryKey(other), siblingHistory())
+  for (let call = 0; call < 2; call++) await retainLatestHistory(scope, historyTarget, new Set())
+  // When
+  await retainLatestHistory(scope, other, new Set())
+  authSession.logout(scope.owner)
+  const replacement = createSessionQueryScope(authSession, authSession.capture(), replacementClient)
+  replacementClient.setQueryData(chatHistoryKey(historyTarget), siblingHistory())
+  await retainLatestHistory(replacement, historyTarget, new Set())
+  // Then
+  assert.deepEqual(sessions, [historyTarget.sessionId, other.sessionId, historyTarget.sessionId])
 })

@@ -157,6 +157,7 @@ test('file rejection retries the exact uploaded envelope after effect recreation
   await page.goto(chatPath())
   const socket = await chat.socket()
   await page.getByLabel('Attach a file', { exact: true }).setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('file bytes') })
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect.poll(() => socket.sent.length).toBe(1)
   const envelope = submitted(socket)
   expect(envelope).toMatchObject({ content: 'Frozen extracted notes', display_content: 'notes.txt', file_name: 'notes.txt',

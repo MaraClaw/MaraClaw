@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reproduces the chat-turn database stress test in a disposable PostgreSQL container. See README.md.
+# Runs the chat-turn database stress test in a disposable PostgreSQL container. See README.md.
 #
 # Usage (from anywhere):
 #   docs/stress-tests/run-stress.sh            # recorded scale: 2,000 agents, 10M rows per history table
@@ -13,6 +13,7 @@
 #   STRESS_CLIENTS       pgbench clients                           (default 64)
 #   STRESS_THREADS       pgbench threads                           (default 8)
 #   STRESS_SECONDS       pgbench duration per variant              (default 60)
+#   STRESS_DAILY_MESSAGE_LIMIT  per-agent cap in the current intake fixture (default 500)
 #   STRESS_CONTAINER     container name                            (default maraclaw-stress)
 #   STRESS_IMAGE         PostgreSQL image                          (default postgres:18.6-alpine)
 #   STRESS_OUT_DIR       where report.txt, plans.txt and pgbench output go (default: a new temp directory)
@@ -31,7 +32,7 @@ for arg in "$@"; do
         --quick) QUICK=1 ;;
         --keep) KEEP=1 ;;
         -h | --help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) stress_die "unknown option: $arg (see --help)" ;;
@@ -50,7 +51,8 @@ STRESS_BACKLOG="${STRESS_BACKLOG:-81}"
 STRESS_CLIENTS="${STRESS_CLIENTS:-64}"
 STRESS_THREADS="${STRESS_THREADS:-8}"
 STRESS_SECONDS="${STRESS_SECONDS:-60}"
-for knob in STRESS_AGENTS STRESS_HISTORY STRESS_BACKLOG STRESS_CLIENTS STRESS_THREADS STRESS_SECONDS MIN_FREE_GB; do
+STRESS_DAILY_MESSAGE_LIMIT="${STRESS_DAILY_MESSAGE_LIMIT:-500}"
+for knob in STRESS_AGENTS STRESS_HISTORY STRESS_BACKLOG STRESS_CLIENTS STRESS_THREADS STRESS_SECONDS STRESS_DAILY_MESSAGE_LIMIT MIN_FREE_GB; do
     [[ "${!knob}" =~ ^[1-9][0-9]*$ ]] || stress_die "$knob must be a positive integer, not '${!knob}'"
 done
 CONTAINER="${STRESS_CONTAINER:-maraclaw-stress}"
@@ -87,6 +89,7 @@ status=0
 docker exec \
     -e STRESS_AGENTS="$STRESS_AGENTS" -e STRESS_HISTORY="$STRESS_HISTORY" -e STRESS_BACKLOG="$STRESS_BACKLOG" \
     -e STRESS_CLIENTS="$STRESS_CLIENTS" -e STRESS_THREADS="$STRESS_THREADS" -e STRESS_SECONDS="$STRESS_SECONDS" \
+    -e STRESS_DAILY_MESSAGE_LIMIT="$STRESS_DAILY_MESSAGE_LIMIT" \
     "$CONTAINER" sh /stress/stress.sh || status=$?
 
 docker cp "$CONTAINER:/stress/out/." "$OUT_DIR/" >/dev/null 2>&1 || echo "[stress] could not copy /stress/out" >&2
