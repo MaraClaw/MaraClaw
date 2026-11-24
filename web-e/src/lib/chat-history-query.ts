@@ -58,14 +58,21 @@ export async function loadEarlierHistory(scope: SessionQueryScope, target: ChatH
   })
 }
 
+// Held ranges still over budget after a latest-page checkpoint: no boundary can
+// move their floor until the range itself changes. Keyed by the cached value, so
+// any commit that changes it (structural sharing keeps equal data's identity)
+// releases the mark, and the entry lives no longer than the owner's cache.
+const settledCheckpoints = new WeakSet<ChatHistory>()
+
 export async function retainLatestHistory(scope: SessionQueryScope, target: ChatHistoryTarget, protectedEntries: ReadonlySet<string>) {
   scope.assertCurrent()
   scope.client.setQueryData<ChatHistory>(chatHistoryKey(target), (current) => current ? trimHistory(current, protectedEntries) : current)
   const current = scope.client.getQueryData<ChatHistory>(chatHistoryKey(target))
-  if (!current || current.items.length <= RETAINED_HISTORY_LIMIT || protectedEntries.size > 0) return
+  if (!current || current.items.length <= RETAINED_HISTORY_LIMIT || protectedEntries.size > 0 || settledCheckpoints.has(current)) return
   // Deltas have no forward/page cursor. If the held tail itself has grown past
   // the budget, fetch a real page boundary rather than inventing a cursor.
   const page = await scope.run(() => listChatHistoryPage(target, { owner: scope.owner }))
-  scope.client.setQueryData<ChatHistory>(chatHistoryKey(target), (latest) => latest === current
-    ? trimHistory(checkpointHistory(current, page), protectedEntries) : latest)
+  if (scope.client.getQueryData<ChatHistory>(chatHistoryKey(target)) !== current) return
+  const retained = scope.client.setQueryData<ChatHistory>(chatHistoryKey(target), trimHistory(checkpointHistory(current, page), protectedEntries))
+  if (retained && retained.items.length > RETAINED_HISTORY_LIMIT) settledCheckpoints.add(retained)
 }
