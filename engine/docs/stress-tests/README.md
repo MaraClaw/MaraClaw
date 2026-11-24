@@ -1,12 +1,12 @@
 # Chat-turn database stress test
 
-This directory records the 2026-11-12 stress test of the database work behind a chat turn and holds the scripts that reproduce it. The test drives the SQL a turn runs (intake, native dispatch claim and settlement, history reads, the dispatch reconciler and the agent gateway listing) against a production-sized dataset in a disposable PostgreSQL container, and compares the schema and SQL from before the fixes with the current ones.
+This directory preserves the 2026-11-12 chat-turn database stress test and contains the current database-only stress runner. The runner exercises intake, native dispatch claim and settlement, history reads, the dispatch reconciler and the agent gateway listing in disposable PostgreSQL. Today's after workload models organization-member intake; the before workload remains the historical control. The recorded before/after timings are evidence from the original workload, not a baseline for current intake throughput.
 
 | Path | Purpose |
 |---|---|
 | [`results-2026-11-12.md`](results-2026-11-12.md) | The recorded result: findings, fixes, before and after numbers, costs and open follow-ups |
 | [`summary-2026-11-12.md`](summary-2026-11-12.md) | One-page summary of that result, with the test hardware |
-| `run-stress.sh` | Reproduces the measurement, checks the fixed plans and exits non-zero when a check fails |
+| `run-stress.sh` | Measures the historical control and current workload, checks the fixed plans and exits non-zero when a check fails |
 | `run-regression-tests.sh` | Runs the PostgreSQL tests that pin each fix |
 | `lib.sh` | Disk guard and disposable-container helpers shared by both scripts |
 | `container/` | The in-container driver (`stress.sh`), seed, pgbench workloads, EXPLAIN probes and report |
@@ -34,7 +34,7 @@ The result is verified when:
 
 1. `run-regression-tests.sh` exits 0 with no skipped tests.
 2. `run-stress.sh` exits 0, and every check in its report reads `PASS` (the last check is informational).
-3. Compared with [`results-2026-11-12.md`](results-2026-11-12.md), the plan shapes and buffer counts come out close to the recorded ones. After the fix there are no failed transactions, throughput is higher, and history reads and reconciler ticks are faster. Milliseconds, tps, the number of deadlocks before the fix, and intake and claim latency vary with the machine and between runs; [Reading the report](#reading-the-report) explains why.
+3. Compare the plan shapes and buffer counts with [`results-2026-11-12.md`](results-2026-11-12.md) only at comparable scale. Do not use the mixed-workload timings or TPS to reproduce the archived speedup: the after intake now does different work. Deadlocks in the before arm are timing-dependent; zero after-fix SQL failures is still checked.
 
 Each script starts its own container with `--rm` and stops it on exit, Ctrl-C included, which also removes its volume. No other container is touched, and a container name already in use stops the script instead of being reused.
 
@@ -43,9 +43,9 @@ Each script starts its own container with `--rm` and stops it on exit, Ctrl-C in
 1. Starts `maraclaw-stress` with durability off (`fsync`, `full_page_writes` and `synchronous_commit` off, `wal_level=minimal`), copies `container/` and the working tree's `scripts/schema_baseline.sql` into it, and runs `container/stress.sh` there.
 2. Loads the baseline and drops the four indexes the fixes added. That is the pre-fix schema: the fixes changed nothing else in the baseline.
 3. Seeds 2,000 agents across 20 tenants, each with an owner, a colleague, 10 chat sessions and the reply bindings of the two canonical ones. Sessions 1 and 6 are the owner's and the colleague's canonical web conversations (`web`, primary, not a group, as `chat_session_dao.insert_primary_platform` creates them), 2, 3, 7 and 8 are IM group chats, and 4, 5, 9 and 10 are agent-to-agent sessions. Then it adds 5,000 completed turns, 5,000 chat messages and 5,000 history revisions per agent (10 million rows per table), written in time order across agents the way production traffic arrives. In the steady state each agent has two pending turns on each of lanes 1 to 5, and a delivered turn with one queued behind it on lane 6: 22,000 pending and 2,000 delivered rows.
-4. Measures **before**. It records EXPLAIN probes in the steady state and again with 81 more pending turns per agent (184,000 pending). Then it runs a 60-second pgbench workload with the pre-fix intake lock order and the pre-fix pending-page SQL, and restores the steady state.
+4. Measures **before**. It records EXPLAIN probes in the steady state and again with 81 more pending turns per agent (184,000 pending). Then it runs a 60-second pgbench workload with the historical intake (session-first lock order and per-user quota update) and the pre-fix pending-page SQL, and restores the seeded queue and quota counters.
 5. Reruns the baseline over the seeded database, as `python -m app.scripts.bootstrap_db` does on an existing one. Its `CREATE INDEX IF NOT EXISTS` statements build the four indexes; the report records how long that took and the index sizes.
-6. Measures **after** the same way with the current SQL. It prints the report and copies `report.txt`, `plans.txt` (the full `EXPLAIN (ANALYZE, BUFFERS)` text of every probe) and the pgbench output and logs to `STRESS_OUT_DIR`, or to a new temporary directory. Keep these outputs out of `docs/`.
+6. Measures **after** with the fixed plans and current organization-member intake SQL. It prints the report and copies `report.txt`, `plans.txt` (the full `EXPLAIN (ANALYZE, BUFFERS)` text of every probe) and the pgbench output and logs to `STRESS_OUT_DIR`, or to a new temporary directory. Keep these outputs out of `docs/`.
 
 Options: `--quick` (200 agents), `--keep` (leave the container running), `--help`. Environment overrides:
 
@@ -56,6 +56,7 @@ Options: `--quick` (200 agents), `--keep` (leave the container running), `--help
 | `STRESS_BACKLOG` | 81 | Extra pending turns per agent in the backlog phase |
 | `STRESS_CLIENTS`, `STRESS_THREADS` | 64, 8 | pgbench clients and threads |
 | `STRESS_SECONDS` | 60 | pgbench duration per variant |
+| `STRESS_DAILY_MESSAGE_LIMIT` | 500 | Positive per-agent daily cap for the after fixture. The default is a snapshot of the seeded Ultra tier's cap; check `app/records/organization_plan.py` for current policy. |
 | `STRESS_CONTAINER` | `maraclaw-stress` | Container name |
 | `STRESS_IMAGE` | `postgres:18.6-alpine` | PostgreSQL image |
 | `STRESS_OUT_DIR` | a new temporary directory | Where the report, plans and pgbench output go |
@@ -63,16 +64,18 @@ Options: `--quick` (200 agents), `--keep` (leave the container running), `--help
 
 ### Workloads
 
-The pgbench mix mirrors the SQL each step runs. Before and after differ only where the fixes changed the code:
+The pgbench mix approximates the database work of each step. The intake arms also differ in which quota they charge:
 
 | Script | Share | Mirrors |
 |---|---|---|
-| `bench-intake-before.sql`, `bench-intake-after.sql` | 40% | `chat_submissions.accept_submission`: `chat_session_dao.lock_for_agent` (after the fix it takes the agent row `FOR KEY SHARE` before the session `FOR UPDATE`), `find_submission`, `reserve_submission`, `user_dao.charge_message_quota`, the session update and the pending gateway insert |
+| `bench-intake-before.sql`, `bench-intake-after.sql` | 40% | **Before:** historical session-first lock, reservation and user-counter update. **After:** agent `FOR KEY SHARE` then session `FOR UPDATE`, submission lookup/reservation, stored workspace gate, daily agent charge, session touch and pending gateway insert. |
 | `bench-claim-settle.sql` | 40% | The claim of one lane head, then, when the claim wins, `settle_native_report` and `record_report`. Lanes 1 and 6 (canonical web sessions) take the human-lane path of `openclaw_shared_dispatch.claim_shared_turn`: shared tenant, owner and agent locks, then `lock_human_lane` on the session, which settlement takes again. The other lanes take `openclaw_native_claims.claim_ordinary_turn` (shared tenant and owner locks, exclusive agent lock, `claim_ordinary_head` with `bind_openclaw_reply`) |
 | `bench-history.sql` | 20% | `chat_message_dao.list_recent`, 50 rows |
 | `bench-reconcile-before.sql`, `bench-reconcile-after.sql` | one more client, once a second | One `openclaw_dispatch_reconciler` tick: the first `pending_dispatch_page` and the first `delivered_dispatch_page` |
 
-The model covers database work only. Authorization and eligibility reads, Redis, HTTP and WebSocket handling, the guest `docker exec` and Python overhead are left out.
+In the after arm, the sender is a member of the ordinary agent's seeded Ultra tenant, so no per-user message quota is charged. New work checks `agent_workspace_usage.over_since`; no measurement or no overage marker allows it through. The atomic upsert charges `agent_daily_message_usage` once per accepted turn, keyed by agent with a local calendar date. It uses the genesis org admin's timezone (`Asia/Ho_Chi_Minh` in the seed), not the sender's or tenant row's timezone; missing or empty timezone uses UTC. A different date restarts the count at one. Workspace or daily-cap refusal rolls back the reserved message and leaves the session and queue untouched. An exact replay commits without writes or quota checks; a conflicting fingerprint or missing post-conflict reservation rolls back. Random submission IDs make replays rare in the default mix.
+
+This is a database-only simulation of the seeded use case, not a full submission or a production TPS test. It reads the tenant tier but takes its numeric cap from the fixture input; it does not run the Python plan resolver, invalid-timezone handling, workspace measurement, authorization, eligibility and expiry checks, intake history reconstruction, title generation, routing, Redis, HTTP/WebSockets or the guest. The seed assumes existing writable sessions and valid IANA timezone names, and uses a fixed synthetic payload/fingerprint.
 
 ## Reading the report
 
@@ -90,6 +93,8 @@ The model covers database work only. Authorization and eligibility reads, Redis,
 
 **Mixed workload** gives completed transactions, deadlocks, other failures and p50/p95/p99/max latency in milliseconds per workload. **pgbench runs** gives throughput and the `pg_stat_database` deadlock count per variant. Four effects matter when reading them:
 
+In the after arm pgbench counts a replay or a deliberate quota rollback as a completed SQL iteration, not an accepted turn. Check **after committed intake reservations** under **Scale and timings** for the count of accepted simulated submissions. A small cap or a long run can turn intake into mostly refusals. The archived workload instead updated the user counter with an effectively unreachable cap in both arms; do not compare intake or mixed-workload TPS with that record or attribute a difference between today's arms solely to the original fixes.
+
 - Before the fix, a deadlocked transaction waits `deadlock_timeout` (1 s) before PostgreSQL aborts one side, and clients that pick the same agent meanwhile queue behind it. At `--quick` scale (64 clients over 200 agents) these convoys have queued about 30 clients on one agent row and held transactions for up to 63 s. Stalled clients take load off the rest, so the before-fix p50 can come out lower than the after-fix one: compare throughput, failures, p99 and max instead.
 - pgbench runs a closed loop: each client starts its next transaction when the last one ends. Before the fix, slow history reads and deadlock stalls tie clients up. After it, those clients move to intakes and claims, where row-lock contention rises, so intake and claim latency can go up while throughput doubles. The reproduction run in the results shows this.
 - pgbench lets in-flight transactions finish after the run's duration. A before-fix run can overrun while a convoy drains, and its tps covers the whole elapsed time.
@@ -104,7 +109,7 @@ The model covers database work only. Authorization and eligibility reads, Redis,
 | agent gateway listing walks `ix_gateway_messages_agent_created` without a scan or sort | Both after-fix gateway-list probes do, with no `Seq Scan` and no `Sort` |
 | delivered dispatch pages walk `ix_gateway_messages_delivered_order` without a sort | All four after-fix custom and generic first delivered pages (both phases) have an index condition on that index and no `Sort` node |
 | every fixed probe reads fewer buffers after the fix | All fourteen first, mid, generic mid, delivered, history and gateway-list pairs do |
-| no deadlocks or other failed transactions after the fix | Every after-fix pgbench transaction completed |
+| no deadlocks or other failed transactions after the fix | Both after-fix pgbench processes exited successfully and their logs recorded no SQL failures |
 | deadlocks reproduced before the fix | Informational. Deadlocks depend on timing, so a run can see none; the scope-lock test below reproduces the deadlock deterministically |
 
 ### Inspecting a run
@@ -136,4 +141,4 @@ The CI `lifecycle-postgres` job runs the scope-lock and lane-read files; `test_c
 
 ## Keeping the scripts current
 
-The `-after` workloads, `bench-claim-settle.sql`, `bench-history.sql` and the probes in `explain.sql` copy SQL from `app/dao/chat_dao.py`, `gateway_message_dao.py`, `gateway_message_delivery_dao.py` and `user_dao.py`, and the lock sequences of `app/services/chat_submissions.py`, `openclaw_native_claims.py` and `openclaw_gateway_delivery.py`. Update them when that SQL or those lock orders change. The `-before` workloads record the pre-fix code and stay as they are. `stress.sh` and `report.sql` name the four fix indexes, so renaming one in the baseline means renaming it there too.
+The `-after` workloads, `bench-claim-settle.sql`, `bench-history.sql` and the probes in `explain.sql` follow the SQL in `app/dao/chat_dao.py`, `gateway_message_dao.py` and `gateway_message_delivery_dao.py`, and the lock sequences in `app/services/chat_submissions.py`, `openclaw_native_claims.py` and `openclaw_gateway_delivery.py`. For intake quota handling also check `quota_guard.py`, `agent_workspace_quota.py`, `agent_message_quota.py`, `user_dao.py` (genesis lookup) and `agent_daily_message_usage_dao.py` (atomic charge). Keep the `-before` SQL and recorded results as historical evidence. `stress.sh` and `report.sql` name the four fix indexes, so renaming one in the baseline means renaming it there too.

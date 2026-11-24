@@ -1,6 +1,7 @@
 -- Chat intake as chat_submissions.accept_submission ran it before the fix: chat_session_dao.lock_for_agent locked
 -- the session first, so the chat and gateway INSERTs took the agent row's foreign-key lock after it, the reverse of
 -- the order claims and settlements use. Read-only checks (authorization, eligibility, expiry) are left out.
+-- Historical control: the original simulation charged the user row even for this tiered fixture. Keep its SQL intact.
 \set n random(1, :agents)
 \set k random(1, 5)
 \set submission random(1, 4611686018427387904)
