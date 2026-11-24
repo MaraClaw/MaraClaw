@@ -9,6 +9,7 @@ UPDATE gateway_messages
 SET status = 'pending', result = NULL, delivered_at = NULL, completed_at = NULL, reply_binding_id = NULL
 WHERE (content LIKE 'pending %' OR content = 'queued behind delivered') AND status <> 'pending';
 UPDATE users SET quota_messages_used = 0, quota_period_start = NULL WHERE quota_messages_used <> 0;
+DELETE FROM agent_daily_message_usage;
 
 RESET session_replication_role;
 VACUUM ANALYZE gateway_messages;
@@ -17,3 +18,4 @@ VACUUM ANALYZE chat_history_changes;
 VACUUM ANALYZE chat_sessions;
 VACUUM ANALYZE users;
 VACUUM ANALYZE agents;
+VACUUM ANALYZE agent_daily_message_usage;

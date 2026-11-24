@@ -8,16 +8,27 @@ INSERT INTO tenants (id, name, slug, tier)
 SELECT md5('t' || n)::uuid, 'Stress tenant ' || n, 'stress-' || n, 'ultra'
 FROM generate_series(1, 20) AS n;
 
--- A quota no run can exhaust keeps every intake's quota UPDATE taking the user row lock.
+-- Keep the historical before script's per-user quota UPDATE effectively uncapped. The current script must not
+-- touch this counter: these senders are ordinary members of tiered tenants.
 INSERT INTO users (id, display_name, tenant_id, quota_message_limit)
 SELECT md5('u' || n)::uuid, 'Stress user ' || n, md5('t' || ((n - 1) % :agents % 20 + 1))::uuid, 2147483647
 FROM generate_series(1, 2 * :agents) AS n;
+
+-- The daily ledger uses the genesis org admin's local day, not the sender's or tenant row's timezone.
+INSERT INTO users (id, display_name, tenant_id, role, is_genesis, timezone)
+SELECT md5('genesis' || n)::uuid, 'Stress genesis admin ' || n, md5('t' || n)::uuid,
+       'org_admin', true, 'Asia/Ho_Chi_Minh'
+FROM generate_series(1, 20) AS n;
 
 INSERT INTO agents (id, name, role_description, creator_id, tenant_id, status, max_triggers, min_poll_interval_min,
                     webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes)
 SELECT md5('a' || n)::uuid, 'Stress agent ' || n, 'stress test', md5('u' || n)::uuid,
        md5('t' || ((n - 1) % 20 + 1))::uuid, 'running', 20, 5, 5, 'company', 'use', 240
 FROM generate_series(1, :agents) AS n;
+
+-- Synthetic under-limit measurement. Intake checks the stored marker; it does not run the measurement worker.
+INSERT INTO agent_workspace_usage (agent_id, dir_bytes, layer_bytes, limit_bytes, measured_at)
+SELECT md5('a' || n)::uuid, 1, 0, 2, now() FROM generate_series(1, :agents) AS n;
 
 -- Ten sessions per agent; each is one dispatch lane (conversation). Sessions 1 and 6 are the canonical web
 -- conversations of the owner and the colleague (chat_session_dao.insert_primary_platform: 'web', primary, not a
