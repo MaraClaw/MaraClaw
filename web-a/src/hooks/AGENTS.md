@@ -72,6 +72,7 @@ Scope: query-option factories, context providers, session ownership and consumer
     Settings success stores settings at `capacityKeys.settings` and refreshes the same families; settings has no conflict/error handler.
 13. `ThemeProvider` persists `maraclaw-admin-theme`: `light|dark|system`, invalid/missing becomes `system`; resolution is `light|dark`.
     DOM application updates root dark class, color scheme, theme dataset and theme-color meta.
+    Theme and language storage go through `../lib/preference-storage.ts`: when the browser refuses storage, both providers still render and keep changes in memory.
 14. `TranslationProvider` persists `en|vi` in `maraclaw-admin-language` (invalid/missing becomes `en`) and updates document `lang`.
     Typed messages and the client-owned translation boundary live in `../lib/i18n.ts`; API detail and user content stay outside that boundary.
 
