@@ -5,8 +5,8 @@ from threading import Event, Lock, Semaphore
 
 import pytest
 
+from app.core.thread_lanes import ThreadLane
 from app.services.storage_runtime.s3 import S3StorageBackend
-from app.services.storage_runtime.thread_lanes import ThreadLane
 from s3_wire_server import S3Server
 from thread_lane_fixtures import forbid_shared_threads
 

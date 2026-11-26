@@ -9,6 +9,7 @@ from typing import Protocol, TypeIs
 from botocore.exceptions import ClientError
 
 from app.core.json_types import json_as_int
+from app.core.thread_lanes import ThreadLane
 from app.services.storage_runtime.base import (
     MaterializedFile,
     StorageReadLimitExceededError,
@@ -20,7 +21,6 @@ from app.services.storage_runtime.bounded import read_bounded
 from app.services.storage_runtime.owned_copy import materialize_copy
 from app.services.storage_runtime.s3_connection import response_version_id
 from app.services.storage_runtime.s3_types import client_error_response
-from app.services.storage_runtime.thread_lanes import ThreadLane
 
 
 class _ResponseBody(Protocol):

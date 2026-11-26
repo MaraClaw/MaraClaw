@@ -33,7 +33,7 @@ This package abstracts local, S3-compatible, and migration fallback storage for 
 
 ## Thread Lane
 
-- Every blocking S3 call, and every blocking step of an S3 operation (hashing, opening an upload source), runs through `self.lane.run(partial(...))` (`thread_lanes.py`; API in its docstring). The lane has its own threads, sized `min(S3_THREAD_LANE_SIZE, S3_MAX_POOL_CONNECTIONS)`, so slow S3 never queues behind or in front of `asyncio.to_thread` / `anyio.to_thread` callers. New S3 code must not call either; `tests/test_storage_thread_lanes.py` and the managed-storage PostgreSQL test fail if a call reaches them.
+- Every blocking S3 call, and every blocking step of an S3 operation (hashing, opening an upload source), runs through `self.lane.run(partial(...))` (`ThreadLane` in `app/core/thread_lanes.py`, shared with the document conversion lane; API in its docstring: no-argument callable, slot wait cancellable, `abandon_on_cancel`). The lane has its own threads, sized `min(S3_THREAD_LANE_SIZE, S3_MAX_POOL_CONNECTIONS)`, so slow S3 never queues behind or in front of `asyncio.to_thread` / `anyio.to_thread` callers. New S3 code must not call either (nor `loop.run_in_executor`); `tests/test_storage_thread_lanes.py` and the managed-storage PostgreSQL test fail if a call reaches them. Use the default `abandon_on_cancel=False` for writes and deletes.
 - A call abandoned on cancel (`abandon_on_cancel=True`, reads whose worker owns and closes the body) returns to its caller at once but keeps its lane slot until the thread returns. Local-backend calls are not S3 and keep `anyio.to_thread`.
 
 ## Key And Write Safety

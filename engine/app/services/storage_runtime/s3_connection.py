@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, TypeIs, Unpa
 if TYPE_CHECKING:
     from botocore.config import Config
 
+from app.core.thread_lanes import ThreadLane
 from app.services.storage_runtime.base import StorageBackend
 from app.services.storage_runtime.s3_types import new_s3_client
-from app.services.storage_runtime.thread_lanes import ThreadLane
 from app.services.storage_runtime.upload_source import SizedBody
 from app.services.storage_runtime.utils import normalize_storage_key
 

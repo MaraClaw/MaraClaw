@@ -1,23 +1,20 @@
-"""The storage thread lane: the one place blocking S3 work runs.
+"""A bounded set of dedicated threads for blocking work, apart from the event loop's default executor.
 
-Storage I/O must not queue behind (or in front of) the event loop's default executor, which `asyncio.to_thread` and
-`anyio.to_thread` share with everything else. Every `S3Connection` owns a `ThreadLane` as `self.lane`, sized
-`min(S3_THREAD_LANE_SIZE, S3_MAX_POOL_CONNECTIONS)` so no more threads run than the boto pool has connections.
+`asyncio.to_thread` and `anyio.to_thread` share one pool with everything else in the process. A `ThreadLane` owns its
+threads, so slow work in one subsystem (S3 calls, document conversion) never queues behind or in front of another's.
 
-API for storage code, including code added later (streamed writes, batch deletes, server-side copies, bounded reads):
-
-- Route every blocking provider call, and every blocking step of a storage operation (hashing, opening an upload
-  source), through `await self.lane.run(partial(client.operation, ...))`. Never call `asyncio.to_thread`,
-  `anyio.to_thread` or `loop.run_in_executor` from storage code; `tests/test_storage_thread_lanes.py` fails if a
-  storage call reaches either.
 - `run` takes a no-argument callable and returns its result. Waiting for a free slot is cancellable and holds nothing.
 - Default (`abandon_on_cancel=False`), same as `anyio.to_thread.run_sync`: an `anyio` cancel scope cannot interrupt
   the wait, so the call returns its result and the cancellation lands at the caller's next checkpoint. Use it for writes
   and deletes.
 - `abandon_on_cancel=True`: a cancelled caller returns at once and the thread keeps running. Use it only when the
-  worker owns and releases everything it opens (a GET that reads and closes its own body), because nobody awaits it.
+  worker owns and releases everything it opens (a GET that reads and closes its own body), or when the caller must be
+  able to leave at a deadline (a conversion), because nobody awaits it.
 - The lane slot belongs to the thread, not the caller: an abandoned call keeps its slot until the thread returns, so
   abandoned work can never push the lane past its size.
+
+Users: `S3Connection.lane` (`app/services/storage_runtime/AGENTS.md`) and the document conversion lane
+(`app/services/document_conversion/conversion_lane.py`).
 """
 
 from __future__ import annotations
@@ -35,7 +32,7 @@ from app.core.thread_slots import ThreadSlots
 class ThreadLane:
     """A bounded set of dedicated threads; at most `size` calls run at once, the rest wait for a slot."""
 
-    def __init__(self, size: int, name: str = "storage-lane") -> None:
+    def __init__(self, size: int, name: str = "thread-lane") -> None:
         self.size: int = size
         self._slots: ThreadSlots = ThreadSlots(size)
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=size, thread_name_prefix=name)
