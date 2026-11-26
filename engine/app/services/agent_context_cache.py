@@ -2,25 +2,40 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
+from collections.abc import Awaitable, Callable, Sequence
+from typing import NamedTuple
 
 from app.config import get_settings
-from app.core.events import get_redis
+from app.core.events import get_cache_redis
 from app.core.json_types import json_as_str, json_loads_object
 from app.core.logging import logger
-from app.core.redis_cache import bump_version, cache_delete, has_pending_snapshot_writes
+from app.core.redis_cache import (
+    CacheUnavailableError,
+    bump_version,
+    cache_delete,
+    guarded,
+    has_pending_snapshot_writes,
+)
+from app.core.single_flight import SingleFlight
 
 _DEFAULT_TTL = 60
+_loads: SingleFlight[tuple[uuid.UUID, str, str], str] = SingleFlight()
+
+
+class CachedText(NamedTuple):
+    """The cached text of one kind (None on miss or error) and the version observed before it was read."""
+
+    text: str | None
+    ver: str
+
+
+_UNAVAILABLE = CachedText(None, "")
 
 
 def _ttl() -> int:
     return int(getattr(get_settings(), "AGENT_CONTEXT_CACHE_TTL_SECONDS", _DEFAULT_TTL) or 0)
-
-
-def _wait() -> float:
-    return float(getattr(get_settings(), "REDIS_CACHE_WAIT_SECONDS", 0.2) or 0.2)
 
 
 def _key(agent_id: uuid.UUID, kind: str) -> str:
@@ -45,30 +60,62 @@ def _decode_payload(raw: str | None, current_ver: str) -> str | None:
     return None
 
 
-async def read_cached_text(agent_id: uuid.UUID, kind: str) -> tuple[str | None, str]:
-    """Return ``(text, observed_ver)``. Text is None on miss / Redis error."""
+async def read_cached_texts(agent_id: uuid.UUID, kinds: Sequence[str]) -> dict[str, CachedText]:
+    """Read every kind's version and text in one round trip under the cache breaker.
+
+    Each text is None on miss / Redis error / open breaker, with an empty version that disables the fill.
+    """
     if _ttl() <= 0 or has_pending_snapshot_writes():
-        return None, ""
+        return dict.fromkeys(kinds, _UNAVAILABLE)
+
+    async def read() -> list[object]:
+        pipe = (await get_cache_redis()).pipeline(transaction=False)
+        for kind in kinds:
+            _ = pipe.set(_ver_key(agent_id, kind), uuid.uuid4().hex, ex=max(_ttl() * 40, 3600), nx=True)
+            _ = pipe.get(_ver_key(agent_id, kind))
+            _ = pipe.get(_key(agent_id, kind))
+        return list[object](await pipe.execute())
+
     try:
-        client = await asyncio.wait_for(get_redis(), timeout=_wait())
-        _ = await asyncio.wait_for(
-            client.set(_ver_key(agent_id, kind), uuid.uuid4().hex, ex=max(_ttl() * 40, 3600), nx=True),
-            timeout=_wait(),
-        )
-        ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id, kind)), timeout=_wait())
-        value = await asyncio.wait_for(client.get(_key(agent_id, kind)), timeout=_wait())
-    except Exception as exc:
-        logger.debug("agent_context_cache get skipped: {}", type(exc).__name__)
-        return None, ""
-    current = str(ver_raw or "")
-    if isinstance(value, bytes):
-        value = value.decode()
-    return _decode_payload(value if isinstance(value, str) else None, current), current
+        replies = await guarded(read)
+    except CacheUnavailableError as exc:
+        logger.debug("agent_context_cache get skipped: {}", exc)
+        return dict.fromkeys(kinds, _UNAVAILABLE)
+    cached: dict[str, CachedText] = {}
+    for index, kind in enumerate(kinds):
+        ver_raw, value = replies[3 * index + 1], replies[3 * index + 2]
+        current = str(ver_raw or "")
+        if isinstance(value, bytes):
+            value = value.decode()
+        cached[kind] = CachedText(_decode_payload(value if isinstance(value, str) else None, current), current)
+    return cached
+
+
+async def read_cached_text(agent_id: uuid.UUID, kind: str) -> CachedText:
+    return (await read_cached_texts(agent_id, (kind,)))[kind]
 
 
 async def get_cached_text(agent_id: uuid.UUID, kind: str) -> str | None:
-    text, _ver = await read_cached_text(agent_id, kind)
-    return text
+    return (await read_cached_text(agent_id, kind)).text
+
+
+async def load_cached_text(
+    agent_id: uuid.UUID, kind: str, observed_ver: str, load: Callable[[], Awaitable[str]]
+) -> str:
+    """Load a missed kind and fill the cache; concurrent misses at one version share the load and the fill.
+
+    Without an observed version there is no cache to fill and nothing to tell an older load from a newer write, so
+    the caller loads for itself.
+    """
+    if not observed_ver:
+        return await load()
+
+    async def fill() -> str:
+        text = await load()
+        await set_cached_text(agent_id, kind, text, observed_ver=observed_ver)
+        return text
+
+    return await _loads.run((agent_id, kind, observed_ver), fill)
 
 
 async def set_cached_text(
@@ -84,17 +131,23 @@ async def set_cached_text(
     if len(text.encode()) > max_bytes:
         logger.debug("agent_context_cache set skipped (too large)")
         return
-    try:
-        client = await asyncio.wait_for(get_redis(), timeout=_wait())
-        ver_raw = await asyncio.wait_for(client.get(_ver_key(agent_id, kind)), timeout=_wait())
-        current = str(ver_raw or "")
+
+    async def fill() -> bool:
+        client = await get_cache_redis()
+        current = str(await client.get(_ver_key(agent_id, kind)) or "")
         if current != observed_ver:
-            logger.debug("agent_context_cache set skipped (ver)")
-            return
+            return False
         payload = json.dumps({"ver": current, "v": text}, separators=(",", ":"))
-        _ = await asyncio.wait_for(client.set(_key(agent_id, kind), payload, ex=_ttl()), timeout=_wait())
-    except Exception as exc:
-        logger.debug("agent_context_cache set skipped: {}", type(exc).__name__)
+        _ = await client.set(_key(agent_id, kind), payload, ex=_ttl())
+        return True
+
+    try:
+        filled = await guarded(fill)
+    except CacheUnavailableError as exc:
+        logger.debug("agent_context_cache set skipped: {}", exc)
+        return
+    if not filled:
+        logger.debug("agent_context_cache set skipped (ver)")
 
 
 async def invalidate_agent_context(agent_id: uuid.UUID, kind: str | None = None) -> None:

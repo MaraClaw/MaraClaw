@@ -13,6 +13,7 @@ import anyio
 import httpx
 import pytest
 from fastapi import HTTPException
+from tests.rate_limit_fakes import install_limiter_redis
 
 from app.api import agents as agents_api, files as files_api
 from app.core.domain.agents import AgentStatus
@@ -350,3 +351,8 @@ async def test_reconciliation_stop_skips_an_in_flight_cutover(gate: Gate, tmp_pa
     await agent_stops.stop_containers([agent])
     current.assert_awaited_once_with(agent.id)
     stop.assert_awaited_once_with(agent)
+
+
+@pytest.fixture(autouse=True)
+def limiter_redis(monkeypatch):
+    return install_limiter_redis(monkeypatch)

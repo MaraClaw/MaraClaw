@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Unpack
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -36,6 +36,7 @@ from app.services import (
     tenant_lifecycle,
 )
 from app.services.agent_manager import agent_manager
+from app.services.docker_capacity import DockerBusyError, DockerPriority, docker_priority
 from builtin_keyword_fakes import IncludeAllKeyword
 from test_db_session import _FakeRawConnection, _wrap
 
@@ -145,6 +146,75 @@ async def test_orphan_sweep_continues_after_one_docker_failure(monkeypatch):
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=None))
     await agent_orphans.sweep_orphan_containers(now)
     assert calls == ["healthy"]
+
+
+async def test_reconcile_issues_every_docker_call_at_background_priority(monkeypatch):
+    # Given an old orphan on the deployment network, listed and removed through Docker fakes that note the priority.
+    now = datetime.now(UTC)
+    priorities = []
+    orphan = SimpleNamespace(
+        id="orphan",
+        config=SimpleNamespace(labels={"maraclaw.agent_id": str(uuid4())}),
+        network_settings=SimpleNamespace(networks={"owned": {}}),
+        created=now - timedelta(minutes=5),
+    )
+
+    class Containers:
+        def list(self, **kwargs):
+            priorities.append(docker_priority.get())
+            return [orphan]
+
+        def inspect(self, reference: str) -> SimpleNamespace:
+            priorities.append(docker_priority.get())
+            return orphan
+
+        def stop(self, container_id, **kwargs):
+            priorities.append(docker_priority.get())
+
+        def remove(self, container_ids):
+            priorities.append(docker_priority.get())
+
+    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace(container=Containers()))
+    monkeypatch.setattr(agent_orphans, "get_settings", lambda: SimpleNamespace(DOCKER_NETWORK="owned"))
+    monkeypatch.setattr(agent_dao, "prepare_container_stops", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent_dao, "get_many", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=None))
+    # When the stopped-container worker runs one pass.
+    await agent_stops.reconcile_stopped_containers(now)
+    # Then the list, inspect, stop and remove all went through the lane at background priority.
+    assert priorities == [DockerPriority.BACKGROUND] * 4
+
+
+async def test_orphan_sweep_skips_the_pass_when_the_docker_lane_is_busy(monkeypatch):
+    # Given a lane that refuses the listing.
+    run = AsyncMock(side_effect=DockerBusyError())
+    monkeypatch.setattr(agent_manager, "docker_client", SimpleNamespace(container=SimpleNamespace(list=Mock())))
+    monkeypatch.setattr(agent_orphans, "get_settings", lambda: SimpleNamespace(DOCKER_NETWORK="owned"))
+    monkeypatch.setattr(agent_orphans, "run_docker", run)
+    # When the sweep runs.
+    await agent_orphans.sweep_orphan_containers(datetime.now(UTC))
+    # Then the pass ends quietly after the one refused call.
+    run.assert_awaited_once()
+
+
+async def test_container_stops_skip_the_rest_of_the_pass_when_the_docker_lane_is_busy(monkeypatch):
+    # Given two stopped agents with retained containers, and a lane that refuses the first stop.
+    agents = [_agent(), _agent()]
+    monkeypatch.setattr(
+        agent_dao,
+        "get",
+        AsyncMock(
+            side_effect=lambda agent_id: next(
+                replace(agent, status="stopped") for agent in agents if agent.id == agent_id
+            )
+        ),
+    )
+    stop = AsyncMock(side_effect=DockerBusyError())
+    monkeypatch.setattr(agent_manager, "stop_container", stop)
+    # When the worker stops them.
+    await agent_stops.stop_containers(agents)
+    # Then the pass ended at the refusal; the retained containers wait for the next pass.
+    stop.assert_awaited_once()
 
 
 @pytest.mark.parametrize("reason", ["stopped", "expired", "elapsed", "disabled_tenant"])
@@ -264,7 +334,7 @@ async def test_heartbeat_loop_reconciles_independently_of_heartbeat_candidates(m
         calls.append("reconcile")
         reconciled.set()
 
-    async def candidates():
+    async def candidates(_now, _limit):
         calls.append("candidates")
         return []
 

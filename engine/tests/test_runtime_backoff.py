@@ -1,6 +1,16 @@
+import asyncio
+
 import pytest
 
-from app.runtime.tasks import ReconnectBackoff, capped_backoff, jittered_backoff
+from app.runtime.tasks import (
+    RESTART_BASE_SECONDS,
+    OwnedTasks,
+    ReconnectBackoff,
+    RestartPolicy,
+    capped_backoff,
+    jittered_backoff,
+)
+from worker_progress_fixtures import Incarnations, Pacing
 
 
 class FakeClock:
@@ -106,3 +116,29 @@ def test_reconnect_backoff_settle_clears_failures_after_a_healthy_run_without_sc
     clock.now = 60.0
     backoff.settle(started)
     assert backoff.failures == 0
+
+
+@pytest.mark.parametrize("ceiling", [0.5, 4.0, 30.0])
+async def test_restart_delays_are_capped_backoff_up_to_the_policy_ceiling(ceiling: float) -> None:
+    # Given a loop that crashes through a budget of seven restarts.
+    budget = 7
+    pacing = Pacing()
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    tasks.start_supervised(
+        "mail",
+        Incarnations(*(RuntimeError("crash") for _ in range(budget + 1))),
+        progress_budget_seconds=300,
+        policy=RestartPolicy(budget, ceiling),
+    )
+    supervisor = next(task for task in tasks.tasks if task.get_name() == "mail-supervisor")
+    # When every backoff is released in turn.
+    delays: list[float] = []
+    for _ in range(budget):
+        delays.append(await pacing.next_wait())
+        pacing.release()
+    _ = await asyncio.wait_for(supervisor, 2)
+    # Then each delay is the shared deterministic backoff, which never exceeds the ceiling.
+    assert delays == [capped_backoff(n, base_seconds=RESTART_BASE_SECONDS, cap_seconds=ceiling) for n in range(budget)]
+    assert max(delays) == min(ceiling, 64.0)
+    assert delays[:7] == {0.5: [0.5] * 7, 4.0: [1, 2, 4, 4, 4, 4, 4], 30.0: [1, 2, 4, 8, 16, 30, 30]}[ceiling]
+    await tasks.stop()

@@ -8,6 +8,7 @@ from app.core.domain.agents import AgentSharingMode, AgentStatus
 from app.dao.agent_dao import agent_dao
 from app.dao.company_transfer_dao import company_transfer_dao as transfers
 from app.dao.company_transfer_disposition_sql import FREE_INTEGRATION_DELETES, NEUTRALIZE_NOTIFICATIONS_SQL
+from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.company_admission import CompanyAdmissionRecord
@@ -124,7 +125,7 @@ async def migrate_agent(agent: AgentRecord, transfer: CompanyTransferRecord) -> 
             "WHERE agent_id=%(agent)s",
             params,
         )
-        await db.execute("UPDATE agent_triggers SET is_enabled=false WHERE agent_id=%(agent)s", params)
+        _ = await agent_trigger_dao.disable_for_agent(agent.id)
         models = await db.fetchone(
             "SELECT primary_model_id,fallback_model_id FROM agents WHERE id=%(agent)s",
             params,

@@ -438,6 +438,7 @@ async def test_cancelled_request_drains_commit_before_releasing_lock(surface, mo
         ("unexpected", 502, "guest_start_failed"),
         ("http", 418, "preserved HTTP error"),
         ("overload", 503, "database connection pool timed out"),
+        ("busy", 503, "docker_busy"),
         ("gate", 409, "openclaw_update_in_progress"),
     ],
 )
@@ -447,7 +448,8 @@ async def test_start_fault_preserves_typed_errors_and_maps_runtime_faults(surfac
     from pywhales.exceptions import DockerException
 
     from app.db.errors import PoolCheckoutTimeoutError
-    from app.main import database_overload, openclaw_update_gate
+    from app.main import database_overload, docker_busy, openclaw_update_gate
+    from app.services.docker_capacity import DockerBusyError
     from app.services.openclaw_update_gate import OpenClawUpdateGateError, OpenClawUpdateInProgressError
 
     app, runtime, agent = surface
@@ -458,10 +460,12 @@ async def test_start_fault_preserves_typed_errors_and_maps_runtime_faults(surfac
         "unexpected": ValueError("setup incomplete"),
         "http": HTTPException(418, "preserved HTTP error"),
         "overload": PoolCheckoutTimeoutError(),
+        "busy": DockerBusyError(),
         "gate": OpenClawUpdateInProgressError(),
     }
     app.add_exception_handler(PoolCheckoutTimeoutError, database_overload)
     app.add_exception_handler(OpenClawUpdateGateError, openclaw_update_gate)
+    app.add_exception_handler(DockerBusyError, docker_busy)
     fail, reported = AsyncMock(), Mock()
     monkeypatch.setattr(lifecycle.start_store, "fail", fail)
     monkeypatch.setattr(lifecycle, "report_exception", reported)
@@ -479,6 +483,10 @@ async def test_start_fault_preserves_typed_errors_and_maps_runtime_faults(surfac
         reported.assert_not_called()
     if fault == "gate":
         fail.assert_not_awaited()
+    if fault == "busy":
+        # The refused start stays pending and retryable: its retry record shows the host is at capacity.
+        assert fail.await_args is not None
+        assert fail.await_args.args[1] == "capacity_exceeded"
     if status == 503:
         assert response.headers["Retry-After"] == "5"
 

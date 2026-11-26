@@ -94,6 +94,25 @@ async def test_failed_stop_durably_retains_reference_without_publishing(docker, 
     assert runtime.published == []
 
 
+async def test_stop_refused_by_a_busy_docker_lane_answers_503_and_commits_nothing(docker, monkeypatch):
+    # Given the Docker lane refuses the stop because its queue is full.
+    from app.main import docker_busy
+    from app.services.docker_capacity import DockerBusyError
+
+    app, runtime, agent = docker
+    app.add_exception_handler(DockerBusyError, docker_busy)
+    docker_stop(monkeypatch, DockerBusyError())
+    # When the user stops the agent.
+    response = await post_stop(app, agent)
+    # Then the request is retryable: 503 with Retry-After, the agent unchanged and nothing announced.
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "5"
+    assert response.json()["detail"]["code"] == "docker_busy"
+    assert runtime.committed == agent
+    assert "persist" not in runtime.events
+    assert runtime.published == []
+
+
 async def test_retry_after_failed_stop_publishes_despite_committed_stopped(docker, monkeypatch):
     # Given a failed stop already committed STOPPED with the container ID retained.
     app, runtime, agent = docker

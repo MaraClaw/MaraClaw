@@ -17,7 +17,7 @@ from app.services.agent_setup_lock import (
     WorkspaceLockTimeoutError,
     setup_workspace_lock,
 )
-from app.services.docker_capacity import run_docker
+from app.services.docker_capacity import DockerBusyError, run_docker
 from app.services.guest_identity import AGENT_LABEL, guest_resolutions, require_guest_owner
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
 
@@ -59,6 +59,9 @@ async def sweep_orphan_containers(now: datetime) -> None:
             except ValueError:
                 continue
             candidates[container.id] = agent_id
+    except DockerBusyError:
+        logger.info("Orphan container sweep skipped: the Docker lane is busy")
+        return
     except (ClientNotFoundError, DockerException, ParsingError, OSError) as exc:
         logger.warning("Orphan container listing failed: %s", exc)
         return
@@ -112,5 +115,8 @@ async def sweep_orphan_containers(now: datetime) -> None:
             )
         except NoSuchContainer, OpenClawUpdateInProgressError:
             continue
+        except DockerBusyError:
+            logger.info("Orphan container sweep stopped: the Docker lane is busy")
+            return
         except Exception as exc:
             logger.warning("Orphan container cleanup failed for container {}: {}", container_id, type(exc).__name__)

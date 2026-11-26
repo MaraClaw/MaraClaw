@@ -173,6 +173,10 @@ async def test_actual_start_registers_required_role_evidence(
                 task, finite = required[worker_name]
                 assert not finite
                 assert not task.done()
+        assert set(runtime.tasks.restarts) == (
+            {"auth_email", "broadcast_email"} if role_enabled(roles, "worker") else set()
+        )
+        assert runtime.readiness.alive()
         budgeted: set[str] = set()
         if role_enabled(roles, "worker"):
             budgeted |= WORKER_BUDGETED_LOOPS
@@ -198,6 +202,8 @@ async def test_actual_start_registers_required_role_evidence(
             required[failed_worker][0].cancel()
             await asyncio.wait_for(asyncio.gather(required[failed_worker][0], return_exceptions=True), 5)
             assert not await runtime.readiness.check()
+            # A dead loop (restarting or not) turns readiness red; liveness fails only once a restart budget is spent.
+            assert runtime.readiness.alive()
     finally:
         await asyncio.wait_for(runtime.stop(), 5)
     assert runtime.readiness.draining

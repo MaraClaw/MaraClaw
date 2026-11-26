@@ -1,16 +1,20 @@
+import asyncio
 import uuid
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from tests.test_redis_cache import FakeRedis
 
-from app.core import permissions
+from app.core import permissions, redis_cache
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
 from app.dao.agent_relationship_dao import agent_relationship_dao
 from app.records.agent import AgentRecord
 from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.agent_relationship import AgentRelationshipRecord
 from app.records.org import OrgMemberRecord
+from app.services import agent_context, agent_context_cache
 from app.services.agent_context import _load_relationships_from_db
 
 
@@ -118,3 +122,153 @@ async def test_load_relationships_is_empty_when_no_row_is_active(monkeypatch: py
     )
 
     assert await _load_relationships_from_db(agent_id) == ""
+
+
+class _Storage:
+    """Workspace storage stand-in: counts soul reads and lets a test hold the first one open."""
+
+    def __init__(self) -> None:
+        self.soul_reads = 0
+        self.gate: asyncio.Event | None = None
+        self.failures: list[Exception] = []
+
+    async def read(self, key: str, max_chars: int = 3000) -> str:
+        del max_chars
+        if not key.endswith("soul.md"):
+            return ""
+        self.soul_reads += 1
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.failures:
+            raise self.failures.pop(0)
+        return "soul body"
+
+
+@pytest.fixture
+def context_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FakeRedis, _Storage]]:
+    redis_cache.reset_circuit()
+    cache, storage = FakeRedis(), _Storage()
+
+    async def client() -> FakeRedis:
+        return cache
+
+    async def no_skills(_agent_id: object) -> str:
+        return ""
+
+    async def no_relationships(_agent_id: object) -> str:
+        return ""
+
+    async def utc(_agent_id: object) -> str:
+        return "UTC"
+
+    monkeypatch.setattr(agent_context_cache, "get_cache_redis", client)
+    monkeypatch.setattr(redis_cache, "_client", client)
+    monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
+    monkeypatch.setattr(agent_context, "_read_file_safe", storage.read)
+    monkeypatch.setattr(agent_context, "_load_skills_index", no_skills)
+    monkeypatch.setattr(agent_context, "_load_relationships_from_db", no_relationships)
+    monkeypatch.setattr("app.services.timezone_utils.get_agent_timezone", utc)
+    yield cache, storage
+    redis_cache.reset_circuit()
+
+
+async def _build(agent_id: uuid.UUID) -> str:
+    static, dynamic = await agent_context.build_agent_context(agent_id, "Name", "role")
+    return static + dynamic
+
+
+async def test_a_turn_reads_all_three_kinds_in_one_cache_round_trip(context_env: tuple[FakeRedis, _Storage]) -> None:
+    cache, _ = context_env
+    agent_id = uuid.uuid4()
+
+    await _build(agent_id)
+    assert cache.round_trips == 1
+
+    await _build(agent_id)
+    assert cache.round_trips == 2
+
+
+async def test_a_dead_cache_costs_the_first_turn_one_timeout_and_later_turns_none(
+    context_env: tuple[FakeRedis, _Storage],
+) -> None:
+    cache, storage = context_env
+    cache.fail = True
+
+    turns = [await _build(uuid.uuid4()) for _ in range(3)]
+
+    assert all("soul body" in turn for turn in turns)
+    assert cache.round_trips == 1
+    assert storage.soul_reads == 3
+
+
+async def test_concurrent_misses_share_one_storage_load_and_one_fill(context_env: tuple[FakeRedis, _Storage]) -> None:
+    cache, storage = context_env
+    storage.gate = asyncio.Event()
+    agent_id = uuid.uuid4()
+
+    turns = [asyncio.create_task(_build(agent_id)) for _ in range(3)]
+    await asyncio.sleep(0)
+    storage.gate.set()
+
+    assert len(set(await asyncio.gather(*turns))) == 1
+    assert storage.soul_reads == 1
+    assert [key for key in cache.store if key.startswith(f"ctx:{agent_id}:")] == [
+        f"ctx:{agent_id}:soul",
+        f"ctx:{agent_id}:memory",
+        f"ctx:{agent_id}:skills",
+    ]
+
+
+async def test_a_failed_shared_load_reaches_every_turn_and_the_next_turn_retries(
+    context_env: tuple[FakeRedis, _Storage],
+) -> None:
+    _, storage = context_env
+    storage.gate = asyncio.Event()
+    storage.failures.append(OSError("storage down"))
+    agent_id = uuid.uuid4()
+
+    turns = [asyncio.create_task(_build(agent_id)) for _ in range(2)]
+    await asyncio.sleep(0)
+    storage.gate.set()
+    outcomes = await asyncio.gather(*turns, return_exceptions=True)
+
+    assert [type(outcome) for outcome in outcomes] == [OSError, OSError]
+    assert "soul body" in await _build(agent_id)
+    assert storage.soul_reads == 2
+
+
+async def test_a_turn_after_an_invalidation_never_joins_a_load_that_started_before_it(
+    context_env: tuple[FakeRedis, _Storage],
+) -> None:
+    _, storage = context_env
+    storage.gate = asyncio.Event()
+    agent_id = uuid.uuid4()
+
+    before = asyncio.create_task(_build(agent_id))
+    await asyncio.sleep(0)
+    await agent_context_cache.invalidate_for_workspace_paths(agent_id, "soul.md")
+    after = asyncio.create_task(_build(agent_id))
+    await asyncio.sleep(0)
+    storage.gate.set()
+    await asyncio.gather(before, after)
+
+    assert storage.soul_reads == 2
+
+
+async def test_a_cancelled_turn_does_not_cancel_the_load_the_others_wait_on(
+    context_env: tuple[FakeRedis, _Storage],
+) -> None:
+    _, storage = context_env
+    storage.gate = asyncio.Event()
+    agent_id = uuid.uuid4()
+
+    first = asyncio.create_task(_build(agent_id))
+    second = asyncio.create_task(_build(agent_id))
+    await asyncio.sleep(0)
+    _ = first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    storage.gate.set()
+
+    assert "soul body" in await second
+    assert storage.soul_reads == 1

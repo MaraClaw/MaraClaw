@@ -19,6 +19,7 @@ from app.services.agent_setup_lock import drain_on_cancel
 from app.services.agent_start_reconciler import EXPECTED_START_FAULTS, execute_start
 from app.services.agent_start_store import start_store
 from app.services.company_transfer_runtime_gate import assert_transfer_ready
+from app.services.docker_capacity import DockerBusyError
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_identity import GuestOwnershipError
 from app.services.openclaw_update_exclusion import locked_fresh_agent
@@ -89,7 +90,7 @@ async def run_start(operation: AgentStartOperation, agent: AgentRecord) -> Lifec
     except GuestOwnershipError as exc:
         logger.warning("Guest start ownership refused for agent {}: {}", agent.id, exc)
         return LifecycleFailure(502, "guest_start_failed", "Guest ownership could not be verified")
-    except HTTPException, OpenClawUpdateGateError:
+    except HTTPException, OpenClawUpdateGateError, DockerBusyError:
         raise
     except Exception as exc:
         if overload_error(exc) is not None:

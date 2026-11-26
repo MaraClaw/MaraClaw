@@ -8,7 +8,6 @@ set -e
 PROCESS_ROLE="$(python -m app.process_roles)"
 export PROCESS_ROLE
 ALLOW_MIGRATION_FAILURE="${ALLOW_MIGRATION_FAILURE:-false}"
-START_COMMAND="${START_COMMAND:-uvicorn app.main:app --host 0.0.0.0 --port 8000}"
 
 role_contains() {
     case ",${PROCESS_ROLE}," in
@@ -93,6 +92,11 @@ else
 fi
 
 echo "[entrypoint] Step 2: Starting uvicorn..."
+if [ -z "${START_COMMAND:-}" ]; then
+    # The default command bounds a frame before uvicorn parses it; a START_COMMAND you set keeps every flag to itself.
+    WS_MAX_SIZE="$(python -m app.scripts.chat_frame_limit)"
+    START_COMMAND="uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-max-size ${WS_MAX_SIZE}"
+fi
 # uvicorn finishes in-flight HTTP within this window after SIGTERM, then runs the lifespan cleanup.
 export UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN="${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-${SHUTDOWN_HTTP_GRACE_SECONDS:-30}}"
 # bash execs the last command of -c (Debian's dash forks it), so the server replaces this process and gets SIGTERM.

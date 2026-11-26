@@ -117,8 +117,11 @@ RUN chmod +x /app/entrypoint.sh && \
 # at runtime. The entrypoint script will drop privileges to 'maraclaw' after fixing permissions.
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+# /api/live never touches the database pool and fails only after a required worker loop used up its
+# restarts (or when the event loop is hung); /api/health and /api/ready keep their own meaning. The start
+# period covers lifespan startup (pool, bootstrap, connector setup), during which uvicorn is not listening.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8000/api/live || exit 1
 
 EXPOSE 8000
 # entrypoint.sh runs `schema bootstrap (bootstrap_db)` then `uvicorn`

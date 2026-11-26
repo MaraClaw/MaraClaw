@@ -23,6 +23,7 @@ from app.schemas.schemas import HealthResponse
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.company_capacity import CompanyAccountLimitReachedError
+from app.services.docker_capacity import DockerBusyError
 from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
 from app.services.storage_runtime.quota_errors import StorageQuotaError
@@ -57,6 +58,15 @@ async def agent_workspace_busy(_request: Request, _exc: WorkspaceLockTimeoutErro
     return JSONResponse(
         status_code=409,
         content={"detail": {"code": "agent_workspace_busy", "message": "Agent workspace is busy. Please retry."}},
+    )
+
+
+@app.exception_handler(DockerBusyError)
+async def docker_busy(_request: Request, exc: DockerBusyError) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": {"code": "docker_busy", "message": "Docker is busy. Please retry shortly."}},
+        headers={"Retry-After": str(exc.retry_after_seconds)},
     )
 
 

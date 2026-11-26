@@ -28,7 +28,9 @@ from app.services.storage import agent_storage_key, get_storage_backend
 
 HEARTBEAT_INTERVAL_SECONDS = 60.0
 PROGRESS_BUDGET_SECONDS: Final = 300.0
-_HEARTBEAT_SEMAPHORE = asyncio.Semaphore(10)
+HEARTBEAT_CONCURRENCY: Final = 10
+"""Heartbeats one worker runs at once, and the most agents a tick selects as due."""
+_HEARTBEAT_SEMAPHORE = asyncio.Semaphore(HEARTBEAT_CONCURRENCY)
 _HEARTBEAT_TASKS: set[asyncio.Task[None]] = set()
 _HEARTBEAT_IN_FLIGHT: set[uuid.UUID] = set()
 _admission = TaskAdmission("Heartbeat", _HEARTBEAT_TASKS)
@@ -169,34 +171,6 @@ PRIVATE_AGENT_HEARTBEAT_APPEND = """
 - Do NOT share any findings, summaries, or opinions in Clawbook.
 - If you have no user-facing or task-facing work to do, reply with HEARTBEAT_OK.
 """
-
-
-def _is_in_active_hours(active_hours: str, tz_name: str = "UTC") -> bool:
-    """Check if current time is within the agent's active hours.
-
-    Format: "HH:MM-HH:MM" (e.g., "09:00-18:00")
-    Uses agent's configured timezone (defaults to UTC).
-    """
-    try:
-        from zoneinfo import ZoneInfo
-
-        start_str, end_str = active_hours.split("-")
-        sh, sm = map(int, start_str.strip().split(":"))
-        eh, em = map(int, end_str.strip().split(":"))
-        try:
-            tz = ZoneInfo(tz_name)
-        except KeyError, Exception:
-            tz = ZoneInfo("UTC")
-        now = datetime.now(tz)
-        current_minutes = now.hour * 60 + now.minute
-        start_minutes = sh * 60 + sm
-        end_minutes = eh * 60 + em
-        if start_minutes <= end_minutes:
-            return start_minutes <= current_minutes < end_minutes
-        # Overnight range (e.g., "22:00-06:00")
-        return current_minutes >= start_minutes or current_minutes < end_minutes
-    except Exception:
-        return True  # Default to active if parsing fails
 
 
 def _release_heartbeat_slot(agent_id: uuid.UUID) -> None:
@@ -621,50 +595,36 @@ async def _reconcile_stopped_containers() -> None:
 async def _heartbeat_tick() -> bool:
     """One heartbeat tick: find agents due for heartbeat; True once candidate selection and claims completed."""
     from app.dao.agent_dao import agent_dao
-    from app.dao.tenant_dao import tenant_dao
     from app.services.audit_logger import write_audit_log
-    from app.services.timezone_utils import get_agent_timezone_sync
 
     _ = new_trace_id()
     now = datetime.now(UTC)
 
     try:
-        agents = list(await agent_dao.list_heartbeat_candidates())
+        # Due in SQL (status, interval, active hours, expiry), so the tick reads the agents it can start, not every
+        # heartbeat-enabled agent. Anything beyond the free slots stays due for the next tick.
+        agents = list(await agent_dao.list_heartbeat_candidates(now, HEARTBEAT_CONCURRENCY))
 
-        # Pre-load tenants for timezone resolution
-        tenant_ids = {a.tenant_id for a in agents if a.tenant_id}
-        tenants_by_id = {}
-        if tenant_ids:
-            tenants = await tenant_dao.get_by_ids(list(tenant_ids))
-            tenants_by_id = {t.id: t for t in tenants}
-
-        triggered = 0
+        claims: list[asyncio.Task[int]] = []
         for agent in agents:
-            # Skip / persist expired agents
-            if agent.is_expired:
-                continue
+            # Persist agents whose expiry has passed
             if agent.expires_at and now >= agent.expires_at:
                 _ = await agent_dao.mark_expired_stopped(agent)
                 continue
-
-            tenant_id = agent.tenant_id
-            tenant = tenants_by_id.get(tenant_id) if tenant_id is not None else None
-            tz_name = get_agent_timezone_sync(agent, tenant)
-
-            if not _is_in_active_hours(agent.heartbeat_active_hours or "09:00-18:00", tz_name):
-                continue
-
             interval = timedelta(minutes=agent.heartbeat_interval_minutes or 240)
-            if agent.last_heartbeat_at and (now - agent.last_heartbeat_at) < interval:
-                continue
-
-            try:
-                claim = asyncio.create_task(_admission.run(partial(_claim_and_start_heartbeat, agent, now, interval)))
-                claim.add_done_callback(_observe_heartbeat_claim)
-                triggered += await asyncio.shield(claim)
-            except AdmissionClosedError:
+            claim = asyncio.create_task(_admission.run(partial(_claim_and_start_heartbeat, agent, now, interval)))
+            claim.add_done_callback(_observe_heartbeat_claim)
+            claims.append(claim)
+        # Shielded: a claim that advanced ``last_heartbeat_at`` must still start its heartbeat if the tick is cancelled.
+        outcomes = await asyncio.shield(asyncio.gather(*claims, return_exceptions=True))
+        triggered = 0
+        for outcome in outcomes:
+            if isinstance(outcome, AdmissionClosedError):
                 logger.info("Heartbeat tick stopped: shutdown drain in progress")
                 break
+            if isinstance(outcome, BaseException):
+                raise outcome
+            triggered += outcome
 
         if triggered:
             try:

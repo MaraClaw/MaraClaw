@@ -212,7 +212,7 @@ async def test_success_invalidates_cached_skills_index(
     agent_id = uuid.uuid4()
     client = FakeRedis()
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
-    monkeypatch.setattr(agent_context_cache, "get_redis", AsyncMock(return_value=client))
+    monkeypatch.setattr(agent_context_cache, "get_cache_redis", AsyncMock(return_value=client))
     monkeypatch.setattr(redis_cache, "_client", AsyncMock(return_value=client))
     _, observed = await agent_context_cache.read_cached_text(agent_id, "skills")
     await agent_context_cache.set_cached_text(agent_id, "skills", "cached-index", observed_ver=observed)

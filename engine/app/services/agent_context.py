@@ -228,7 +228,10 @@ async def build_agent_context(
     - skills/ → skill names + summaries
     - Database → relationship network (human + agent)
     """
-    from app.services.agent_context_cache import read_cached_text, set_cached_text
+    from app.services.agent_context_cache import load_cached_text, read_cached_texts
+
+    # One cache round trip covers all three kinds, so a Redis outage costs a turn at most one cache timeout.
+    cached = await read_cached_texts(agent_id, ("soul", "memory", "skills"))
 
     # --- Soul ---
     # Soul is the agent's full author-curated identity; detailed souls (e.g.
@@ -237,28 +240,35 @@ async def build_agent_context(
     # denies things its soul plainly states, with no log of the truncation.
     # Memory and relationships below keep small caps because they grow
     # unbounded at runtime; the soul does not (only seeded/explicitly edited).
-    soul, soul_ver = await read_cached_text(agent_id, "soul")
-    if soul is None:
+    async def load_soul() -> str:
         soul = await _read_file_safe(normalize_storage_key(f"{agent_id}/soul.md"), 30000)
         if soul.startswith("# "):
             soul = "\n".join(soul.split("\n")[1:]).strip()
-        await set_cached_text(agent_id, "soul", soul, observed_ver=soul_ver)
+        return soul
+
+    soul = cached["soul"].text
+    if soul is None:
+        soul = await load_cached_text(agent_id, "soul", cached["soul"].ver, load_soul)
 
     # --- Memory ---
-    memory, memory_ver = await read_cached_text(agent_id, "memory")
-    if memory is None:
+    async def load_memory() -> str:
         memory = await _read_file_safe(normalize_storage_key(f"{agent_id}/memory/memory.md"), 2000)
         if not memory:
             memory = await _read_file_safe(normalize_storage_key(f"{agent_id}/memory.md"), 2000)
         if memory.startswith("# "):
             memory = "\n".join(memory.split("\n")[1:]).strip()
-        await set_cached_text(agent_id, "memory", memory, observed_ver=memory_ver)
+        return memory
+
+    memory = cached["memory"].text
+    if memory is None:
+        memory = await load_cached_text(agent_id, "memory", cached["memory"].ver, load_memory)
 
     # --- Skills index (progressive disclosure) ---
-    skills_text, skills_ver = await read_cached_text(agent_id, "skills")
+    skills_text = cached["skills"].text
     if skills_text is None:
-        skills_text = await _load_skills_index(agent_id)
-        await set_cached_text(agent_id, "skills", skills_text, observed_ver=skills_ver)
+        skills_text = await load_cached_text(
+            agent_id, "skills", cached["skills"].ver, lambda: _load_skills_index(agent_id)
+        )
 
     # --- Relationships ---
     relationships = await _load_relationships_from_db(agent_id)

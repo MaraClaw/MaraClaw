@@ -116,3 +116,35 @@ def test_entrypoint_execs_the_start_command_in_its_own_process(
     # Then the server is the launched process itself, so docker stop's SIGTERM reaches it, and it got the window.
     assert process.returncode == 0, stderr
     assert stdout.splitlines()[-1].split() == [str(process.pid), window]
+
+
+def _entrypoint_run(tmp_path: Path, start_command: str | None) -> list[str]:
+    """Run the entrypoint with a uvicorn that prints its arguments; python is the real interpreter (settings load)."""
+    python = tmp_path / "python"
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    python.chmod(0o755)
+    fake_id = tmp_path / "id"
+    fake_id.write_text("#!/bin/sh\nprintf 1000\n")
+    fake_id.chmod(0o755)
+    uvicorn = tmp_path / "uvicorn"
+    uvicorn.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    uvicorn.chmod(0o755)
+    env = {key: value for key, value in os.environ.items() if key != "START_COMMAND" and not key.startswith("CHAT_")}
+    env |= {"PROCESS_ROLE": "api", "PATH": f"{tmp_path}:{os.environ['PATH']}", "INSTANCE_ID": "test-instance"}
+    if start_command is not None:
+        env["START_COMMAND"] = start_command
+    result = subprocess.run(["/bin/bash", "entrypoint.sh"], env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.splitlines()[-1:] if start_command is None else result.stdout.splitlines()
+
+
+def test_default_start_command_bounds_the_websocket_frame_from_the_chat_limits(tmp_path: Path) -> None:
+    # Given no START_COMMAND, the entrypoint launches uvicorn itself.
+    output = _entrypoint_run(tmp_path, None)
+    # Then the frame limit is the settings' derived value, so an oversized frame closes 1009 before parsing.
+    assert output == [str(Settings().chat_frame_max_bytes())]
+
+
+def test_custom_start_command_keeps_every_server_flag(tmp_path: Path) -> None:
+    # Given a deployment's own START_COMMAND, the entrypoint adds nothing to it.
+    assert _entrypoint_run(tmp_path, "uvicorn app.main:app --port 9000")[-3:] == ["app.main:app", "--port", "9000"]

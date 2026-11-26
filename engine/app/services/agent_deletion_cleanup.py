@@ -11,6 +11,7 @@ from app.db.errors import DbError
 from app.services.agent_deletion_archive import publish_deletion_archive
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
+from app.services.docker_capacity import DockerBusyError, DockerPriority, background_docker, run_docker
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_resolutions, require_guest_owner
 
 
@@ -41,10 +42,14 @@ async def _complete_cleanup(agent_id: UUID) -> None:
                 raise RuntimeError("docker_unavailable")
             if not await agent_manager.remove_container(job.runtime_agent()):
                 raise RuntimeError("guest_removal_incomplete")
-            await to_thread.run_sync(_remove_remaining_writers, agent_manager.docker_client, agent_id)
+            await run_docker(
+                _remove_remaining_writers, agent_manager.docker_client, agent_id, priority=DockerPriority.BACKGROUND
+            )
             await cleanup.progress(agent_id)
             await to_thread.run_sync(publish_deletion_archive, job)
             await cleanup.progress(agent_id, completed=True)
+        except DockerBusyError:
+            logger.info("Deleted-agent cleanup skipped, the Docker lane is busy agent_id={}", agent_id)
         except (ClientNotFoundError, DockerException, GuestOwnershipError, RuntimeError, OSError, shutil.Error) as exc:
             await cleanup.progress(agent_id, error=f"{type(exc).__name__}: {exc}")
             logger.opt(exception=exc).warning("Deleted-agent cleanup pending agent_id={}", agent_id)
@@ -52,7 +57,8 @@ async def _complete_cleanup(agent_id: UUID) -> None:
 
 async def complete_deletion_cleanup(agent_id: UUID) -> None:
     try:
-        await drain_on_cancel(_complete_cleanup(agent_id))
+        with background_docker():
+            await drain_on_cancel(_complete_cleanup(agent_id))
     except (DbError, RuntimeError, OSError) as exc:
         logger.opt(exception=exc).warning("Deleted-agent cleanup unavailable agent_id={}", agent_id)
 

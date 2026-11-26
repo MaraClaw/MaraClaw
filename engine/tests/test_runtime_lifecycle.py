@@ -10,13 +10,14 @@ import pytest
 from fastapi import FastAPI
 
 from app.api import background_tasks
-from app.runtime import lifecycle
-from app.runtime.tasks import OwnedTasks
+from app.config import get_settings
+from app.runtime import lifecycle, tasks as owned_tasks
+from app.runtime.tasks import OwnedTasks, RestartPolicy
 from app.services import mcp_client
 from app.services.mcp_client import MCPSessionPool
 from producer_admission_fixtures import producer_admission
 from test_mcp_recovery import TOOL_RESULT, FakeMCPServer, call
-from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS
+from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS, Incarnations, Pacing
 
 __all__ = ["producer_admission"]
 
@@ -1011,7 +1012,9 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert not runtime.tasks.progress["agent_workspace_quota"].stale()
         assert not runtime.tasks.progress["agent_resource_pressure"].stale()
         assert not runtime.tasks.progress["capacity_renewal"].stale()
-        assert not runtime.tasks.progress["workspace_mirror"].stale()
+        assert runtime.tasks.progress["workspace_mirror"].stale() == (
+            now > workspace_mirror_worker.progress_budget_seconds()
+        )
         # Then readiness is stale with an unchanged ready body contract, and the loops keep running.
         assert not await runtime.readiness.check()
         assert all(not task.done() for task, _ in runtime.tasks.required.values())
@@ -1133,5 +1136,269 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
         beat.set()
         await asyncio.wait_for(all_beaten.wait(), 5)
         assert await runtime.readiness.check()
+    finally:
+        await runtime.stop()
+
+
+def supervised(
+    pacing: Pacing,
+    incarnations: Incarnations,
+    *,
+    budget: int = 5,
+    ceiling: float = 30.0,
+    before_restart: Callable[[], Awaitable[None]] | None = None,
+) -> OwnedTasks:
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    tasks.start_supervised(
+        "mail",
+        incarnations,
+        progress_budget_seconds=300,
+        policy=RestartPolicy(budget, ceiling, before_restart),
+    )
+    return tasks
+
+
+def supervisor_of(tasks: OwnedTasks) -> asyncio.Task[object]:
+    return next(task for task in tasks.tasks if task.get_name() == "mail-supervisor")
+
+
+async def test_supervised_loop_restarts_with_fresh_coroutines_after_the_previous_task_finished() -> None:
+    # Given a loop that crashes, returns and crashes again before it settles.
+    pacing = Pacing()
+    incarnations = Incarnations(RuntimeError("one"), RuntimeError("two"), "return", RuntimeError("three"), None)
+    tasks = supervised(pacing, incarnations, ceiling=4.0)
+    # When each backoff is released in turn.
+    delays: list[float] = []
+    for _ in range(4):
+        delays.append(await pacing.next_wait())
+        pacing.release()
+    await incarnations.running()
+    # Then the delays double up to the ceiling, every incarnation is a new coroutine started only after the
+    # previous task had finished, and the required entry now points at the live incarnation.
+    assert delays == [1.0, 2.0, 4.0, 4.0]
+    assert incarnations.previous_finished == [True] * 5
+    assert len({id(coroutine) for coroutine in incarnations.coroutines}) == 5
+    assert tasks.restarts == {"mail": 4}
+    assert tasks.required["mail"][0] is incarnations.tasks[-1]
+    assert not tasks.exhausted
+    # And stop cancels the supervisor and the current incarnation.
+    supervisor = supervisor_of(tasks)
+    await tasks.stop()
+    assert supervisor.cancelled()
+    assert incarnations.tasks[-1].cancelled()
+    assert not tasks.tasks
+
+
+async def test_stop_during_the_backoff_prevents_any_further_restart() -> None:
+    # Given a crashed loop waiting out its backoff.
+    pacing = Pacing()
+    incarnations = Incarnations(RuntimeError("down"))
+    tasks = supervised(pacing, incarnations)
+    assert await pacing.next_wait() == 1.0
+    supervisor = supervisor_of(tasks)
+    # When shutdown begins before the delay ends.
+    await tasks.stop()
+    # Then no second incarnation is ever created and nothing stays owned.
+    assert len(incarnations.coroutines) == 1
+    assert supervisor.cancelled()
+    assert tasks.restarts == {"mail": 0}
+    assert not tasks.tasks
+    assert not tasks.ready()
+
+
+async def test_supervised_loop_gives_up_after_its_restart_budget_and_logs_every_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a loop that crashes on every incarnation and a budget of two restarts.
+    messages: list[str] = []
+
+    def record(message: str, *args: object) -> None:
+        messages.append(message.format(*args))
+
+    monkeypatch.setattr(owned_tasks.logger, "warning", record)
+    monkeypatch.setattr(owned_tasks.logger, "error", record)
+    pacing = Pacing()
+    incarnations = Incarnations(RuntimeError("first"), RuntimeError("second"), RuntimeError("third"))
+    tasks = supervised(pacing, incarnations, budget=2)
+    supervisor = supervisor_of(tasks)
+    for _ in range(2):
+        _ = await pacing.next_wait()
+        pacing.release()
+    _ = await asyncio.wait_for(supervisor, 2)
+    # Then the third exit is final: exhausted, never ready, no fourth incarnation.
+    assert tasks.exhausted == {"mail"}
+    assert tasks.restarts == {"mail": 2}
+    assert len(incarnations.coroutines) == 3
+    assert not tasks.ready()
+    # And each restart and the give-up named the loop and the error that ended the incarnation.
+    restarting = [message for message in messages if "Restarting" in message]
+    assert len(restarting) == 2
+    assert all(
+        "mail" in message and error in message for message, error in zip(restarting, ("first", "second"), strict=True)
+    )
+    assert [message for message in messages if "exhausted" in message and "mail" in message and "third" in message]
+    await tasks.stop()
+
+
+async def test_loops_that_do_not_opt_in_are_never_restarted() -> None:
+    # Given a plain required loop that crashes.
+    incarnations = Incarnations(RuntimeError("crash"))
+    tasks = OwnedTasks()
+    tasks.start("plain", incarnations(), requirement="loop", progress_budget_seconds=300)
+    task, _ = tasks.required["plain"]
+    # When it ends.
+    _ = await asyncio.gather(task, return_exceptions=True)
+    # Then it stays dead: no supervisor, no restart state, readiness red.
+    assert tasks.tasks == set()
+    assert tasks.restarts == {}
+    assert tasks.exhausted == set()
+    assert len(incarnations.coroutines) == 1
+    assert not tasks.ready()
+    await tasks.stop()
+
+
+async def test_before_restart_settles_leftovers_between_the_backoff_and_the_new_incarnation() -> None:
+    # Given a hook standing in for work the dead incarnation left behind.
+    pacing = Pacing()
+    entered, leftovers_done = asyncio.Event(), asyncio.Event()
+
+    async def settle() -> None:
+        entered.set()
+        await leftovers_done.wait()
+
+    incarnations = Incarnations(RuntimeError("crash"), None)
+    tasks = supervised(pacing, incarnations, before_restart=settle)
+    # When the backoff ends.
+    _ = await pacing.next_wait()
+    pacing.release()
+    await asyncio.wait_for(entered.wait(), 2)
+    # Then no new incarnation starts while the leftovers are unsettled.
+    assert len(incarnations.coroutines) == 1
+    assert tasks.restarts == {"mail": 0}
+    leftovers_done.set()
+    await incarnations.running()
+    assert len(incarnations.coroutines) == 2
+    assert tasks.restarts == {"mail": 1}
+    await tasks.stop()
+
+
+async def test_a_failing_restart_hook_leaves_the_loop_down_and_exhausted() -> None:
+    # Given a hook that raises.
+    pacing = Pacing()
+
+    async def broken() -> None:
+        raise RuntimeError("cannot settle")
+
+    incarnations = Incarnations(RuntimeError("crash"))
+    tasks = supervised(pacing, incarnations, before_restart=broken)
+    supervisor = supervisor_of(tasks)
+    # When the backoff ends.
+    _ = await pacing.next_wait()
+    pacing.release()
+    _ = await asyncio.gather(supervisor, return_exceptions=True)
+    # Then the loop is reported down for good instead of silently staying dead.
+    assert tasks.exhausted == {"mail"}
+    assert len(incarnations.coroutines) == 1
+    assert not tasks.ready()
+    await tasks.stop()
+
+
+async def test_worker_start_supervises_only_the_mail_loops_with_the_configured_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a worker runtime whose restart settings are one budget of three and a 1.5 s ceiling, and whose
+    # auth mail loop crashes on every incarnation.
+    from app.process_roles import parse_process_roles
+    from app.services import (
+        agent_resource_pressure_worker,
+        agent_setup,
+        agent_start_reconciler,
+        agent_workspace_quota_worker,
+        audit_logger,
+        auth_email_worker,
+        broadcast_email_worker,
+        broadcast_fanout_worker,
+        cache_invalidation_worker,
+        capacity_renewal_worker,
+        chat_history_retention_worker,
+        gateway_report_relay,
+        heartbeat,
+        openclaw_delayed_replies,
+        openclaw_dispatch_reconciler,
+        openclaw_update_worker,
+        operational_log_retention_worker,
+        organization_admission_email_worker,
+        scheduler,
+        task_lease,
+        trigger_daemon,
+        workspace_mirror_worker,
+    )
+    from app.services.tavily import export
+
+    pacing = Pacing()
+    runtime = lifecycle.Runtime()
+    runtime.tasks = OwnedTasks(pacing.clock, pacing.wait)
+    runtime.readiness = lifecycle.Readiness(runtime.tasks)
+    fake_resources(monkeypatch, [])
+    settings = get_settings().model_copy(
+        update={"WORKER_LOOP_RESTART_BUDGET": 3, "WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS": 1.5}
+    )
+    monkeypatch.setattr(lifecycle, "get_settings", lambda: settings)
+    auth_crashes = Incarnations(*(RuntimeError("auth crash") for _ in range(4)))
+
+    async def noop(*_args: object) -> None:
+        return None
+
+    async def loop() -> None:
+        await asyncio.Event().wait()
+
+    for module, attribute in (
+        (agent_resource_pressure_worker, "start_agent_resource_pressure_worker"),
+        (agent_setup, "start_agent_setup_worker"),
+        (agent_start_reconciler, "agent_start_reconciler_loop"),
+        (agent_workspace_quota_worker, "start_agent_workspace_quota_worker"),
+        (broadcast_email_worker, "start_broadcast_email_worker"),
+        (broadcast_fanout_worker, "start_broadcast_fanout_worker"),
+        (cache_invalidation_worker, "start_cache_invalidation_worker"),
+        (capacity_renewal_worker, "start_capacity_renewal_worker"),
+        (chat_history_retention_worker, "start_chat_history_retention_worker"),
+        (export, "start_web_search_export_daemon"),
+        (gateway_report_relay, "start_gateway_report_relay"),
+        (heartbeat, "start_heartbeat"),
+        (openclaw_delayed_replies, "openclaw_delayed_reply_loop"),
+        (openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop"),
+        (openclaw_update_worker, "start_openclaw_update_worker"),
+        (operational_log_retention_worker, "start_operational_log_retention_worker"),
+        (organization_admission_email_worker, "start_organization_admission_email_worker"),
+        (scheduler, "start_scheduler"),
+        (task_lease, "task_lease_recovery_loop"),
+        (trigger_daemon, "start_trigger_daemon"),
+        (workspace_mirror_worker, "start_workspace_mirror_worker"),
+    ):
+        monkeypatch.setattr(module, attribute, loop)
+    monkeypatch.setattr(auth_email_worker, "start_auth_email_worker", auth_crashes)
+    monkeypatch.setattr(audit_logger, "write_audit_log", noop)
+    monkeypatch.setattr(lifecycle, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
+    monkeypatch.setattr(lifecycle, "log_bwrap_startup_status", lambda: None)
+    monkeypatch.setattr(lifecycle, "init_pool", noop)
+    monkeypatch.setattr(lifecycle, "get_redis", noop)
+    monkeypatch.setattr(runtime.incidents, "start", lambda: None)
+    monkeypatch.setattr(runtime.incidents, "stop", noop)
+    # When the runtime starts and the auth loop keeps crashing through its budget.
+    await runtime.start(parse_process_roles("worker"))
+    try:
+        assert set(runtime.tasks.restarts) == {"auth_email", "broadcast_email"}
+        supervisor = next(task for task in runtime.tasks.tasks if task.get_name() == "auth_email-supervisor")
+        delays: list[float] = []
+        for _ in range(3):
+            delays.append(await pacing.next_wait())
+            pacing.release()
+        _ = await asyncio.wait_for(supervisor, 2)
+        # Then the settings drove the budget and the ceiling, and only the auth loop is down for good.
+        assert delays == [1.0, 1.5, 1.5]
+        assert runtime.tasks.exhausted == {"auth_email"}
+        assert runtime.tasks.restarts == {"auth_email": 3, "broadcast_email": 0}
+        assert not runtime.readiness.alive()
     finally:
         await runtime.stop()

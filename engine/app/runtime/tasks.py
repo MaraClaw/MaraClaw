@@ -93,6 +93,9 @@ class RequiredLoopExitedError(RuntimeError):
     """A required ongoing task returned before runtime shutdown."""
 
 
+RESTART_BASE_SECONDS = 1.0
+
+
 def capped_backoff(failures: int, *, base_seconds: float, cap_seconds: float) -> float:
     """Delay after ``failures`` consecutive failures: ``base`` doubling up to ``cap``."""
     return min(cap_seconds, base_seconds * (1 << min(failures, 32)))
@@ -160,9 +163,19 @@ class LoopProgress:
         self._clock: Callable[[], float] = clock
         self._last_beat: float = clock()
         self._exempt: int = 0
+        self._awaiting_beat: bool = False
 
     def beat(self) -> None:
         self._last_beat = self._clock()
+        self._awaiting_beat = False
+
+    def restarted(self) -> None:
+        """A new incarnation began: the start counts as a beat, but only a real ``beat`` makes the loop ready."""
+        self._last_beat = self._clock()
+        self._awaiting_beat = True
+
+    def awaiting_beat(self) -> bool:
+        return self._awaiting_beat
 
     @contextmanager
     def exempt(self, *, restart_on_error: bool = True) -> Generator[None]:
@@ -172,10 +185,10 @@ class LoopProgress:
             yield
         except BaseException:
             if restart_on_error:
-                self.beat()
+                self._last_beat = self._clock()
             raise
         else:
-            self.beat()
+            self._last_beat = self._clock()
         finally:
             self._exempt -= 1
 
@@ -191,13 +204,34 @@ def loop_progress() -> LoopProgress:
     return _loop_progress.get() or LoopProgress(math.inf, monotonic)
 
 
+@dataclass(frozen=True, slots=True)
+class RestartPolicy:
+    """How a supervised required loop is restarted.
+
+    ``budget`` is the number of restarts the loop may use over the life of the process; the next exit is final.
+    Delays double from ``RESTART_BASE_SECONDS`` up to ``max_backoff_seconds``. ``before_restart`` runs after the
+    delay and before the new incarnation starts, so work the dead one left behind can be settled first.
+    """
+
+    budget: int
+    max_backoff_seconds: float
+    before_restart: Callable[[], Awaitable[None]] | None = None
+
+
 class OwnedTasks:
-    def __init__(self, clock: Callable[[], float] = monotonic) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], float] = monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self.tasks: set[asyncio.Task[object]] = set()
         self.required: dict[str, tuple[asyncio.Task[object], bool]] = {}
         self.progress: dict[str, LoopProgress] = {}
+        self.restarts: dict[str, int] = {}
+        self.exhausted: set[str] = set()
         self.closing: bool = False
         self._clock: Callable[[], float] = clock
+        self._sleep: Callable[[float], Awaitable[None]] = sleep
 
     def start(
         self,
@@ -208,12 +242,44 @@ class OwnedTasks:
         progress_budget_seconds: float | None = None,
     ) -> None:
         """Own ``coroutine``; a required loop with a budget must call ``loop_progress().beat()`` once per pass."""
-        if progress_budget_seconds is None:
-            task = asyncio.create_task(coroutine, name=name)
-        else:
+        progress = None
+        if progress_budget_seconds is not None:
             if requirement != "loop":
                 raise ValueError("a progress budget applies only to required loops")
             progress = self.progress[name] = LoopProgress(progress_budget_seconds, self._clock)
+        _ = self._launch(name, coroutine, requirement, progress)
+
+    def start_supervised(
+        self,
+        name: str,
+        factory: Callable[[], Coroutine[object, object, object]],
+        *,
+        progress_budget_seconds: float,
+        policy: RestartPolicy,
+    ) -> None:
+        """Own a required budgeted loop and restart it from a supervisor task when it exits before shutdown.
+
+        Every incarnation is a fresh coroutine from ``factory``, started only after the previous task finished.
+        A restarted loop is unready until its first real beat; stale progress alone never restarts it.
+        """
+        progress = self.progress[name] = LoopProgress(progress_budget_seconds, self._clock)
+        self.restarts[name] = 0
+        _ = self._launch(name, factory(), "loop", progress)
+        supervisor = asyncio.create_task(self._supervise(name, factory, progress, policy), name=f"{name}-supervisor")
+        self.tasks.add(supervisor)
+        supervisor.add_done_callback(self.tasks.discard)
+        supervisor.add_done_callback(self._report)
+
+    def _launch(
+        self,
+        name: str,
+        coroutine: Coroutine[object, object, object],
+        requirement: Literal["optional", "setup", "loop"],
+        progress: LoopProgress | None,
+    ) -> asyncio.Task[object]:
+        if progress is None:
+            task = asyncio.create_task(coroutine, name=name)
+        else:
             context = copy_context()
             _ = context.run(_loop_progress.set, progress)
             task = asyncio.create_task(coroutine, name=name, context=context)
@@ -222,13 +288,59 @@ class OwnedTasks:
             self.required[name] = (task, requirement == "setup")
         task.add_done_callback(self.tasks.discard)
         task.add_done_callback(self._report)
+        return task
+
+    async def _supervise(
+        self,
+        name: str,
+        factory: Callable[[], Coroutine[object, object, object]],
+        progress: LoopProgress,
+        policy: RestartPolicy,
+    ) -> None:
+        try:
+            while True:
+                incarnation = self.required[name][0]
+                _ = await asyncio.wait((incarnation,))
+                if self.closing:
+                    return
+                error = _exit_error(incarnation)
+                used = self.restarts[name]
+                if used >= policy.budget:
+                    self.exhausted.add(name)
+                    logger.error(
+                        "[runtime] Required loop {} exhausted its {} restarts and stays down: {!r}",
+                        name,
+                        policy.budget,
+                        error,
+                    )
+                    return
+                delay = capped_backoff(used, base_seconds=RESTART_BASE_SECONDS, cap_seconds=policy.max_backoff_seconds)
+                logger.warning(
+                    "[runtime] Restarting required loop {} in {:g}s (restart {} of {}): {!r}",
+                    name,
+                    delay,
+                    used + 1,
+                    policy.budget,
+                    error,
+                )
+                await self._sleep(delay)
+                if policy.before_restart is not None:
+                    await policy.before_restart()
+                self.restarts[name] = used + 1
+                progress.restarted()
+                _ = self._launch(name, factory(), "loop", progress)
+        except Exception:
+            self.exhausted.add(name)
+            raise
 
     def ready(self) -> bool:
         for name, (task, finite) in self.required.items():
             if finite:
                 if not task.done() or task.cancelled() or task.exception() is not None:
                     return False
-            elif task.done() or ((progress := self.progress.get(name)) is not None and progress.stale()):
+            elif task.done() or (
+                (progress := self.progress.get(name)) is not None and (progress.stale() or progress.awaiting_beat())
+            ):
                 return False
         return True
 
@@ -247,6 +359,12 @@ class OwnedTasks:
         self.closing = True
         await cancel_tasks(self.tasks)
         self.tasks.clear()
+
+
+def _exit_error(task: asyncio.Task[object]) -> BaseException:
+    if task.cancelled():
+        return asyncio.CancelledError()
+    return task.exception() or RequiredLoopExitedError()
 
 
 class EventTasks:

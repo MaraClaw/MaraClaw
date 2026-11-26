@@ -297,3 +297,21 @@ def test_context_rejects_unsafe_policy_additions(pattern: str) -> None:
     # When / Then
     with pytest.raises(AssertionError):
         _assert_context_policy(f"{source}\n{pattern}\n")
+
+
+def _healthcheck(source: str) -> str:
+    instruction = source.partition("\nHEALTHCHECK ")[2].partition("\n\n")[0]
+    return " ".join(line.strip().removesuffix("\\").strip() for line in instruction.splitlines())
+
+
+def test_healthcheck_targets_liveness_with_a_start_period_covering_startup() -> None:
+    # Given the production healthcheck instruction.
+    healthcheck = _healthcheck(DOCKERFILE.read_text(encoding="utf-8"))
+    options = {name: int(value) for name, value in re.findall(r"--([a-z-]+)=(\d+)s?", healthcheck)}
+    # Then it probes the liveness route, never the dependency-bound routes.
+    assert "curl -f http://localhost:8000/api/live" in healthcheck
+    assert "/api/ready" not in healthcheck
+    assert "/api/health" not in healthcheck
+    # And failures during connector setup are not counted: the start period outlasts the retries window.
+    assert options["start-period"] >= 60
+    assert options["timeout"] < options["interval"]

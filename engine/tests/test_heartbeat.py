@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -178,7 +178,6 @@ async def test_daily_quota_charges_each_heartbeat_request_and_skips_when_capped(
 class _TickHarness:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.dao.agent_dao import agent_dao
-        from app.dao.tenant_dao import tenant_dao
 
         self.agent_id: uuid.UUID = uuid.uuid4()
         self.agent: SimpleNamespace = SimpleNamespace(
@@ -214,13 +213,20 @@ class _TickHarness:
         self.reconcile_cancelled: asyncio.Event = asyncio.Event()
         self.finish_reconcile_cleanup: asyncio.Event = asyncio.Event()
 
-        async def candidates() -> list[SimpleNamespace]:
+        async def candidates(now: datetime, limit: int) -> list[SimpleNamespace]:
             if self.fail == "candidates":
                 raise OSError("candidate read failed")
             if self.block_candidates:
                 self.in_candidates.set()
                 await self.finish_candidates.wait()
-            return self.agents
+            # The interval check the SQL selection makes.
+            due = [
+                agent
+                for agent in self.agents
+                if agent.last_heartbeat_at is None
+                or now - agent.last_heartbeat_at >= timedelta(minutes=agent.heartbeat_interval_minutes)
+            ]
+            return due[:limit]
 
         async def claim(_agent_id: uuid.UUID, **_kwargs: object) -> bool:
             self.claims += 1
@@ -269,17 +275,11 @@ class _TickHarness:
                 case _:
                     return
 
-        async def no_tenants(_ids: object) -> list[object]:
-            return []
-
         monkeypatch.setattr(agent_dao, "list_heartbeat_candidates", candidates)
         monkeypatch.setattr(agent_dao, "claim_heartbeat", claim)
         monkeypatch.setattr(agent_dao, "get", get_agent)
-        monkeypatch.setattr(tenant_dao, "get_by_ids", no_tenants)
         monkeypatch.setattr("app.services.agent_stops.reconcile_stopped_containers", reconcile)
         monkeypatch.setattr("app.services.audit_logger.write_audit_log", audit)
-        monkeypatch.setattr("app.services.timezone_utils.get_agent_timezone_sync", lambda *_args: "UTC")
-        monkeypatch.setattr(heartbeat, "_is_in_active_hours", lambda *_args: True)
 
 
 @pytest.fixture
@@ -327,6 +327,37 @@ async def test_tick_claims_only_as_many_due_agents_as_free_slots(tick: _TickHarn
     finally:
         for _ in range(held):
             slots.release()
+
+
+async def test_tick_selects_at_most_the_free_slots_and_claims_every_selected_agent_together(
+    tick: _TickHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.dao.agent_dao import agent_dao
+
+    # Given more due agents than one worker runs at once
+    asked: list[int] = []
+    original = agent_dao.list_heartbeat_candidates
+
+    async def bounded(now: datetime, limit: int) -> Sequence[AgentRecord]:
+        asked.append(limit)
+        return await original(now, limit)
+
+    monkeypatch.setattr(agent_dao, "list_heartbeat_candidates", bounded)
+    tick.agents.extend(SimpleNamespace(**(vars(tick.agent) | {"id": uuid.uuid4()})) for _ in range(14))
+    tick.block_claim = True
+    # When a tick runs and every claim waits for the database
+    ticking = asyncio.create_task(heartbeat._heartbeat_tick())
+    await tick.in_claim.wait()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    # Then the selection was bounded by the worker's heartbeat slots and all selected claims were in flight together
+    assert asked == [heartbeat.HEARTBEAT_CONCURRENCY]
+    assert tick.claims == heartbeat.HEARTBEAT_CONCURRENCY
+    tick.finish_claim.set()
+    assert await ticking
+    assert len(heartbeat._HEARTBEAT_TASKS) == heartbeat.HEARTBEAT_CONCURRENCY
+    tick.run_until.set()
+    _ = await asyncio.gather(*heartbeat._HEARTBEAT_TASKS)
 
 
 async def test_tick_defers_a_due_agent_until_its_in_flight_heartbeat_finishes(tick: _TickHarness) -> None:

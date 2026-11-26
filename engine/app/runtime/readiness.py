@@ -30,6 +30,10 @@ class Readiness:
             and (not role_enabled(self.roles, "api") or realtime_router.ready)
         )
 
+    def alive(self) -> bool:
+        """Liveness: no required loop has used up its restart budget. Never touches the pool or Redis."""
+        return not self.tasks.exhausted
+
     async def check(self) -> bool:
         if not self.eligible():
             return False
@@ -51,12 +55,29 @@ class ReadyResponse(BaseModel):
     status: str
 
 
+class LiveResponse(BaseModel):
+    status: str
+
+
 router = APIRouter()
+
+
+def _readiness(request: Request) -> Readiness | None:
+    application = dict[str, object](request.scope).get("app")
+    state: object = getattr(application.state, "readiness", None) if isinstance(application, FastAPI) else None
+    return state if isinstance(state, Readiness) else None
 
 
 @router.get("/api/ready", response_model=ReadyResponse)
 async def ready(request: Request) -> JSONResponse:
-    application = dict[str, object](request.scope).get("app")
-    state: object = getattr(application.state, "readiness", None) if isinstance(application, FastAPI) else None
-    available = isinstance(state, Readiness) and await state.check()
+    state = _readiness(request)
+    available = state is not None and await state.check()
     return JSONResponse({"status": "ready" if available else "not_ready"}, status_code=200 if available else 503)
+
+
+@router.get("/api/live", response_model=LiveResponse)
+async def live(request: Request) -> JSONResponse:
+    """Container liveness: 503 only once a required loop has used up its restarts; the answer itself proves the process runs."""
+    state = _readiness(request)
+    alive = state is None or state.alive()
+    return JSONResponse({"status": "alive" if alive else "failed"}, status_code=200 if alive else 503)

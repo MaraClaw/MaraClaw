@@ -10,9 +10,9 @@ from fastapi import FastAPI
 from app.core import events
 from app.process_roles import parse_process_roles
 from app.runtime import lifecycle, readiness
-from app.runtime.tasks import OwnedTasks, loop_progress
+from app.runtime.tasks import OwnedTasks, RestartPolicy, loop_progress
 from producer_admission_fixtures import producer_admission
-from worker_progress_fixtures import Pacing, WorkerHTTP, worker_http
+from worker_progress_fixtures import Incarnations, Pacing, WorkerHTTP, worker_http
 
 __all__ = ["producer_admission", "worker_http"]
 
@@ -396,3 +396,102 @@ async def test_http_observes_each_scanner_stall_while_its_siblings_keep_progress
     await worker_http.ready(expected=False)
     await worker_http.runtime.tasks.stop()
     assert all(task.cancelled() for task, _ in worker_http.runtime.tasks.required.values())
+
+
+def start_mail(tasks: OwnedTasks, incarnations: Incarnations, *, budget: int = 5) -> asyncio.Task[object]:
+    tasks.start_supervised("mail", incarnations, progress_budget_seconds=300, policy=RestartPolicy(budget, 30.0))
+    return next(task for task in tasks.tasks if task.get_name() == "mail-supervisor")
+
+
+async def test_restarted_loop_is_unready_until_its_first_real_beat_each_time() -> None:
+    # Given a loop that beats, is cancelled, and is restarted twice.
+    pacing = Pacing()
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    incarnations = Incarnations(RuntimeError("crash"), None, None)
+    _ = start_mail(tasks, incarnations)
+    progress = tasks.progress["mail"]
+    # When the first restart is running: alive, within budget, but it has not produced progress yet.
+    _ = await pacing.next_wait()
+    pacing.release()
+    await incarnations.running()
+    assert not tasks.required["mail"][0].done()
+    assert not progress.stale()
+    assert not tasks.ready()
+    # Then time spent in an exempt section is not a beat, and only a real one makes it ready.
+    with progress.exempt():
+        pass
+    assert not tasks.ready()
+    progress.beat()
+    assert tasks.ready()
+    # And the next crash puts the loop through the same gate again instead of flapping green.
+    incarnations.tasks[-1].cancel()
+    assert await pacing.next_wait() == 2.0
+    assert not tasks.ready()
+    pacing.release()
+    await incarnations.running()
+    assert not tasks.ready()
+    progress.beat()
+    assert tasks.ready()
+    await tasks.stop()
+
+
+async def test_stale_progress_is_reported_and_never_restarts_the_loop() -> None:
+    # Given a supervised loop that never beats.
+    pacing = Pacing()
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    incarnations = Incarnations(None)
+    _ = start_mail(tasks, incarnations)
+    await incarnations.running()
+    # When the progress budget passes.
+    pacing.now += 301
+    # Then it is unready but still the same running task: no restart, no backoff, no exhaustion.
+    assert tasks.progress["mail"].stale()
+    assert not tasks.ready()
+    assert not tasks.required["mail"][0].done()
+    assert len(incarnations.coroutines) == 1
+    assert tasks.restarts == {"mail": 0}
+    assert tasks.exhausted == set()
+    assert pacing.entered.empty()
+    await tasks.stop()
+
+
+async def test_liveness_fails_only_when_a_loop_exhausted_its_restarts(
+    worker_http: WorkerHTTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.db import pool
+
+    # Given dependencies that would fail, and a loop that crashes through a budget of one restart.
+    async def failing() -> bool:
+        raise AssertionError("liveness must not probe a dependency")
+
+    monkeypatch.setattr(readiness, "ping_pool", failing)
+    monkeypatch.setattr(readiness, "ping_redis", failing)
+    monkeypatch.setattr(pool, "ping_pool", failing)
+    await worker_http.live(expected=True)
+    supervisor = start_mail(worker_http.runtime.tasks, Incarnations(RuntimeError("one"), RuntimeError("two")), budget=1)
+    # When the loop is down and waiting for its restart: not ready, still alive.
+    await worker_http.pacing.paused()
+    assert (await worker_http.client.get("/api/ready")).status_code == 503
+    await worker_http.live(expected=True)
+    # Then the restart is spent on a second crash and the process is reported failed for good.
+    worker_http.pacing.release()
+    _ = await asyncio.wait_for(supervisor, 2)
+    await worker_http.live(expected=False)
+    assert (await worker_http.client.get("/api/ready")).status_code == 503
+
+
+async def test_liveness_answers_without_dependency_probes_or_runtime_state(probes: Probes) -> None:
+    # Given an eligible worker whose pool and Redis probes are down.
+    state = readiness.Readiness(OwnedTasks())
+    state.roles, state.initialized = frozenset({"worker"}), True
+    probes.database = probes.redis = False
+    application = FastAPI()
+    application.include_router(readiness.router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+        # When asked before the lifespan published any runtime state, and once it did.
+        assert (await client.get("/api/live")).status_code == 200
+        application.state.readiness = state
+        response = await client.get("/api/live")
+    # Then liveness is independent of the probes.
+    assert (response.status_code, response.json()) == (200, {"status": "alive"})
+    assert probes.calls == 0

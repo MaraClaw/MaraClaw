@@ -20,6 +20,7 @@ from app.services.agent_manager import _guest_config_fingerprints, agent_manager
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from app.services.company_transfer_connectors import stop_free_transfer_connectors
 from app.services.company_transfer_credentials import scrub_credentials
+from app.services.docker_capacity import DockerBusyError, background_docker
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_no_active_run
 
 PROGRESS_BUDGET_SECONDS: Final = 300.0
@@ -87,9 +88,12 @@ async def reconcile_transfer_cleanup() -> bool:
         return False
     for item in pending:
         try:
-            error = await complete_cleanup(item)
+            with background_docker():
+                error = await complete_cleanup(item)
         except WorkspaceLockTimeoutError:
             error = "workspace_busy"
+        except DockerBusyError:
+            error = "docker_busy"
         except (
             DbError,
             RuntimeError,

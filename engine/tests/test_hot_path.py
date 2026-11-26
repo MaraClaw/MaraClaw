@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from tests.test_redis_cache import FakeRedis
 
 from app.core import redis_cache
 from app.dao.agent_dao import agent_dao
@@ -110,37 +112,11 @@ def raw(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeRawConnection]:
     session_module._conn_ctx.reset(token)
 
 
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.store: dict[str, str] = {}
-        self.fail = False
-
-    async def get(self, key: str) -> str | None:
-        if self.fail:
-            raise RuntimeError("redis down")
-        return self.store.get(key)
-
-    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
-        if self.fail:
-            raise RuntimeError("redis down")
-        del ex
-        if nx and key in self.store:
-            return False
-        self.store[key] = value
-        return True
-
-    async def delete(self, *keys: str) -> None:
-        if self.fail:
-            raise RuntimeError("redis down")
-        for key in keys:
-            self.store.pop(key, None)
-
-    async def incr(self, key: str) -> int:
-        if self.fail:
-            raise RuntimeError("redis down")
-        nxt = int(self.store.get(key) or 0) + 1
-        self.store[key] = str(nxt)
-        return nxt
+@pytest.fixture(autouse=True)
+def _closed_cache_circuit() -> Iterator[None]:
+    redis_cache.reset_circuit()
+    yield
+    redis_cache.reset_circuit()
 
 
 @pytest.mark.asyncio
@@ -328,10 +304,10 @@ async def test_get_agent_config_reloads_token_counters(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_build_agent_context_second_call_skips_storage_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
+    redis = FakeRedis()
     reads = {"n": 0}
 
-    async def fake_redis() -> _FakeRedis:
+    async def fake_redis() -> FakeRedis:
         return redis
 
     async def fake_read(key: str, max_chars: int = 3000) -> str:
@@ -353,7 +329,7 @@ async def test_build_agent_context_second_call_skips_storage_reads(monkeypatch: 
     async def fake_tz(_agent_id: object) -> str:
         return "UTC"
 
-    monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(agent_context_cache, "get_cache_redis", fake_redis)
     monkeypatch.setattr(redis_cache, "_client", fake_redis)
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
     monkeypatch.setattr(agent_context, "_read_file_safe", fake_read)
@@ -372,10 +348,10 @@ async def test_build_agent_context_second_call_skips_storage_reads(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_build_agent_context_redis_failure_falls_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
+    redis = FakeRedis()
     redis.fail = True
 
-    async def fake_redis() -> _FakeRedis:
+    async def fake_redis() -> FakeRedis:
         return redis
 
     async def fake_read(key: str, max_chars: int = 3000) -> str:
@@ -391,7 +367,7 @@ async def test_build_agent_context_redis_failure_falls_open(monkeypatch: pytest.
     async def fake_tz(_agent_id: object) -> str:
         return "UTC"
 
-    monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(agent_context_cache, "get_cache_redis", fake_redis)
     monkeypatch.setattr(redis_cache, "_client", fake_redis)
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
     monkeypatch.setattr(agent_context, "_read_file_safe", fake_read)
@@ -401,14 +377,16 @@ async def test_build_agent_context_redis_failure_falls_open(monkeypatch: pytest.
 
     static, _dynamic = await agent_context.build_agent_context(uuid4(), "Name", "role")
     assert "You are Name" in static
+    assert "soul body" in static
+    assert redis.round_trips == 1
 
 
 @pytest.mark.asyncio
 async def test_context_cache_invalidates_on_soul_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
+    redis = FakeRedis()
     reads = {"n": 0}
 
-    async def fake_redis() -> _FakeRedis:
+    async def fake_redis() -> FakeRedis:
         return redis
 
     async def fake_read(key: str, max_chars: int = 3000) -> str:
@@ -425,7 +403,7 @@ async def test_context_cache_invalidates_on_soul_path(monkeypatch: pytest.Monkey
     async def fake_tz(_agent_id: object) -> str:
         return "UTC"
 
-    monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(agent_context_cache, "get_cache_redis", fake_redis)
     monkeypatch.setattr(redis_cache, "_client", fake_redis)
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
     monkeypatch.setattr(agent_context, "_read_file_safe", fake_read)
@@ -443,12 +421,12 @@ async def test_context_cache_invalidates_on_soul_path(monkeypatch: pytest.Monkey
 
 @pytest.mark.asyncio
 async def test_context_cache_rejects_stale_fill(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
+    redis = FakeRedis()
 
-    async def fake_redis() -> _FakeRedis:
+    async def fake_redis() -> FakeRedis:
         return redis
 
-    monkeypatch.setattr(agent_context_cache, "get_redis", fake_redis)
+    monkeypatch.setattr(agent_context_cache, "get_cache_redis", fake_redis)
     monkeypatch.setattr(redis_cache, "_client", fake_redis)
     monkeypatch.setattr(agent_context_cache, "_ttl", lambda: 60)
 
@@ -501,7 +479,7 @@ async def test_apply_token_counter_resets_many_batches(raw: _FakeRawConnection) 
 
 @pytest.mark.asyncio
 async def test_list_heartbeat_candidates_selects_claim_columns(raw: _FakeRawConnection) -> None:
-    await agent_dao.list_heartbeat_candidates()
+    await agent_dao.list_heartbeat_candidates(datetime(2026, 1, 1, tzinfo=UTC), 10)
     query, _params = raw.executed[0]
     assert "FROM agents" in query
     assert "heartbeat_enabled" in query

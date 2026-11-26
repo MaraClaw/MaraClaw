@@ -7,9 +7,19 @@ from functools import partial
 
 import anyio
 import anyio.lowlevel
+import pytest
 
-from app.services import docker_capacity as lane
-from app.services.docker_capacity import DockerCapacity, docker_capacity, run_docker, shutdown_docker_capacity
+from app.config import get_settings
+from app.services.docker_capacity import (
+    DockerBusyError,
+    DockerCapacity,
+    DockerPriority,
+    background_docker,
+    docker_capacity,
+    docker_priority,
+    run_docker,
+    shutdown_docker_capacity,
+)
 
 caller: ContextVar[str | None] = ContextVar("lane_test_caller", default=None)
 
@@ -41,6 +51,10 @@ class Gate:
         return released
 
 
+async def run_recording(capacity: DockerCapacity, order: list[str], name: str, priority: DockerPriority) -> None:
+    await capacity.run(order.append, name, priority=priority)
+
+
 def one_slot() -> DockerCapacity:
     capacity = DockerCapacity()
     capacity.limit = 1
@@ -49,12 +63,13 @@ def one_slot() -> DockerCapacity:
 
 async def test_plain_to_thread_work_proceeds_while_every_lane_slot_is_blocked():
     # Given every slot of this loop's Docker lane is held by a call blocked on a threading.Event.
-    gate = Gate(lane.DOCKER_LANE_THREADS)
+    threads = get_settings().DOCKER_LANE_THREADS
+    gate = Gate(threads)
     queued = threading.Event()
     try:
         with anyio.fail_after(5):
             async with anyio.create_task_group() as group:
-                for _ in range(lane.DOCKER_LANE_THREADS):
+                for _ in range(threads):
                     group.start_soon(run_docker, gate.block)
                 await gate.entered.wait()
                 group.start_soon(run_docker, queued.set)
@@ -68,7 +83,7 @@ async def test_plain_to_thread_work_proceeds_while_every_lane_slot_is_blocked():
         gate.release.set()
         shutdown_docker_capacity()
     assert queued.is_set()
-    assert gate.outcomes == [True] * lane.DOCKER_LANE_THREADS
+    assert gate.outcomes == [True] * threads
 
 
 async def test_abandoned_call_returns_while_blocked_and_keeps_its_slot_until_its_thread_returns():
@@ -194,3 +209,125 @@ async def test_shutdown_returns_while_a_lane_call_is_blocked():
                 group.cancel_scope.cancel()
     finally:
         gate.release.set()
+
+
+async def test_lane_size_and_queue_bound_come_from_settings(monkeypatch: pytest.MonkeyPatch):
+    # Given the configured lane threads and queue bound.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "DOCKER_LANE_THREADS", 3)
+    monkeypatch.setattr(settings, "DOCKER_LANE_QUEUE_LIMIT", 7)
+    # When a loop's lane is built.
+    capacity = docker_capacity()
+    # Then it takes both numbers from them.
+    assert (capacity.limit, capacity.queue_limit) == (3, 7)
+    shutdown_docker_capacity()
+
+
+async def test_interactive_calls_are_admitted_ahead_of_queued_background_calls():
+    # Given a one-slot lane held by a blocked call, with a background call queued first and an interactive one second.
+    capacity = one_slot()
+    gate = Gate()
+    order: list[str] = []
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(capacity.run, gate.block)
+                await gate.entered.wait()
+                group.start_soon(run_recording, capacity, order, "background", DockerPriority.BACKGROUND)
+                await anyio.lowlevel.checkpoint()
+                group.start_soon(run_recording, capacity, order, "interactive", DockerPriority.INTERACTIVE)
+                await anyio.lowlevel.checkpoint()
+                # When the slot is freed.
+                gate.release.set()
+    finally:
+        gate.release.set()
+        capacity.shutdown()
+    # Then the interactive call ran first although it queued later.
+    assert order == ["interactive", "background"]
+
+
+async def test_background_docker_context_sets_the_priority_of_nested_calls():
+    # Given a one-slot lane held by a blocked call.
+    capacity = one_slot()
+    gate = Gate()
+    order: list[str] = []
+    seen: list[DockerPriority] = []
+
+    def record(name: str) -> None:
+        order.append(name)
+        seen.append(docker_priority.get())
+
+    async def call(name: str) -> None:
+        await capacity.run(record, name)
+
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(capacity.run, gate.block)
+                await gate.entered.wait()
+                # When a call made inside background_docker() queues before an ordinary one.
+                with background_docker():
+                    group.start_soon(call, "background")
+                await anyio.lowlevel.checkpoint()
+                group.start_soon(call, "interactive")
+                await anyio.lowlevel.checkpoint()
+                gate.release.set()
+    finally:
+        gate.release.set()
+        capacity.shutdown()
+    # Then it queued behind it, and its thread saw the background priority.
+    assert order == ["interactive", "background"]
+    assert seen == [DockerPriority.INTERACTIVE, DockerPriority.BACKGROUND]
+    assert docker_priority.get() is DockerPriority.INTERACTIVE
+
+
+async def test_full_queue_refuses_the_next_call_of_its_priority_only():
+    # Given a one-slot lane that may queue one call per priority, with its slot and its background place taken.
+    capacity = DockerCapacity(limit=1, queue_limit=1)
+    gate = Gate()
+    refused, queued = threading.Event(), threading.Event()
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(capacity.run, gate.block)
+                await gate.entered.wait()
+                group.start_soon(partial(capacity.run, queued.set, priority=DockerPriority.BACKGROUND))
+                await anyio.lowlevel.checkpoint()
+                # When another background call arrives.
+                with pytest.raises(DockerBusyError):
+                    await capacity.run(refused.set, priority=DockerPriority.BACKGROUND)
+                # Then it is refused at once, while an interactive call still queues.
+                group.start_soon(capacity.run, refused.set)
+                await anyio.lowlevel.checkpoint()
+                assert not refused.is_set()
+                gate.release.set()
+    finally:
+        gate.release.set()
+        capacity.shutdown()
+    assert queued.is_set()
+    assert refused.is_set()
+
+
+async def test_cancelled_queued_call_gives_its_queue_place_back():
+    # Given a one-slot lane with one queue place, held by a blocked call and one waiting call.
+    capacity = DockerCapacity(limit=1, queue_limit=1)
+    gate = Gate()
+    later = threading.Event()
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(capacity.run, gate.block)
+                await gate.entered.wait()
+                async with anyio.create_task_group() as waiting:
+                    waiting.start_soon(capacity.run, threading.Event().set)
+                    await anyio.lowlevel.checkpoint()
+                    # When the waiting call is cancelled.
+                    waiting.cancel_scope.cancel()
+                # Then the next call is queued instead of refused.
+                group.start_soon(capacity.run, later.set)
+                await anyio.lowlevel.checkpoint()
+                gate.release.set()
+    finally:
+        gate.release.set()
+        capacity.shutdown()
+    assert later.is_set()
