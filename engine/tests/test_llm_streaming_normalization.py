@@ -1,4 +1,6 @@
+import asyncio
 from collections.abc import Callable, Iterable
+from functools import partial
 from types import TracebackType
 
 import httpx
@@ -13,11 +15,15 @@ from tests.llm_retry_fakes import (
     ScriptedHttpClient,
     ScriptedResponse,
     call_provider,
+    health_model,
+    install_provider_health,
     install_retry_policy,
+    trip,
 )
 
 from app.services.llm.base import LLMError
 from app.services.llm.failover import FailoverErrorType, classify_error
+from app.services.llm.provider_health import ProviderUnavailableError, guarded, is_unavailable
 from app.services.llm.providers import (
     AnthropicClient,
     GeminiClient,
@@ -498,3 +504,73 @@ async def test_stream_thinking_or_tool_delta_delivery_also_blocks_the_retry(
     assert len(seen) == 1
     assert len(http.requests) == 1
     assert sleeps == []
+
+
+@pytest.mark.parametrize("case", STREAMING_CASE_PARAMS)
+async def test_a_stream_dropped_after_a_delivered_chunk_counts_as_a_provider_failure(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, sleeps: list[float]
+) -> None:
+    # Given a stream that delivers a chunk and drops, and a circuit that opens on the first failure.
+    _tracker, _clock = install_provider_health(monkeypatch, threshold=1)
+    model = health_model()
+    http = ScriptedHttpClient(case.partial(httpx.ReadError("dropped")))
+
+    async def on_chunk(_text: str) -> None:
+        return None
+
+    # When it is streamed under the model's circuit.
+    with pytest.raises(LLMError, match=r"^Connection failed: dropped$"):
+        _ = await guarded(model, partial(call_provider, monkeypatch, case, "stream", http, on_chunk=on_chunk))
+    # Then the failure was reported even though the stream could not be retried.
+    assert is_unavailable(model)
+
+
+@pytest.mark.parametrize("case", CASE_PARAMS)
+async def test_a_stream_that_recovers_inside_its_retry_budget_is_one_success(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, sleeps: list[float]
+) -> None:
+    # Given a circuit one failure short of opening and a stream whose first request fails but is retried.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    model = health_model()
+    trip(tracker, model, failures=1)
+    http = ScriptedHttpClient(ScriptedResponse(503, body="upstream busy"), case.ok())
+    # When it is streamed.
+    response = await guarded(model, partial(call_provider, monkeypatch, case, "stream", http))
+    # Then the retry hid the transient failure from the circuit, and the streak was reset.
+    assert response.content == "Hello"
+    trip(tracker, model, failures=1)
+    assert not is_unavailable(model)
+
+
+@pytest.mark.parametrize("case", STREAMING_CASE_PARAMS)
+async def test_a_probe_stays_in_flight_for_the_whole_stream_and_a_cancelled_stream_frees_it(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, sleeps: list[float]
+) -> None:
+    # Given an open circuit past its cooldown and a probe stream parked inside its first chunk callback.
+    tracker, clock = install_provider_health(monkeypatch, threshold=1)
+    model = health_model()
+    trip(tracker, model, failures=1)
+    clock.advance(30)
+    arrived, release = asyncio.Event(), asyncio.Event()
+
+    async def on_chunk(_text: str) -> None:
+        arrived.set()
+        await release.wait()
+
+    http = ScriptedHttpClient(case.ok(), case.ok())
+    probe = asyncio.create_task(
+        guarded(model, partial(call_provider, monkeypatch, case, "stream", http, on_chunk=on_chunk))
+    )
+    await asyncio.wait_for(arrived.wait(), timeout=1)
+    # When another call arrives mid-stream, the probe is still in flight, so it is refused without a request.
+    with pytest.raises(ProviderUnavailableError):
+        _ = await guarded(model, partial(call_provider, monkeypatch, case, "stream", http))
+    assert len(http.requests) == 1
+    assert is_unavailable(model)
+    # Then cancelling the stream proves nothing: the next caller probes, and its complete stream closes the circuit.
+    _ = probe.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        _ = await probe
+    response = await guarded(model, partial(call_provider, monkeypatch, case, "stream", http))
+    assert response.content == "Hello"
+    assert not is_unavailable(model)

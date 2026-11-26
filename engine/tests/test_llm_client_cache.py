@@ -6,14 +6,17 @@ from dataclasses import dataclass, replace
 from uuid import UUID
 
 import pytest
+from tests.llm_retry_fakes import install_provider_health, trip
 
 from app.config import get_settings
 from app.core.security import encrypt_data
 from app.core.stored_credentials import seal_credential
 from app.dao.credential_contexts import model_key_context
+from app.records.llm import LLMModelRecord
 from app.services.llm import create_llm_client, create_llm_client_from_model
 from app.services.llm.client_cache import reset_llm_client_cache
 from app.services.llm.http_pool import acquire_httpx
+from app.services.llm.provider_health import is_unavailable
 from app.services.llm.providers.openai_compatible import OpenAICompatibleClient
 from app.services.llm.providers.openai_responses import OpenAIResponsesClient
 
@@ -112,3 +115,48 @@ def test_cache_expires_and_wipes_api_key(monkeypatch):
     second = create_llm_client("openai", "sk-live", "gpt-6.2-sol", timeout=8)
     assert second is not first
     assert first.api_key == ""
+
+
+def _model_row(row_id: UUID) -> LLMModelRecord:
+    return LLMModelRecord(
+        id=row_id,
+        provider="openai",
+        model="gpt-6.2-sol",
+        base_url="https://api.openai.com/v1",
+        api_key_encrypted=seal_credential("key", model_key_context(None, row_id)),
+        label="row",
+        request_timeout=45,
+    )
+
+
+def test_a_rebuilt_wrapper_keeps_its_rows_circuit_and_a_neighbour_row_is_unaffected(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Given two rows with the same provider, model and key, and the first one's circuit open.
+    tracker, clock = install_provider_health(monkeypatch)
+    sick = _model_row(UUID("22222222-2222-2222-2222-222222222222"))
+    neighbour = _model_row(UUID("33333333-3333-3333-3333-333333333333"))
+    first = create_llm_client_from_model(sick)
+    trip(tracker, sick)
+    # When the cache drops and rebuilds the wrapper.
+    reset_llm_client_cache()
+    rebuilt = create_llm_client_from_model(sick)
+    # Then the circuit belongs to the row, not the wrapper: it is still open and the neighbour is not.
+    assert rebuilt is not first
+    assert is_unavailable(sick)
+    assert not is_unavailable(neighbour)
+    clock.advance(30)
+    assert not is_unavailable(sick)
+
+
+def test_an_expired_wrapper_does_not_reset_the_circuit(monkeypatch: pytest.MonkeyPatch):
+    from app.services.llm import client_cache
+
+    tracker, _clock = install_provider_health(monkeypatch)
+    row = _model_row(UUID("44444444-4444-4444-4444-444444444444"))
+    monkeypatch.setattr(client_cache, "_TTL_SECONDS", 0)
+    first = create_llm_client_from_model(row)
+    trip(tracker, row)
+    second = create_llm_client_from_model(row)
+    assert second is not first
+    assert is_unavailable(row)

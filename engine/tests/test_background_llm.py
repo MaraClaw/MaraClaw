@@ -1,15 +1,19 @@
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from tests.llm_retry_fakes import FakeClock, install_provider_health, trip
 
 from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
 from app.services.llm import caller
 from app.services.llm.background_guard import BackgroundCallOutcome, ScheduleLeaseLostError
 from app.services.llm.base import ToolDefinition
+from app.services.llm.provider_health import ProviderHealth
+from app.services.llm.retry_policy import LLMHTTPError
 from app.services.llm.turn import TurnContext
 from app.services.llm.types import LLMMessage, LLMResponse
 from test_finish_protocol import (
@@ -88,7 +92,7 @@ def background_case(
     monkeypatch: pytest.MonkeyPatch, responses: Sequence[LLMResponse | BaseException], *, fallback: bool = False
 ) -> BackgroundCase:
     tenant_id = uuid4()
-    model = replace(_model(), tenant_id=tenant_id)
+    model = replace(_model(), id=uuid4(), tenant_id=tenant_id)
     agent = AgentRecord(id=uuid4(), name="Agent", creator_id=uuid4(), tenant_id=tenant_id)
     turn = TurnContext(
         agent=agent,
@@ -210,3 +214,125 @@ async def test_background_closes_client_on_cancellation(monkeypatch):
         await task
     assert state.client.closed
     assert state.usage == []
+
+
+@pytest.fixture
+def health(monkeypatch: pytest.MonkeyPatch) -> tuple[ProviderHealth, FakeClock]:
+    return install_provider_health(monkeypatch, threshold=2)
+
+
+async def run_background(state: BackgroundCase) -> BackgroundCallOutcome:
+    return await caller.call_agent_llm_with_tools(state.agent.id, "system", "user", turn=state.turn, guard=state.guard)
+
+
+def primary_of(state: BackgroundCase):
+    assert state.turn.primary_model is not None
+    return state.turn.primary_model
+
+
+@pytest.mark.asyncio
+async def test_background_calls_move_to_the_fallback_once_the_primary_provider_is_open(monkeypatch, health):
+    # Given a primary whose provider answers 503, a healthy fallback and a circuit that opens after two failures.
+    down = LLMHTTPError(503, "upstream busy")
+    state = background_case(
+        monkeypatch,
+        [down, _finish_response("one"), down, _finish_response("two"), _finish_response("three")],
+        fallback=True,
+    )
+    # When three background calls run.
+    results = [await run_background(state) for _ in range(3)]
+    # Then the first two each failed over after hitting the primary, and the third went straight to the fallback.
+    assert [result.content for result in results] == ["one", "two", "three"]
+    assert state.created == ["fake-model", "fallback", "fake-model", "fallback", "fallback"]
+
+
+@pytest.mark.asyncio
+async def test_background_traffic_returns_to_the_primary_after_a_successful_probe(monkeypatch, health):
+    # Given an open primary circuit and a fallback.
+    tracker, clock = health
+    state = background_case(
+        monkeypatch, [_finish_response("fallback"), _finish_response("probe"), _finish_response("back")], fallback=True
+    )
+    trip(tracker, primary_of(state), failures=2)
+    assert (await run_background(state)).content == "fallback"
+    # When the cooldown ends, the next call is the probe and goes to the primary; its success closes the circuit.
+    clock.advance(30)
+    assert (await run_background(state)).content == "probe"
+    assert (await run_background(state)).content == "back"
+    assert state.created == ["fallback", "fake-model", "fake-model"]
+
+
+@pytest.mark.asyncio
+async def test_background_without_a_fallback_fails_fast_while_the_circuit_is_open(monkeypatch, health):
+    # Given a primary with no fallback whose provider has failed twice.
+    state = background_case(monkeypatch, [LLMHTTPError(503, "upstream busy")] * 2)
+    charge = AsyncMock(return_value=state.agent)
+    monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
+    assert [(await run_background(state)).status for _ in range(2)] == ["failure", "failure"]
+    # When a third call arrives.
+    refused = await run_background(state)
+    # Then it fails at once with a clear, retryable error: no provider request and no daily call charged.
+    assert refused.status == "failure"
+    assert refused.content.startswith("[Error] LLM provider is unavailable after repeated failures")
+    assert caller.is_retryable_error(refused.content)
+    assert len(state.client.messages_seen) == 2
+    assert charge.await_count == 2
+    assert state.client.closed
+
+
+@pytest.mark.asyncio
+async def test_background_probe_failure_keeps_the_circuit_open_and_a_success_closes_it(monkeypatch, health):
+    tracker, clock = health
+    state = background_case(
+        monkeypatch, [LLMHTTPError(503, "upstream busy"), _finish_response("done"), _finish_response("again")]
+    )
+    trip(tracker, primary_of(state), failures=2)
+    clock.advance(30)
+    assert (await run_background(state)).status == "failure"
+    assert len(state.client.messages_seen) == 1
+    refused = await run_background(state)
+    assert refused.content.startswith("[Error] LLM provider is unavailable")
+    assert len(state.client.messages_seen) == 1
+    clock.advance(30)
+    assert (await run_background(state)).content == "done"
+    assert (await run_background(state)).content == "again"
+
+
+@pytest.mark.asyncio
+async def test_background_admits_exactly_one_probe_while_the_circuit_recovers(monkeypatch, health):
+    # Given an open circuit past its cooldown and a probe parked at the provider.
+    tracker, clock = health
+    state = background_case(monkeypatch, [_finish_response("probe"), _finish_response("after")])
+    trip(tracker, primary_of(state), failures=2)
+    clock.advance(30)
+    state.client.paused = True
+    probe = asyncio.create_task(run_background(state))
+    await asyncio.wait_for(state.client.entered.wait(), timeout=1)
+    # When a second call arrives meanwhile, it fails fast and sends nothing.
+    refused = await run_background(state)
+    assert refused.content.startswith("[Error] LLM provider is unavailable")
+    assert len(state.client.messages_seen) == 1
+    # Then the probe's answer closes the circuit for the calls after it.
+    state.client.release.set()
+    assert (await probe).content == "probe"
+    assert (await run_background(state)).content == "after"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 401, 404, 422])
+async def test_background_client_errors_never_open_the_circuit(monkeypatch, health, status):
+    # Given a provider that keeps rejecting the request, with a body that reads like a timeout.
+    state = background_case(monkeypatch, [LLMHTTPError(status, "request timeout")] * 5)
+    # When far more of them arrive than the threshold.
+    results = [await run_background(state) for _ in range(5)]
+    # Then every call reached the provider and none was refused.
+    assert all(result.content.startswith(f"[Error] HTTP {status}") for result in results)
+    assert len(state.client.messages_seen) == 5
+
+
+@pytest.mark.asyncio
+async def test_background_routes_around_a_disabled_primary_like_a_chat_turn(monkeypatch, health):
+    state = background_case(monkeypatch, [_finish_response("done")], fallback=True)
+    state.turn.primary_model = replace(primary_of(state), enabled=False)
+    assert (await run_background(state)).content == "done"
+    assert state.created == ["fallback"]

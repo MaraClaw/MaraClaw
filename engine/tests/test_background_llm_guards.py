@@ -4,13 +4,15 @@ from uuid import uuid4
 
 import anyio
 import pytest
-from tests.test_background_llm import background_case, tool_response
+from tests.llm_retry_fakes import install_provider_health, trip
+from tests.test_background_llm import background_case, primary_of, tool_response
 
 from app.dao.agent_dao import agent_dao
 from app.records.task import TaskClaim
 from app.services import task_lease
 from app.services.llm import caller
 from app.services.llm.background_guard import BackgroundCallOutcome, ScheduleLeaseLostError
+from app.services.llm.provider_health import Admission, model_key
 from test_finish_protocol import _finish_response
 
 
@@ -241,3 +243,75 @@ async def test_task_lease_database_revocation_stops_dispatch(monkeypatch, phase)
     assert state.executed == []
     assert state.usage == []
     assert state.client.closed
+
+
+async def test_refused_call_is_not_charged_against_the_daily_cap(monkeypatch):
+    # Given a primary whose circuit is open, with no fallback, and an agent with daily calls left.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    state = background_case(monkeypatch, [_finish_response("forbidden")])
+    charge = AsyncMock(return_value=state.agent)
+    monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
+    trip(tracker, primary_of(state), failures=2)
+
+    # When a background call is refused by the circuit.
+    result = await caller.call_agent_llm_with_tools(
+        state.agent.id, "system", "user", turn=state.turn, guard=state.guard
+    )
+
+    # Then no request was sent and nothing was spent from the agent's daily budget.
+    assert result.status == "failure"
+    assert charge.await_count == 0
+    assert state.client.messages_seen == []
+    assert state.client.closed
+
+
+async def test_daily_cap_refusal_does_not_hold_the_probe_slot(monkeypatch):
+    # Given a circuit past its cooldown and a quota refusal for the call that would have probed.
+    tracker, clock = install_provider_health(monkeypatch, threshold=2)
+    state = background_case(monkeypatch, [_finish_response("forbidden")])
+    monkeypatch.setattr(agent_dao, "consume_llm_call", AsyncMock(return_value=None), raising=False)
+    primary = primary_of(state)
+    key = model_key(primary)
+    assert key is not None
+    trip(tracker, primary, failures=2)
+    clock.advance(30)
+
+    # When the quota stops the call before it reaches the provider.
+    result = await caller.call_agent_llm_with_tools(
+        state.agent.id, "system", "user", turn=state.turn, guard=state.guard
+    )
+
+    # Then it was a quota failure, and the next caller can still be the probe.
+    assert result.status == "failure"
+    assert state.client.messages_seen == []
+    assert tracker.admit(key) is Admission.PROBE
+
+
+async def test_lease_loss_at_the_provider_frees_the_probe_slot_and_is_no_provider_failure(monkeypatch):
+    # Given a circuit one failure short of opening and another past its cooldown.
+    tracker, clock = install_provider_health(monkeypatch, threshold=2)
+    state = background_case(monkeypatch, [_finish_response("done")])
+    primary = primary_of(state)
+    key = model_key(primary)
+    assert key is not None
+
+    async def lost(*_args, **_kwargs):
+        raise ScheduleLeaseLostError("expired")
+
+    monkeypatch.setattr(state.client, "complete", lost)
+    trip(tracker, primary, failures=1)
+
+    # When the lease is lost at the provider on a closed circuit, over and over.
+    for _ in range(5):
+        with pytest.raises(ScheduleLeaseLostError):
+            await caller.call_agent_llm_with_tools(state.agent.id, "system", "user", turn=state.turn, guard=state.guard)
+
+    # Then none of it counted as a provider failure: the circuit needs one more real failure to open.
+    assert not tracker.refusing(key)
+    assert tracker.failed(key, Admission.CALL) is True
+    clock.advance(30)
+
+    # And a lease lost during the probe hands the probe slot to the next caller.
+    with pytest.raises(ScheduleLeaseLostError):
+        await caller.call_agent_llm_with_tools(state.agent.id, "system", "user", turn=state.turn, guard=state.guard)
+    assert tracker.admit(key) is Admission.PROBE

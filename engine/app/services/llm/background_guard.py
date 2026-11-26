@@ -15,6 +15,7 @@ from app.services.token_tracker import TokenUsage
 
 from .base import ToolDefinition
 from .finish import FINISH_PROTOCOL_REMINDER, find_finish_call, parse_tool_arguments
+from .provider_health import ProviderUnavailableError, ensure_available, guarded
 from .types import LLMMessage
 
 
@@ -103,19 +104,26 @@ class BackgroundToolLoop:
 
                 self.ensure_held()
                 try:
+                    ensure_available(model)
+                except ProviderUnavailableError as error:
+                    return await failure(error)
+                try:
                     await consume_agent_llm_call(self.agent_id)
                 except QuotaExceeded:
                     await flush_usage()
                     raise
                 await self.confirm()
                 try:
-                    response = await client.complete(
-                        messages=api_messages,
-                        tools=self.tools or None,
-                        temperature=model.temperature,
-                        max_tokens=max_tokens,
-                        llm_provider=model.provider,
-                        reasoning_effort=model.reasoning_effort,
+                    response = await guarded(
+                        model,
+                        lambda: client.complete(
+                            messages=api_messages,
+                            tools=self.tools or None,
+                            temperature=model.temperature,
+                            max_tokens=max_tokens,
+                            llm_provider=model.provider,
+                            reasoning_effort=model.reasoning_effort,
+                        ),
                     )
                 except ScheduleLeaseLostError:
                     raise

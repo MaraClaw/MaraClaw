@@ -1,7 +1,8 @@
 """Registered providers are the factory's authorization boundary and share one retry policy."""
 
 import asyncio
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
+from functools import partial
 from types import SimpleNamespace
 from typing import Any, Never
 from uuid import uuid4
@@ -23,17 +24,21 @@ from tests.llm_retry_fakes import (
     ScriptedResponse,
     call_provider,
     capture_retry_logs,
+    health_model,
+    install_provider_health,
     install_retry_policy,
 )
 
+from app.records.llm import LLMModelRecord
 from app.services.llm import caller, factory
 from app.services.llm.base import LLMClient, LLMError
 from app.services.llm.client_cache import cache_put, fingerprint_secret, reset_llm_client_cache
 from app.services.llm.failover import FailoverErrorType, classify_error
+from app.services.llm.provider_health import ProviderUnavailableError, guarded, is_unavailable
 from app.services.llm.providers import GeminiClient, OpenAICompatibleClient
 from app.services.llm.registry import PROVIDER_ALIASES, PROVIDER_CLIENTS, PROVIDER_REGISTRY
 from app.services.llm.retry_policy import LLMHTTPError, RetryPolicy, call_with_retry
-from app.services.llm.types import LLMMessage
+from app.services.llm.types import LLMMessage, LLMResponse
 
 
 @pytest.fixture(autouse=True)
@@ -155,7 +160,7 @@ async def test_transient_failure_is_retried_then_succeeds(
 
 
 @pytest.mark.parametrize(("case", "mode"), CALLS)
-@pytest.mark.parametrize(("header", "waited"), [("7", 7.0), ("3600", 30.0)])
+@pytest.mark.parametrize(("header", "waited"), [("7", 7.5), ("3600", 30.0)])
 async def test_retry_after_sets_the_wait_and_is_capped(
     monkeypatch: pytest.MonkeyPatch, case: ProviderCase, mode: Mode, header: str, waited: float, sleeps: list[float]
 ) -> None:
@@ -163,7 +168,7 @@ async def test_retry_after_sets_the_wait_and_is_capped(
     http = ScriptedHttpClient(ScriptedResponse(429, body="slow down", headers={"retry-after": header}), case.ok())
     # When the provider is called.
     response = await call_provider(monkeypatch, case, mode, http)
-    # Then the wait is the header's value, never above the cap.
+    # Then the wait is the header's value plus mid-range jitter, never above the cap.
     assert response.content == "Hello"
     assert sleeps == [waited]
 
@@ -171,10 +176,10 @@ async def test_retry_after_sets_the_wait_and_is_capped(
 @pytest.mark.parametrize(
     ("header", "expected"),
     [
-        ("7", 7.0),
-        (" 2.5 ", 2.5),
-        ("0", 0.0),
-        ("Fri, 20 Nov 2026 12:00:10 GMT", 10.0),
+        ("7", 7.5),
+        (" 2.5 ", 3.0),
+        ("0", 0.5),
+        ("Fri, 20 Nov 2026 12:00:10 GMT", 10.5),
         ("3600", 30.0),
         ("Fri, 20 Nov 2026 14:00:00 GMT", 30.0),
         ("Fri, 20 Nov 2026 11:59:00 GMT", 0.75),
@@ -190,8 +195,50 @@ def test_retry_after_forms_are_parsed_and_garbage_falls_back_to_backoff(header: 
     # Given a policy with a fixed clock and mid-range jitter.
     policy = RetryPolicy(jitter=lambda: 0.5, now=lambda: FIXED_NOW)
     # When the wait after a first failure is computed.
-    # Then seconds and HTTP dates set it (capped) and anything unusable yields the jittered backoff.
+    # Then seconds and HTTP dates set its floor (jittered, capped) and anything unusable yields the jittered backoff.
     assert policy.delay_for(1, header) == expected
+
+
+@pytest.mark.parametrize(
+    ("header", "jitter", "expected"),
+    [
+        ("7", 0.0, 7.0),
+        ("7", 0.5, 7.5),
+        ("7", 1.0, 8.0),
+        ("0", 1.0, 1.0),
+        ("29.5", 1.0, 30.0),
+        ("30", 0.0, 30.0),
+        ("30", 1.0, 30.0),
+        ("3600", 0.0, 30.0),
+        ("3600", 1.0, 30.0),
+    ],
+)
+def test_retry_after_is_the_floor_of_the_wait_and_jitter_spreads_it_below_the_cap(
+    header: str, jitter: float, expected: float
+) -> None:
+    # Given callers told the same wait, whatever the random draw is.
+    policy = RetryPolicy(jitter=lambda: jitter)
+    # When their waits are computed.
+    # Then none returns before the header's time, the spread is at most the base delay, and none passes the cap.
+    assert policy.delay_for(1, header) == expected
+
+
+@pytest.mark.parametrize(("case", "mode"), CALLS)
+@pytest.mark.parametrize(("jitter", "waits"), [(0.0, [7.0, 1.0]), (1.0, [8.0, 2.0])])
+async def test_injected_randomness_sets_every_wait_of_a_retried_call(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, mode: Mode, jitter: float, waits: list[float]
+) -> None:
+    # Given a policy whose random draw is fixed by the test, a 429 that names its wait and a dropped connection.
+    sleeps = install_retry_policy(monkeypatch, jitter=jitter)
+    http = ScriptedHttpClient(
+        ScriptedResponse(429, body="slow down", headers={"retry-after": "7"}), httpx.ReadError("dropped"), case.ok()
+    )
+    # When the provider is called.
+    response = await call_provider(monkeypatch, case, mode, http)
+    # Then the Retry-After wait and the backoff wait each carry that draw, and the retry count is unchanged.
+    assert response.content == "Hello"
+    assert len(http.requests) == 3
+    assert sleeps == waits
 
 
 @pytest.mark.parametrize(
@@ -291,8 +338,8 @@ async def test_retry_logs_carry_no_secret_header_or_prompt(
     # Then each log names the provider, the status or error, the attempt and the delay, and nothing sensitive.
     assert API_KEY in str(http.requests[0]["kwargs"]["headers"])
     assert len(logged) == 2
-    assert [case.id, "HTTP 429", "1/3", "2.00"] == [
-        token for token in (case.id, "HTTP 429", "1/3", "2.00") if token in logged[0]
+    assert [case.id, "HTTP 429", "1/3", "2.50"] == [
+        token for token in (case.id, "HTTP 429", "1/3", "2.50") if token in logged[0]
     ]
     assert [case.id, "ReadError", "2/3", "1.50"] == [
         token for token in (case.id, "ReadError", "2/3", "1.50") if token in logged[1]
@@ -401,3 +448,79 @@ async def test_failover_falls_back_exactly_once_after_the_retry_budget_is_spent(
     assert len(http_by_model["primary"].requests) == 3
     assert len(http_by_model["fallback"].requests) == (1 if fallback_recovers else 3)
     assert (result == "Hello") if fallback_recovers else result.startswith("⚠️ Model call failed")
+
+
+def _guarded_call(
+    monkeypatch: pytest.MonkeyPatch, model: LLMModelRecord, case: ProviderCase, mode: Mode, http: ScriptedHttpClient
+) -> Awaitable[LLMResponse]:
+    return guarded(model, partial(call_provider, monkeypatch, case, mode, http))
+
+
+def _always(status: int, body: str = "upstream busy") -> list[Outcome]:
+    return [ScriptedResponse(status, body=body) for _ in range(3)]
+
+
+@pytest.mark.parametrize(("case", "mode"), CALLS)
+async def test_a_provider_answering_5xx_stops_receiving_requests_until_a_probe_succeeds(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, mode: Mode, sleeps: list[float]
+) -> None:
+    # Given a model whose provider keeps answering 503 and a circuit that opens after two exhausted calls.
+    _tracker, clock = install_provider_health(monkeypatch, threshold=2)
+    model = health_model()
+    for _ in range(2):
+        http = ScriptedHttpClient(*_always(503))
+        with pytest.raises(LLMError, match=r"^HTTP 503"):
+            _ = await _guarded_call(monkeypatch, model, case, mode, http)
+        assert len(http.requests) == 3
+    assert is_unavailable(model)
+    # When another call is made, it is refused before any request leaves the process.
+    idle = ScriptedHttpClient()
+    with pytest.raises(ProviderUnavailableError):
+        _ = await _guarded_call(monkeypatch, model, case, mode, idle)
+    assert idle.requests == []
+    # Then after the cooldown exactly one request goes out as the probe; its failure reopens the circuit.
+    clock.advance(30)
+    probe = ScriptedHttpClient(*_always(503))
+    with pytest.raises(LLMError, match=r"^HTTP 503"):
+        _ = await _guarded_call(monkeypatch, model, case, mode, probe)
+    assert len(probe.requests) == 3
+    assert is_unavailable(model)
+    # And a probe that succeeds closes it, so traffic returns.
+    clock.advance(30)
+    recovered = ScriptedHttpClient(case.ok(), case.ok())
+    for _ in range(2):
+        response = await _guarded_call(monkeypatch, model, case, mode, recovered)
+        assert response.content == "Hello"
+    assert not is_unavailable(model)
+
+
+@pytest.mark.parametrize("status", [429, 500, 501, 502, 503, 504, 529])
+async def test_rate_limit_and_server_statuses_each_count_toward_opening_the_circuit(
+    monkeypatch: pytest.MonkeyPatch, status: int, sleeps: list[float]
+) -> None:
+    _tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    model = health_model()
+    for _ in range(2):
+        with pytest.raises(LLMError, match=f"^HTTP {status}"):
+            _ = await _guarded_call(
+                monkeypatch, model, OPENAI_COMPATIBLE, "complete", ScriptedHttpClient(*_always(status))
+            )
+    assert is_unavailable(model)
+
+
+@pytest.mark.parametrize(("case", "mode"), CALLS)
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 422])
+async def test_a_client_error_whose_body_mentions_a_timeout_never_opens_the_circuit(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, mode: Mode, status: int, sleeps: list[float]
+) -> None:
+    # Given a provider that rejects every request, with a body that reads like an outage.
+    _tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    model = health_model()
+    body = "request timeout: rate limit exceeded, connection reset, upstream 503 unavailable"
+    # When far more of them arrive than the threshold.
+    for _ in range(5):
+        with pytest.raises(LLMError, match=f"^HTTP {status}"):
+            _ = await _guarded_call(monkeypatch, model, case, mode, ScriptedHttpClient(*_always(status, body)))
+    # Then each one reached the provider and the circuit is still closed.
+    assert not is_unavailable(model)
+    assert sleeps == []

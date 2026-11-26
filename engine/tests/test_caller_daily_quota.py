@@ -3,12 +3,19 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from tests.llm_retry_fakes import install_provider_health, trip
 
 from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
 from app.services.llm import caller
+from app.services.llm.retry_policy import LLMHTTPError
 from app.services.llm.types import LLMResponse
 from test_finish_protocol import FakeStreamClient, _finish_response, _model
+
+
+@pytest.fixture(autouse=True)
+def isolated_provider_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ = install_provider_health(monkeypatch)
 
 
 @pytest.fixture
@@ -89,3 +96,77 @@ async def test_failover_attempt_consumes_its_own_daily_call(stream_case, monkeyp
     assert (reply == "fallback done") is fallback_allowed
     assert client.closed
     assert fallback.closed
+
+
+async def test_caller_refuses_an_open_provider_before_charging_or_dispatching(stream_case, monkeypatch):
+    # Given a model whose provider circuit is open.
+    agent, client, charge, usage = stream_case
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    trip(tracker, _model(), failures=2)
+
+    # When a chat turn reaches its first dispatch.
+    reply = await caller.call_llm(_model(), [], agent.name, "", agent.id, agent.creator_id)
+
+    # Then it fails at once with an error the failover reads as retryable, and the daily budget is untouched.
+    assert reply.startswith("[LLM Error] LLM provider is unavailable after repeated failures")
+    assert caller.is_retryable_error(reply)
+    charge.assert_not_awaited()
+    assert client.messages_seen == []
+    assert client.closed
+    usage.assert_not_awaited()
+
+
+async def test_caller_reports_each_stream_outcome_to_the_provider_circuit(stream_case, monkeypatch):
+    # Given a provider that answers 503 until the second failure opens its circuit.
+    agent, client, charge, _usage = stream_case
+    tracker, clock = install_provider_health(monkeypatch, threshold=2)
+
+    async def broken_stream(**_kwargs):
+        raise LLMHTTPError(503, "upstream busy")
+
+    client.stream = broken_stream
+
+    async def call():
+        return await caller.call_llm(_model(), [], agent.name, "", agent.id, agent.creator_id)
+
+    # When two calls fail, the third is refused and the daily budget was charged only for the first two.
+    assert [(await call()).startswith("[LLM Error] HTTP 503") for _ in range(2)] == [True, True]
+    assert (await call()).startswith("[LLM Error] LLM provider is unavailable")
+    assert charge.await_count == 2
+
+    # And after the cooldown the next call is the probe: a failed probe keeps the circuit open.
+    clock.advance(30)
+    assert (await call()).startswith("[LLM Error] HTTP 503")
+    assert (await call()).startswith("[LLM Error] LLM provider is unavailable")
+    assert charge.await_count == 3
+
+    # While a probe that finishes closes it.
+    clock.advance(30)
+    client.stream = FakeStreamClient([_finish_response("recovered")]).stream
+    assert await call() == "recovered"
+    assert not tracker.refusing(_model().id)
+    assert charge.await_count == 4
+
+
+async def test_failover_uses_the_fallback_when_the_primary_is_refused(stream_case, monkeypatch):
+    # Given a primary that is refused by its circuit and a healthy fallback.
+    agent, client, charge, _usage = stream_case
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    trip(tracker, _model(), failures=2)
+    fallback = FakeStreamClient([_finish_response("fallback done")])
+    monkeypatch.setattr(
+        caller,
+        "create_fresh_llm_client_from_model",
+        AsyncMock(side_effect=[(_model(), client), (replace(_model(), id=uuid4()), fallback)]),
+    )
+
+    # When the failover wrapper runs.
+    reply = await caller.call_llm_with_failover(
+        _model(), replace(_model(), id=uuid4()), [], agent.name, "", agent.id, agent.creator_id
+    )
+
+    # Then the refusal cost nothing and only the fallback was charged and called.
+    assert reply == "fallback done"
+    assert charge.await_count == 1
+    assert client.messages_seen == []
+    assert len(fallback.messages_seen) == 1

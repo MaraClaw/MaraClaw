@@ -508,6 +508,11 @@ class Settings(BaseSettings):
             ) from None
         return value
 
+    # LLM provider health: consecutive retryable failures that open a model's circuit, and the seconds it stays open
+    # before a single probe request may close it again. In-process per worker; see app/services/llm/provider_health.py.
+    LLM_PROVIDER_FAILURE_THRESHOLD: int = Field(default=5, ge=1, le=1000)
+    LLM_PROVIDER_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
+
     # Feishu OAuth
     FEISHU_APP_ID: str = ""
     FEISHU_APP_SECRET: str = ""

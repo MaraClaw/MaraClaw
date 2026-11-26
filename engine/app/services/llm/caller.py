@@ -35,7 +35,8 @@ from .background_guard import BackgroundCallGuard, BackgroundCallOutcome, Backgr
 from .base import ChunkCallback, LLMError, ThinkingCallback, ToolCallback, ToolCallbackData, ToolDefinition
 from .failover import FailoverErrorType, classify_error
 from .finish import FINISH_PROTOCOL_REMINDER, FINISH_TOOL_DEFINITION, find_finish_call
-from .turn import TurnContext
+from .provider_health import ProviderUnavailableError, ensure_available, guarded
+from .turn import ModelBundle, TurnContext
 from .types import LLMContentPart, LLMResponse, LLMToolCall, OpenAIMessage, ToolPayload
 from .utils import LLMMessage, create_fresh_llm_client_from_model, get_max_tokens
 
@@ -615,6 +616,14 @@ async def call_llm(
         if side_effect_guard is not None:
             side_effect_guard()
         try:
+            ensure_available(model)
+        except ProviderUnavailableError as error:
+            logger.warning("[LLM] {}: provider={} model={}", error, model.provider, model.model)
+            if agent_id and _unsaved_usage.total_tokens > 0:
+                await record_token_usage(agent_id, _unsaved_usage)
+            await client.close()
+            return f"[LLM Error] {error}"
+        try:
             await consume_agent_llm_call(agent_id)
         except QuotaExceeded as error:
             if _unsaved_usage.total_tokens > 0:
@@ -629,16 +638,19 @@ async def call_llm(
                 # Final user-facing text must come through finish(content=...).
                 return None
 
-            response = await client.stream(
-                messages=api_messages,
-                tools=tools_for_llm or None,
-                temperature=model.temperature,
-                max_tokens=max_tokens,
-                on_chunk=_buffer_chunk,
-                on_tool_delta=on_tool_delta,
-                on_thinking=on_thinking,
-                llm_provider=model.provider,
-                reasoning_effort=getattr(model, "reasoning_effort", None),
+            response = await guarded(
+                model,
+                lambda: client.stream(
+                    messages=api_messages,
+                    tools=tools_for_llm or None,
+                    temperature=model.temperature,
+                    max_tokens=max_tokens,
+                    on_chunk=_buffer_chunk,
+                    on_tool_delta=on_tool_delta,
+                    on_thinking=on_thinking,
+                    llm_provider=model.provider,
+                    reasoning_effort=getattr(model, "reasoning_effort", None),
+                ),
             )
         except LLMError as e:
             logger.error(
@@ -1034,15 +1046,15 @@ async def call_agent_llm_with_tools(
         if fallback_model is None and agent.fallback_model_id:
             fallback_model = loaded.get(agent.fallback_model_id)
     from app.services.enterprise_llm import owned_model_or_none
+    from app.services.llm.router import select_turn_model
 
     tenant_id = getattr(agent, "tenant_id", None)
     primary_model = owned_model_or_none(primary_model, tenant_id)
     fallback_model = owned_model_or_none(fallback_model, tenant_id)
 
-    # Config-level fallback
-    if not primary_model and fallback_model:
-        primary_model = fallback_model
-        fallback_model = None
+    choice = select_turn_model(ModelBundle(primary=primary_model, fallback=fallback_model), agent_id=agent_id)
+    primary_model = choice.model
+    fallback_model = choice.failover_model
 
     if not primary_model:
         return await outcome(f"⚠️ {agent.name} has no LLM model configured", False)

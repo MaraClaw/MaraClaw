@@ -48,12 +48,13 @@ class RetryPolicy:
     def delay_for(self, attempt: int, retry_after: str | None) -> float:
         """Seconds to wait after failed attempt number ``attempt`` (1-based).
 
-        A usable ``Retry-After`` sets the wait, capped at ``max_retry_after``. Without one the wait is
-        exponential backoff capped at ``max_delay``, scaled by jitter into [0.5, 1.0] of its size.
+        A usable ``Retry-After`` is the floor of the wait and jitter adds up to ``base_delay`` on top, so callers
+        told the same wait do not return together; the sum never passes ``max_retry_after``. Without one the wait
+        is exponential backoff capped at ``max_delay``, scaled by jitter into [0.5, 1.0] of its size.
         """
         hinted = self._retry_after_seconds(retry_after)
         if hinted is not None:
-            return min(hinted, self.max_retry_after)
+            return min(hinted + self.jitter() * self.base_delay, self.max_retry_after)
         backoff = min(self.base_delay * 2.0 ** (attempt - 1), self.max_delay)
         return backoff * (0.5 + self.jitter() / 2)
 
