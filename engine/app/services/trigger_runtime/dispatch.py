@@ -15,7 +15,13 @@ from app.services.trigger_runtime.executions import (
     claim_pending_trigger_executions,
     fail_abandoned_trigger_executions,
 )
-from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY, build_scheduled_execution_key, poll_sequence
+from app.services.trigger_runtime.keys import (
+    POLL_OBSERVED_KEY,
+    build_okr_execution_key,
+    build_scheduled_execution_key,
+    poll_sequence,
+)
+from app.services.trigger_runtime.okr import OKR_PERIOD_KEY, due_period, is_okr_firing
 from app.services.trigger_runtime.queue import enqueue_trigger_execution
 
 
@@ -72,9 +78,19 @@ async def _enqueue_poll_observation(trigger: AgentTriggerRecord, now: datetime) 
         logger.info("Poll change for trigger {} dropped: baseline advanced concurrently", trigger.id)
 
 
-async def enqueue_due_trigger(trigger: AgentTriggerRecord, now: datetime) -> None:
+async def enqueue_due_trigger(trigger: AgentTriggerRecord, now: datetime, agent_timezone: str | None = None) -> None:
+    """Queue a due trigger; ``agent_timezone`` is the zone the caller resolved, used for an OKR report period."""
     if trigger.type == "poll":
         await _enqueue_poll_observation(trigger, now)
+        return
+    if is_okr_firing(trigger):
+        period = await due_period(trigger, now, agent_timezone)
+        _ = await enqueue_trigger_execution(
+            trigger=trigger,
+            source=trigger.type,
+            idempotency_key=build_okr_execution_key(trigger, period),
+            payload_obj={OKR_PERIOD_KEY: period.isoformat()},
+        )
         return
     _ = await enqueue_trigger_execution(
         trigger=trigger,

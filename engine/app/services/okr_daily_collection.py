@@ -8,7 +8,8 @@ the OKR Agent, which then records the report through the standard tool path.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from collections.abc import Callable
+from datetime import date, datetime, tzinfo
 from typing import TypedDict
 
 from app.dao.agent_agent_relationship_dao import agent_agent_relationship_dao
@@ -20,6 +21,7 @@ from app.dao.user_dao import user_dao
 from app.services.agent_tool_exec.a2a_send import _send_message_to_agent
 from app.services.agent_tool_exec.channel_messaging import _send_channel_message
 from app.services.agent_tool_exec.platform_messaging import _send_platform_message
+from app.services.timezone_utils import get_agent_timezone, now_in_timezone
 
 
 class DailyCollectionResult(TypedDict):
@@ -53,8 +55,20 @@ def _agent_request_message(target_name: str, report_day: date) -> str:
     )
 
 
-async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyCollectionResult:
-    """Send daily collection requests to tracked relationships."""
+def local_day(now: datetime, zone: tzinfo) -> date:
+    """The calendar day an aware instant falls on in ``zone``; the host's clock and zone never decide it."""
+    if now.tzinfo is None:
+        raise ValueError("The collection day needs a timezone-aware instant")
+    return now.astimezone(zone).date()
+
+
+async def trigger_daily_collection_for_tenant(
+    tenant_id: uuid.UUID, report_day: date | None = None, *, guard: Callable[[], None] | None = None
+) -> DailyCollectionResult:
+    """Send daily collection requests to tracked relationships for ``report_day``.
+
+    Without a day it is today in the OKR agent's timezone. ``guard`` runs before each message is sent.
+    """
     settings = await okr_settings_dao.get_by_tenant(tenant_id)
     if not settings or not settings.enabled:
         raise ValueError("OKR is not enabled for this tenant")
@@ -108,7 +122,8 @@ async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyColl
                 if user and user.display_name:
                     member_user_display_names[org_member.id] = user.display_name
 
-    report_day = date.today()  # noqa: DTZ011
+    if report_day is None:
+        report_day = now_in_timezone(await get_agent_timezone(okr_agent.id)).date()
     sent_humans = 0
     sent_agents = 0
 
@@ -121,6 +136,8 @@ async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyColl
         has_external_channel = bool(org_member.open_id or org_member.external_id)
 
         send_result = ""
+        if guard is not None:
+            guard()
         if has_external_channel:
             send_result = await _send_channel_message(
                 okr_agent.id,
@@ -136,6 +153,8 @@ async def trigger_daily_collection_for_tenant(tenant_id: uuid.UUID) -> DailyColl
             sent_humans += 1
 
     for agent_member in tracked_agents:
+        if guard is not None:
+            guard()
         send_result = await _send_message_to_agent(
             okr_agent.id,
             {

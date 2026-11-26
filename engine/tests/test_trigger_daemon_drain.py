@@ -10,7 +10,7 @@ from typing import override
 import pytest
 
 from app.core.json_types import JsonValue
-from app.records.trigger import AgentTriggerRecord
+from app.records.trigger import AgentTriggerRecord, DueTrigger
 from app.services import heartbeat, trigger_daemon
 from app.services.trigger_runtime import invoker, scan
 from app.services.trigger_runtime.scan import TriggerScanner
@@ -18,10 +18,10 @@ from app.services.trigger_runtime.scan import TriggerScanner
 
 @pytest.fixture(autouse=True)
 def isolated_daemon(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    async def no_triggers(*, after: uuid.UUID | None, limit: int) -> list[AgentTriggerRecord]:
+    async def no_triggers(*, now: datetime, after: scan.Cursor | None, limit: int) -> list[DueTrigger]:
         return []
 
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", no_triggers)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_due_page", no_triggers)
     monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
     monkeypatch.setattr(trigger_daemon, "_A2A_WAKE_CHAIN", {})
     trigger_daemon.open_trigger_admission()
@@ -628,11 +628,14 @@ def scan_trigger(name: str, trigger_type: str = "poll", **config: JsonValue) -> 
     )
 
 
-def trigger_pages(triggers: list[AgentTriggerRecord]) -> Callable[..., Awaitable[list[AgentTriggerRecord]]]:
-    ordered = sorted(triggers, key=lambda trigger: trigger.id)
+DUE_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
-    async def page(*, after: uuid.UUID | None, limit: int) -> list[AgentTriggerRecord]:
-        return [trigger for trigger in ordered if after is None or trigger.id > after][:limit]
+
+def trigger_pages(triggers: list[AgentTriggerRecord], zone: str) -> Callable[..., Awaitable[list[DueTrigger]]]:
+    ordered = sorted((DueTrigger(trigger, DUE_AT, zone) for trigger in triggers), key=lambda due: due.trigger.id)
+
+    async def page(*, now: datetime, after: scan.Cursor | None, limit: int) -> list[DueTrigger]:
+        return [due for due in ordered if after is None or (due.due_at, due.trigger.id) > after][:limit]
 
     return page
 
@@ -641,6 +644,7 @@ def patch_scan(
     monkeypatch: pytest.MonkeyPatch,
     triggers: list[AgentTriggerRecord],
     evaluate: Callable[[AgentTriggerRecord, datetime, str | None], Awaitable[bool]],
+    zone: str = "UTC",
 ) -> list[datetime]:
     claims: list[datetime] = []
 
@@ -650,7 +654,7 @@ def patch_scan(
         claims.append(now)
         return {}, set()
 
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", trigger_pages(triggers))
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_due_page", trigger_pages(triggers, zone))
     monkeypatch.setattr(trigger_daemon, "_evaluate_trigger", evaluate)
     monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim_ready)
     return claims
@@ -762,77 +766,20 @@ async def test_evaluations_start_in_an_empty_context(monkeypatch: pytest.MonkeyP
     assert seen == [None]
 
 
-async def test_cron_timezones_are_resolved_once_for_the_tick(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given cron triggers on three agents (two share a company), one with its own timezone, and a poll trigger
-    tenant_id = uuid.uuid4()
-    first, second, third = scan_trigger("a", "cron"), scan_trigger("b", "cron"), scan_trigger("c", "cron")
-    second.agent_id = first.agent_id
-    configured = scan_trigger("d", "cron", timezone="Asia/Tokyo")
-    polled = scan_trigger("e")
-    agents = [
-        SimpleNamespace(id=first.agent_id, tenant_id=tenant_id, timezone=None),
-        SimpleNamespace(id=third.agent_id, tenant_id=None, timezone="Europe/Paris"),
-    ]
-    lookups: list[str] = []
-
-    async def get_many(ids: list[uuid.UUID]) -> list[SimpleNamespace]:
-        lookups.append("agents")
-        return [agent for agent in agents if agent.id in ids]
-
-    async def get_by_ids(ids: list[uuid.UUID]) -> list[SimpleNamespace]:
-        lookups.append("tenants")
-        assert ids == [tenant_id]
-        return [SimpleNamespace(id=tenant_id, timezone="Asia/Seoul")]
-
-    async def per_trigger_lookup(*_args: object) -> object:
-        pytest.fail("a cron evaluation must not read its agent or tenant itself")
-
-    monkeypatch.setattr(scan.agent_dao, "get_many", get_many)
-    monkeypatch.setattr(scan.tenant_dao, "get_by_ids", get_by_ids)
-    monkeypatch.setattr(scan.agent_dao, "get", per_trigger_lookup)
-    monkeypatch.setattr(scan.tenant_dao, "get", per_trigger_lookup)
-    zones: dict[str, str | None] = {}
-
-    async def evaluate(trigger: AgentTriggerRecord, _now: datetime, zone: str | None = None) -> bool:
-        zones[trigger.name] = zone
-        return False
-
-    _ = patch_scan(monkeypatch, [first, second, third, configured, polled], evaluate)
-    # When a tick evaluates them
-    await trigger_daemon._tick()
-    # Then two queries served every trigger, and each cron trigger got its agent's timezone
-    assert lookups == ["agents", "tenants"]
-    assert zones == {"a": "Asia/Seoul", "b": "Asia/Seoul", "c": "Europe/Paris", "d": None, "e": None}
-
-
-async def test_tick_without_cron_triggers_reads_no_timezones(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def forbidden(*_args: object) -> object:
-        pytest.fail("no cron trigger, no timezone read")
-
-    monkeypatch.setattr(scan.agent_dao, "get_many", forbidden)
-
-    async def evaluate(_trigger: AgentTriggerRecord, _now: datetime, _zone: str | None = None) -> bool:
-        return False
-
-    _ = patch_scan(monkeypatch, [scan_trigger("poll")], evaluate)
-    await trigger_daemon._tick()
-
-
-async def test_timezone_batch_failure_does_not_cause_per_trigger_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_zone_of_the_due_page_reaches_every_evaluation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given two due triggers whose agent zone the due page read with them
     triggers = [scan_trigger("a", "cron"), scan_trigger("b", "cron")]
     zones: list[str | None] = []
-
-    async def fail_batch(_triggers: object) -> dict[uuid.UUID, str]:
-        raise RuntimeError("database unavailable")
 
     async def evaluate(_trigger: AgentTriggerRecord, _now: datetime, zone: str | None = None) -> bool:
         zones.append(zone)
         return False
 
-    monkeypatch.setattr(trigger_daemon, "cron_agent_timezones", fail_batch)
-    _ = patch_scan(monkeypatch, triggers, evaluate)
+    _ = patch_scan(monkeypatch, triggers, evaluate, zone="Asia/Ho_Chi_Minh")
+    # When a tick evaluates them
     await trigger_daemon._tick()
-    assert zones == ["UTC", "UTC"]
+    # Then each is evaluated in that zone, with no timezone lookup of its own
+    assert zones == ["Asia/Ho_Chi_Minh", "Asia/Ho_Chi_Minh"]
 
 
 async def test_tick_skips_evaluation_once_admission_closed(monkeypatch: pytest.MonkeyPatch) -> None:

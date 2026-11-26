@@ -39,6 +39,7 @@ class AgentTriggerRecord:
     is_system: bool = False
     created_at: datetime | None = None
     expires_at: datetime | None = None
+    next_due_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, object]) -> AgentTriggerRecord:
@@ -60,7 +61,17 @@ class AgentTriggerRecord:
             is_system=bool(row.get("is_system", False)),
             created_at=datetime_from_row(row.get("created_at")),
             expires_at=datetime_from_row(row.get("expires_at")),
+            next_due_at=datetime_from_row(row.get("next_due_at")),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DueTrigger:
+    """A trigger whose ``next_due_at`` has come, with the effective timezone of its agent."""
+
+    trigger: AgentTriggerRecord
+    due_at: datetime
+    agent_timezone: str
 
 
 @dataclass(slots=True)

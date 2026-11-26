@@ -1,17 +1,22 @@
+import asyncio
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import anyio
 import pytest
-from tests.test_openclaw_update_postgres import db, tenant
+from tests.test_openclaw_update_postgres import agent, db, member, tenant
 
 from app.dao.okr_dao import company_report_dao, member_daily_report_dao
+from app.dao.trigger_dao import agent_trigger_dao
 from app.db.connection import DbConnection
 from app.db.session import connection_ctx, get_connection
 from app.records.okr import CompanyReportRecord
+from app.records.trigger import AgentTriggerRecord
 from app.services import okr_report_generation as generation, okr_reporting as reporting
+from app.services.trigger_runtime import dispatch, executions, invoker
+from app.services.trigger_runtime.evaluator import evaluate_trigger
 
 __all__ = ["db"]
 DAY = date(2026, 11, 2)
@@ -231,3 +236,128 @@ async def test_daily_publication_invalidates_month_without_weekly(reporting_tena
     )
     assert current is not None
     assert current.needs_refresh is True
+
+
+class OkrFiring:
+    """A due daily report trigger of an OKR-enabled tenant, and its generated reports counted per attempt."""
+
+    def __init__(self, db: DbConnection, trigger: AgentTriggerRecord, tenant_id: UUID) -> None:
+        self.db: DbConnection = db
+        self.trigger: AgentTriggerRecord = trigger
+        self.tenant_id: UUID = tenant_id
+        self.attempts: int = 0
+        self.failures: list[str] = []
+
+    async def rows(self) -> list[dict[str, object]]:
+        return await self.db.fetchall(
+            "SELECT status, idempotency_key, payload, last_error, scheduled_at FROM trigger_executions "
+            "WHERE trigger_id = %(id)s ORDER BY created_at",
+            {"id": self.trigger.id},
+        )
+
+    async def claim_and_invoke(self) -> int:
+        """Claim ready executions like a worker's tick and run their invocations; returns how many were claimed."""
+        grouped, _forced = await dispatch.claim_ready_trigger_invocations(datetime.now(UTC), max_agents=5)
+        for agent_id, triggers in grouped.items():
+            await invoker.invoke_agent_for_triggers(agent_id, triggers)
+        return sum(len(triggers) for triggers in grouped.values())
+
+    async def reports(self) -> list[CompanyReportRecord]:
+        return list(await company_report_dao.list_for_tenant(self.tenant_id))
+
+
+@pytest.fixture
+async def okr_firing(db: DbConnection, reporting_tenant: UUID, monkeypatch: pytest.MonkeyPatch) -> OkrFiring:
+    creator = await member(db, reporting_tenant)
+    okr_agent = await agent(db, reporting_tenant, creator)
+    await db.execute(
+        "INSERT INTO okr_settings (tenant_id, enabled, daily_report_enabled, okr_agent_id) "
+        "VALUES (%(tenant)s, TRUE, TRUE, %(agent)s)",
+        {"tenant": reporting_tenant, "agent": okr_agent},
+    )
+    trigger = await agent_trigger_dao.create(
+        obj_in={
+            "agent_id": okr_agent,
+            "name": "daily_okr_report",
+            "type": "cron",
+            "config": {"expr": "0 9 * * *"},
+            "is_system": True,
+            "cooldown_seconds": 3600,
+        }
+    )
+    firing = OkrFiring(db, trigger, reporting_tenant)
+    real_generate = reporting.generate_company_daily_report
+
+    async def generate(tenant_id: UUID, period_day: date) -> CompanyReportRecord:
+        firing.attempts += 1
+        if firing.failures:
+            raise RuntimeError(firing.failures.pop(0))
+        return await real_generate(tenant_id, period_day)
+
+    monkeypatch.setattr(reporting, "generate_company_daily_report", generate)
+    return firing
+
+
+async def test_racing_workers_and_repeated_ticks_send_and_generate_once(okr_firing: OkrFiring) -> None:
+    # Given a due report trigger that four workers and two later ticks all try to enqueue
+    now = datetime.now(UTC)
+    await asyncio.gather(*(dispatch.enqueue_due_trigger(okr_firing.trigger, now, "UTC") for _ in range(4)))
+    # When one worker claims and runs it, and the trigger is enqueued again afterwards
+    assert await okr_firing.claim_and_invoke() == 1
+    await dispatch.enqueue_due_trigger(okr_firing.trigger, now + timedelta(seconds=15), "UTC")
+    await dispatch.enqueue_due_trigger(okr_firing.trigger, now + timedelta(seconds=30), "UTC")
+    assert await okr_firing.claim_and_invoke() == 0
+    # Then one execution keyed by the trigger and its period ran once: one generation, one report, completed
+    [row] = await okr_firing.rows()
+    period = (now.astimezone(UTC).date() - timedelta(days=1)).isoformat()
+    assert row["status"] == "completed"
+    assert row["idempotency_key"] == f"okr:{okr_firing.trigger.id}:{period}"
+    assert row["payload"] == {"okr_period": period}
+    assert okr_firing.attempts == 1
+    assert [report.period_start.isoformat() for report in await okr_firing.reports()] == [period]
+
+
+async def test_failed_generation_is_recorded_and_retried_without_refiring_every_tick(okr_firing: OkrFiring) -> None:
+    # Given a provider outage on the first attempt
+    okr_firing.failures = ["provider down"]
+    now = datetime.now(UTC)
+    await dispatch.enqueue_due_trigger(okr_firing.trigger, now, "UTC")
+    # When the first attempt runs and the daemon ticks again every 15 seconds
+    assert await okr_firing.claim_and_invoke() == 1
+    stored = await agent_trigger_dao.get(okr_firing.trigger.id)
+    assert stored is not None
+    for tick in range(1, 4):
+        later = now + timedelta(seconds=15 * tick)
+        assert await evaluate_trigger(stored, later, agent_timezone="UTC") is False
+        assert await okr_firing.claim_and_invoke() == 0
+    # Then the failure is on the execution, which waits queued for its retry time instead of being refired
+    [row] = await okr_firing.rows()
+    assert (row["status"], row["last_error"]) == ("pending", "provider down")
+    assert isinstance(row["scheduled_at"], datetime)
+    assert row["scheduled_at"] > datetime.now(UTC) + executions.EXECUTION_RETRY_DELAY - timedelta(minutes=1)
+    assert okr_firing.attempts == 1
+    assert await okr_firing.reports() == []
+    # And once the retry time has passed, the same execution runs again and completes with one report
+    await okr_firing.db.execute("UPDATE trigger_executions SET scheduled_at = %(at)s", {"at": now})
+    assert await okr_firing.claim_and_invoke() == 1
+    [row] = await okr_firing.rows()
+    assert row["status"] == "completed"
+    assert okr_firing.attempts == 2
+    assert len(await okr_firing.reports()) == 1
+    stored = await agent_trigger_dao.get(okr_firing.trigger.id)
+    assert stored is not None
+    assert stored.fire_count == 1
+
+
+async def test_tenant_without_okr_completes_the_execution_without_generating(okr_firing: OkrFiring) -> None:
+    # Given a tenant that switched OKR off after the trigger was queued
+    await okr_firing.db.execute(
+        "UPDATE okr_settings SET enabled = FALSE WHERE tenant_id = %(id)s", {"id": okr_firing.tenant_id}
+    )
+    await dispatch.enqueue_due_trigger(okr_firing.trigger, datetime.now(UTC), "UTC")
+    # When it runs
+    assert await okr_firing.claim_and_invoke() == 1
+    # Then nothing was generated and the execution still completed
+    [row] = await okr_firing.rows()
+    assert row["status"] == "completed"
+    assert okr_firing.attempts == 0

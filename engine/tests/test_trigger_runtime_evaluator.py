@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import TracebackType
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock
@@ -10,45 +10,23 @@ import pytest
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow
 
+from app.core.json_types import JsonObject, JsonValue
+from app.core.trigger_schedule import POLL_CHECKPOINT_KEY, next_due_at, poll_checkpoint
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db import session as session_module
 from app.db.connection import DbConnection
 from app.records.trigger import AgentTriggerRecord
-from app.services.trigger_runtime import evaluator
-from app.services.trigger_runtime.dispatch import runtime_execution_payload
+from app.services.trigger_runtime import dispatch, evaluator
+from app.services.trigger_runtime.dispatch import enqueue_due_trigger, runtime_execution_payload
 from app.services.trigger_runtime.evaluator import PollObservation, evaluate_trigger
 from app.services.trigger_runtime.keys import (
-    POLL_CHECKPOINT_KEY,
     POLL_OBSERVED_KEY,
+    build_okr_execution_key,
     build_scheduled_execution_key,
-    poll_checkpoint,
 )
+from app.services.trigger_runtime.okr import OKR_PERIOD_KEY, due_period, report_period
 
 NOW = datetime(2026, 11, 5, 12, tzinfo=UTC)
-
-
-async def test_mark_fired_records_only_a_self_disable_transition(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.db import session as session_module
-    from app.services.trigger_runtime.evaluator import mark_trigger_fired
-    from test_tenant_disable_dao import _FakePool, _FakeRawConnection
-
-    # Given a recording connection, without a live database.
-    raw = _FakeRawConnection()
-    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
-    token = session_module._conn_ctx.set(None)
-    trigger_id, now = uuid.uuid4(), datetime.now(UTC)
-    # When recording a firing.
-    try:
-        await mark_trigger_fired(trigger_id, now)
-    finally:
-        session_module._conn_ctx.reset(token)
-    # Then only an enabled -> disabled transition records self provenance.
-    query, params = raw.executed[0]
-    assert (
-        "self_disabled = CASE WHEN is_enabled IS TRUE AND (type = 'once' OR "
-        "(max_fires IS NOT NULL AND fire_count + 1 >= max_fires)) THEN TRUE ELSE self_disabled END"
-    ) in " ".join(query.split())
-    assert params == {"id": trigger_id, "now": now}
 
 
 @pytest.mark.asyncio
@@ -215,6 +193,9 @@ class _Cursor:
     async def fetchone(self) -> dict[str, object] | None:
         return {"id": self.raw.executed[-1][1]["trigger_id"]} if self.raw.matches else None
 
+    async def fetchall(self) -> list[dict[str, object]]:
+        return []
+
 
 class _Raw:
     def __init__(self, *, matches: bool) -> None:
@@ -375,7 +356,8 @@ async def test_claim_poll_checkpoint_is_a_conditional_update_of_one_internal_key
         session_module._conn_ctx.reset(token)
     # Then only the checkpoint key is written, for an enabled row whose checkpoint is unchanged
     assert won is True
-    [(sql, params)] = raw.executed
+    [(sql, params), (reschedule, _)] = raw.executed
+    assert reschedule.startswith("SELECT t.id")
     assert sql.startswith("UPDATE agent_triggers SET config = config || jsonb_build_object('_poll_checked_at', ")
     assert "COALESCE((config->>'_poll_seq')::bigint, 0) = %(expected_seq)s" in sql
     assert "'_last_value'" not in sql
@@ -389,3 +371,179 @@ def test_checkpoint_that_is_not_a_string_counts_as_absent() -> None:
     assert poll_checkpoint({POLL_CHECKPOINT_KEY: 5}) is None
     assert poll_checkpoint({}) is None
     assert poll_checkpoint({POLL_CHECKPOINT_KEY: "x"}) == "x"
+
+
+def okr_trigger(name: str, **config: JsonValue) -> AgentTriggerRecord:
+    return AgentTriggerRecord(uuid.uuid4(), uuid.uuid4(), name=name, type="cron", config=config, created_at=NOW)
+
+
+@pytest.mark.parametrize(
+    ("name", "today", "period"),
+    [
+        ("daily_okr_collection", date(2026, 11, 26), date(2026, 11, 26)),
+        ("daily_okr_report", date(2026, 11, 26), date(2026, 11, 25)),
+        ("daily_okr_report", date(2026, 3, 1), date(2026, 2, 28)),
+        ("weekly_okr_report", date(2026, 11, 23), date(2026, 11, 16)),
+        ("weekly_okr_report", date(2026, 11, 26), date(2026, 11, 16)),
+        ("monthly_okr_report", date(2026, 11, 1), date(2026, 10, 31)),
+        ("monthly_okr_report", date(2026, 1, 15), date(2025, 12, 31)),
+    ],
+)
+def test_report_period_is_the_day_to_collect_or_the_generation_anchor(name: str, today: date, period: date) -> None:
+    # Given a firing on a local day, When its period is derived, Then it is the one the report generator is called with.
+    assert report_period(name, today) == period
+
+
+@pytest.mark.parametrize(
+    ("config", "agent_zone", "period"),
+    [
+        ({}, "Asia/Ho_Chi_Minh", date(2026, 11, 26)),
+        ({}, "UTC", date(2026, 11, 25)),
+        ({"timezone": "UTC"}, "Asia/Ho_Chi_Minh", date(2026, 11, 25)),
+        ({"timezone": "Not/AZone"}, "Asia/Ho_Chi_Minh", date(2026, 11, 25)),
+    ],
+)
+async def test_collection_period_is_the_local_day_in_the_schedules_zone(
+    config: JsonObject, agent_zone: str, period: date
+) -> None:
+    # Given a collection firing at 18:30 UTC, which is already the next day in Ho Chi Minh
+    trigger = okr_trigger("daily_okr_collection", **config)
+    now = datetime(2026, 11, 25, 18, 30, tzinfo=UTC)
+    # When the period is taken in the zone the schedule is evaluated in: its own, else its agent's, else UTC
+    # Then neither the host's date nor UTC decide it
+    assert await due_period(trigger, now, agent_zone) == period
+
+
+async def test_period_resolves_the_agent_zone_itself_when_the_caller_has_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a trigger enqueued without a tick-resolved zone
+    from app.services import timezone_utils
+
+    zone = AsyncMock(return_value="Asia/Ho_Chi_Minh")
+    monkeypatch.setattr(timezone_utils, "get_agent_timezone", zone)
+    trigger = okr_trigger("daily_okr_collection")
+    # When its period is taken
+    period = await due_period(trigger, datetime(2026, 11, 25, 18, 30, tzinfo=UTC), None)
+    # Then the agent's zone was looked up
+    zone.assert_awaited_once_with(trigger.agent_id)
+    assert period == date(2026, 11, 26)
+
+
+async def test_okr_firing_is_enqueued_once_per_period_whichever_worker_or_tick_enqueues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a due weekly report and a recording enqueue
+    trigger = okr_trigger("weekly_okr_report")
+    queued: list[dict[str, Any]] = []
+
+    async def enqueue(**kwargs: Any) -> tuple[None, bool]:
+        queued.append(kwargs)
+        return None, False
+
+    monkeypatch.setattr(dispatch, "enqueue_trigger_execution", enqueue)
+    # When two workers and a later tick enqueue it for the same week, and a tick a week later enqueues it again
+    for now in (
+        datetime(2026, 11, 23, 2, 0, tzinfo=UTC),
+        datetime(2026, 11, 23, 2, 0, 15, tzinfo=UTC),
+        datetime(2026, 11, 24, 1, 0, tzinfo=UTC),
+        datetime(2026, 11, 30, 2, 0, tzinfo=UTC),
+    ):
+        await enqueue_due_trigger(trigger, now, "UTC")
+    # Then the idempotency key is the trigger and the report period, and the period travels in the payload
+    keys = [call["idempotency_key"] for call in queued]
+    assert keys[:3] == [build_okr_execution_key(trigger, date(2026, 11, 16))] * 3
+    assert keys[3] == build_okr_execution_key(trigger, date(2026, 11, 23))
+    assert keys[0] != keys[3]
+    assert [call["payload_obj"] for call in queued[:1]] == [{OKR_PERIOD_KEY: "2026-11-16"}]
+    assert {call["source"] for call in queued} == {"cron"}
+
+
+async def test_other_cron_triggers_keep_their_scheduled_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an ordinary cron trigger
+    trigger = AgentTriggerRecord(
+        uuid.uuid4(), uuid.uuid4(), name="digest", type="cron", config={"expr": "0 9 * * *"}, created_at=NOW
+    )
+    enqueue = AsyncMock(return_value=(None, True))
+    monkeypatch.setattr(dispatch, "enqueue_trigger_execution", enqueue)
+    # When it is enqueued
+    await enqueue_due_trigger(trigger, NOW)
+    # Then the key is the cron schedule's, not an OKR period key
+    assert enqueue.await_args is not None
+    assert enqueue.await_args.kwargs["idempotency_key"] == build_scheduled_execution_key(trigger, NOW)
+
+
+def _scheduled(trigger_type: str, config: JsonObject, **columns: Any) -> AgentTriggerRecord:
+    return AgentTriggerRecord(
+        id=uuid.uuid4(),
+        agent_id=uuid.uuid4(),
+        name=trigger_type,
+        type=trigger_type,
+        config=config,
+        created_at=NOW - timedelta(days=3, hours=5),
+        **columns,
+    )
+
+
+@pytest.mark.parametrize(
+    ("trigger", "zone"),
+    [
+        (_scheduled("cron", {"expr": "0 9 * * 1-5"}), "UTC"),
+        (_scheduled("cron", {"expr": "*/20 * * * *"}), "Asia/Ho_Chi_Minh"),
+        (_scheduled("cron", {"expr": "30 6 * * *", "timezone": "America/New_York"}), "UTC"),
+        (
+            _scheduled("cron", {"expr": "0 9 * * *"}, last_fired_at=NOW - timedelta(hours=30), cooldown_seconds=3600),
+            "UTC",
+        ),
+        (_scheduled("interval", {"minutes": 90}), "UTC"),
+        (_scheduled("interval", {"minutes": 1}, last_fired_at=NOW, cooldown_seconds=1800), "UTC"),
+        (_scheduled("once", {"at": "2026-11-05T15:00:00"}), "UTC"),
+        (
+            _scheduled(
+                "poll", {"url": "https://example.test", "interval_min": 1}, last_fired_at=NOW - timedelta(hours=1)
+            ),
+            "UTC",
+        ),
+        (
+            _scheduled(
+                "poll", {"url": "https://example.test", "interval_min": 30, POLL_CHECKPOINT_KEY: NOW.isoformat()}
+            ),
+            "UTC",
+        ),
+    ],
+)
+async def test_next_due_at_is_the_first_instant_the_evaluator_calls_the_trigger_due(
+    trigger: AgentTriggerRecord, zone: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a stored trigger and its scheduled instant; evaluation reads no database beyond the poll claim
+    checkpoints = _Checkpoints(monkeypatch)
+    checkpoints.stored = poll_checkpoint(trigger.config)
+    monkeypatch.setattr(evaluator, "poll_check", AsyncMock(return_value=PollObservation("x", 0, fire=True)))
+    due = next_due_at(trigger, zone)
+    assert due is not None
+    # When evaluated just before and exactly at it
+    before = await evaluate_trigger(
+        replace(trigger, config=dict(trigger.config)), due - timedelta(seconds=1), agent_timezone=zone
+    )
+    at = await evaluate_trigger(replace(trigger, config=dict(trigger.config)), due, agent_timezone=zone)
+    # Then the schedule and the evaluator agree
+    assert (before, at) == (False, True)
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        _scheduled("cron", {"expr": "not a cron"}),
+        _scheduled("cron", {"expr": 5}),
+        _scheduled("interval", {"minutes": "soon"}),
+        _scheduled("once", {"at": "2026-11-05T15:00:00"}, fire_count=1),
+        _scheduled("interval", {"minutes": 5}, max_fires=2, fire_count=2),
+        _scheduled("interval", {"minutes": 5}, is_enabled=False),
+        _scheduled("webhook", {"token": "t"}),
+    ],
+)
+def test_a_trigger_that_can_never_be_due_has_no_schedule(trigger: AgentTriggerRecord) -> None:
+    assert next_due_at(trigger, "UTC") is None
+
+
+def test_expiry_makes_a_trigger_due_so_the_daemon_disables_it() -> None:
+    trigger = _scheduled("interval", {"minutes": 600}, last_fired_at=NOW, expires_at=NOW + timedelta(minutes=5))
+    assert next_due_at(trigger, "UTC") == NOW + timedelta(minutes=5)

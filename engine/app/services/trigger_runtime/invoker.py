@@ -32,8 +32,10 @@ from app.services.trigger_runtime import (
     hold_trigger_execution_leases,
     mark_trigger_executions_completed,
     mark_trigger_executions_failed,
+    mark_trigger_executions_retry,
     trigger_execution_leases,
 )
+from app.services.trigger_runtime.okr import is_okr_firing, run_okr_firing
 
 
 class TriggerDeliveryTarget(TypedDict):
@@ -114,13 +116,22 @@ async def resolve_trigger_delivery_target(
 
 
 async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTriggerRecord]) -> None:
-    """Run one invocation within its run budget; a spent budget fails the still-owned rows while they renew."""
+    """Run one invocation within its run budget; a spent budget fails the still-owned rows while they renew.
+
+    The deterministic OKR firings run first and never reach the model. One that fails is queued again on the
+    execution retry schedule; the rest of the invocation settles as before.
+    """
     leases = trigger_execution_leases(triggers)
+    okr_firings = [trigger for trigger in triggers if is_okr_firing(trigger)]
+    model_triggers = [trigger for trigger in triggers if not is_okr_firing(trigger)]
     try:
         async with hold_trigger_execution_leases(leases) as hold:
             try:
                 async with hold.within_budget(get_settings().TRIGGER_RUN_BUDGET_SECONDS):
-                    error_text = await _run_trigger_invocation(agent_id, triggers, hold)
+                    okr_succeeded, okr_failed = await _run_okr_firings(okr_firings, hold)
+                    error_text = (
+                        await _run_trigger_invocation(agent_id, model_triggers, hold) if model_triggers else None
+                    )
             except ExecutionRunTimeoutError as exc:
                 logger.warning(f"Agent {agent_id} trigger invocation stopped: {exc.reason}")
                 _ = await hold.settle(partial(mark_trigger_executions_failed, leases, RUN_TIMEOUT_ERROR))
@@ -129,10 +140,34 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
         logger.warning(f"Agent {agent_id} stopped after execution lease loss: {exc.reason}")
         _ = await mark_trigger_executions_failed(leases, LEASE_LOST_ERROR)
         return
+    for firing, okr_error in okr_failed:
+        _ = await mark_trigger_executions_retry(trigger_execution_leases([firing]), okr_error)
     if error_text is None:
-        _ = await mark_trigger_executions_completed(leases)
+        _ = await mark_trigger_executions_completed(trigger_execution_leases([*okr_succeeded, *model_triggers]))
     else:
-        _ = await mark_trigger_executions_failed(leases, error_text)
+        _ = await mark_trigger_executions_completed(trigger_execution_leases(okr_succeeded))
+        _ = await mark_trigger_executions_failed(trigger_execution_leases(model_triggers), error_text)
+
+
+async def _run_okr_firings(
+    firings: list[AgentTriggerRecord], hold: ExecutionLeaseHold
+) -> tuple[list[AgentTriggerRecord], list[tuple[AgentTriggerRecord, str]]]:
+    """Run each OKR firing under the lease; returns the ones that succeeded and the failed ones with their error."""
+    succeeded: list[AgentTriggerRecord] = []
+    failed: list[tuple[AgentTriggerRecord, str]] = []
+    for firing in firings:
+        try:
+            await hold.confirm()
+            hold.ensure_held()
+            await run_okr_firing(firing, guard=hold.ensure_held)
+        except ExecutionLeaseLostError:
+            raise
+        except Exception as exc:
+            logger.error(f"OKR firing {firing.name} failed: {exc}")
+            failed.append((firing, str(exc)[:2000]))
+        else:
+            succeeded.append(firing)
+    return succeeded, failed
 
 
 async def _run_trigger_invocation(
@@ -158,19 +193,7 @@ async def _run_trigger_invocation(
         trigger_names: list[str] = []
         for t in triggers:
             part = f"Trigger: {t.name} ({t.type})\nReason: {t.reason}"
-            if t.name == "daily_okr_collection":
-                part += (
-                    "\nExecution requirements: First call get_okr_settings to confirm whether daily report collection is enabled. "
-                    "If enabled, contact only members and digital employees in your relationship network to collect today's final daily reports, "
-                    "then organize them into a formal report of no more than 2,000 words. "
-                    "If it is disabled, state that no action is needed and stop."
-                )
-            elif t.name in ("daily_okr_report", "weekly_okr_report", "monthly_okr_report"):
-                part += (
-                    "\nExecution requirements: The system automatically generates this company-wide report. "
-                    "If you are awakened, provide only necessary clarification and do not collect reports from members again."
-                )
-            elif t.name == "biweekly_okr_checkin":
+            if t.name == "biweekly_okr_checkin":
                 part += (
                     "\nExecution requirements: First call get_okr_settings to confirm whether OKRs are enabled. "
                     "If enabled, check the company and member OKRs for the current period and proactively remind members who have not set OKRs or whose progress is behind. "
