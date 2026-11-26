@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
+from tests.llm_retry_fakes import health_model, install_provider_health, trip
 from tests.test_openclaw_update_postgres import agent, db, member, tenant
 
 from app.dao.okr_dao import company_report_dao, member_daily_report_dao
@@ -111,6 +112,28 @@ async def test_guarded_upsert_rejects_older_snapshot(reporting_tenant: UUID, exi
     assert older == newer
     assert older.content == "new snapshot"
     assert len(await company_report_dao.list_for_tenant(reporting_tenant)) == 1
+
+
+async def test_open_provider_circuit_publishes_the_deterministic_report_without_a_request(
+    reporting_tenant: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a report model whose provider circuit is open.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary = health_model("primary")
+    trip(tracker, primary, failures=2)
+    monkeypatch.setattr(
+        reporting, "_resolve_report_models", AsyncMock(return_value=reporting.ResolvedReportModels(primary, None, None))
+    )
+    chat = AsyncMock()
+    monkeypatch.setattr(reporting, "chat_complete", chat)
+
+    # When the daily report is generated against the real database.
+    saved = await generation.generate_company_report(reporting_tenant, "daily", DAY)
+
+    # Then the deterministic report was published and no provider request went out.
+    chat.assert_not_awaited()
+    assert saved.content == reporting._build_company_daily_content(DAY, 0, [], [])
+    assert [row.id for row in await company_report_dao.list_for_tenant(reporting_tenant)] == [saved.id]
 
 
 @pytest.mark.parametrize("kind", ["weekly", "monthly"])

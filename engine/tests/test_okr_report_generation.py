@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
+from tests.llm_retry_fakes import health_model, install_provider_health, trip
 from tests.test_transaction_boundaries import pool
 from tests.transaction_pool_fakes import CountingPool
 
@@ -19,6 +20,8 @@ from app.records.llm import LLMModelRecord
 from app.records.okr import CompanyReportRecord, MemberDailyReportRecord
 from app.records.trigger import AgentTriggerRecord
 from app.services import okr_report_generation as generation, okr_reporting as reporting
+from app.services.llm.provider_health import Admission, is_unavailable, model_key
+from app.services.llm.retry_policy import LLMHTTPError
 from app.services.trigger_runtime import okr
 from app.services.trigger_runtime.executions import ExecutionLeaseLostError
 
@@ -336,6 +339,120 @@ async def test_fallback_success_runs_without_connection(store: ReportStore, monk
     assert called == ["primary", "fallback"]
     assert "fallback success" in saved.content
     assert saved.needs_refresh is False
+
+
+def _answering(monkeypatch: pytest.MonkeyPatch, **outcomes: str | Exception) -> list[str]:
+    """Replace the provider call with one that plays each model's outcome and returns the models it was asked."""
+    asked: list[str] = []
+
+    async def complete(**kwargs: object) -> dict[str, object]:
+        asked.append(str(kwargs["model"]))
+        outcome = outcomes[str(kwargs["model"])]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return {"choices": [{"message": {"content": outcome}}]}
+
+    monkeypatch.setattr(reporting, "chat_complete", complete)
+    return asked
+
+
+async def _generate(primary: LLMModelRecord, fallback: LLMModelRecord | None = None) -> str:
+    return await reporting._generate_llm_report_content(
+        TENANT,
+        "daily",
+        DAY,
+        DAY,
+        {},
+        fallback_content="deterministic report",
+        models=reporting.ResolvedReportModels(primary, fallback, None),
+    )
+
+
+async def test_open_primary_is_skipped_for_the_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an open primary circuit and a healthy fallback.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary, fallback = health_model("primary"), health_model("fallback")
+    trip(tracker, primary, failures=2)
+    asked = _answering(monkeypatch, primary="unused", fallback="fallback report")
+
+    # When the report is generated.
+    content = await _generate(primary, fallback)
+
+    # Then only the fallback was asked, and it wrote the report.
+    assert asked == ["fallback"]
+    assert "fallback report" in content
+
+
+async def test_no_healthy_model_publishes_the_deterministic_report_without_a_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given both models' circuits are open.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary, fallback = health_model("primary"), health_model("fallback")
+    trip(tracker, primary, failures=2)
+    trip(tracker, fallback, failures=2)
+    asked = _answering(monkeypatch, primary="unused", fallback="unused")
+    warnings: list[str] = []
+    monkeypatch.setattr(reporting.logger, "warning", lambda message: warnings.append(message))
+
+    # When the report is generated.
+    content = await _generate(primary, fallback)
+
+    # Then it falls back to the deterministic content with no provider request and one warning.
+    assert content == "deterministic report"
+    assert asked == []
+    assert len(warnings) == 1
+
+
+async def test_retryable_failures_are_recorded_and_then_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a provider that answers 503 and a circuit that opens after two failures.
+    _tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary = health_model("primary")
+    asked = _answering(monkeypatch, primary=LLMHTTPError(503, "upstream busy"))
+
+    # When the report is generated three times.
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="All configured OKR report models failed"):
+            await _generate(primary)
+    content = await _generate(primary)
+
+    # Then the first two reached the provider and raised; the third was refused before it.
+    assert asked == ["primary", "primary"]
+    assert content == "deterministic report"
+    assert is_unavailable(primary)
+
+
+async def test_refused_primary_does_not_hide_a_failing_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an open primary and a fallback that fails.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary, fallback = health_model("primary"), health_model("fallback")
+    trip(tracker, primary, failures=2)
+    asked = _answering(monkeypatch, primary="unused", fallback=LLMHTTPError(503, "upstream busy"))
+
+    # When the report is generated.
+    # Then the failure still raises, so the prior report is kept instead of replaced by the deterministic one.
+    with pytest.raises(RuntimeError, match="All configured OKR report models failed"):
+        await _generate(primary, fallback)
+    assert asked == ["fallback"]
+
+
+async def test_successful_probe_closes_the_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an open circuit whose cooldown has ended.
+    tracker, clock = install_provider_health(monkeypatch, threshold=2)
+    primary = health_model("primary")
+    key = model_key(primary)
+    assert key is not None
+    trip(tracker, primary, failures=2)
+    clock.advance(30)
+    asked = _answering(monkeypatch, primary="probe report")
+
+    # When the report is generated as the probe and the provider answers.
+    content = await _generate(primary)
+
+    # Then the circuit is closed.
+    assert "probe report" in content
+    assert asked == ["primary"]
+    assert tracker.admit(key) is Admission.CALL
 
 
 @pytest.mark.parametrize("kind", ["weekly", "monthly"])

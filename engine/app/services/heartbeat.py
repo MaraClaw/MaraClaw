@@ -20,8 +20,11 @@ from app.core.logging import logger, new_trace_id
 from app.core.notification_kinds import NotificationKind
 from app.core.tool_types import ToolDefinition
 from app.records.agent import AgentRecord
+from app.records.llm import LLMModelRecord
 from app.runtime.tasks import AdmissionClosedError, TaskAdmission, cancel_tasks, loop_progress
 from app.services.llm.finish import FINISH_PROTOCOL_REMINDER, find_finish_call, parse_tool_arguments
+from app.services.llm.provider_health import ProviderUnavailableError, ensure_available, guarded
+from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.types import LLMToolCall, LLMToolFunction, ToolPayload
 from app.services.quota_guard import QuotaExceeded, consume_agent_llm_call
 from app.services.storage import agent_storage_key, get_storage_backend
@@ -173,6 +176,21 @@ PRIVATE_AGENT_HEARTBEAT_APPEND = """
 """
 
 
+async def _select_model(agent: AgentRecord) -> LLMModelRecord | None:
+    """The agent's model for a background run, routed like a chat turn: the fallback while the primary is open."""
+    return select_turn_model(await load_agent_model_bundle(agent), agent_id=agent.id).model
+
+
+def _refusal(label: str, agent_id: uuid.UUID, model: LLMModelRecord) -> str | None:
+    """Why the model's provider refuses calls right now (logged once at warning), or None when a request may go out."""
+    try:
+        ensure_available(model)
+    except ProviderUnavailableError as error:
+        logger.warning("[{}] agent {}: {}: provider={} model={}", label, agent_id, error, model.provider, model.model)
+        return str(error)
+    return None
+
+
 def _release_heartbeat_slot(agent_id: uuid.UUID) -> None:
     _HEARTBEAT_IN_FLIGHT.remove(agent_id)
     _HEARTBEAT_SEMAPHORE.release()
@@ -206,7 +224,6 @@ async def _run_heartbeat(agent_id: uuid.UUID) -> None:
     try:
         from app.dao.activity_log_dao import agent_activity_log_dao
         from app.dao.agent_dao import agent_dao
-        from app.dao.llm_dao import llm_model_dao
         from app.dao.notification_dao import notification_dao
 
         # ── Phase 1: Read all context from DB (short transactions via DAOs) ──
@@ -225,17 +242,9 @@ async def _run_heartbeat(agent_id: uuid.UUID) -> None:
         if not agent:
             return
 
-        model_id = agent.primary_model_id or agent.fallback_model_id
-        if not model_id:
-            return
-
-        model = await llm_model_dao.get(model_id)
-        if not model:
-            return
-        from app.services.enterprise_llm import model_usable_in_tenant
-
-        if not model_usable_in_tenant(model, getattr(agent, "tenant_id", None)):
-            logger.warning("[heartbeat] skip agent {}: model is not this company's", agent.id)
+        # Skip here, before the inbox is drained below: a run that cannot answer must not consume it.
+        model = await _select_model(agent)
+        if model is None or _refusal("Heartbeat", agent_id, model) is not None:
             return
 
         # Cache values we need for Phase 2
@@ -377,6 +386,10 @@ async def _run_heartbeat(agent_id: uuid.UUID) -> None:
                     reply = _token_limit_msg
                     break
 
+            if _refusal("Heartbeat", agent_id, model) is not None:
+                reply = ""
+                break
+
             try:
                 await consume_agent_llm_call(agent_id)
             except QuotaExceeded:
@@ -384,11 +397,14 @@ async def _run_heartbeat(agent_id: uuid.UUID) -> None:
                 break
 
             try:
-                response = await client.complete(
-                    messages=llm_messages,
-                    tools=tools_for_llm,
-                    temperature=model_temperature,
-                    max_tokens=get_max_tokens(model_provider, model_model, model_max_output_tokens),
+                response = await guarded(
+                    model,
+                    lambda: client.complete(
+                        messages=llm_messages,
+                        tools=tools_for_llm,
+                        temperature=model_temperature,
+                        max_tokens=get_max_tokens(model_provider, model_model, model_max_output_tokens),
+                    ),
                 )
             except LLMError as e:
                 logger.error(f"LLM error in heartbeat: {e}")
@@ -712,7 +728,6 @@ async def run_agent_oneshot(
     _ = new_trace_id()
     try:
         from app.dao.agent_dao import agent_dao
-        from app.dao.llm_dao import llm_model_dao
 
         # ── Phase 1: Read agent + model config ─────────────────────────────────
         agent_name = ""
@@ -736,10 +751,10 @@ async def run_agent_oneshot(
             await _notify_oneshot_error(triggered_by_user_id, agent_id, agent_name or str(agent_id), msg)
             return ""
 
-        model = await llm_model_dao.get(model_id)
-        if not model:
-            msg = f"The configured LLM model ({model_id}) was not found. Please check Agent Settings."
-            logger.warning(f"[Oneshot] Model {model_id} not found - aborting")
+        model = await _select_model(agent)
+        if model is None:
+            msg = f"The configured LLM model ({model_id}) was not found or is not usable. Please check Agent Settings."
+            logger.warning(f"[Oneshot] Model {model_id} not found or not usable - aborting")
             await _notify_oneshot_error(triggered_by_user_id, agent_id, agent_name or str(agent_id), msg)
             return ""
 
@@ -811,6 +826,15 @@ async def run_agent_oneshot(
                     reply = _token_limit_msg
                     break
 
+            if (refusal := _refusal("Oneshot", agent_id, model)) is not None:
+                await _notify_oneshot_error(
+                    triggered_by_user_id,
+                    agent_id,
+                    agent_name,
+                    f"LLM call failed (round {round_i}): {refusal}",
+                )
+                break
+
             try:
                 await consume_agent_llm_call(agent_id)
             except QuotaExceeded:
@@ -818,11 +842,14 @@ async def run_agent_oneshot(
                 break
 
             try:
-                response = await client.complete(
-                    messages=llm_messages,
-                    tools=tools_for_llm,
-                    temperature=model_temperature,
-                    max_tokens=get_max_tokens(model_provider, model_model, model_max_output_tokens),
+                response = await guarded(
+                    model,
+                    lambda: client.complete(
+                        messages=llm_messages,
+                        tools=tools_for_llm,
+                        temperature=model_temperature,
+                        max_tokens=get_max_tokens(model_provider, model_model, model_max_output_tokens),
+                    ),
                 )
             except LLMError as e:
                 logger.error(f"[Oneshot] LLM error (round {round_i}): {e}")

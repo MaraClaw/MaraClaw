@@ -32,6 +32,7 @@ from app.dao.user_dao import user_dao
 from app.records.llm import LLMModelRecord
 from app.records.okr import CompanyReportRecord, MemberDailyReportRecord
 from app.services.llm.factory import chat_complete
+from app.services.llm.provider_health import ProviderUnavailableError, guarded
 from app.services.llm.utils import get_max_tokens, get_model_api_key
 
 MEMBER_DAILY_CHAR_LIMIT = 2000
@@ -505,37 +506,47 @@ async def _generate_llm_report_content(
     )
 
     async def _try_model(model: LLMModelRecord) -> str:
-        response = await chat_complete(
-            provider=model.provider,
-            api_key=get_model_api_key(model),
-            model=model.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            base_url=model.base_url,
-            temperature=model.temperature,
-            max_tokens=min(
-                get_max_tokens(model.provider, model.model, getattr(model, "max_output_tokens", None)), 1800
+        response = await guarded(
+            model,
+            lambda: chat_complete(
+                provider=model.provider,
+                api_key=get_model_api_key(model),
+                model=model.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                base_url=model.base_url,
+                temperature=model.temperature,
+                max_tokens=min(
+                    get_max_tokens(model.provider, model.model, getattr(model, "max_output_tokens", None)), 1800
+                ),
+                request_timeout=float(getattr(model, "request_timeout", None) or 120.0),
             ),
-            request_timeout=float(getattr(model, "request_timeout", None) or 120.0),
         )
         return response.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
-    for candidate in (models.primary, models.fallback):
-        if not candidate:
-            continue
+    candidates = [candidate for candidate in (models.primary, models.fallback) if candidate]
+    refused = 0
+    for candidate in candidates:
         try:
             generated = await _try_model(candidate)
             normalized = _sanitize_llm_report_output(report_type, period_start, period_end, generated)
             if normalized:
                 return normalized
+        except ProviderUnavailableError:
+            refused += 1
         except Exception as exc:
             logger.warning(
                 f"[OKR] LLM company report generation failed tenant={tenant_id} "
                 f"report_type={report_type} model={getattr(candidate, 'model', '?')}: {exc}"
             )
 
+    if refused == len(candidates):
+        logger.warning(
+            f"[OKR] no healthy report model tenant={tenant_id} report_type={report_type}: deterministic report"
+        )
+        return fallback_content
     raise RuntimeError("All configured OKR report models failed")
 
 
