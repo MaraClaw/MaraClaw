@@ -7,7 +7,7 @@ import { createSessionQueryScope } from '../src/hooks/session-query-scope.ts'
 import { authSession } from '../src/lib/auth-session.ts'
 import { agentFilesQuery, loadedFiles } from '../src/lib/agent-files-query.ts'
 import { StaleSessionError } from '../src/lib/http.ts'
-import { listFiles, listFilesPage, type FileInfo } from '../src/lib/workspace-api.ts'
+import { listFiles, listFilesPage, readFileContent, type FileInfo } from '../src/lib/workspace-api.ts'
 
 const file = (name: string, is_dir = false): FileInfo => ({ name, path: name, is_dir, size: 0 })
 const cursor = 'opaque/+?=&position'
@@ -106,3 +106,23 @@ for (const retire of ['owner', 'signal'] as const) {
       ? error instanceof StaleSessionError : error instanceof DOMException && error.name === 'AbortError')
   })
 }
+
+test('file content reads return the full body or a typed too-large result, never a partial body', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const url = new URL(String(input), 'https://fixture.test')
+    assert.equal(url.pathname, '/api/agents/agent/files/content')
+    return url.searchParams.get('path') === 'big.log'
+      ? Response.json({ detail: { code: 'file_too_large', message: 'too big', max_bytes: 1048576 } }, { status: 413 })
+      : Response.json({ path: 'a.txt', content: 'hello', version_token: 'v1' })
+  })
+  assert.deepEqual(await readFileContent('agent', 'a.txt'), { kind: 'content', path: 'a.txt', content: 'hello', version_token: 'v1' })
+  assert.deepEqual(await readFileContent('agent', 'big.log'), { kind: 'too-large', path: 'big.log', maxBytes: 1048576 })
+})
+
+test('other read failures, including a 413 without the file limit code, still reject', async (t) => {
+  let status = 413
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ detail: status === 413 ? 'Request too large' : 'boom' }, { status }))
+  await assert.rejects(readFileContent('agent', 'a.txt'), { status: 413 })
+  status = 500
+  await assert.rejects(readFileContent('agent', 'a.txt'), { status: 500 })
+})

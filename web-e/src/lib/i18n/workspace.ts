@@ -585,6 +585,7 @@ export const workspace = {
   "Preview unavailable. Download the file to view it.": "Xem trước không có sẵn. Tải tập tin để xem nó.",
   "Uploaded": "Đã tải lên",
   "Cannot read file": "Không thể đọc tập tin",
+  "This file is larger than the {limit} editor limit. Download it to view or change it.": "Tập tin này lớn hơn giới hạn trình chỉnh sửa {limit}. Hãy tải xuống để xem hoặc thay đổi.",
   "Saved": "Đã lưu",
   "Save failed": "Lưu không thành công",
   "Unable to start download. Try again.": "Không thể bắt đầu tải xuống. Hãy thử lại.",

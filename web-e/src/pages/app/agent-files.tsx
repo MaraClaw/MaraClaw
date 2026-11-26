@@ -77,6 +77,7 @@ export function AgentFilesPage() {
   const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [version, setVersion] = useState<string | undefined>()
+  const [tooLargeBytes, setTooLargeBytes] = useState<number | null>(null)
   const uploadPolicy = useQuery({
     queryKey: ['upload-policy'],
     queryFn: ({ signal }) => getUploadPolicy({ signal, owner: scope.owner }),
@@ -105,8 +106,15 @@ export function AgentFilesPage() {
     mutationFn: (filePath: string) => readFileContent(agent.id, filePath),
     onSuccess(data) {
       setSelected(data.path)
+      if (data.kind === 'too-large') {
+        setDraft('')
+        setVersion(undefined)
+        setTooLargeBytes(data.maxBytes)
+        return
+      }
       setDraft(data.content)
       setVersion(data.version_token)
+      setTooLargeBytes(null)
     },
     onError(error) {
       toast.error(userFacingRequestError(error, translate("Cannot read file")))
@@ -234,7 +242,7 @@ export function AgentFilesPage() {
                       {translate("Unlock")}</Button>
                   </>
                 ) : null}
-                <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
+                <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending || tooLargeBytes !== null}>
                   {translate("Save")}</Button>
                 {canManage ? (
                   <Button
@@ -256,7 +264,15 @@ export function AgentFilesPage() {
             {token && /\.(png|jpe?g|gif|webp|svg)$/i.test(selected) ? (
               <FileImagePreview key={`${agent.id}:${selected}`} agentId={agent.id} path={selected} />
             ) : null}
-            <Textarea aria-label={translate("Contents of {path}", { path: selected })} className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
+            {tooLargeBytes === null ? (
+              <Textarea aria-label={translate("Contents of {path}", { path: selected })} className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
+            ) : (
+              <div className="space-y-2 rounded-xl border border-border p-4 text-sm" role="status">
+                <p>{translate("This file is larger than the {limit} editor limit. Download it to view or change it.", { limit: formatUploadLimit(tooLargeBytes, locale) })}</p>
+                <Button type="button" size="sm" variant="outline" disabled={download.isPending} onClick={() => download.mutate(selected)}>
+                  {translate("Download")}</Button>
+              </div>
+            )}
             {revisions.isError ? <RequestErrorToast error={revisions.error} message="Unable to load file revisions. Try again." /> : null}
             {(revisions.data ?? []).length > 0 ? (
               <div className="mt-3 space-y-1">
