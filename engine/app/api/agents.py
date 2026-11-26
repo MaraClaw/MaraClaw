@@ -86,9 +86,12 @@ from app.services.openclaw_keys import mint_openclaw_gateway_key, write_gateway_
 from app.services.openclaw_update_exclusion import guest_write_exclusion
 from app.services.quota_guard import QuotaExceeded, check_agent_renewal_quota
 
-__all__ = ["agent_manager", "router"]
+__all__ = ["agent_manager", "router", "runtime_router"]
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+# Routes whose work outlives a short transaction (Docker, the workspace lock). Mounted without `bind_crud_connection`,
+# so each read or write below is its own short transaction and no pooled connection waits on the guest.
+runtime_router = APIRouter(prefix="/agents", tags=["agents"])
 settings = get_settings()
 
 # Re-export cleanup SQL for tests (parameterized with %(aid)s).
@@ -800,7 +803,7 @@ async def delete_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(g
         schedule_agent_teardown(teardown)
 
 
-@router.post("/{agent_id}/start", response_model=AgentOut)
+@runtime_router.post("/{agent_id}/start", response_model=AgentOut)
 async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> AgentOut:
     """Start an agent's container."""
     agent, access_level = await check_agent_access(current_user, agent_id)
@@ -819,7 +822,7 @@ async def start_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(ge
             assert_never(outcome)
 
 
-@router.post("/{agent_id}/start-new-container", response_model=AgentOut)
+@runtime_router.post("/{agent_id}/start-new-container", response_model=AgentOut)
 async def start_new_agent_container_route(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> AgentOut:
@@ -840,7 +843,7 @@ async def start_new_agent_container_route(
             assert_never(outcome)
 
 
-@router.post("/{agent_id}/stop", response_model=AgentOut)
+@runtime_router.post("/{agent_id}/stop", response_model=AgentOut)
 async def stop_agent(agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)) -> AgentOut:
     """Stop an agent's container."""
     _, access_level = await check_agent_access(current_user, agent_id)
@@ -910,7 +913,7 @@ async def resolve_agent_approval(
     }
 
 
-@router.post("/{agent_id}/api-key", response_model=None, dependencies=[Depends(guest_write_exclusion)])
+@runtime_router.post("/{agent_id}/api-key", response_model=None, dependencies=[Depends(guest_write_exclusion)])
 async def generate_or_reset_api_key(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> AgentApiKeyResponse:
@@ -921,11 +924,12 @@ async def generate_or_reset_api_key(
     if agent.setup_pending:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent setup is incomplete")
     raw_key, key_hash = mint_openclaw_gateway_key()
-    _ = await agent_dao.update(
-        db_obj=agent,
-        obj_in={"api_key_hash": key_hash},
-    )
-    write_gateway_api_key(agent, raw_key)
+    async with optional_connection_ctx():
+        _ = await agent_dao.update(
+            db_obj=agent,
+            obj_in={"api_key_hash": key_hash},
+        )
+        write_gateway_api_key(agent, raw_key)
     from app.services.openclaw_hot_cache import drop_cached_agent
 
     drop_cached_agent(agent.id)

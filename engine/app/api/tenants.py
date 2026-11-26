@@ -61,6 +61,8 @@ from app.services.tenant_provisioning import (
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 router.include_router(invitation_preview_router)
+# Logo routes read and write object storage, so they are mounted without `bind_crud_connection`.
+logo_router = APIRouter(prefix="/tenants", tags=["tenants"])
 
 
 # ─── Schemas ────────────────────────────────────────────
@@ -841,7 +843,7 @@ async def update_tenant(
     return TenantOut.model_validate(updated)
 
 
-@router.get("/{tenant_id}/logo")
+@logo_router.get("/{tenant_id}/logo")
 async def get_tenant_logo(tenant_id: uuid.UUID) -> Response:
     """Serve a tenant logo. Logos are public UI assets, addressed by UUID."""
     try:
@@ -851,7 +853,7 @@ async def get_tenant_logo(tenant_id: uuid.UUID) -> Response:
     return Response(data, media_type="image/png")
 
 
-@router.post("/{tenant_id}/logo", response_model=TenantOut)
+@logo_router.post("/{tenant_id}/logo", response_model=TenantOut)
 async def upload_tenant_logo(
     tenant_id: uuid.UUID,
     file: UploadFile = File(...),
@@ -892,7 +894,7 @@ async def upload_tenant_logo(
     return TenantOut.model_validate(updated)
 
 
-@router.delete("/{tenant_id}/logo", response_model=TenantOut)
+@logo_router.delete("/{tenant_id}/logo", response_model=TenantOut)
 async def delete_tenant_logo(
     tenant_id: uuid.UUID, current_user: UserRecord = Depends(require_role("org_admin", "platform_admin"))
 ) -> TenantOut:

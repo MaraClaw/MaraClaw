@@ -225,7 +225,7 @@ def test_every_guest_visible_file_mutator_carries_the_exclusion_and_reads_do_not
     }
     guarded: set[tuple[str, str]] = set()
     unguarded: set[tuple[str, str]] = set()
-    for router in (agents_api.router, files_api.router, files_api.upload_router):
+    for router in (agents_api.router, agents_api.runtime_router, files_api.router, files_api.upload_router):
         for route in router.routes:
             methods = getattr(route, "methods", None) or set()
             dependant = getattr(route, "dependant", None)

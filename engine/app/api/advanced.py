@@ -31,6 +31,8 @@ from app.services.guest_container_status import get_guest_container_status
 from app.services.guest_limits import resolve_guest_limits
 
 router = APIRouter(tags=["advanced"])
+# Mounted without `bind_crud_connection`: the Docker inspection must not hold a pooled connection.
+metrics_router = APIRouter(tags=["advanced"])
 
 
 # ─── Collaboration ──────────────────────────────────────
@@ -229,20 +231,20 @@ async def handover_agent(
 # ─── Observability ──────────────────────────────────────
 
 
-@router.get("/agents/{agent_id}/metrics", response_model=None)
+@metrics_router.get("/agents/{agent_id}/metrics", response_model=None)
 async def get_agent_metrics(
     agent_id: uuid.UUID, current_user: UserRecord = Depends(get_current_user)
 ) -> AgentMetricsResponse:
     """Get observability metrics for an agent."""
     agent, _access = await check_agent_access(current_user, agent_id)
 
-    # Task stats
-    _total_tasks = await task_dao.count_for_agent(agent_id)
-    _done_tasks = await task_dao.count_for_agent(agent_id, status=TaskStatus.DONE)
-    _pending_tasks = await task_dao.count_for_agent(agent_id, status=TaskStatus.PENDING)
-
-    # Approval + audit stats via raw SQL (no dedicated DAO yet)
+    # The database reads share one short transaction that is closed before the Docker inspection starts.
     async with connection_ctx() as conn:
+        _total_tasks = await task_dao.count_for_agent(agent_id)
+        _done_tasks = await task_dao.count_for_agent(agent_id, status=TaskStatus.DONE)
+        _pending_tasks = await task_dao.count_for_agent(agent_id, status=TaskStatus.PENDING)
+
+        # Approval + audit stats via raw SQL (no dedicated DAO yet)
         _total_approvals = int_from_row(
             await conn.fetchval(
                 "SELECT COUNT(*) FROM approval_requests WHERE agent_id = %(agent_id)s",
@@ -262,11 +264,10 @@ async def get_agent_metrics(
                 {"agent_id": agent_id, "cutoff": cutoff},
             )
         )
+        expected_limits = await resolve_guest_limits(agent)
 
-    # Container status
     from app.services.agent_manager import agent_manager
 
-    expected_limits = await resolve_guest_limits(agent)
     container_status = await run_docker(
         get_guest_container_status, agent_manager, agent, expected_limits, abandon_on_cancel=True
     )

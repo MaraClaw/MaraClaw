@@ -198,7 +198,13 @@ async def api(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytes
     )
     open_guest_write_gate(monkeypatch)
     app = FastAPI()
-    for router in (files_api.router, files_api.upload_router, file_previews.router, pages_api.router):
+    for router in (
+        files_api.router,
+        files_api.upload_router,
+        file_previews.router,
+        pages_api.router,
+        pages_api.publish_router,
+    ):
         app.include_router(router, prefix="/api")
     app.dependency_overrides[get_current_user] = lambda: user
     transport = httpx.ASGITransport(app=app)

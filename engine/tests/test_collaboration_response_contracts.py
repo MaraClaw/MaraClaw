@@ -49,7 +49,14 @@ from openclaw_update_gate_fixtures import open_guest_write_gate
 
 ROUTES = tuple(
     route
-    for router in (agents.router, relationships.router, okr.router, advanced.router)
+    for router in (
+        agents.router,
+        agents.runtime_router,
+        relationships.router,
+        okr.router,
+        advanced.router,
+        advanced.metrics_router,
+    )
     for route in router.routes
     if isinstance(route, APIRoute)
 )
@@ -76,7 +83,13 @@ def agent(actor: UserRecord, monkeypatch: pytest.MonkeyPatch) -> AgentRecord:
 @pytest.fixture
 async def client(actor: UserRecord) -> AsyncIterator[AsyncClient]:
     app = FastAPI()
-    for router in (agents.router, relationships.router, advanced.router):
+    for router in (
+        agents.router,
+        agents.runtime_router,
+        relationships.router,
+        advanced.router,
+        advanced.metrics_router,
+    ):
         app.include_router(router, prefix="/api")
     app.include_router(okr.router)
     app.dependency_overrides[agents.get_current_user] = lambda: actor

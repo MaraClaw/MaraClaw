@@ -9,14 +9,13 @@ from uuid import uuid4
 import anyio
 import httpx
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 
 import test_openclaw_update_postgres as postgres_fixtures
 from app.api import agents as api
 from app.core import events
 from app.core.domain.agents import AgentStatus
 from app.db import session
-from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.records.user import UserRecord
@@ -87,8 +86,8 @@ def surface(monkeypatch, tmp_path):
         return None
 
     async def publish(_operation, record):
-        await runtime.update(db_obj=record, obj_in={})
-        await runtime.commit()
+        async with session.connection_ctx():
+            await runtime.update(db_obj=record, obj_in={})
         return True
 
     async def halted(_operation_id):
@@ -133,12 +132,20 @@ def surface(monkeypatch, tmp_path):
                 runtime.locked = False
                 runtime.released.set()
 
-    async def transaction():
-        raw = DbConnection.__new__(DbConnection)
-        monkeypatch.setattr(raw, "commit", runtime.commit)
-        monkeypatch.setattr(raw, "rollback", runtime.rollback)
-        async with session.transaction(raw):
-            yield
+    class RuntimeConnection:
+        async def commit(self):
+            await runtime.commit()
+
+        async def rollback(self):
+            await runtime.rollback()
+
+    class RuntimePool:
+        @asynccontextmanager
+        async def connection(self):
+            yield RuntimeConnection()
+
+    # The runtime router is mounted without a request-wide connection: each scope below is its own checkout.
+    monkeypatch.setattr(session, "get_pool", RuntimePool)
 
     async def serialize(record, _viewer):
         return api.AgentOut.model_validate(record)
@@ -159,7 +166,7 @@ def surface(monkeypatch, tmp_path):
     monkeypatch.setattr(exclusion, "setup_workspace_lock", lock)
     monkeypatch.setattr(lifecycle.agent_manager, "_agent_dir", lambda _id: tmp_path / str(_id))
     app = FastAPI()
-    app.include_router(api.router, prefix="/api", dependencies=[Depends(transaction)])
+    app.include_router(api.runtime_router, prefix="/api")
     app.dependency_overrides[api.get_current_user] = lambda: user
     return app, runtime, agent
 
@@ -186,7 +193,7 @@ async def test_explicit_outcome_is_committed_before_unlock(surface, monkeypatch,
     # When the real ASGI route completes (including its HTTP failure response).
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(f"/api/agents/{agent.id}/{operation}")
-    # Then the runtime survives rollback of a 502, and publication preceded lock release.
+    # Then the runtime survives a 502 (its commit is its own transaction), and publication preceded lock release.
     assert response.status_code == (200 if succeeds else 502)
     if operation == "start" and not succeeds:
         assert runtime.events[0] == "release"
@@ -202,7 +209,7 @@ async def test_explicit_outcome_is_committed_before_unlock(surface, monkeypatch,
         assert (runtime.committed.container_id, runtime.committed.container_port) == (None, None)
     if not succeeds:
         assert response.json()["detail"]["code"] == f"guest_{operation}_failed"
-        assert runtime.events[-1] == "rollback"
+        assert runtime.events[-1] == "release"
 
 
 @pytest.mark.parametrize("failure", ["admission", "preflight", "layout", "ownership", "unexpected"])
@@ -236,7 +243,7 @@ async def test_preflight_outcomes_do_not_persist_runtime(surface, monkeypatch, f
     assert "persist" not in runtime.events
 
 
-async def test_stop_timeout_keeps_committed_start_cancellation_and_allows_retry(surface, monkeypatch, db):
+async def test_stop_timeout_keeps_committed_start_cancellation_and_allows_retry(db, surface, monkeypatch):
     from app.dao.agent_start_dao import agent_start_dao
     from app.main import app as main_app
     from app.services.agent_lifecycle_events import AGENT_LIFECYCLE_CHANNEL

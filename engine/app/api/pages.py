@@ -21,6 +21,8 @@ public_router = APIRouter(tags=["pages"])
 
 # Authenticated router - under /api prefix
 router = APIRouter(prefix="/pages", tags=["pages"])
+# Publishing reads the source file from storage, so it is mounted without `bind_crud_connection`.
+publish_router = APIRouter(prefix="/pages", tags=["pages"])
 
 # ── Public render (NO auth) ────────────────────────────
 
@@ -88,7 +90,7 @@ async def list_pages(
     return [_page_payload(p) for p in pages]
 
 
-@router.post("/", response_model=dict[str, object])
+@publish_router.post("/", response_model=dict[str, object])
 async def publish_page(
     body: PagePublish, current_user: UserRecord = Depends(get_current_user)
 ) -> PublishedPageResponse:

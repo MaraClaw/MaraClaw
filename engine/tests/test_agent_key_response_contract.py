@@ -79,6 +79,7 @@ async def surface(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[AsyncC
     )
     app = FastAPI()
     app.include_router(agents.router, prefix="/api")
+    app.include_router(agents.runtime_router, prefix="/api")
     app.dependency_overrides[agents.get_current_user] = lambda: actor
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://key-contract") as client:

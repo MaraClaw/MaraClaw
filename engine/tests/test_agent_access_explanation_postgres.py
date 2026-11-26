@@ -100,6 +100,7 @@ async def access_api(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AccessAPI
             monkeypatch.setattr(agents.user_dao, "get_with_identity", AsyncMock(return_value=None))
             app = FastAPI()
             app.include_router(agents.router, prefix="/api")
+            app.include_router(agents.runtime_router, prefix="/api")
             app.dependency_overrides[agents.get_current_user] = lambda: viewer
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://access-qa") as client:
                 yield AccessAPI(db, client, viewer, agent, departments)

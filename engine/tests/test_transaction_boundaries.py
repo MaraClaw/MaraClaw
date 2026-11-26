@@ -34,6 +34,7 @@ def pool(monkeypatch: pytest.MonkeyPatch) -> Iterator[CountingPool]:
 
     async def execute(query: str, params: Params = None) -> None:
         assert query in {
+            "SELECT set_config('lock_timeout', %(ms)s, false)",
             "SELECT is_active FROM tenants WHERE id = %(id)s FOR UPDATE",
             "SELECT id FROM users WHERE id = %(id)s FOR UPDATE",
             "SELECT id FROM identities WHERE id = %(id)s FOR UPDATE",
@@ -65,6 +66,11 @@ def pool(monkeypatch: pytest.MonkeyPatch) -> Iterator[CountingPool]:
         main.tools_probe_router,
         main.files_upload_router,
         main.enterprise_kb_router,
+        main.agents_runtime_router,
+        main.advanced_metrics_router,
+        main.tenants_logo_router,
+        main.pages_publish_router,
+        main.gogcli_router,
     ],
     ids=[
         "auth",
@@ -76,6 +82,11 @@ def pool(monkeypatch: pytest.MonkeyPatch) -> Iterator[CountingPool]:
         "tools_probes",
         "workspace_upload",
         "enterprise_kb",
+        "agent_runtime",
+        "agent_metrics",
+        "tenant_logo",
+        "page_publish",
+        "gogcli",
     ],
 )
 def test_io_router_has_no_request_wide_checkout(router: APIRouter) -> None:
@@ -117,7 +128,6 @@ def test_io_router_has_no_request_wide_checkout(router: APIRouter) -> None:
         main.admin_search_analytics_router,
         main.pages_router,
         main.credentials_router,
-        main.gogcli_router,
         main.okr_router,
         main.onboarding_router,
     ],

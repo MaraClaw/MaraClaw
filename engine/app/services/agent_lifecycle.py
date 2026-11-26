@@ -10,7 +10,7 @@ from app.core.incident_reporting import report_exception
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.db.errors import overload_error
-from app.db.session import flush_request_transaction
+from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.services.agent_lifecycle_events import AgentStopped, publish_agent_stopped
@@ -118,8 +118,8 @@ async def stop_agent_guest(agent_id: UUID, persist: RuntimePersistence = persist
             if not stopped:
                 # Retain the ID so the existing stopped-guest worker can retry the Docker stop.
                 agent.status = AgentStatus.STOPPED
-            saved = await persist(agent)
-            await flush_request_transaction()
+            async with optional_connection_ctx():
+                saved = await persist(agent)
             if not stopped:
                 return LifecycleFailure(502, "guest_stop_failed", "Guest stop is pending retry")
             if agent_manager.docker_client is not None:
