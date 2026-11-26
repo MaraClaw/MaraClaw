@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.core import security
 from app.core.domain.agents import AgentType
 from app.core.rate_limit import TOO_MANY_REQUESTS_DETAIL
+from app.dao.user_dao import user_dao
 from app.records.chat import ChatSessionRecord
 from app.services import chat_tickets as tickets
 
@@ -72,7 +73,7 @@ def context(monkeypatch):
     )
     monkeypatch.setattr(tickets, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(tickets, "load_user_principal", AsyncMock(return_value=user))
-    monkeypatch.setattr(tickets, "check_token_generation", AsyncMock())
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     pin_membership_generation(monkeypatch)
     monkeypatch.setattr(tickets, "check_agent_access", AsyncMock(return_value=(agent, "use")))
     monkeypatch.setattr(
@@ -334,7 +335,7 @@ async def test_socket_uses_fresh_session_privileges(context, monkeypatch, source
         await tickets.redeem(issued.ticket)
     assert error.value.status_code == 400
     load_principal.assert_awaited_with(binding.user_id, fresh=True)
-    agent_access.assert_awaited_with(fresh_user, binding.agent_id, fresh=True)
+    agent_access.assert_awaited_with(fresh_user, binding.agent_id, fresh=True, user_is_current=True)
 
 
 async def test_peer_history_does_not_allow_ticket_or_socket_binding(context, monkeypatch):
@@ -477,6 +478,70 @@ async def test_ticket_without_a_session_resolves_the_callers_canonical_conversat
     ensure.assert_awaited_once_with(agent.id, user.id)
     assert issued.session_id == canonical.id
     assert (await tickets.redeem(issued.ticket)).session_id == canonical.id
+
+
+async def test_create_authorizes_the_principal_it_was_given_once(context, monkeypatch):
+    # Given the principal the route already loaded and generation-checked.
+    redis, binding, user, agent = context
+    principal_load = AsyncMock()
+    generations = AsyncMock(wraps=user_dao.get_generations)
+    access = AsyncMock(return_value=(agent, "use"))
+    session_read = AsyncMock(
+        return_value=ChatSessionRecord(
+            id=binding.session_id, agent_id=binding.agent_id, user_id=binding.user_id, source_channel="web"
+        )
+    )
+    monkeypatch.setattr(tickets, "load_user_principal", principal_load)
+    monkeypatch.setattr(user_dao, "get_generations", generations)
+    monkeypatch.setattr(tickets, "check_agent_access", access)
+    monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", session_read)
+
+    # When the ticket is created.
+    issued = await tickets.create(
+        tickets.ChatTicketRequest(agent_id=agent.id, session_id=binding.session_id),
+        user,
+        binding.auth_deadline,
+        binding.auth_generation,
+        binding.membership_generation,
+    )
+
+    # Then it was authorized once, without loading the principal or reading the agent and session twice.
+    principal_load.assert_not_awaited()
+    generations.assert_awaited_once()
+    access.assert_awaited_once()
+    session_read.assert_awaited_once()
+    assert (await tickets.redeem(issued.ticket)).session_id == binding.session_id
+    assert redis.values == {}
+
+
+async def test_create_refuses_a_credential_whose_membership_generation_moved_on(context, monkeypatch):
+    # Given a bearer admitted a moment ago whose membership was deactivated before the ticket was minted.
+    redis, binding, user, agent = context
+    pin_membership_generation(monkeypatch, binding.membership_generation + 1)
+
+    # When the ticket is created from that credential, then nothing is stored.
+    with pytest.raises(HTTPException) as error:
+        await tickets.create(
+            tickets.ChatTicketRequest(agent_id=agent.id, session_id=binding.session_id),
+            user,
+            binding.auth_deadline,
+            binding.auth_generation,
+            binding.membership_generation,
+        )
+    assert error.value.status_code == 401
+    assert not redis.values
+
+
+async def test_message_authorization_checks_the_binding_and_the_session_together(context, monkeypatch):
+    # Given the fixture's authorization and a session that no longer opens.
+    _, binding, user, agent = context
+    assert await tickets.authorize_message(binding) == (user, agent, "use")
+    monkeypatch.setattr(tickets.chat_session_dao, "get_for_agent", AsyncMock(return_value=None))
+
+    # When the next message is authorized, then the missing session refuses it.
+    with pytest.raises(HTTPException) as error:
+        await tickets.authorize_message(binding)
+    assert error.value.status_code == 403
 
 
 async def test_ticket_naming_a_session_never_creates_a_conversation(context, monkeypatch):

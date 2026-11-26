@@ -25,11 +25,11 @@ from app.core.logging import logger
 from app.core.redis_cache import (
     bump_version,
     cache_delete,
-    cache_get_json,
     cache_key,
     cache_set_json,
     ensure_version,
     has_pending_snapshot_writes,
+    read_session_keys,
     read_version,
 )
 from app.core.row_memo import memo_drop, memo_drop_kind, memo_get, memo_set
@@ -53,6 +53,10 @@ def user_version_key(user_id: UUID) -> str:
 
 def identity_version_key(identity_id: UUID) -> str:
     return cache_key("sessver", "i", identity_id)
+
+
+def identity_version_key_prefix() -> str:
+    return cache_key("sessver", "i", "")
 
 
 def _parse_uuid(value: object) -> UUID | None:
@@ -188,21 +192,19 @@ async def get_cached_user(user_id: UUID) -> UserRecord | None:
         return memo
     if _ttl() <= 0 or has_pending_snapshot_writes():
         return None
-    cached: object = await cache_get_json(_sess_key(user_id))
-    if not is_json_object(cached):
+    keys = await read_session_keys(_sess_key(user_id), user_version_key(user_id), identity_version_key_prefix())
+    if keys is None or not is_json_object(keys.snapshot):
         return None
+    cached = keys.snapshot
     user = _from_snapshot(cached)
     if user is None or user.id != user_id:
         return None
     if user.identity_id != (user.identity.id if user.identity else None):
         return None
-    user_ver = await read_version(user_version_key(user_id))
-    if user_ver is None or user_ver.value is None or cached.get("u_ver") != user_ver.value:
+    if keys.user_version is None or cached.get("u_ver") != keys.user_version:
         return None
-    if user.identity_id is not None:
-        ident_ver = await read_version(identity_version_key(user.identity_id))
-        if ident_ver is None or ident_ver.value is None or cached.get("i_ver") != ident_ver.value:
-            return None
+    if user.identity_id is not None and (keys.identity_version is None or cached.get("i_ver") != keys.identity_version):
+        return None
     memo_set(_MEMO_KIND, user_id, user)
     logger.debug("session_cache hit")
     return user

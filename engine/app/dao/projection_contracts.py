@@ -12,3 +12,8 @@ class UserNameAvatarProjection(TypedDict):
     id: UUID
     display_name: str
     avatar_url: str | None
+
+
+class UserGenerationsProjection(TypedDict):
+    auth_generation: int
+    membership_generation: int

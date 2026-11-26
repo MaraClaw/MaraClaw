@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
+import { spawn } from 'node:child_process';
+import { EventEmitter, once } from 'node:events';
+import { createInterface } from 'node:readline';
+import type { TestContext } from 'node:test';
 import { LoginQRCallbackEventType, ThreadType } from 'zca-js';
 import type { Credentials, LoginQRCallback, Message, MessageContent, SendMessageResponse, TMessage } from 'zca-js';
 import { childFrame } from '../src/protocol.js';
@@ -8,6 +11,29 @@ import { Runtime } from '../src/runtime.js';
 import type { SdkApi, SdkClient, SdkListener } from '../src/sdk.js';
 
 export const token = 'one-run-only-secret';
+export function launch(context: TestContext, mode = 'fixture', ...args: string[]) {
+  const entry = mode === 'production' ? '../src/bridge.js' : './fixtures/bridge.js';
+  const child = spawn(process.execPath, [new URL(entry, import.meta.url).pathname, mode, ...args], {
+    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env },
+  });
+  const exit = once(child, 'exit');
+  const lines = createInterface({ input: child.stdout });
+  const iterator = lines[Symbol.asyncIterator]();
+  let stderr = '';
+  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+  context.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exit;
+    lines.close();
+    assert.equal(stderr, '');
+  });
+  return { child, exit, write: (frame: unknown) => child.stdin.write(JSON.stringify(frame) + '\n'),
+    next: async () => {
+      const line = await iterator.next();
+      assert.equal(line.done, false);
+      return childFrame.parse(JSON.parse(line.value));
+    } };
+}
 export const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=';
 export const credentials = { cookie: [{ key: 'session', value: 'private-cookie', domain: 'zalo.me', path: '/' }],
   imei: 'resolved-imei', userAgent: 'resolved-user-agent' };

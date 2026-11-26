@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from app.dao.personal_burst_lifecycle import cancel_open_for_agent
-from app.dao.whatsapp_personal_runtime_dao import runtime_for
+from app.dao.whatsapp_personal_runtime_dao import runtime_for, startable_since
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
 
@@ -17,16 +17,17 @@ async def get_personal(agent_id: UUID, *, lock: bool = False) -> PersonalConnect
 
 
 async def candidates() -> list[PersonalConnection]:
+    """Unclaimed desired connections past their retry gate, longest waiting first, from one joined read."""
     async with connection_ctx() as db:
-        rows = await db.fetchall("SELECT * FROM whatsapp_personal_connections WHERE desired AND claim_token IS NULL")
-        now = datetime.now(UTC)
-        due: list[PersonalConnection] = []
-        for row in rows:
-            candidate = PersonalConnection.from_row(row)
-            runtime = await runtime_for(candidate.config_id)
-            if runtime.retry_at is None or runtime.retry_at <= now:
-                due.append(candidate)
-        return due
+        rows = await db.fetchall(
+            "SELECT c.*,cc.extra_config FROM whatsapp_personal_connections c "
+            "LEFT JOIN channel_configs cc ON cc.id=c.config_id WHERE c.desired AND c.claim_token IS NULL "
+            "ORDER BY c.created_at,c.config_id"
+        )
+    now = datetime.now(UTC)
+    waiting = [(since, row) for row in rows if (since := startable_since(row, now)) is not None]
+    waiting.sort(key=lambda entry: entry[0])
+    return [PersonalConnection.from_row(row) for _, row in waiting]
 
 
 async def claim(config_id: UUID) -> PersonalConnection | None:
@@ -108,7 +109,8 @@ async def reaped(connection: PersonalConnection) -> bool:
             "attempt_id=CASE WHEN desired AND purge_requested THEN %(attempt)s ELSE attempt_id END, "
             "activated_at=CASE WHEN purge_requested THEN NULL ELSE activated_at END, "
             "expires_at=CASE WHEN desired AND purge_requested THEN now()+interval '120 seconds' ELSE expires_at END, "
-            "purge_requested=FALSE,revision=revision+1 WHERE config_id=%(id)s AND claim_token=%(claim)s RETURNING TRUE",
+            "purge_requested=FALSE,revision=revision+1,updated_at=now() "
+            "WHERE config_id=%(id)s AND claim_token=%(claim)s RETURNING TRUE",
             {"id": connection.config_id, "claim": connection.claim_token, "epoch": uuid4(), "attempt": uuid4()},
         )
         if changed:

@@ -29,7 +29,7 @@ from app.core.session_cache import (
 from app.core.single_flight import SingleFlight
 from app.dao.base import BaseDAO, as_uuid
 from app.dao.mention_patterns import like_patterns
-from app.dao.projection_contracts import UserNameAvatarProjection
+from app.dao.projection_contracts import UserGenerationsProjection, UserNameAvatarProjection
 from app.db.session import get_connection
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
@@ -291,6 +291,22 @@ class UserDAO(BaseDAO[UserRecord]):
                 "SELECT membership_generation FROM users WHERE id = %(user_id)s", {"user_id": user_id}
             )
             return int_from_row(row["membership_generation"]) if row is not None else None
+
+    async def get_generations(self, user_id: UUID, identity_id: UUID) -> UserGenerationsProjection | None:
+        """Both revocation counters from SQL in one statement; None unless the membership still has this identity."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "SELECT i.auth_generation, u.membership_generation FROM users u "
+                "JOIN identities i ON i.id = u.identity_id "
+                "WHERE u.id = %(user_id)s AND i.id = %(identity_id)s",
+                {"user_id": user_id, "identity_id": identity_id},
+            )
+            if row is None:
+                return None
+            return {
+                "auth_generation": int_from_row(row["auth_generation"]),
+                "membership_generation": int_from_row(row["membership_generation"]),
+            }
 
     @override
     async def update(self, *, db_obj: UserRecord, obj_in: Mapping[str, object]) -> UserRecord:

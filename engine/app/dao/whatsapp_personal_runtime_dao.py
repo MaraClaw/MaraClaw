@@ -1,10 +1,11 @@
 """Durable transient-retry budget for personal WhatsApp, kept credential-free in channel extra_config."""
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Final
 from uuid import UUID
 
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import AwareDatetime, BaseModel, JsonValue, ValidationError
 
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection, PersonalRuntime
@@ -17,23 +18,38 @@ class _ExtraConfig(BaseModel):
     extra_config: JsonValue = None
 
 
+class _Waiter(_ExtraConfig):
+    updated_at: AwareDatetime
+
+
+def _runtime_in(extra: JsonValue) -> PersonalRuntime:
+    match extra:
+        case dict():
+            try:
+                return PersonalRuntime.model_validate(extra.get("whatsapp_runtime", {}))
+            except ValidationError:
+                return PersonalRuntime()
+        case _:
+            return PersonalRuntime()
+
+
 async def runtime_for(config_id: UUID, *, lock: bool = False) -> PersonalRuntime:
     async with connection_ctx() as db:
         raw = await db.fetchone(
             "SELECT extra_config FROM channel_configs WHERE id=%(id)s" + (" FOR UPDATE" if lock else ""),
             {"id": config_id},
         )
-        if raw is None:
-            return PersonalRuntime()
-        extra = _ExtraConfig.model_validate(raw).extra_config
-        match extra:
-            case dict():
-                try:
-                    return PersonalRuntime.model_validate(extra.get("whatsapp_runtime", {}))
-                except ValidationError:
-                    return PersonalRuntime()
-            case _:
-                return PersonalRuntime()
+        return PersonalRuntime() if raw is None else _runtime_in(_ExtraConfig.model_validate(raw).extra_config)
+
+
+def startable_since(row: Mapping[str, object], now: datetime) -> datetime | None:
+    """When a connection row joined with its channel config became startable: its last release, or its retry gate
+    if that opened later. ``None`` while the retry gate is still closed at ``now``."""
+    waiter = _Waiter.model_validate(row)
+    retry_at = _runtime_in(waiter.extra_config).retry_at
+    if retry_at is None:
+        return waiter.updated_at
+    return None if retry_at > now else max(waiter.updated_at, retry_at)
 
 
 async def _save(config_id: UUID, runtime: PersonalRuntime) -> None:

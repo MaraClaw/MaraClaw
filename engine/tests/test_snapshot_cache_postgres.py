@@ -8,14 +8,14 @@ from uuid import UUID, uuid4
 
 import anyio
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
 from tests.test_redis_cache import FakeRedis
 
 from app.api import auth
 from app.core import redis_cache, row_memo, session_cache, tenant_cache
-from app.core.security import create_access_token
+from app.core.security import create_access_token, load_user_from_access_token
 from app.dao.identity_dao import identity_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.user_dao import user_dao
@@ -76,6 +76,65 @@ async def test_patch_returns_new_value_when_session_snapshot_is_warm(
     )
     assert await deletion_pg.rows(query, (row_id,)) == [{field: value}]
     assert key not in wire_cache.store
+
+
+@pytest.mark.parametrize("moved", ["membership", "identity"])
+async def test_a_moved_generation_rejects_the_next_request_though_the_session_snapshot_is_warm(
+    deletion_pg: DeletionPostgres, wire_cache: FakeRedis, moved: str
+) -> None:
+    # Given a bearer for the actor whose session snapshot is warm and answers in one Redis call.
+    actor = deletion_pg.actor
+    token = await create_access_token(str(actor.id), "org_admin")
+    row_memo.clear_row_memo()
+    assert (await load_user_from_access_token(token)).id == actor.id
+    key = redis_cache.cache_key("sess", "v1", actor.id)
+    assert key in wire_cache.store
+    row_memo.clear_row_memo()
+    wire_cache.commands.clear()
+    assert (await load_user_from_access_token(token)).id == actor.id
+    assert wire_cache.commands == ["eval"]
+
+    # When SQL moves one generation without any cache invalidation.
+    update, row_id = (
+        ("UPDATE users SET membership_generation = membership_generation + 1 WHERE id = %s RETURNING id", actor.id)
+        if moved == "membership"
+        else (
+            "UPDATE identities SET auth_generation = auth_generation + 1 WHERE id = %s RETURNING id",
+            actor.identity_id,
+        )
+    )
+    assert await deletion_pg.rows(update, (row_id,)) == [{"id": row_id}]
+
+    # Then the next request is refused even though the snapshot still hits in one Redis call.
+    row_memo.clear_row_memo()
+    wire_cache.commands.clear()
+    with pytest.raises(HTTPException) as refused:
+        await load_user_from_access_token(token)
+    assert refused.value.status_code == 401
+    assert key in wire_cache.store
+    assert wire_cache.commands == ["eval"]
+
+
+async def test_one_statement_returns_both_generations_and_only_for_the_bound_identity(
+    deletion_pg: DeletionPostgres,
+) -> None:
+    # Given a membership with moved counters.
+    actor = deletion_pg.actor
+    assert actor.identity_id is not None
+    await deletion_pg.rows(
+        "UPDATE users SET membership_generation = 4 WHERE id = %s RETURNING id",
+        (actor.id,),
+    )
+    await deletion_pg.rows("UPDATE identities SET auth_generation = 9 WHERE id = %s RETURNING id", (actor.identity_id,))
+
+    # When both are read through the DAO, then they come from SQL as stored.
+    assert await user_dao.get_generations(actor.id, actor.identity_id) == {
+        "auth_generation": 9,
+        "membership_generation": 4,
+    }
+    # And an identity that is not the membership's, or a membership that is gone, reads as nothing.
+    assert await user_dao.get_generations(actor.id, uuid4()) is None
+    assert await user_dao.get_generations(uuid4(), actor.identity_id) is None
 
 
 async def test_get_returns_absent_when_warm_tenant_deleted_in_owning_transaction(
@@ -290,3 +349,60 @@ async def test_recovered_generation_rejects_late_real_redis_snapshot_fill(
             current_tenant = await tenant_dao.get(deletion_pg.tenant_id)
             assert current_tenant is not None
             assert current_tenant.name == "Committed"
+
+
+@pytest.mark.parametrize("stored", ["snapshot", "garbage"])
+async def test_real_redis_serves_the_session_snapshot_and_both_generations_in_one_round_trip(
+    deletion_pg: DeletionPostgres, monkeypatch: pytest.MonkeyPatch, stored: str
+) -> None:
+    url = os.environ.get("MARACLAW_TEST_REDIS_URL", "")
+    if not url:
+        pytest.skip("MARACLAW_TEST_REDIS_URL required for the real session read script")
+    actor = deletion_pg.actor
+    assert actor.identity_id is not None
+    async with Redis.from_url(url, decode_responses=True) as client:
+
+        async def real_client() -> Redis:
+            return client
+
+        monkeypatch.setattr(redis_cache, "_client", real_client)
+        redis_cache.reset_circuit()
+        row_memo.clear_row_memo()
+        sent: list[str] = []
+        original = client.execute_command
+
+        async def counting(*args: object, **kwargs: object) -> object:
+            sent.append(str(args[0]))
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(client, "execute_command", counting)
+        sess_key = redis_cache.cache_key("sess", "v1", actor.id)
+        user_version_key = session_cache.user_version_key(actor.id)
+        identity_version_key = session_cache.identity_version_key(actor.identity_id)
+        try:
+            # Given the snapshot filled through SQL, or garbage standing where the snapshot belongs.
+            assert await user_dao.get_with_identity(actor.id) is not None
+            if stored == "garbage":
+                await client.set(sess_key, "{not json", ex=60)
+            row_memo.clear_row_memo()
+            sent.clear()
+
+            # When the next request loads the principal.
+            loaded = await user_dao.get_with_identity(actor.id)
+
+            # Then a stored snapshot is served by one EVAL over all three keys, and garbage falls back to SQL.
+            assert loaded is not None
+            assert loaded.id == actor.id
+            assert sent[0] == "EVAL"
+            assert (len(sent) == 1) is (stored == "snapshot")
+            keys = await redis_cache.read_session_keys(
+                sess_key, user_version_key, session_cache.identity_version_key_prefix()
+            )
+            assert keys is not None
+            assert keys.user_version == await client.get(user_version_key)
+            assert keys.identity_version == await client.get(identity_version_key)
+            assert keys.snapshot is not None
+        finally:
+            await client.delete(sess_key, user_version_key, identity_version_key)
+            row_memo.clear_row_memo()
+            redis_cache.reset_circuit()

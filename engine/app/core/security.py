@@ -224,10 +224,14 @@ async def check_token_generation(identity_id: uuid.UUID, claimed: int) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked token")
 
 
-async def check_membership_generation(user_id: uuid.UUID, claimed: int) -> None:
-    """Compare a claimed membership generation with SQL on every call; the session snapshot never carries it."""
-    generation = await user_dao.get_membership_generation(user_id)
-    if generation is None or generation != claimed:
+async def check_generations(user_id: uuid.UUID, identity_id: uuid.UUID, *, auth: int, membership: int) -> None:
+    """Compare both claimed generations with one SQL statement on every call; the session snapshot carries neither."""
+    generations = await user_dao.get_generations(user_id, identity_id)
+    if (
+        generations is None
+        or generations["auth_generation"] != auth
+        or generations["membership_generation"] != membership
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked token")
 
 
@@ -274,8 +278,7 @@ async def load_user_from_access_token(
     user = await load_user_principal(uid, require_active=require_active, enforce_password_change=False, fresh=fresh)
     if user.identity_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
-    await check_token_generation(user.identity_id, payload["gen"])
-    await check_membership_generation(user.id, payload["mgen"])
+    await check_generations(user.id, user.identity_id, auth=payload["gen"], membership=payload["mgen"])
     if enforce_password_change:
         raise_if_password_change_required(user)
     return user

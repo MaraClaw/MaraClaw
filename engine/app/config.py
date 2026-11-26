@@ -430,11 +430,22 @@ class Settings(BaseSettings):
     WHATSAPP_PERSONAL_BURST_PENDING_BYTES: int = Field(default=65536, gt=0, le=268435456)
     WHATSAPP_PERSONAL_BURST_BODY_BYTES: int = Field(default=16384, gt=0, le=268435456)
     WHATSAPP_PERSONAL_BUSY_NOTICE_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0, le=86400, allow_inf_nan=False)
+    # Personal WhatsApp bridge fleet per engine process: at most MAX_RUNNING_CHILDREN Node bridges run at once and at
+    # most MAX_STARTS_PER_POLL waiting connections (longest waiting first) start on each one-second supervisor poll.
+    # WORKER_HEAP_MB is the V8 old-generation ceiling in MiB each bridge gives its Baileys worker; a session that
+    # outgrows it ends only its own bridge, which restarts through the durable retry budget.
+    WHATSAPP_PERSONAL_MAX_RUNNING_CHILDREN: int = Field(default=200, ge=1, le=5000)
+    WHATSAPP_PERSONAL_MAX_STARTS_PER_POLL: int = Field(default=5, ge=1, le=100)
+    WHATSAPP_PERSONAL_WORKER_HEAP_MB: int = Field(default=512, ge=64, le=8192)
 
     # Optional typing pulses for current authorized busy private Zalo peers.
     ZALO_PERSONAL_TYPING_ENABLED: bool = False
     # Operator-selected seconds between keepalives; the SDK server interval's units are undocumented.
     ZALO_PERSONAL_KEEPALIVE_INTERVAL_SECONDS: int = Field(default=300, ge=60, le=1800)
+    # Personal Zalo bridge fleet per engine process, with the same meaning as the WhatsApp settings above.
+    ZALO_PERSONAL_MAX_RUNNING_CHILDREN: int = Field(default=200, ge=1, le=5000)
+    ZALO_PERSONAL_MAX_STARTS_PER_POLL: int = Field(default=5, ge=1, le=100)
+    ZALO_PERSONAL_WORKER_HEAP_MB: int = Field(default=512, ge=64, le=8192)
     ZALO_PERSONAL_MEDIA_ALLOWED_HOSTS: list[
         Annotated[
             str,

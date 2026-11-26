@@ -1,35 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { createInterface } from 'node:readline';
 import { test } from 'node:test';
-import type { TestContext } from 'node:test';
-import { childFrame, MAX_FRAME_BYTES } from '../src/protocol.js';
-import { credentials, token } from './support.js';
+import { MAX_FRAME_BYTES } from '../src/protocol.js';
+import { credentials, launch, token } from './support.js';
 
-function launch(context: TestContext, mode = 'fixture') {
-  const entry = mode === 'production' ? '../src/bridge.js' : './fixtures/bridge.js';
-  const child = spawn(process.execPath, [new URL(entry, import.meta.url).pathname, mode], {
-    stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env },
-  });
-  const exit = once(child, 'exit');
-  const lines = createInterface({ input: child.stdout });
-  const iterator = lines[Symbol.asyncIterator]();
-  let stderr = '';
-  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-  context.after(async () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    await exit;
-    lines.close();
-    assert.equal(stderr, '');
-  });
-  return { child, exit, write: (frame: unknown) => child.stdin.write(JSON.stringify(frame) + '\n'),
-    next: async () => {
-      const line = await iterator.next();
-      assert.equal(line.done, false);
-      return childFrame.parse(JSON.parse(line.value));
-    } };
-}
 const init = { id: 'init', token, type: 'init', lease_ms: 30_000, credentials: JSON.stringify(credentials) } as const;
 test('actual production entry rejects invalid restore without SDK networking or error disclosure', { timeout: 5000 }, async context => {
   const p = launch(context, 'production');

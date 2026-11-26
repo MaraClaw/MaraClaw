@@ -4,15 +4,18 @@ import asyncio
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException, WebSocket
 from starlette.types import Message
+from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api.websocket import ConnectionManager
-from app.core import access_cache
+from app.core import access_cache, security
+from app.dao.user_dao import user_dao
 from app.services import chat_tickets
 from app.services.realtime_runtime import chat_authorization
 from app.services.realtime_runtime.chat_authorization import (
@@ -25,6 +28,7 @@ from app.services.realtime_runtime.fanout import LOCAL_FANOUT_CONCURRENCY
 from app.services.realtime_runtime.router import PresenceLookup, RealtimeRouter
 from test_chunk_live_delivery import TRANSIENT_FAILURES, Gate
 
+REAL_AUTHORIZE_IDENTITY = chat_tickets.authorize_identity
 ALLOWED = DeliveryVerdict.ALLOWED
 FORBIDDEN = DeliveryVerdict.FORBIDDEN
 # Long enough that every decision here settles inside it; the wait bounds are covered in test_chunk_live_delivery.
@@ -235,6 +239,32 @@ async def test_only_401_403_and_404_revoke_and_no_failure_is_cached(
             DeliveryVerdict.SKIPPED: None,
         }[verdict]
     )
+
+
+@pytest.mark.parametrize(
+    ("stored", "verdict"),
+    [(0, ALLOWED), (1, DeliveryVerdict.UNAUTHENTICATED)],
+    ids=["unchanged", "membership-replaced"],
+)
+async def test_delivery_compares_the_bound_generations_with_one_sql_read(
+    env: Env, monkeypatch: pytest.MonkeyPatch, stored: int, verdict: DeliveryVerdict
+) -> None:
+    # Given the real identity authorization over a principal whose stored membership generation is ``stored``.
+    monkeypatch.setattr(chat_tickets, "authorize_identity", REAL_AUTHORIZE_IDENTITY)
+    socket, agent_id, session_id = canonical_socket()
+    binding = socket.state.chat_binding
+    principal = SimpleNamespace(id=binding.user_id, tenant_id=binding.tenant_id, identity=SimpleNamespace(id=uuid4()))
+    agent = SimpleNamespace(is_expired=False, expires_at=None)
+    monkeypatch.setattr(chat_tickets, "load_user_principal", AsyncMock(return_value=principal))
+    monkeypatch.setattr(chat_tickets, "check_agent_access", AsyncMock(return_value=(agent, "use")))
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=binding.auth_generation))
+    pin_membership_generation(monkeypatch, stored)
+    generations = AsyncMock(wraps=user_dao.get_generations)
+    monkeypatch.setattr(user_dao, "get_generations", generations)
+
+    # When a delivery is authorized, then the verdict follows the stored value and both counters came from one read.
+    assert await check(socket, agent_id, session_id) is verdict
+    generations.assert_awaited_once_with(binding.user_id, principal.identity.id)
 
 
 async def test_cold_decisions_never_exceed_the_fanout_bound_across_deliveries(env: Env) -> None:

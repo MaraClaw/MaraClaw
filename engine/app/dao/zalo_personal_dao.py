@@ -18,20 +18,19 @@ async def get_personal(agent_id: UUID, *, lock: bool = False) -> ZaloConnection 
 
 
 async def candidates() -> list[ZaloConnection]:
-    from app.dao.zalo_personal_runtime_dao import runtime_for
+    """Unclaimed desired connections past their retry gate, longest waiting first, from one joined read."""
+    from app.dao.zalo_personal_runtime_dao import startable_since
 
     async with connection_ctx() as db:
         rows = await db.fetchall(
-            "SELECT * FROM zalo_personal_connections WHERE desired AND claim_token IS NULL "
-            "AND state IN ('pending','reconnecting') ORDER BY created_at,config_id"
+            "SELECT c.*,cc.extra_config FROM zalo_personal_connections c "
+            "LEFT JOIN channel_configs cc ON cc.id=c.config_id WHERE c.desired AND c.claim_token IS NULL "
+            "AND c.state IN ('pending','reconnecting') ORDER BY c.created_at,c.config_id"
         )
-        due: list[ZaloConnection] = []
-        for row in rows:
-            candidate = ZaloConnection.from_row(row)
-            runtime = await runtime_for(candidate.config_id)
-            if runtime.retry_at is None or runtime.retry_at <= datetime.now(UTC):
-                due.append(candidate)
-        return due
+    now = datetime.now(UTC)
+    waiting = [(since, row) for row in rows if (since := startable_since(row, now)) is not None]
+    waiting.sort(key=lambda entry: entry[0])
+    return [ZaloConnection.from_row(row) for _, row in waiting]
 
 
 async def claim(config_id: UUID) -> ZaloConnection | None:

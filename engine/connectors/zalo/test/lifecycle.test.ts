@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { credentials, Harness, token } from './support.js';
+import { workerLimits } from '../src/limits.js';
+import { credentials, Harness, launch, token } from './support.js';
 
 test('lease renewal replaces the deadline and expires without reconnect', async context => {
   context.mock.timers.enable({ apis: ['setTimeout'] });
@@ -80,3 +81,26 @@ for (const restored of [false, true]) {
     assert.equal(h.frames.filter(frame => frame.type === 'creds_set' || frame.type === 'ready').length, 0);
   });
 }
+
+test('the parent heap ceiling becomes the worker old-generation limit and unrelated arguments are ignored', () => {
+  assert.deepEqual(workerLimits([]), {});
+  assert.deepEqual(workerLimits(['--worker-heap-mb=512']), { maxOldGenerationSizeMb: 512 });
+  assert.deepEqual(workerLimits(['dist/src/bridge.js', 'oom', '--worker-heap-mb=64']), { maxOldGenerationSizeMb: 64 });
+});
+for (const given of ['--worker-heap-mb=', '--worker-heap-mb=0', '--worker-heap-mb=-1', '--worker-heap-mb=1e3', '--worker-heap-mb=512MB', '--worker-heap-mb=100000']) {
+  test(`a malformed heap ceiling ${given} is refused instead of widening the worker`, () => {
+    assert.throws(() => workerLimits([given]), RangeError);
+  });
+}
+test('a worker that outgrows its heap ceiling ends only its bridge as a transport failure', { timeout: 20_000 }, async context => {
+  // Given the real supervisor over a worker that allocates past a 32 MiB ceiling once it is initialized.
+  const p = launch(context, 'oom', '--worker-heap-mb=32');
+  p.write({ id: 'init', token, type: 'init', lease_ms: 120_000, credentials: JSON.stringify(credentials) });
+  // When the worker runs out of memory.
+  const closed = await p.next();
+  // Then the bridge reports the ordinary transient close and exits cleanly, so the parent retries on its durable budget.
+  assert.equal(closed.type, 'closed');
+  if (closed.type === 'closed') assert.equal(closed.reason, 'transport_failed');
+  assert.equal(closed.token, token);
+  assert.deepEqual(await p.exit, [0, null]);
+});

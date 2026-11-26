@@ -1,10 +1,10 @@
 import asyncio
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from time import monotonic
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import anyio
@@ -15,6 +15,7 @@ from tests.channel_submission_fixtures import channel_db, receipt_db
 from tests.test_whatsapp_personal_integration import connected
 
 from app.api.whatsapp import router
+from app.config import get_settings
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
 from app.dao.whatsapp_personal_dao import claim, get_personal
@@ -194,18 +195,27 @@ class Scripted:
     """A connection whose bridge child plays the next scripted behaviour per spawn, then stays up."""
 
     def __init__(
-        self, pacing: Pacing, *script: Callable[[], Awaitable[None]], failing_stage: str = "run_child"
+        self,
+        pacing: Pacing,
+        *script: Callable[[], Awaitable[None]],
+        failing_stage: str = "run_child",
+        declines: bool = False,
     ) -> None:
         self.connection = pending_connection()
         self.pacing = pacing
         self.script = list(script)
         self.failing_stage = failing_stage
+        self.declines = declines
+        self.attempts: list[float] = []
         self.spawns: list[float] = []
 
     async def play(self) -> None:
         await (self.script.pop(0) if self.script else forever)()
 
-    async def claim(self) -> PersonalConnection:
+    async def claim(self) -> PersonalConnection | None:
+        self.attempts.append(self.pacing.now)
+        if self.declines:
+            return None
         self.spawns.append(self.pacing.now)
         if self.failing_stage == "claim":
             await self.play()
@@ -349,6 +359,86 @@ async def test_supervisor_cancellation_ends_at_once_while_a_cooldown_is_pending(
     assert bad.spawns == [0.0]
 
 
+def fleet(monkeypatch: pytest.MonkeyPatch, *, ceiling: int, per_poll: int) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "WHATSAPP_PERSONAL_MAX_RUNNING_CHILDREN", ceiling)
+    monkeypatch.setattr(settings, "WHATSAPP_PERSONAL_MAX_STARTS_PER_POLL", per_poll)
+
+
+def started(children: Sequence[Scripted]) -> list[int]:
+    return [index for index, child in enumerate(children) if child.spawns]
+
+
+async def test_supervisor_brings_a_fleet_back_in_paced_waves_under_the_ceiling(monkeypatch):
+    # Given seven waiting connections, oldest first, a ceiling of five running children and two starts per poll.
+    fleet(monkeypatch, ceiling=5, per_poll=2)
+    pacing, first_exit, logger = Pacing(), asyncio.Event(), Mock()
+    monkeypatch.setattr(supervisor, "logger", logger)
+    children = [Scripted(pacing, lives_until(first_exit, then_explodes=False))]
+    children += [Scripted(pacing) for _ in range(6)]
+    task, candidates = supervise(monkeypatch, pacing, *children)
+    await pacing.paused()
+    # When polls pass.
+    waves = [started(children)]
+    for _ in range(2):
+        await pacing.step(1)
+        waves.append(started(children))
+    # Then the oldest start first, two per poll, until the ceiling is reached.
+    assert waves == [[0, 1], [0, 1, 2, 3], [0, 1, 2, 3, 4]]
+    assert [child.spawns for child in children[:5]] == [[0.0], [0.0], [1.0], [1.0], [2.0]]
+    # And later polls start nothing while the ceiling holds, reporting that once.
+    for _ in range(3):
+        await pacing.step(1)
+    assert started(children) == [0, 1, 2, 3, 4]
+    assert logger.warning.call_count == 1
+    # When a child ends and leaves the candidates.
+    first_exit.set()
+    candidates.return_value = [child.connection for child in children[1:]]
+    await pacing.step(1)
+    # Then exactly one waiting connection, the oldest, takes the free slot.
+    assert started(children) == [0, 1, 2, 3, 4, 5]
+    await pacing.step(1)
+    assert children[6].spawns == []
+    await stop_supervisor(task)
+
+
+async def test_supervisor_skips_a_cooling_down_connection_without_spending_the_start_pace(monkeypatch):
+    # Given the oldest connection fails at once and two healthy ones wait behind it, with one start per poll.
+    fleet(monkeypatch, ceiling=10, per_poll=1)
+    pacing, fail_connection = Pacing(), AsyncMock()
+    monkeypatch.setattr(child_module, "fail_connection", fail_connection)
+    bad, first, second = Scripted(pacing, explodes), Scripted(pacing), Scripted(pacing)
+    task, _ = supervise(monkeypatch, pacing, bad, first, second)
+    await pacing.paused()
+    # When polls pass.
+    await pacing.step(1)
+    await pacing.step(1)
+    # Then each poll starts the next connection in line while the failed one cools down.
+    assert (bad.spawns, first.spawns, second.spawns) == ([0.0], [1.0], [2.0])
+    await pacing.step(27)
+    assert bad.spawns == [0.0]
+    await pacing.step(1)
+    assert bad.spawns == [0.0, 30.0]
+    fail_connection.assert_not_awaited()
+    await stop_supervisor(task)
+
+
+async def test_supervisor_does_not_spend_the_start_pace_on_a_declined_claim(monkeypatch):
+    # Given two oldest connections whose claims are declined, three healthy ones behind them and two starts per poll.
+    fleet(monkeypatch, ceiling=10, per_poll=2)
+    pacing = Pacing()
+    declined = [Scripted(pacing, declines=True) for _ in range(2)]
+    healthy = [Scripted(pacing) for _ in range(3)]
+    task, _ = supervise(monkeypatch, pacing, *declined, *healthy)
+    await pacing.paused()
+    # When polls pass.
+    await pacing.step(1)
+    # Then the declined claims are tried again every poll and the healthy connections still start two per poll.
+    assert [child.attempts for child in declined] == [[0.0, 1.0], [0.0, 1.0]]
+    assert [child.spawns for child in healthy] == [[0.0], [0.0], [1.0]]
+    await stop_supervisor(task)
+
+
 async def test_supervisor_backs_off_when_candidates_fails(monkeypatch):
     # Given a candidates query that fails twice before recovering.
     monkeypatch.setattr(supervisor, "_POLL_SECONDS", 0.01)
@@ -403,6 +493,33 @@ async def test_supervisor_beats_after_every_completed_pass_including_an_idle_one
         await worker_http.pacing.step()
         # Then every finished pass keeps the loop ready.
         await worker_http.ready(expected=True)
+    assert not task.done()
+
+
+async def test_supervisor_beats_every_pass_while_the_ceiling_holds_a_connection_back(monkeypatch, worker_http):
+    # Given a ceiling of one running child and a second connection waiting behind it.
+    fleet(monkeypatch, ceiling=1, per_poll=5)
+    connections = [pending_connection(), pending_connection()]
+    claimed = []
+
+    async def claim(config_id):
+        claimed.append(config_id)
+        return next(connection for connection in connections if connection.config_id == config_id)
+
+    async def run_child(_connection, _command):
+        await forever()
+
+    monkeypatch.setattr(supervisor, "candidates", AsyncMock(return_value=connections))
+    monkeypatch.setattr(supervisor, "claim", claim)
+    monkeypatch.setattr(supervisor, "run_child", run_child)
+    task = run_supervisor(monkeypatch, worker_http)
+    await worker_http.pacing.paused()
+    # When passes keep finishing for longer than the budget in total.
+    for _ in range(4):
+        await worker_http.pacing.step()
+        # Then every capped pass still keeps the loop ready, and only the oldest connection ever started.
+        await worker_http.ready(expected=True)
+    assert claimed == [connections[0].config_id]
     assert not task.done()
 
 

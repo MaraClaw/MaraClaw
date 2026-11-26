@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -88,6 +89,79 @@ async def test_session_cache_roundtrip_strips_hash_and_quota(fake_cache: FakeRed
     dumped = str(fake_cache.store)
     assert "secret-hash" not in dumped
     assert "password_hash" not in dumped
+
+
+async def test_a_session_hit_reads_the_snapshot_and_both_generations_in_one_round_trip(fake_cache: FakeRedis) -> None:
+    # Given a warm snapshot and no request memo.
+    user = _user()
+    await session_cache.set_cached_user(user, observed=await _observation(user))
+    clear_row_memo()
+    fake_cache.commands.clear()
+
+    # When the next request reads it.
+    loaded = await session_cache.get_cached_user(user.id)
+
+    # Then one Redis call covered the snapshot, the user generation and the identity generation.
+    assert loaded is not None
+    assert loaded.id == user.id
+    assert fake_cache.commands == ["eval"]
+    assert fake_cache.round_trips == 1
+
+
+async def test_a_session_hit_through_the_dao_costs_one_round_trip_and_no_sql(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a warm snapshot and a DAO that fails if it reaches SQL.
+    user = _user()
+    await session_cache.set_cached_user(user, observed=await _observation(user))
+    clear_row_memo()
+    fake_cache.commands.clear()
+    monkeypatch.setattr(user_dao, "_load_with_identity", AsyncMock(side_effect=AssertionError("reached SQL")))
+
+    # When the principal is loaded for a request.
+    loaded = await user_dao.get_with_identity(user.id)
+
+    # Then the cache answered in a single call.
+    assert loaded is not None
+    assert fake_cache.commands == ["eval"]
+
+
+async def test_an_unavailable_cache_falls_open_to_sql_after_one_attempt(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a Redis that fails every call and a DAO load that stands in for SQL.
+    user = _user()
+    fake_cache.fail = True
+    load = AsyncMock(return_value=user)
+    monkeypatch.setattr(user_dao, "_load_with_identity", load)
+
+    # When two requests load the principal.
+    first = await user_dao.get_with_identity(user.id)
+    clear_row_memo()
+    second = await user_dao.get_with_identity(user.id)
+
+    # Then both are answered from SQL, and only the first paid for a Redis attempt before the breaker opened.
+    assert (first, second) == (user, user)
+    assert load.await_count == 2
+    assert fake_cache.commands == ["eval"]
+
+
+@pytest.mark.parametrize("stored", ["not json", "[]", "5", '"text"', '{"user": 5}', '{"user": {}}'])
+async def test_a_malformed_snapshot_is_a_miss_after_one_round_trip(fake_cache: FakeRedis, stored: str) -> None:
+    user = _user()
+    fake_cache.store[session_cache._sess_key(user.id)] = stored
+    fake_cache.commands.clear()
+
+    assert await session_cache.get_cached_user(user.id) is None
+    assert fake_cache.commands == ["eval"]
+
+
+def test_the_identity_generation_prefix_names_the_same_keys_as_the_key_builder() -> None:
+    identity_id = uuid4()
+
+    assert session_cache.identity_version_key_prefix() + str(identity_id) == session_cache.identity_version_key(
+        identity_id
+    )
 
 
 @pytest.mark.parametrize("timezone", ["UTC", "Etc/GMT-7", "Asia/Shanghai", None])

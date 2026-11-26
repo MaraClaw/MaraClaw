@@ -1,13 +1,15 @@
 import json
 import sys
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import anyio
 import pytest
 from tests.zalo_personal_fixtures import bind, channel_db, claimed, connected, receipt_db, route_for
 
-from app.dao.zalo_personal_dao import claim, get_personal
-from app.dao.zalo_personal_runtime_dao import runtime_for
+from app.config import get_settings
+from app.dao.zalo_personal_dao import candidates, claim, get_personal
+from app.dao.zalo_personal_runtime_dao import RETRY_DELAYS, runtime_for
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.records.outbound_plan import OutboundChunk
@@ -128,6 +130,21 @@ async def test_spawn_isolates_parent_secrets(monkeypatch):
     assert not set(secrets) & set(json.loads(raw))
 
 
+async def test_spawn_passes_the_worker_heap_ceiling_as_a_flag(monkeypatch):
+    monkeypatch.setattr(get_settings(), "ZALO_PERSONAL_WORKER_HEAP_MB", 96)
+    process = await spawn_child((sys.executable, "-c", "import json,sys;print(json.dumps(sys.argv[1:]))"))
+    async with process:
+        assert process.stdout is not None
+        raw = b""
+        try:
+            while True:
+                raw += await process.stdout.receive()
+        except anyio.EndOfStream:
+            pass
+        assert await process.wait() == 0
+    assert json.loads(raw) == ["--worker-heap-mb=96"]
+
+
 @pytest.mark.parametrize("closure", ["closed", "eof"])
 async def test_real_transport_exit_is_reaped_once_and_keeps_login(channel_db, closure):
     f = channel_db
@@ -207,3 +224,55 @@ for line in sys.stdin:
             assert runtime.reconnect_attempts == 1
     finally:
         await close_pool()
+
+
+async def test_repeated_worker_oom_closes_walk_the_retry_budget_and_keep_the_login(channel_db):
+    # Given a paired connection whose bridge reports its worker out of memory as a transport close every run.
+    f = channel_db
+    async with transaction(f.db.first):
+        owned = await connected(f)
+        sealed = await f.db.first.fetchval("SELECT ciphertext FROM zalo_personal_auth")
+    script = """
+import json,sys
+init=json.loads(sys.stdin.readline())
+print(json.dumps(dict(type='closed',id='oom',token=init['token'],reason='transport_failed')),flush=True)
+"""
+    current = owned
+    await init_pool(conninfo=f.db.conninfo, min_size=1, max_size=4)
+    try:
+        for attempt, delay in enumerate(RETRY_DELAYS, start=1):
+            before = datetime.now(UTC)
+            with anyio.fail_after(10):
+                await ZaloChild(current).run((sys.executable, "-u", "-c", script))
+            async with transaction(f.db.first):
+                runtime = await runtime_for(owned.config_id)
+                waiting = {candidate.config_id for candidate in await candidates()}
+                gated = await claim(owned.config_id)
+                # Then each death is charged once with its escalating delay, and nothing respawns before it passes.
+                assert runtime.reconnect_attempts == attempt
+                assert runtime.retry_at is not None
+                assert delay <= (runtime.retry_at - before).total_seconds() < delay + 5
+                assert owned.config_id not in waiting
+                assert gated is None
+                assert await f.db.first.fetchval("SELECT ciphertext FROM zalo_personal_auth") == sealed
+                await f.db.first.execute(
+                    "UPDATE channel_configs SET extra_config=jsonb_set(extra_config::jsonb,"
+                    "'{zalo_runtime,retry_at}',to_jsonb(now()-interval '1 second'))::json"
+                )
+                reclaimed = await claim(owned.config_id)
+            assert reclaimed is not None
+            current = reclaimed
+        # When the budget is spent and the next worker dies the same way.
+        with anyio.fail_after(10):
+            await ZaloChild(current).run((sys.executable, "-u", "-c", script))
+    finally:
+        await close_pool()
+    # Then the connection stops retrying but keeps its encrypted login for the owner's explicit restart.
+    async with transaction(f.db.first):
+        row = await get_personal(owned.agent_id)
+        assert row is not None
+        assert not row.desired
+        assert row.state == "failed"
+        assert row.account_id == owned.account_id
+        assert await f.db.first.fetchval("SELECT ciphertext FROM zalo_personal_auth") == sealed
+        assert await candidates() == []

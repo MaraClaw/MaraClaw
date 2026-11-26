@@ -640,8 +640,7 @@ class WebSocketChatHandler:
             await task
 
     async def setup(self) -> bool:
-        self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
-        _ = await chat_tickets.authorized_session(self.binding, self.user, self.agent)
+        self.user, self.agent, self.access_level = await chat_tickets.authorize_message(self.binding)
         self.websocket.state.chat_binding = self.binding
         self.conv_id = str(self.binding.session_id)
         self.agent_name = self.agent.name
@@ -700,8 +699,7 @@ class WebSocketChatHandler:
                 continue
 
             try:
-                self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
-                _ = await chat_tickets.authorized_session(self.binding, self.user, self.agent)
+                self.user, self.agent, self.access_level = await chat_tickets.authorize_message(self.binding)
             except HTTPException as exc:
                 await self._send_error({"type": ChatEventType.ERROR, "content": exc.detail})
                 await self._close(4001 if exc.status_code == 401 else 4003)

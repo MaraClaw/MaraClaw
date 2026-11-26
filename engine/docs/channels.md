@@ -99,6 +99,34 @@ sockets is recorded as rejected and is never sent later. Unpaired attempts, logo
 a replaced or forbidden session, account conflicts, ambiguous identity, credential
 store failures and lost owner authorization end the connection as before.
 
+## Personal bridge fleet limits (WhatsApp and Zalo)
+
+Each connector process supervises its personal bridges with three settings per bridge, so a
+worker restart with hundreds of linked numbers returns them in paced waves instead of
+spawning hundreds of Node processes at once:
+
+| Setting (`WHATSAPP_PERSONAL_` / `ZALO_PERSONAL_`) | Default | Range | Meaning |
+|---|---|---|---|
+| `MAX_RUNNING_CHILDREN` | 200 | 1-5000 | Bridge processes one engine process runs at once |
+| `MAX_STARTS_PER_POLL` | 5 | 1-100 | New bridges started on each one-second supervisor poll |
+| `WORKER_HEAP_MB` | 512 | 64-8192 | V8 old-generation ceiling in MiB of each bridge's SDK worker |
+
+Waiting connections start longest waiting first: the later of when the previous bridge was
+released and when its retry gate opened. A connection in cooldown or inside its durable
+`retry_at` never counts against the pace, and neither does a claim that is declined (a stopped agent
+or an owner who lost authorization): only a claim that wins a bridge counts, so a declined connection
+never holds back the ones behind it. Once the ceiling is reached the supervisor logs
+`fleet_ceiling_reached` once and keeps polling; each freed slot goes to the next waiting connection.
+The ceiling is per process and per bridge, so two worker replicas run up to twice as many. The
+candidate read is one joined query, whatever the number of connections.
+
+The parent passes the heap ceiling as `--worker-heap-mb=<MiB>` after the bridge entry; the
+environment still carries only `PATH`. A worker that outgrows it ends only its own bridge, which
+reaches the parent as an ordinary transient child death: WhatsApp exits non-zero after a
+`worker_exit` failure diagnostic and Zalo closes with `transport_failed`. The durable retry budget
+(5, 15, 30, 60, 120 seconds) is charged, no replacement starts before its `retry_at`, and
+paired credentials are kept even once the budget is spent.
+
 ## Personal QR WhatsApp bursts
 
 Personal QR self-chat text uses durable burst collection. Cloud API WhatsApp and

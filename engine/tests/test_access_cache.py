@@ -516,6 +516,39 @@ async def test_access_helpers_observe_version_before_decision_inputs(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bump_before", ["snapshot", "reread"])
+async def test_agent_needing_rows_is_read_again_after_the_version_is_observed(monkeypatch, bump_before):
+    user = _user()
+    agent = _agent(tenant_id=user.tenant_id, access_mode="custom", company_access_level=None)
+    fake = FakeRedis()
+    reads = 0
+
+    async def redis():
+        return fake
+
+    async def agent_input(_id):
+        nonlocal reads
+        reads += 1
+        if reads == (1 if bump_before == "snapshot" else 2):
+            fake.store[f"aclver:{agent.id}"] = "1"
+        return agent
+
+    monkeypatch.setattr(access_cache, "get_cache_redis", redis)
+    monkeypatch.setattr(permissions.agent_dao, "get", agent_input)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(
+        permissions.agent_permission_dao,
+        "list_for_agent",
+        AsyncMock(return_value=[SimpleNamespace(scope_type="user", scope_id=user.id, access_level="use")]),
+    )
+    # A change committed before the version was observed is in the re-read; one committed after it voids the fill.
+    assert (await permissions.check_agent_access(user, agent.id))[1] == "use"
+    assert reads == 2
+    stored = any(key.startswith("acl:v1:") for key in fake.store)
+    assert stored is (bump_before == "snapshot")
+
+
+@pytest.mark.asyncio
 async def test_inactive_user_id_helper_rejects_even_a_request_memo(monkeypatch):
     user = _user(is_active=False)
     agent = _agent(tenant_id=user.tenant_id)
@@ -545,6 +578,53 @@ class _SessionPool:
 
     def connection(self) -> _SessionPoolCM:
         return _SessionPoolCM(self._raw)
+
+
+class _CountingPool(_SessionPool):
+    def __init__(self, raw: _SessionRaw) -> None:
+        super().__init__(raw)
+        self.checkouts = 0
+
+    @override
+    def connection(self) -> _SessionPoolCM:
+        self.checkouts += 1
+        return super().connection()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("memoized", [False, True])
+async def test_transfer_gate_and_agent_load_share_one_connection(monkeypatch, memoized):
+    from app.db import session as session_module
+    from app.services import company_transfer_runtime_gate
+
+    user = _user()
+    agent = _agent(tenant_id=user.tenant_id, creator_id=user.id)
+    pool = _CountingPool(_SessionRaw())
+    seen: dict[str, object] = {}
+
+    async def is_pending(_agent_id):
+        seen["gate"] = session_module.get_connection()
+        return False
+
+    async def load_agent(_agent_id):
+        seen["agent"] = session_module.get_connection()
+        return agent
+
+    monkeypatch.setattr(session_module, "get_pool", lambda: pool)
+    monkeypatch.setattr(company_transfer_runtime_gate.company_transfer_cleanup_dao, "is_pending", is_pending)
+    monkeypatch.setattr(permissions.agent_dao, "get", load_agent)
+    if memoized:
+        access_cache.memo_set(user.id, agent.id, agent, PermissionAccessLevel.MANAGE)
+    token = session_module._conn_ctx.set(None)
+    try:
+        await permissions.check_agent_access(user, agent.id)
+    finally:
+        session_module._conn_ctx.reset(token)
+
+    assert pool.checkouts == 1
+    assert seen["gate"] is not None
+    if not memoized:
+        assert seen["agent"] is seen["gate"]
 
 
 @pytest.mark.asyncio
@@ -638,7 +718,7 @@ async def test_stalled_redis_costs_one_wait_then_calls_return_at_once_and_is_nev
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user = _user()
-    agent = _agent(tenant_id=user.tenant_id)
+    agent = _agent(tenant_id=user.tenant_id, access_mode="custom", company_access_level=None)
     fake = _SocketTimeoutRedis()
 
     async def cache_redis():
@@ -651,6 +731,11 @@ async def test_stalled_redis_costs_one_wait_then_calls_return_at_once_and_is_nev
     monkeypatch.setattr(asyncio, "wait_for", forbidden_wait_for)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(
+        permissions.agent_permission_dao,
+        "list_for_agent",
+        AsyncMock(return_value=[SimpleNamespace(scope_type="user", scope_id=user.id, access_level="use")]),
+    )
 
     _, level = await permissions.check_agent_access(user, agent.id)
 

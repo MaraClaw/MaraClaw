@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Self
@@ -49,17 +50,18 @@ class FakePipeline:
     async def execute(self) -> list[bool | str | None]:
         parent = self._parent
         parent.round_trips += 1
+        parent.commands.append("pipeline")
         if parent.fail:
             raise RuntimeError("redis down")
         parent.pipelines.append(self._ops)
         results: list[bool | str | None] = []
         for (op, args, ex), nx in zip(self._ops, self._nx, strict=True):
             if op == "set":
-                results.append(await parent.set(args[0], args[1], ex=ex, nx=nx))
+                results.append(parent.write(args[0], args[1], ex=ex, nx=nx))
             elif op == "get":
-                results.append(await parent.get(args[0]))
+                results.append(parent.read(args[0]))
             else:
-                await parent.delete(*args)
+                parent.remove(*args)
                 results.append(True)
         return results
 
@@ -72,16 +74,17 @@ class FakeRedis:
         self.expires: dict[str, int] = {}
         self.pipelines: list[list[tuple[str, tuple[str, ...], int | None]]] = []
         self.round_trips: int = 0
+        self.commands: list[str] = []
 
     def pipeline(self, transaction: bool = True) -> FakePipeline:
         return FakePipeline(self)
 
-    async def get(self, key: str) -> str | None:
+    def read(self, key: str) -> str | None:
         if self.fail or key in self.fail_gets:
             raise RuntimeError("redis down")
         return self.store.get(key)
 
-    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
+    def write(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
         if self.fail:
             raise RuntimeError("redis down")
         if nx and key in self.store:
@@ -91,13 +94,26 @@ class FakeRedis:
             self.expires[key] = ex
         return True
 
-    async def delete(self, *keys: str) -> None:
+    def remove(self, *keys: str) -> None:
         if self.fail:
             raise RuntimeError("redis down")
         for key in keys:
             self.store.pop(key, None)
 
+    async def get(self, key: str) -> str | None:
+        self.commands.append("get")
+        return self.read(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
+        self.commands.append("set")
+        return self.write(key, value, ex=ex, nx=nx)
+
+    async def delete(self, *keys: str) -> None:
+        self.commands.append("delete")
+        self.remove(*keys)
+
     async def incr(self, key: str) -> int:
+        self.commands.append("incr")
         if self.fail:
             raise RuntimeError("redis down")
         nxt = int(self.store.get(key) or 0) + 1
@@ -105,9 +121,31 @@ class FakeRedis:
         return nxt
 
     async def expire(self, key: str, ttl: int) -> None:
+        self.commands.append("expire")
         if self.fail:
             raise RuntimeError("redis down")
         self.expires[key] = ttl
+
+    async def eval(
+        self, script: str, key_count: int, snapshot_key: str, user_version_key: str, identity_prefix: str
+    ) -> list[str | None]:
+        """Mirror ``redis_cache._SESSION_READ_SCRIPT``; a real Redis runs the script in the PostgreSQL-backed suite."""
+        assert (script, key_count) == (redis_cache._SESSION_READ_SCRIPT, 2)
+        self.commands.append("eval")
+        self.round_trips += 1
+        snapshot = self.read(snapshot_key)
+        user_version = self.read(user_version_key)
+        identity_version = None
+        if snapshot is not None:
+            try:
+                document = json.loads(snapshot)
+            except ValueError:
+                document = None
+            user = document.get("user") if isinstance(document, dict) else None
+            identity_id = user.get("identity_id") if isinstance(user, dict) else None
+            if isinstance(identity_id, str):
+                identity_version = self.read(identity_prefix + identity_id)
+        return [snapshot, user_version, identity_version]
 
 
 @pytest.fixture

@@ -306,12 +306,11 @@ async def drive_turn(
 
     monkeypatch.setattr(
         chat_tickets,
-        "authorize",
+        "authorize_message",
         AsyncMock(side_effect=HTTPException(403, "Revoked"))
         if denied
         else AsyncMock(return_value=(user, agent, "use")),
     )
-    monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
     if denied or not state.session_exists:
         await handler.message_loop()
     else:

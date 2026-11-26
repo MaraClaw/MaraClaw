@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from typing import Any, Self
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,9 +15,14 @@ from psycopg import AsyncConnection
 from psycopg.rows import DictRow, dict_row
 
 from app.dao.chat_dao import chat_message_dao
+from app.dao.user_dao import user_dao
 from app.db import session as session_module
 from app.db.connection import DbConnection
-from app.services import tool_config as tool_config_mod
+from app.records.agent import AgentRecord
+from app.records.chat import ChatSessionRecord
+from app.records.identity import IdentityRecord
+from app.records.user import UserRecord
+from app.services import chat_tickets, tool_config as tool_config_mod
 from app.services.trigger_runtime import executions as trigger_executions
 
 
@@ -43,6 +50,7 @@ class _FakeRawConnection:
     def __init__(self) -> None:
         self.executed: list[tuple[str, Any]] = []
         self.commits = 0
+        self.checkouts = 0
 
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self)
@@ -70,6 +78,7 @@ class _FakePool:
         self._raw = raw
 
     def connection(self) -> _PoolConnectionCM:
+        self._raw.checkouts += 1
         return _PoolConnectionCM(self._raw)
 
 
@@ -80,6 +89,49 @@ def raw(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeRawConnection]:
     token = session_module._conn_ctx.set(None)
     yield conn
     session_module._conn_ctx.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_a_socket_message_is_authorized_on_one_pool_checkout(
+    raw: _FakeRawConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given every authorization read taking its connection the way a DAO session does: join one, else check one out.
+    def read_on_a_session(result: object) -> AsyncMock:
+        async def read(*_args: object, **_kwargs: object) -> object:
+            async with session_module.connection_ctx():
+                return result
+
+        return AsyncMock(side_effect=read)
+
+    binding = chat_tickets.ChatTicketBinding(
+        user_id=uuid4(),
+        tenant_id=uuid4(),
+        agent_id=uuid4(),
+        session_id=uuid4(),
+        auth_deadline=int(time.time()) + 3600,
+        auth_generation=7,
+    )
+    identity = IdentityRecord(id=uuid4())
+    user = UserRecord(id=binding.user_id, tenant_id=binding.tenant_id, identity_id=identity.id, identity=identity)
+    agent = AgentRecord(id=binding.agent_id, name="Agent", creator_id=binding.user_id, tenant_id=binding.tenant_id)
+    session = ChatSessionRecord(
+        id=binding.session_id, agent_id=binding.agent_id, user_id=binding.user_id, source_channel="web"
+    )
+    generations = {"auth_generation": 7, "membership_generation": 0}
+    monkeypatch.setattr(chat_tickets, "load_user_principal", read_on_a_session(user))
+    monkeypatch.setattr(user_dao, "get_generations", read_on_a_session(generations))
+    monkeypatch.setattr(chat_tickets, "check_agent_access", read_on_a_session((agent, "manage")))
+    monkeypatch.setattr(chat_tickets.chat_session_dao, "get_for_agent", read_on_a_session(session))
+
+    # When one message is authorized read by read, each read checks out its own connection.
+    await chat_tickets.authorize(binding)
+    await chat_tickets.authorized_session(binding, user, agent)
+    assert raw.checkouts == 4
+    raw.checkouts = 0
+
+    # And when it is authorized as a socket message, one checkout serves all of them.
+    assert await chat_tickets.authorize_message(binding) == (user, agent, "manage")
+    assert raw.checkouts == 1
 
 
 @pytest.mark.asyncio

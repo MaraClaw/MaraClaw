@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from jose import jwt
 from starlette.requests import Request
-from tests.membership_generation_fixtures import pin_membership_generation
+from tests.membership_generation_fixtures import pin_membership_generation, recording_user_writes
 from tests.oauth_state_fakes import install_state_redis
 from tests.rate_limit_fakes import install_limiter_redis
 from tests.test_redis_cache import FakeRedis
@@ -26,6 +26,7 @@ from tests.test_redis_cache import FakeRedis
 from app.api import auth as auth_api
 from app.config import get_settings
 from app.core import redis_cache, security, session_cache
+from app.core.cache_contracts import SessionCacheObservation
 from app.core.client_address import get_client_ip
 from app.core.json_types import json_object_from_response, object_mapping_from
 from app.core.row_memo import clear_row_memo
@@ -189,10 +190,11 @@ class _Membership:
 
 
 class _MembershipDb:
-    """The two reads the real UserDAO issues for a bearer: the joined principal and the generation column."""
+    """The two reads the real UserDAO issues for a bearer: the joined principal and both generations."""
 
     def __init__(self, memberships: list[_Membership]) -> None:
         self.rows = {row.user.id: row for row in memberships}
+        self.auth_generation = 5
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[_MembershipDb]:
@@ -203,6 +205,8 @@ class _MembershipDb:
 
     async def fetchone(self, sql: str, params: dict[str, uuid.UUID]) -> dict[str, object]:
         row = self.rows[params["user_id"]]
+        if sql.startswith("SELECT i.auth_generation, u.membership_generation"):
+            return {"auth_generation": self.auth_generation, "membership_generation": row.generation}
         if sql.startswith("SELECT membership_generation"):
             return {"membership_generation": row.generation}
         identity = row.user.identity
@@ -401,21 +405,113 @@ async def test_membership_generation_is_compared_for_strict_equality(
     monkeypatch: pytest.MonkeyPatch, stored: int | None, claimed: int, accepted: bool
 ) -> None:
     # Given the stored generation of a membership, or none when the row has vanished.
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     pin_membership_generation(monkeypatch, stored)
 
     # When a claim is compared, only an exact match passes.
     if accepted:
-        await security.check_membership_generation(uuid.uuid4(), claimed)
+        await security.check_generations(uuid.uuid4(), uuid.uuid4(), auth=7, membership=claimed)
         return
     with pytest.raises(HTTPException) as caught:
-        await security.check_membership_generation(uuid.uuid4(), claimed)
+        await security.check_generations(uuid.uuid4(), uuid.uuid4(), auth=7, membership=claimed)
     assert caught.value.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("stored", "claimed", "accepted"),
+    [(7, 7, True), (8, 7, False), (7, 8, False), (None, 7, False)],
+    ids=["current", "revoked", "future", "identity-gone"],
+)
+async def test_token_generation_is_compared_for_strict_equality(
+    monkeypatch: pytest.MonkeyPatch, stored: int | None, claimed: int, accepted: bool
+) -> None:
+    # Given the stored identity generation, or none when the identity has vanished.
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=stored))
+    pin_membership_generation(monkeypatch, 0)
+
+    # When a claim is compared, only an exact match passes.
+    if accepted:
+        await security.check_generations(uuid.uuid4(), uuid.uuid4(), auth=claimed, membership=0)
+        return
+    with pytest.raises(HTTPException) as caught:
+        await security.check_generations(uuid.uuid4(), uuid.uuid4(), auth=claimed, membership=0)
+    assert caught.value.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("auth", "membership", "accepted"),
+    [(9, 4, True), (8, 4, False), (9, 3, False), (10, 5, False)],
+    ids=["current", "identity-revoked", "membership-revoked", "both-ahead"],
+)
+async def test_both_generations_are_read_by_one_statement_and_compared_with_the_stored_values(
+    monkeypatch: pytest.MonkeyPatch, auth: int, membership: int, accepted: bool
+) -> None:
+    # Given a membership whose stored counters are 9 (identity) and 4 (membership).
+    user = UserRecord(id=uuid.uuid4(), identity_id=uuid.uuid4())
+    assert user.identity_id is not None
+    with recording_user_writes(monkeypatch, user) as raw:
+        raw.auth_generation, raw.generation = 9, 4
+
+        # When a bearer's claims are checked.
+        if accepted:
+            await security.check_generations(user.id, user.identity_id, auth=auth, membership=membership)
+        else:
+            with pytest.raises(HTTPException) as caught:
+                await security.check_generations(user.id, user.identity_id, auth=auth, membership=membership)
+            assert caught.value.status_code == 401
+
+    # Then one statement answered both, bound to the membership and its identity.
+    assert len(raw.executed) == 1
+    query, params = raw.executed[0]
+    assert "auth_generation" in query
+    assert "membership_generation" in query
+    assert params == {"user_id": user.id, "identity_id": user.identity_id}
+
+
+async def test_a_session_cache_hit_request_costs_one_redis_round_trip_and_one_sql_statement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a warm session snapshot for a membership and its bearer.
+    redis = FakeRedis()
+
+    async def get_cache_redis() -> FakeRedis:
+        return redis
+
+    redis_cache.reset_circuit()
+    clear_row_memo()
+    monkeypatch.setattr(redis_cache, "_client", get_cache_redis)
+    monkeypatch.setattr(session_cache, "_ttl", lambda: 20)
+    identity = IdentityRecord(id=uuid.uuid4(), email="member@example.com", email_verified=True)
+    user = UserRecord(id=uuid.uuid4(), identity_id=identity.id, tenant_id=uuid.uuid4(), identity=identity)
+    user_version = await session_cache.peek_user_version(user.id)
+    identity_version = await session_cache.peek_identity_version(identity.id)
+    assert user_version is not None
+    assert identity_version is not None
+    await session_cache.set_cached_user(
+        user, observed=SessionCacheObservation(identity.id, user_version, identity_version)
+    )
+    clear_row_memo()
+    redis.commands.clear()
+
+    # When the bearer authenticates a request.
+    with recording_user_writes(monkeypatch, user) as raw:
+        loaded = await security.load_user_from_access_token(_signed(sub=str(user.id), gen=0, mgen=0))
+
+    # Then the principal came from the cache in one Redis call and both generations from one SQL statement.
+    assert loaded.id == user.id
+    assert redis.commands == ["eval"]
+    assert redis.round_trips == 1
+    assert len(raw.executed) == 1
+    assert "auth_generation" in raw.executed[0][0]
+    redis_cache.reset_circuit()
+    clear_row_memo()
 
 
 @pytest.mark.asyncio
 async def test_chat_ticket_bearer_contract(monkeypatch):
     install_limiter_redis(monkeypatch)
-    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), identity_id=uuid.uuid4())
+    identity = IdentityRecord(id=uuid.uuid4())
+    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), identity_id=identity.id, identity=identity)
     agent_id, session_id = uuid.uuid4(), uuid.uuid4()
     monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))

@@ -771,9 +771,9 @@ class _AclRedis:
 @pytest.fixture
 def acl_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_AclRedis, Any, Any]]:
     from app.core import access_cache, permissions
-    from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel
+    from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
     from app.core.domain.users import UserRole
-    from app.records.agent import AgentRecord
+    from app.records.agent import AgentPermissionRecord, AgentRecord
     from app.records.user import UserRecord
 
     redis = _AclRedis()
@@ -784,8 +784,14 @@ def acl_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_AclRedis, Any,
         name="A",
         creator_id=uuid4(),
         tenant_id=tenant,
-        access_mode=AgentSharingMode.COMPANY,
-        company_access_level=PermissionAccessLevel.USE,
+        access_mode=AgentSharingMode.CUSTOM,
+    )
+    grant = AgentPermissionRecord(
+        id=uuid4(),
+        agent_id=agent.id,
+        scope_type=PermissionGrantScope.USER,
+        scope_id=user.id,
+        access_level=PermissionAccessLevel.USE,
     )
 
     async def cache_redis() -> _AclRedis:
@@ -796,6 +802,7 @@ def acl_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_AclRedis, Any,
     monkeypatch.setattr(access_cache, "_ttl_seconds", lambda: 45)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", AsyncMock(return_value=[grant]))
     yield redis, user, agent
     access_cache.clear_request_memo()
 
@@ -833,3 +840,66 @@ async def test_acl_miss_takes_two_round_trips_and_hit_takes_one(acl_cache: tuple
     # Then
     assert miss_trips == 2
     assert redis.round_trips - miss_trips == 1
+
+
+@pytest.mark.parametrize("decided_by", ["creator", "administrator", "company"])
+@pytest.mark.asyncio
+async def test_agent_decided_without_permission_rows_takes_no_redis_round_trip_and_no_user_reload(
+    acl_cache: tuple[_AclRedis, Any, Any], monkeypatch: pytest.MonkeyPatch, decided_by: str
+) -> None:
+    from app.core import access_cache, permissions
+    from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel
+    from app.core.domain.users import UserRole
+
+    # Given an agent whose decision needs only the user and the agent, one way or another.
+    redis, user, agent = acl_cache
+    user_get = AsyncMock(return_value=user)
+    list_rows = AsyncMock(return_value=[])
+    monkeypatch.setattr(permissions.user_dao, "get", user_get)
+    monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", list_rows)
+    match decided_by:
+        case "creator":
+            agent.creator_id = user.id
+        case "administrator":
+            user.role = UserRole.ORG_ADMIN
+        case _:
+            agent.access_mode = AgentSharingMode.COMPANY
+            agent.company_access_level = PermissionAccessLevel.USE
+
+    # When the access check runs twice in separate requests.
+    levels: list[str] = []
+    for _ in range(2):
+        access_cache.clear_request_memo()
+        levels.append((await permissions.check_agent_access(user, agent.id))[1])
+
+    # Then neither run touched Redis, and the caller's user was used as loaded.
+    assert levels == [("use" if decided_by == "company" else "manage")] * 2
+    assert redis.round_trips == 0
+    user_get.assert_not_awaited()
+    list_rows.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acl_miss_reads_user_and_agent_again_after_the_version_and_hit_reads_the_agent_once(
+    acl_cache: tuple[_AclRedis, Any, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core import access_cache, permissions
+
+    # Given an agent that needs its permission rows, so the version guards the user and the agent.
+    redis, user, agent = acl_cache
+    user_get = AsyncMock(return_value=user)
+    agent_get = AsyncMock(return_value=agent)
+    monkeypatch.setattr(permissions.user_dao, "get", user_get)
+    monkeypatch.setattr(permissions.agent_dao, "get", agent_get)
+
+    # When the first request misses and fills, and the second hits.
+    await permissions.check_agent_access(user, agent.id)
+    miss_reads = agent_get.await_count
+    access_cache.clear_request_memo()
+    await permissions.check_agent_access(user, agent.id)
+
+    # Then the miss read the agent on both sides of the version, the hit once, and each read the user after it.
+    assert miss_reads == 2
+    assert agent_get.await_count - miss_reads == 1
+    assert user_get.await_count == 2
+    assert redis.round_trips == 3

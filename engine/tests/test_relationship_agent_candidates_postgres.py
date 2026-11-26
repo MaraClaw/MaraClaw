@@ -101,8 +101,9 @@ async def test_agent_candidates_ignore_stale_cached_manage_after_revocation(
                     {"id": target.id},
                 )
 
-    assert [args.args[1] for args in snapshot.await_args_list] == [data.agent.id, data.agent.id]
-    assert [args.args[1] for args in cached.await_args_list] == [data.agent.id, data.agent.id]
+    # The source agent is the actor's own, decided without the cache, and no candidate consults it either.
+    snapshot.assert_not_awaited()
+    cached.assert_not_awaited()
     fill.assert_not_awaited()
 
 

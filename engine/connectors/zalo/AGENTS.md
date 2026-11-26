@@ -7,6 +7,7 @@ Private Node 26 ESM package `@maraclaw/zalo-bridge`, with its own lockfile and p
 | Concern | Source |
 |---|---|
 | Process entry and framed stdio | `src/bridge.ts`, `src/supervisor.ts` |
+| Worker heap ceiling | `src/limits.ts` (`workerLimits`), applied as `resourceLimits` in `src/bridge.ts` |
 | Worker entry and lifecycle | `src/worker.ts`, `src/runtime.ts` |
 | Strict schemas, byte framing and persistence ACK | `src/protocol.ts`, `src/peer.ts` |
 | Typed SDK seam, QR/restore, listener and receipts | `src/sdk.ts` (`SdkClient`, `SdkApi`, `SdkAdapter`) |
@@ -19,6 +20,7 @@ Private Node 26 ESM package `@maraclaw/zalo-bridge`, with its own lockfile and p
 
 - The Python supervisor spawns `node dist/src/bridge.js`. The main thread owns stdin/stdout framing, token checks, lease enforcement and worker termination; the SDK runs only in the worker. Worker stdout/stderr are captured and discarded.
 - Keep the independent shutdown watchdog: stop revokes intake and closes the listener; an unresponsive worker is terminated after 2 seconds, with a further 1-second process exit bound. EOF, SIGINT and SIGTERM enter shutdown.
+- Heap ceiling: the parent appends `--worker-heap-mb=<MiB>` to the command (not an `init` field, because the worker exists before `init`); `workerLimits` turns it into the worker's `maxOldGenerationSizeMb`, no flag keeps Node's defaults and a malformed one aborts startup. A worker that runs out of memory raises `error`/`exit` on the main thread, which closes with `transport_failed` like any dead worker, so Python charges the durable retry budget; the fixture bridge in `test/fixtures/` (mode `oom`) covers it.
 - `src/protocol.ts` uses strict Zod schemas in both directions. Frames are UTF-8 NDJSON, capped at 1 MiB excluding LF before decoding/parsing, including unterminated input. Unknown keys, invalid UTF-8 and malformed frames close the bridge.
 - Require exactly one initial `init` within 15 seconds. Every frame carries `id` and a per-run `token`; later tokens use constant-time comparison. IDs are 1..256 code units, tokens 1..512, provider IDs 1..64 decimal digits, and `lease_ms` is 1..120000.
 - Outgoing text is nonblank and capped at 2000 Unicode code points; incoming text is capped at 131072 UTF-16 code units. Attachment sends use the separate staged-transfer contract in `README.md`. Change Python and TypeScript schemas together.

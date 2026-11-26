@@ -16,15 +16,15 @@ from app.records.user import UserRecord
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", ["role", "tenant", "active"])
 async def test_access_uses_identity_read_after_observed_version(monkeypatch, mutation):
-    before = UserRecord(id=uuid4(), tenant_id=uuid4(), role=UserRole.ORG_ADMIN)
+    before = UserRecord(id=uuid4(), tenant_id=uuid4(), role=UserRole.MEMBER)
     current = replace(before)
     agent = AgentRecord(
-        id=uuid4(), creator_id=uuid4(), name="Shared", tenant_id=before.tenant_id, access_mode=AgentSharingMode.COMPANY
+        id=uuid4(), creator_id=uuid4(), name="Shared", tenant_id=before.tenant_id, access_mode=AgentSharingMode.CUSTOM
     )
 
     async def snapshot(_user_id, _agent_id):
         if mutation == "role":
-            current.role = UserRole.MEMBER
+            current.role = UserRole.ORG_ADMIN
         elif mutation == "tenant":
             current.tenant_id = uuid4()
         else:
@@ -35,16 +35,42 @@ async def test_access_uses_identity_read_after_observed_version(monkeypatch, mut
     monkeypatch.setattr(access_cache, "read_acl_snapshot", snapshot)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=current))
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(permissions.agent_permission_dao, "list_for_agent", AsyncMock(return_value=[]))
     monkeypatch.setattr(access_cache, "get_cached_level", AsyncMock(return_value=None))
     fill = AsyncMock()
     monkeypatch.setattr(access_cache, "set_cached_level", fill)
     if mutation == "role":
-        assert (await permissions.check_agent_access(before, agent.id))[1] == "use"
+        assert (await permissions.check_agent_access(before, agent.id))[1] == "manage"
         assert fill.await_args is not None
-        assert fill.await_args.args[0].role == "member"
+        assert fill.await_args.args[0].role == "org_admin"
         assert fill.await_args.kwargs["observed_ver"] == "1"
     else:
         with pytest.raises(HTTPException) as error:
             await permissions.check_agent_access(before, agent.id)
         assert error.value.status_code == 403
         fill.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["role", "tenant", "active"])
+async def test_fresh_access_reads_the_identity_from_sql(monkeypatch, mutation):
+    before = UserRecord(id=uuid4(), tenant_id=uuid4(), role=UserRole.ORG_ADMIN)
+    current = replace(before)
+    if mutation == "role":
+        current.role = UserRole.MEMBER
+    elif mutation == "tenant":
+        current.tenant_id = uuid4()
+    else:
+        current.is_active = False
+    agent = AgentRecord(
+        id=uuid4(), creator_id=uuid4(), name="Shared", tenant_id=before.tenant_id, access_mode=AgentSharingMode.COMPANY
+    )
+    access_cache.clear_request_memo()
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=current))
+    monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
+    if mutation == "role":
+        assert (await permissions.check_agent_access(before, agent.id, fresh=True))[1] == "use"
+    else:
+        with pytest.raises(HTTPException) as error:
+            await permissions.check_agent_access(before, agent.id, fresh=True)
+        assert error.value.status_code == 403

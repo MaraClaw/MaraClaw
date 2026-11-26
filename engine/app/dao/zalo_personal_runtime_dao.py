@@ -1,11 +1,12 @@
 """Durable retry budgets and sanitized observations under the connection's claim fence."""
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Final, Literal, assert_never
 from uuid import UUID
 
 from fastapi import HTTPException
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import AwareDatetime, BaseModel, JsonValue, ValidationError
 
 from app.core.logging import logger
 from app.db.session import connection_ctx
@@ -18,23 +19,38 @@ class _ExtraConfig(BaseModel):
     extra_config: JsonValue = None
 
 
+class _Waiter(_ExtraConfig):
+    updated_at: AwareDatetime
+
+
+def _runtime_in(extra: JsonValue) -> ZaloRuntime:
+    match extra:
+        case dict():
+            try:
+                return ZaloRuntime.model_validate(extra.get("zalo_runtime", {}))
+            except ValidationError:
+                return ZaloRuntime()
+        case _:
+            return ZaloRuntime()
+
+
 async def runtime_for(config_id: UUID, *, lock: bool = False) -> ZaloRuntime:
     async with connection_ctx() as db:
         raw = await db.fetchone(
             "SELECT extra_config FROM channel_configs WHERE id=%(id)s" + (" FOR UPDATE" if lock else ""),
             {"id": config_id},
         )
-        if raw is None:
-            return ZaloRuntime()
-        extra = _ExtraConfig.model_validate(raw).extra_config
-        match extra:
-            case dict():
-                try:
-                    return ZaloRuntime.model_validate(extra.get("zalo_runtime", {}))
-                except ValidationError:
-                    return ZaloRuntime()
-            case _:
-                return ZaloRuntime()
+        return ZaloRuntime() if raw is None else _runtime_in(_ExtraConfig.model_validate(raw).extra_config)
+
+
+def startable_since(row: Mapping[str, object], now: datetime) -> datetime | None:
+    """When a connection row joined with its channel config became startable: its last release, or its retry gate
+    if that opened later. ``None`` while the retry gate is still closed at ``now``."""
+    waiter = _Waiter.model_validate(row)
+    retry_at = _runtime_in(waiter.extra_config).retry_at
+    if retry_at is None:
+        return waiter.updated_at
+    return None if retry_at > now else max(waiter.updated_at, retry_at)
 
 
 async def _save(config_id: UUID, runtime: ZaloRuntime) -> None:

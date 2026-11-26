@@ -17,17 +17,34 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import final
+from typing import Final, cast, final
 from uuid import uuid4
 
 from app.config import get_settings
-from app.core.cache_contracts import RedisValueRead
+from app.core.cache_contracts import RedisValueRead, SessionKeysRead
 from app.core.events import RedisPoolOverloadError
+from app.core.json_types import is_any_list, json_loads_value
 from app.core.logging import logger
 from app.records.cache_invalidation import CacheInvalidation, CacheInvalidationKind
 
 _COOLDOWN_SECONDS = 2.0
 _VERSION_MIN_TTL = 3600
+# One-trip session read: the identity generation key is named by an id inside the snapshot, so the script resolves it
+# server-side instead of costing the caller a dependent round trip. A missing or malformed snapshot returns no identity
+# generation, which the caller treats as a miss.
+_SESSION_READ_SCRIPT: Final = """
+local snapshot = redis.call('GET', KEYS[1])
+local identity_version = false
+if snapshot then
+  local ok, doc = pcall(cjson.decode, snapshot)
+  local user = ok and type(doc) == 'table' and doc.user
+  local identity_id = type(user) == 'table' and user.identity_id
+  if type(identity_id) == 'string' then
+    identity_version = redis.call('GET', ARGV[1] .. identity_id)
+  end
+end
+return {snapshot, redis.call('GET', KEYS[2]), identity_version}
+"""
 
 
 class _Admission(StrEnum):
@@ -233,16 +250,16 @@ async def _delete_now(*keys: str) -> None:
         logger.warning("redis_cache delete failed: keys={} error={}", len(keys), type(exc).__name__)
 
 
-async def cache_get_json(key: str) -> object | None:
-    raw = await cache_get(key)
-    if raw is None:
-        return None
+def _parse_json(raw: str) -> object | None:
     try:
-        from app.core.json_types import json_loads_value
-
         return json_loads_value(raw)
     except TypeError, ValueError:
         return None
+
+
+async def cache_get_json(key: str) -> object | None:
+    raw = await cache_get(key)
+    return None if raw is None else _parse_json(raw)
 
 
 async def cache_set_json(key: str, value: object, *, ttl: int) -> bool:
@@ -263,6 +280,42 @@ def _json_default(value: object) -> object:
 async def read_version(version_key: str) -> RedisValueRead | None:
     """Separate an unavailable read (None) from a successful miss (value=None)."""
     return await _read_value(version_key)
+
+
+def _decoded(value: object) -> str | None:
+    if isinstance(value, bytes):
+        return value.decode()
+    return value if isinstance(value, str) else None
+
+
+async def read_session_keys(
+    snapshot_key: str, user_version_key: str, identity_version_key_prefix: str
+) -> SessionKeysRead | None:
+    """Read a session snapshot, its user generation and the identity generation it names in one round trip.
+
+    The identity generation key is ``identity_version_key_prefix`` plus the ``user.identity_id`` stored in the snapshot.
+    Returns None when the cache is unavailable, like ``read_version``; a successful miss has a None snapshot.
+    """
+
+    async def read() -> object:
+        client = await _client()
+        return cast(
+            "object",
+            await client.eval(_SESSION_READ_SCRIPT, 2, snapshot_key, user_version_key, identity_version_key_prefix),
+        )
+
+    try:
+        reply = await guarded(read)
+    except CacheUnavailableError as exc:
+        logger.debug("redis_cache session read skipped: {}", exc)
+        return None
+    if not is_any_list(reply) or len(reply) != 3:
+        return None
+    snapshot, user_version, identity_version = reply
+    raw_snapshot = _decoded(snapshot)
+    return SessionKeysRead(
+        None if raw_snapshot is None else _parse_json(raw_snapshot), _decoded(user_version), _decoded(identity_version)
+    )
 
 
 async def ensure_version(version_key: str, *, ttl: int) -> str | None:

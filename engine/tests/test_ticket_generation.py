@@ -40,7 +40,6 @@ def transport(request, monkeypatch):
     if request.param == "chat":
         service = chat_tickets
         binding = chat_tickets.ChatTicketBinding(**fields, session_id=uuid.uuid4(), membership_generation=0)
-        monkeypatch.setattr(chat_tickets, "check_membership_generation", AsyncMock())
         monkeypatch.setattr(
             chat_tickets.chat_session_dao,
             "get_for_agent",
@@ -58,11 +57,21 @@ def transport(request, monkeypatch):
         if claimed != current.generation:
             raise HTTPException(401, "Session revoked")
 
+    async def check_chat_generations(
+        _user_id: uuid.UUID, identity_id: uuid.UUID, *, auth: int, membership: int
+    ) -> None:
+        assert membership == 0
+        await check_generation(identity_id, auth)
+
     redis = TicketRedis()
-    checker = AsyncMock(side_effect=check_generation)
+    if request.param == "chat":
+        checker = AsyncMock(side_effect=check_chat_generations)
+        monkeypatch.setattr(service, "check_generations", checker)
+    else:
+        checker = AsyncMock(side_effect=check_generation)
+        monkeypatch.setattr(service, "check_token_generation", checker)
     monkeypatch.setattr(service, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(service, "load_user_principal", AsyncMock(return_value=user))
-    monkeypatch.setattr(service, "check_token_generation", checker)
     monkeypatch.setattr(
         service,
         "check_agent_access",
@@ -189,7 +198,12 @@ async def test_create_preserves_presenting_generation_instead_of_principal_snaps
     redeemed = await transport.service.redeem(issued.ticket)
     assert (redeemed.auth_generation, redeemed.auth_deadline) == (generation, binding.auth_deadline)
     await authorize(redeemed)
-    transport.checker.assert_awaited_with(transport.user.identity.id, generation)
+    if isinstance(binding, chat_tickets.ChatTicketBinding):
+        transport.checker.assert_awaited_with(
+            transport.user.id, transport.user.identity.id, auth=generation, membership=0
+        )
+    else:
+        transport.checker.assert_awaited_with(transport.user.identity.id, generation)
 
 
 async def test_admission_race_cannot_upgrade_presenting_generation(transport):
