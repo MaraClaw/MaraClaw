@@ -331,3 +331,31 @@ async def test_page_never_splits_an_agent_with_more_than_twenty_bindings(recover
         assert len(page) == 25
         assert {binding.agent_id for binding in page} == {db.agent.id}
         assert await openclaw_reply_dao.page(db.agent.id) == ()
+
+
+async def test_clearing_a_non_uuid_conversation_touches_no_session_binding(pooled_database: ReceiptDatabase) -> None:
+    # Given a bound session and messages stored under a feishu_ conversation id.
+    db = pooled_database
+    async with transaction(db.first):
+        binding = await db.first.fetchval(
+            "SELECT bind_openclaw_reply(%(agent)s, %(session)s)",
+            {
+                "agent": db.agent.id,
+                "session": str(db.session_id),
+            },
+        )
+        await chat_message_dao.insert_message(
+            agent_id=db.agent.id, user_id=db.user.id, role="user", content="hello", conversation_id="feishu_oc_abc"
+        )
+        # When that conversation is cleared.
+        await chat_message_dao.delete_for_conversation("feishu_oc_abc")
+        remaining = await db.first.fetchval(
+            "SELECT count(*) FROM chat_messages WHERE conversation_id = 'feishu_oc_abc'"
+        )
+        revoked = await db.first.fetchval(
+            "SELECT count(*) FROM openclaw_reply_bindings WHERE id = %(id)s", {"id": binding}
+        )
+    # Then the clear succeeds and the unrelated session keeps its binding.
+    assert binding is not None
+    assert remaining == 0
+    assert revoked == 1

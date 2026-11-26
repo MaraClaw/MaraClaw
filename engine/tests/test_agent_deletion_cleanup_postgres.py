@@ -20,7 +20,7 @@ from app.services import agent_deletion_archive, agent_deletion_cleanup, agent_s
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import setup_workspace_lock
 from app.services.guest_identity import GuestOwnershipError
-from deletion_content_pg import seed_deletion_content
+from deletion_content_pg import seed_deletion_branches, seed_deletion_content, surviving
 
 if TYPE_CHECKING:
     from tenant_deletion_pg_fixtures import DeletionPostgres
@@ -219,3 +219,16 @@ async def test_cancellation_drains_publication_under_the_workspace_lock(deletion
     # Then cancellation propagates only after all effects have a durable completion record.
     assert await deletion_pg.rows("SELECT phase FROM agent_deletion_cleanup") == [{"phase": "completed"}]
     assert not (deletion_pg.runtime_root / str(deletion_pg.agent_id)).exists()
+
+
+async def test_agent_deletion_removes_every_predicate_branch_and_nothing_else(deletion_pg: DeletionPostgres):
+    # Given one row per deletion branch (agent, peer agent, participant), rows only a company deletion removes, and
+    # rows that belong to neither.
+    branches = await seed_deletion_branches(deletion_pg)
+    # When the agent is deleted.
+    await agents_api.delete_agent(deletion_pg.agent_id, replace(deletion_pg.actor, role=UserRole.PLATFORM_ADMIN))
+    await asyncio.gather(*tuple(background_tasks._tasks))
+    # Then no row of the agent survives, and every other row does.
+    assert await surviving(deletion_pg, branches.agent) == {table: set() for table in branches.agent}
+    for others in (branches.tenant, branches.kept):
+        assert await surviving(deletion_pg, others) == {table: set(ids) for table, ids in others.items()}

@@ -1439,6 +1439,9 @@ DO $$ BEGIN
 	END IF;
 END $$;
 
+-- Serves agent and tenant deletion, which delete approvals by agent_id.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_approval_requests_agent_id ON approval_requests (agent_id)$ddl$);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
 	id UUID NOT NULL, 
 	user_id UUID, 
@@ -1453,6 +1456,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at)$ddl$);
+
+-- Serve agent and tenant deletion, which delete audit rows by agent_id and user_id.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_agent_id ON audit_logs (agent_id)$ddl$);
+
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_user_id ON audit_logs (user_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
 	id UUID NOT NULL,
@@ -1722,6 +1730,9 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_mes
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_participant_id ON chat_messages (participant_id)$ddl$);
 
+-- Serves tenant deletion by user_id. ux_chat_messages_submission leads with user_id but is partial, so it cannot.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_user_id ON chat_messages (user_id)$ddl$);
+
 -- Serves agent-scoped conversation reads (list_recent, list_for_agent_conversation) in created_at order.
 -- Add no dependency statistics on (agent_id, conversation_id): the planner costs a BitmapAnd of the single-column
 -- indexes as if they were independent, so an accurate estimate makes it sort the whole conversation instead.
@@ -1776,6 +1787,12 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_c
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_agent_id ON chat_sessions (agent_id)$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_user_id ON chat_sessions (user_id)$ddl$);
+
+-- Serve agent and tenant deletion, which delete sessions by peer_agent_id and by the participants of the deleted
+-- agents and users.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_peer_agent_id ON chat_sessions (peer_agent_id)$ddl$);
+
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_participant_id ON chat_sessions (participant_id)$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_is_primary ON chat_sessions (is_primary)$ddl$);
 
@@ -1902,8 +1919,13 @@ BEGIN
         DELETE FROM openclaw_reply_bindings WHERE session_id = OLD.id;
         RETURN NEW;
     END IF;
-    PERFORM id FROM chat_sessions WHERE id::text = OLD.conversation_id FOR UPDATE;
-    DELETE FROM openclaw_reply_bindings WHERE session_id::text = OLD.conversation_id;
+    -- conversation_id also holds non-UUID values (feishu_ ids), so the typed comparison only runs behind this guard,
+    -- never in the same WHERE as the regex: SQL does not promise evaluation order. Typed UUIDs reach the primary key
+    -- and the session_id index; a text cast on the column would scan every session once per deleted message.
+    IF OLD.conversation_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+        PERFORM id FROM chat_sessions WHERE id = OLD.conversation_id::uuid FOR UPDATE;
+        DELETE FROM openclaw_reply_bindings WHERE session_id = OLD.conversation_id::uuid;
+    END IF;
     RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;
@@ -2066,6 +2088,14 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_queue
     ON gateway_messages (agent_id, conversation_id, created_at, id) WHERE status = 'pending'$ddl$);
+-- Serve the ON DELETE SET NULL of reply bindings and the deletion of an agent's or a tenant's sent messages; the
+-- agent_id lookup is already led by ix_gateway_messages_agent_created.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_reply_binding_id
+    ON gateway_messages (reply_binding_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_sender_agent_id
+    ON gateway_messages (sender_agent_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_sender_user_id
+    ON gateway_messages (sender_user_id)$ddl$);
 -- Serves the NOT EXISTS delivered-row probes of claim_head, claim_ordinary_head and pending_dispatch_page.
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_lane
     ON gateway_messages (agent_id, conversation_id) WHERE status = 'delivered'$ddl$);

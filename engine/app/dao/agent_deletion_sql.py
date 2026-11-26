@@ -9,9 +9,12 @@ AGENT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     "DELETE FROM agent_activity_logs WHERE agent_id = %(aid)s",
     "DELETE FROM audit_logs WHERE agent_id = %(aid)s",
     "DELETE FROM approval_requests WHERE agent_id = %(aid)s",
-    "DELETE FROM chat_messages WHERE agent_id = %(aid)s OR participant_id IN (" + _PARTICIPANTS + ")",
-    "DELETE FROM chat_sessions WHERE agent_id = %(aid)s OR peer_agent_id = %(aid)s "
-    "OR participant_id IN (" + _PARTICIPANTS + ")",
+    # One statement per OR branch, so each runs on its own index; together they delete the rows the OR did.
+    "DELETE FROM chat_messages WHERE agent_id = %(aid)s",
+    "DELETE FROM chat_messages WHERE participant_id IN (" + _PARTICIPANTS + ")",
+    "DELETE FROM chat_sessions WHERE agent_id = %(aid)s",
+    "DELETE FROM chat_sessions WHERE peer_agent_id = %(aid)s",
+    "DELETE FROM chat_sessions WHERE participant_id IN (" + _PARTICIPANTS + ")",
     "DELETE FROM agent_schedules WHERE agent_id = %(aid)s",
     "DELETE FROM agent_triggers WHERE agent_id = %(aid)s",
     "DELETE FROM channel_configs WHERE agent_id = %(aid)s",
