@@ -490,12 +490,15 @@ async def test_an_unsafe_incoming_trace_id_is_replaced_by_a_generated_one(incomi
 
 
 async def test_a_request_without_a_trace_id_gets_a_new_one_and_the_binding_ends_with_the_request() -> None:
+    # Bind a known outer id so the test does not depend on what earlier tests left bound.
+    _ = trace_id_var.set("outer-trace")
+
     first = await _request("/api/webhooks/t/x", None)
     second = await _request("/api/webhooks/t/x", None)
 
     assert GENERATED_TRACE_ID.fullmatch(first.headers["X-Trace-Id"])
     assert first.headers["X-Trace-Id"] != second.headers["X-Trace-Id"]
-    assert get_trace_id() is None
+    assert get_trace_id() == "outer-trace"
 
 
 async def test_latency_runs_on_the_monotonic_clock_and_is_recorded_under_the_route_template(
