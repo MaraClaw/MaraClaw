@@ -18,6 +18,7 @@ from app.api.whatsapp import router
 from app.config import get_settings
 from app.core.security import get_current_user
 from app.dao.agent_dao import agent_dao
+from app.dao.personal_bridge_fleet import FleetFullError
 from app.dao.whatsapp_personal_dao import claim, get_personal
 from app.db import session as db_session
 from app.db.pool import close_pool, init_pool
@@ -200,12 +201,16 @@ class Scripted:
         *script: Callable[[], Awaitable[None]],
         failing_stage: str = "run_child",
         declines: bool = False,
+        hangs: bool = False,
+        refused: FleetFullError | None = None,
     ) -> None:
         self.connection = pending_connection()
         self.pacing = pacing
         self.script = list(script)
         self.failing_stage = failing_stage
         self.declines = declines
+        self.hangs = hangs
+        self.refused = refused
         self.attempts: list[float] = []
         self.spawns: list[float] = []
 
@@ -214,6 +219,10 @@ class Scripted:
 
     async def claim(self) -> PersonalConnection | None:
         self.attempts.append(self.pacing.now)
+        if self.hangs:
+            await forever()
+        if self.refused is not None:
+            raise self.refused
         if self.declines:
             return None
         self.spawns.append(self.pacing.now)
@@ -369,6 +378,10 @@ def started(children: Sequence[Scripted]) -> list[int]:
     return [index for index, child in enumerate(children) if child.spawns]
 
 
+def abandoned_claims(logger: Mock) -> list[tuple[object, ...]]:
+    return [call.args[1:] for call in logger.warning.call_args_list if "claim_abandoned" in call.args[0]]
+
+
 async def test_supervisor_brings_a_fleet_back_in_paced_waves_under_the_ceiling(monkeypatch):
     # Given seven waiting connections, oldest first, a ceiling of five running children and two starts per poll.
     fleet(monkeypatch, ceiling=5, per_poll=2)
@@ -436,6 +449,104 @@ async def test_supervisor_does_not_spend_the_start_pace_on_a_declined_claim(monk
     # Then the declined claims are tried again every poll and the healthy connections still start two per poll.
     assert [child.attempts for child in declined] == [[0.0, 1.0], [0.0, 1.0]]
     assert [child.spawns for child in healthy] == [[0.0], [0.0], [1.0]]
+    await stop_supervisor(task)
+
+
+async def test_supervisor_ends_the_polls_claims_when_the_fleet_is_full_and_reports_each_episode_once(monkeypatch):
+    # Given three waiting connections with room locally, a fourth not yet waiting, and a fleet other processes filled.
+    fleet(monkeypatch, ceiling=10, per_poll=10)
+    pacing, logger = Pacing(), Mock()
+    monkeypatch.setattr(supervisor, "logger", logger)
+    full = FleetFullError(live=10, ceiling=10)
+    children = [Scripted(pacing, refused=full) for _ in range(3)]
+    late = Scripted(pacing, refused=full)
+    task, candidates = supervise(monkeypatch, pacing, *children, late)
+    candidates.return_value = [child.connection for child in children]
+    await pacing.paused()
+    # When polls pass.
+    for _ in range(3):
+        await pacing.step(1)
+    # Then each poll tries only the oldest connection, nothing starts, and the fleet-wide count is reported once.
+    assert [child.attempts for child in children] == [[0.0, 1.0, 2.0, 3.0], [], []]
+    assert started(children) == []
+    assert logger.warning.call_count == 1
+    assert "fleet_ceiling_reached" in logger.warning.call_args.args[0]
+    assert logger.warning.call_args.args[1:] == (10, 10, 3)
+    # When room opens.
+    for child in children:
+        child.refused = None
+    await pacing.step(1)
+    # Then the oldest connections start in order within that one poll.
+    assert started(children) == [0, 1, 2]
+    # And a later full fleet is a new episode, reported again.
+    candidates.return_value = [child.connection for child in (*children, late)]
+    await pacing.step(1)
+    assert late.attempts == [5.0]
+    assert logger.warning.call_count == 2
+    assert logger.warning.call_args.args[1:] == (10, 10, 1)
+    await stop_supervisor(task)
+
+
+async def test_supervisor_abandons_a_hung_claim_and_keeps_polling_and_beating(monkeypatch):
+    # Given a claim that never returns for the oldest connection, a healthy one behind it, and a small claim budget.
+    monkeypatch.setattr(supervisor, "_CLAIM_TIMEOUT_SECONDS", 0.05)
+    progress = Mock()
+    monkeypatch.setattr(supervisor, "loop_progress", lambda: progress)
+    pacing = Pacing()
+    hung, healthy = Scripted(pacing, hangs=True), Scripted(pacing)
+    task, _ = supervise(monkeypatch, pacing, hung, healthy)
+    # When the first pass runs.
+    await pacing.paused()
+    # Then the abandoned claim ended that poll's claims and the pass beat.
+    assert (hung.attempts, healthy.attempts) == ([0.0], [])
+    assert progress.beat.call_count == 1
+    # And the next poll, with the abandoned connection cooling down, starts the healthy one.
+    await pacing.step(1)
+    assert (hung.attempts, healthy.spawns, progress.beat.call_count) == ([0.0], [1.0], 2)
+    # And polls go on and beat until the cooldown ends, then try the abandoned connection again.
+    await pacing.step(28)
+    assert (hung.attempts, progress.beat.call_count) == ([0.0], 3)
+    await pacing.step(1)
+    assert (hung.attempts, progress.beat.call_count) == ([0.0, 30.0], 4)
+    await stop_supervisor(task)
+
+
+async def test_supervisor_spends_at_most_one_claim_budget_per_poll_however_many_claims_hang(monkeypatch):
+    # Given three waiting connections whose claims all hang, and a small claim budget.
+    monkeypatch.setattr(supervisor, "_CLAIM_TIMEOUT_SECONDS", 0.05)
+    progress, logger = Mock(), Mock()
+    monkeypatch.setattr(supervisor, "loop_progress", lambda: progress)
+    monkeypatch.setattr(supervisor, "logger", logger)
+    pacing = Pacing()
+    children = [Scripted(pacing, hangs=True) for _ in range(3)]
+    task, _ = supervise(monkeypatch, pacing, *children)
+    # When the first poll runs.
+    await pacing.paused()
+    # Then it attempted exactly one claim, beat, and reported the abandonment with the two behind it deferred.
+    assert [child.attempts for child in children] == [[0.0], [], []]
+    assert progress.beat.call_count == 1
+    assert abandoned_claims(logger) == [(children[0].connection.config_id, 2)]
+    # When the next polls run.
+    await pacing.step(1)
+    await pacing.step(1)
+    # Then each attempts the next connection, the timed-out one cooling down, and the last abandonment defers none.
+    assert [child.attempts for child in children] == [[0.0], [1.0], [2.0]]
+    assert progress.beat.call_count == 3
+    assert abandoned_claims(logger) == [
+        (child.connection.config_id, left) for child, left in zip(children, (2, 1, 0), strict=True)
+    ]
+    await stop_supervisor(task)
+
+
+async def test_supervisor_still_continues_to_the_next_connection_after_a_claim_error_that_is_not_a_timeout(monkeypatch):
+    # Given the oldest connection's claim raises an unclassified error and a healthy one waits behind it.
+    pacing = Pacing()
+    bad, healthy = Scripted(pacing, explodes, failing_stage="claim"), Scripted(pacing)
+    task, _ = supervise(monkeypatch, pacing, bad, healthy)
+    # When the first poll runs.
+    await pacing.paused()
+    # Then the same poll goes on to claim and start the healthy connection.
+    assert (bad.attempts, healthy.spawns) == ([0.0], [0.0])
     await stop_supervisor(task)
 
 

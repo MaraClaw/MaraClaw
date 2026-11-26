@@ -3,6 +3,8 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
+from app.config import get_settings
+from app.dao.personal_bridge_fleet import admit
 from app.db.session import connection_ctx
 from app.records.zalo_personal import ZaloConnection, ZaloError
 from app.services.channels.zalo_personal_access import require_running, zalo_owner
@@ -34,6 +36,7 @@ async def candidates() -> list[ZaloConnection]:
 
 
 async def claim(config_id: UUID) -> ZaloConnection | None:
+    """Lease one connection, or ``None`` when it is declined. Raises ``FleetFullError`` at the fleet ceiling."""
     from app.dao.zalo_personal_runtime_dao import runtime_for
 
     async with connection_ctx() as db:
@@ -46,11 +49,16 @@ async def claim(config_id: UUID) -> ZaloConnection | None:
             require_running(agent)
         except HTTPException:
             return None
-        current = await get_personal(candidate.agent_id, lock=True)
+        # Lock the connection without waiting, so a row held elsewhere (or re-pointed at a new config by a start) is
+        # declined and never queues the poll loop.
+        locked = await db.fetchone(
+            "SELECT * FROM zalo_personal_connections WHERE config_id=%(id)s FOR UPDATE SKIP LOCKED", {"id": config_id}
+        )
+        if locked is None:
+            return None
+        current = ZaloConnection.from_row(locked)
         if (
-            current is None
-            or current.config_id != config_id
-            or current.owner_id != owner.id
+            current.owner_id != owner.id
             or current.tenant_id != agent.tenant_id
             or not current.desired
             or current.claim_token is not None
@@ -60,6 +68,7 @@ async def claim(config_id: UUID) -> ZaloConnection | None:
         runtime = await runtime_for(config_id, lock=True)
         if runtime.retry_at is not None and runtime.retry_at > datetime.now(UTC):
             return None
+        await admit(db, "zalo", get_settings().ZALO_PERSONAL_MAX_RUNNING_CHILDREN)
         row = await db.fetchone(
             "UPDATE zalo_personal_connections SET claim_token=%(claim)s,"
             "state=CASE WHEN account_id IS NULL THEN 'pending' ELSE 'reconnecting' END,"

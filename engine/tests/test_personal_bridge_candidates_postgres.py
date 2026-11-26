@@ -1,15 +1,26 @@
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID, uuid4
 
+import anyio
 import pytest
 from tests.channel_submission_fixtures import ChannelDatabase, channel_db, receipt_db
 from tests.relationship_postgres_fixtures import statements
 
-from app.dao import whatsapp_personal_dao, whatsapp_personal_runtime_dao, zalo_personal_dao, zalo_personal_runtime_dao
+from app.config import get_settings
+from app.dao import (
+    personal_bridge_fleet,
+    whatsapp_personal_dao,
+    whatsapp_personal_runtime_dao,
+    zalo_personal_dao,
+    zalo_personal_runtime_dao,
+)
+from app.dao.personal_bridge_fleet import FleetFullError
+from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.services.channels import whatsapp_personal_control, zalo_personal_control
 
@@ -32,13 +43,15 @@ class Gated(Protocol):
 class Bridge:
     insert: str
     eligible: str
-    channel: str
+    channel: personal_bridge_fleet.Bridge
     runtime_key: str
     state_gated: bool
     candidates: Callable[[], Awaitable[Sequence[Listed]]]
     claim: Callable[[UUID], Awaitable[object | None]]
     runtime_for: Callable[[UUID], Awaitable[Gated]]
     start: Callable[[UUID, UUID], Awaitable[object]]
+    lock_row: str
+    expire_lease: str
 
 
 async def _start_whatsapp(agent_id: UUID, actor_id: UUID) -> object:
@@ -64,6 +77,8 @@ BRIDGES = [
             whatsapp_personal_dao.claim,
             whatsapp_personal_runtime_dao.runtime_for,
             _start_whatsapp,
+            "SELECT TRUE FROM whatsapp_personal_connections WHERE config_id=%(id)s FOR UPDATE",
+            "UPDATE whatsapp_personal_connections SET lease_until=now()-interval '1 second' WHERE config_id=%(id)s",
         ),
         id="whatsapp",
     ),
@@ -82,6 +97,8 @@ BRIDGES = [
             zalo_personal_dao.claim,
             zalo_personal_runtime_dao.runtime_for,
             _start_zalo,
+            "SELECT TRUE FROM zalo_personal_connections WHERE config_id=%(id)s FOR UPDATE",
+            "UPDATE zalo_personal_connections SET lease_until=now()-interval '1 second' WHERE config_id=%(id)s",
         ),
         id="zalo",
     ),
@@ -99,6 +116,7 @@ async def seed(
     created_at: datetime = _NOW,
     desired: bool = True,
     claimed: bool = False,
+    lease_in: timedelta = timedelta(seconds=30),
     state: str = "reconnecting",
 ) -> UUID:
     """One connection row. ``runtime`` is the value under the bridge's runtime key; ``_MISSING`` omits the config row."""
@@ -106,10 +124,10 @@ async def seed(
     db = f.db.first
     if runtime is not _MISSING:
         await db.execute(
-            "INSERT INTO agents (id, name, creator_id, role_description, max_triggers, min_poll_interval_min, "
-            "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
-            "VALUES (%(id)s, 'Fleet QA', %(user)s, '', 20, 5, 5, 'private', 'use', 240)",
-            {"id": agent_id, "user": f.db.user.id},
+            "INSERT INTO agents (id, name, creator_id, tenant_id, role_description, max_triggers, "
+            "min_poll_interval_min, webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+            "VALUES (%(id)s, 'Fleet QA', %(user)s, %(tenant)s, '', 20, 5, 5, 'private', 'use', 240)",
+            {"id": agent_id, "user": f.db.user.id, "tenant": f.tenant_id},
         )
         await db.execute(
             "INSERT INTO channel_configs (id, agent_id, channel_type, is_configured, is_connected, extra_config) "
@@ -134,7 +152,7 @@ async def seed(
             "state": state,
             "desired": desired,
             "claim": uuid4() if claimed else None,
-            "lease": _NOW + timedelta(seconds=30) if claimed else None,
+            "lease": _NOW + lease_in if claimed else None,
             "created": created_at,
             "updated": updated_at,
         },
@@ -263,3 +281,181 @@ async def test_claim_rechecks_the_retry_gate_after_a_connection_was_listed_as_du
         assert await bridge.claim(listed.config_id) is None
         await set_gate(datetime.now(UTC) - timedelta(seconds=1))
         assert await bridge.claim(listed.config_id) is not None
+
+
+def fleet_ceiling(monkeypatch: pytest.MonkeyPatch, bridge: Bridge, ceiling: int) -> None:
+    monkeypatch.setattr(get_settings(), f"{bridge.channel.upper()}_PERSONAL_MAX_RUNNING_CHILDREN", ceiling)
+
+
+async def unclaimed(bridge: Bridge) -> set[UUID]:
+    return {candidate.config_id for candidate in await bridge.candidates()}
+
+
+@pytest.mark.parametrize("bridge", BRIDGES)
+async def test_claim_is_refused_at_the_fleet_ceiling_and_expired_leases_do_not_count(channel_db, monkeypatch, bridge):
+    # Given a ceiling of two held by one live lease and one expired lease, and two waiting connections.
+    f = channel_db
+    fleet_ceiling(monkeypatch, bridge, 2)
+    async with transaction(f.db.first):
+        live = await seed(f, bridge, claimed=True, lease_in=timedelta(hours=1))
+        await seed(f, bridge, claimed=True, lease_in=timedelta(hours=-1))
+        first, second = await seed(f, bridge, runtime={}), await seed(f, bridge, runtime={})
+        # When the waiting connections claim in turn.
+        assert await bridge.claim(first) is not None
+        with pytest.raises(FleetFullError) as refused:
+            await bridge.claim(second)
+        # Then the expired lease never counted, and the refusal reports the fleet-wide count and wrote nothing.
+        assert (refused.value.live, refused.value.ceiling) == (2, 2)
+        assert await unclaimed(bridge) == {second}
+        # And once the live lease expires the refused connection is claimed.
+        await f.db.first.execute(bridge.expire_lease, {"id": live})
+        assert await bridge.claim(second) is not None
+
+
+@pytest.mark.parametrize("bridge", BRIDGES)
+async def test_a_claim_queues_behind_the_fleet_lock_and_counts_the_lease_it_waited_for(channel_db, monkeypatch, bridge):
+    # Given a ceiling of one, two waiting connections, and a first claim that has leased its row but not committed.
+    f = channel_db
+    fleet_ceiling(monkeypatch, bridge, 1)
+    async with transaction(f.db.first):
+        first, second = await seed(f, bridge, runtime={}), await seed(f, bridge, runtime={})
+    leased, release = anyio.Event(), anyio.Event()
+    outcomes: dict[str, object] = {}
+
+    async def hold() -> None:
+        async with transaction(f.db.first):
+            outcomes["first"] = await bridge.claim(first)
+            leased.set()
+            await release.wait()
+
+    async def compete() -> None:
+        await leased.wait()
+        async with transaction(f.db.second):
+            try:
+                outcomes["second"] = await bridge.claim(second)
+            except FleetFullError as refused:
+                outcomes["second"] = refused
+
+    # When a second claimer on another connection starts while the first is uncommitted.
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(hold)
+            tasks.start_soon(compete)
+            await leased.wait()
+            while "second" not in outcomes and not await f.db.first.fetchval(
+                "SELECT cardinality(pg_blocking_pids(%(pid)s))", {"pid": f.db.second.raw.info.backend_pid}
+            ):
+                pass
+            release.set()
+    # Then it queued behind the first, counted the lease that committed and was refused: one live lease, never two.
+    refused = outcomes["second"]
+    assert outcomes["first"] is not None
+    assert isinstance(refused, FleetFullError)
+    assert (refused.live, refused.ceiling) == (1, 1)
+    async with transaction(f.db.first):
+        assert await unclaimed(bridge) == {second}
+
+
+@pytest.mark.parametrize("bridge", BRIDGES)
+async def test_claimers_on_separate_connections_win_exactly_the_ceiling(channel_db, monkeypatch, bridge):
+    # Given a ceiling of three and eight waiting connections shared between two claimers on separate connections.
+    f = channel_db
+    fleet_ceiling(monkeypatch, bridge, 3)
+    async with transaction(f.db.first):
+        waiting = [await seed(f, bridge, runtime={}) for _ in range(8)]
+    won: list[UUID] = []
+    refused: list[UUID] = []
+
+    async def claimer(db, config_ids: list[UUID]) -> None:
+        for config_id in config_ids:
+            async with transaction(db):
+                try:
+                    if await bridge.claim(config_id) is not None:
+                        won.append(config_id)
+                except FleetFullError:
+                    refused.append(config_id)
+
+    # When both claim every connection in their share concurrently.
+    with anyio.fail_after(30):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(claimer, f.db.first, waiting[::2])
+            tasks.start_soon(claimer, f.db.second, waiting[1::2])
+    # Then exactly the ceiling won and the rest were refused, leaving only the refused connections unclaimed.
+    assert (len(won), len(refused)) == (3, 5)
+    async with transaction(f.db.first):
+        assert await unclaimed(bridge) == set(refused)
+
+
+@pytest.mark.parametrize("bridge", BRIDGES)
+async def test_a_connection_row_locked_elsewhere_is_declined_without_waiting(channel_db, bridge):
+    # Given a waiting connection whose row another transaction holds locked.
+    f = channel_db
+    async with transaction(f.db.first):
+        config_id = await seed(f, bridge, runtime={})
+    async with transaction(f.db.second):
+        await f.db.second.fetchval(bridge.lock_row, {"id": config_id})
+        # When a claim runs meanwhile.
+        with anyio.fail_after(5):
+            async with transaction(f.db.first):
+                declined = await bridge.claim(config_id)
+        # Then it is declined at once, as a decline rather than a fleet refusal, and wrote nothing.
+        assert declined is None
+        assert await unclaimed(bridge) == {config_id}
+    # And it is claimed once the row is free.
+    async with transaction(f.db.first):
+        assert await bridge.claim(config_id) is not None
+
+
+@asynccontextmanager
+async def real_pool(f: ChannelDatabase) -> AsyncGenerator[None]:
+    await init_pool(conninfo=f.db.conninfo, min_size=1, max_size=1, pool_timeout=5)
+    try:
+        yield
+    finally:
+        await close_pool()
+
+
+@pytest.mark.parametrize("bridge", BRIDGES)
+async def test_a_claim_cancelled_while_queued_for_the_fleet_lock_rolls_back_and_returns_its_connection(
+    channel_db, bridge
+):
+    # Given a waiting connection, a one-connection pool, and another session holding the bridge's fleet lock.
+    f = channel_db
+    async with transaction(f.db.first):
+        config_id = await seed(f, bridge, runtime={})
+    locked, release = anyio.Event(), anyio.Event()
+
+    async def hold_fleet_lock() -> None:
+        async with transaction(f.db.second):
+            await f.db.second.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%(key)s, 0))",
+                {"key": personal_bridge_fleet.LOCK_KEYS[bridge.channel]},
+            )
+            locked.set()
+            await release.wait()
+
+    async def claim_is_queued() -> bool:
+        async with transaction(f.db.first):
+            return bool(
+                await f.db.first.fetchval(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() "
+                    "AND wait_event_type='Lock' AND wait_event='advisory'"
+                )
+            )
+
+    async with real_pool(f), anyio.create_task_group() as holder:
+        holder.start_soon(hold_fleet_lock)
+        await locked.wait()
+        # When a claim queues behind that lock and is then cancelled.
+        with anyio.fail_after(10):
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(bridge.claim, config_id)
+                while not await claim_is_queued():
+                    pass
+                tasks.cancel_scope.cancel()
+        # Then nothing was leased, and the pool's only connection is back: a one-connection pool serves this read.
+        assert await unclaimed(bridge) == {config_id}
+        release.set()
+    # And once the lock is free the next claim gets that connection and wins.
+    async with real_pool(f):
+        assert await bridge.claim(config_id) is not None

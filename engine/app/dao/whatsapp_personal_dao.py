@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from app.config import get_settings
+from app.dao.personal_bridge_fleet import admit
 from app.dao.personal_burst_lifecycle import cancel_open_for_agent
 from app.dao.whatsapp_personal_runtime_dao import runtime_for, startable_since
 from app.db.session import connection_ctx
@@ -31,16 +33,20 @@ async def candidates() -> list[PersonalConnection]:
 
 
 async def claim(config_id: UUID) -> PersonalConnection | None:
+    """Lease one connection, or ``None`` when it is declined. Raises ``FleetFullError`` at the fleet ceiling."""
     async with connection_ctx() as db:
-        # Lock the connection, then re-check the durable retry gate, so a concurrent interruption is never bypassed.
+        # Lock the connection without waiting, so a row held elsewhere is declined and never queues the poll loop, then
+        # re-check the durable retry gate, so a concurrent interruption is never bypassed.
         locked = await db.fetchval(
-            "SELECT TRUE FROM whatsapp_personal_connections WHERE config_id=%(id)s FOR UPDATE", {"id": config_id}
+            "SELECT TRUE FROM whatsapp_personal_connections WHERE config_id=%(id)s FOR UPDATE SKIP LOCKED",
+            {"id": config_id},
         )
         if not locked:
             return None
         runtime = await runtime_for(config_id, lock=True)
         if runtime.retry_at is not None and runtime.retry_at > datetime.now(UTC):
             return None
+        await admit(db, "whatsapp", get_settings().WHATSAPP_PERSONAL_MAX_RUNNING_CHILDREN)
         row = await db.fetchone(
             "UPDATE whatsapp_personal_connections SET claim_token=%(token)s,lease_until=now()+interval '30 seconds' "
             "WHERE config_id=%(id)s AND desired AND claim_token IS NULL "

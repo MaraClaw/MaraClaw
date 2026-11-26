@@ -292,7 +292,7 @@ async def test_retry_gate_is_rechecked_under_the_row_lock_during_a_concurrent_cl
         owner = await connected(f)
         await write_auth(owner, AuthMutation("creds", {"main": "secret"}))
         assert await reaped(owner)
-    held, release = anyio.Event(), anyio.Event()
+    held, release, contended = anyio.Event(), anyio.Event(), anyio.Event()
     results = []
 
     async def interrupt():
@@ -305,19 +305,18 @@ async def test_retry_gate_is_rechecked_under_the_row_lock_during_a_concurrent_cl
         async with transaction(f.db.second):
             results.append(owner.config_id in {row.config_id for row in await candidates()})
             results.append(await claim_personal(owner.config_id))
+        contended.set()
 
-    # When another connector lists it before the retry commits and then claims behind the row lock.
+    # When another connector lists it before the retry commits and then claims while the row is locked.
     with anyio.fail_after(10):
         async with anyio.create_task_group() as tasks:
             tasks.start_soon(interrupt)
             await held.wait()
             tasks.start_soon(contend)
-            while not await f.db.first.fetchval(
-                "SELECT cardinality(pg_blocking_pids(%(pid)s))", {"pid": f.db.second.raw.info.backend_pid}
-            ):
-                await anyio.lowlevel.checkpoint()
+            await contended.wait()
             release.set()
-    # Then the stale candidate cannot claim before retry_at, and fresh listings skip it.
+    # Then the claim is declined without waiting for the lock, so the stale candidate cannot claim before retry_at,
+    # and fresh listings skip it.
     assert results == [True, True, None]
     async with transaction(f.db.second):
         assert owner.config_id not in {row.config_id for row in await candidates()}

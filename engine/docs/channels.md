@@ -122,8 +122,8 @@ spawning hundreds of Node processes at once:
 
 | Setting (`WHATSAPP_PERSONAL_` / `ZALO_PERSONAL_`) | Default | Range | Meaning |
 |---|---|---|---|
-| `MAX_RUNNING_CHILDREN` | 200 | 1-5000 | Bridge processes one engine process runs at once |
-| `MAX_STARTS_PER_POLL` | 5 | 1-100 | New bridges started on each one-second supervisor poll |
+| `MAX_RUNNING_CHILDREN` | 200 | 1-5000 | Live bridge leases across all engine processes (fleet-wide) |
+| `MAX_STARTS_PER_POLL` | 5 | 1-100 | New bridges each engine process starts on each one-second supervisor poll |
 | `WORKER_HEAP_MB` | 512 | 64-8192 | V8 old-generation ceiling in MiB of each bridge's SDK worker |
 
 Waiting connections start longest waiting first: the later of when the previous bridge was
@@ -132,8 +132,21 @@ released and when its retry gate opened. A connection in cooldown or inside its 
 or an owner who lost authorization): only a claim that wins a bridge counts, so a declined connection
 never holds back the ones behind it. Once the ceiling is reached the supervisor logs
 `fleet_ceiling_reached` once and keeps polling; each freed slot goes to the next waiting connection.
-The ceiling is per process and per bridge, so two worker replicas run up to twice as many. The
-candidate read is one joined query, whatever the number of connections.
+The candidate read is one joined query, whatever the number of connections.
+
+The ceiling is fleet-wide and per bridge, so replicas share it instead of multiplying it. Every claim
+takes a transaction-scoped advisory lock (key `personal_bridge_fleet:whatsapp` or
+`personal_bridge_fleet:zalo`, hashed with `hashtextextended`) and counts the connections whose lease is
+live (`claim_token` set and `lease_until` in the future); at the ceiling it is refused, the process stops
+claiming for that poll, and `fleet_ceiling_reached` logs once per episode with the fleet-wide count. A bridge
+renews its 30-second lease about every second, so a process that died stops counting after at most 30
+seconds (its row stays claimed until teardown, as before). A connection row locked elsewhere (the creator's
+start, a revoke, another claimer) is declined without waiting. Each claim is abandoned after 10 seconds and
+handled like a failed one (the per-connection cooldown); because a hung claim usually has a shared cause
+(a stuck lock holder or the database), the timeout also ends that poll's claims, so one poll spends at most
+one 10-second budget however many connections wait, the pass still beats, and the next poll starts with the
+connections behind it. Any other claim error only skips its connection. Every
+replica enforces its own configured ceiling against the shared count, so set the same value on all of them.
 
 The parent passes the heap ceiling as `--worker-heap-mb=<MiB>` after the bridge entry; the
 environment still carries only `PATH`. A worker that outgrows it ends only its own bridge, which

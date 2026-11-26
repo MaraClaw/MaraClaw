@@ -1543,6 +1543,9 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_w
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_lid
     ON whatsapp_personal_connections(lid_jid) WHERE lid_jid IS NOT NULL$ddl$);
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_agent ON whatsapp_personal_connections(agent_id)$ddl$);
+-- The fleet ceiling counts unexpired leases under an advisory lock (app/dao/personal_bridge_fleet.py).
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_live_leases
+    ON whatsapp_personal_connections(lease_until) WHERE claim_token IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS whatsapp_personal_auth (
     config_id UUID NOT NULL REFERENCES whatsapp_personal_connections(config_id) ON DELETE CASCADE,
@@ -1603,6 +1606,8 @@ CREATE TABLE IF NOT EXISTS zalo_personal_connections (
 );
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_zalo_personal_account ON zalo_personal_connections(account_id)
     WHERE account_id IS NOT NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_zalo_personal_live_leases
+    ON zalo_personal_connections(lease_until) WHERE claim_token IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS zalo_personal_auth (
     config_id UUID NOT NULL REFERENCES zalo_personal_connections(config_id) ON DELETE CASCADE,
