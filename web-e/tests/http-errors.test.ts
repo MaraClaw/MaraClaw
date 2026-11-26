@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createAuthSessionStore } from '../src/lib/auth-session.ts'
-import { ApiError, createHttpClient, formatApiDetail, userFacingRequestError } from '../src/lib/http.ts'
+import { ApiError, createHttpClient, formatApiDetail, parseRetryAfter, userFacingRequestError } from '../src/lib/http.ts'
 
 for (const kind of ['JSON', 'multipart', 'binary'] as const) {
   test(`${kind} HTTP failures never expose upstream HTML in display messages`, async () => {
@@ -91,4 +91,73 @@ test('HTTP display formatting retains readable validation and domain details', (
   const error = new ApiError(409, detail)
   assert.equal(userFacingRequestError(error, 'Try again.'), 'This name is already in use.')
   assert.equal(error.detail, detail)
+})
+
+const noSession = createAuthSessionStore({ read: () => null, write: () => undefined, clear: () => undefined })
+const published = Date.parse('Wed, 21 Oct 2026 07:28:00 GMT')
+
+function refuse(status: number, headers: Record<string, string>) {
+  return createHttpClient(noSession, () => Promise.resolve(Response.json({ detail: 'Busy' }, { status, headers })),
+    (path) => `https://api.example${path}`, () => published).apiRequest('/resource')
+}
+
+for (const status of [429, 503]) {
+  for (const kind of ['JSON', 'multipart', 'binary'] as const) {
+    test(`a ${status} ${kind} refusal carries its Retry-After seconds on the error`, async () => {
+      const client = createHttpClient(noSession, () => Promise.resolve(Response.json({ detail: 'Busy' }, {
+        status, headers: { 'Retry-After': '7' },
+      })), (path) => `https://api.example${path}`, () => published)
+      const request = kind === 'JSON' ? client.apiRequest('/resource')
+        : kind === 'multipart' ? client.apiFormRequest('/resource', new FormData())
+        : client.apiBinaryRequest('/resource')
+      await assert.rejects(request, (error: unknown) => {
+        assert.ok(error instanceof ApiError)
+        assert.equal(error.status, status)
+        assert.equal(error.retryAfterMs, 7000)
+        return true
+      })
+    })
+  }
+}
+
+test('a Retry-After HTTP-date becomes the wait from the response time, and a past date waits no longer', async () => {
+  await assert.rejects(refuse(503, { 'Retry-After': 'Wed, 21 Oct 2026 07:28:30 GMT' }), (error: unknown) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.retryAfterMs, 30_000)
+    return true
+  })
+  await assert.rejects(refuse(429, { 'Retry-After': 'Wed, 21 Oct 2026 07:27:00 GMT' }), (error: unknown) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.retryAfterMs, 0)
+    return true
+  })
+})
+
+test('Retry-After parsing accepts seconds and HTTP-dates in their three RFC forms and ignores anything else', () => {
+  assert.equal(parseRetryAfter('120', published), 120_000)
+  assert.equal(parseRetryAfter(' 0 ', published), 0)
+  assert.equal(parseRetryAfter('Wed, 21 Oct 2026 07:28:10 GMT', published), 10_000)
+  assert.equal(parseRetryAfter('Wednesday, 21-Oct-26 07:28:10 GMT', published), 10_000)
+  for (const invalid of [null, '', '   ', 'soon', '-5', '1.5', '1e3', '5 seconds', '0x10', '12:00', 'NaN', '2026-10-21T07:28:10Z']) {
+    assert.equal(parseRetryAfter(invalid, published), null, String(invalid))
+  }
+})
+
+test('an invalid Retry-After leaves the error without a wait', async () => {
+  await assert.rejects(refuse(503, { 'Retry-After': 'tomorrow-ish' }), (error: unknown) => {
+    assert.ok(error instanceof ApiError)
+    assert.equal(error.retryAfterMs, null)
+    return true
+  })
+})
+
+test('only 429 and 503 responses carry a Retry-After onto the error', async () => {
+  for (const status of [400, 403, 404, 409, 500, 502, 507]) {
+    await assert.rejects(refuse(status, { 'Retry-After': '7' }), (error: unknown) => {
+      assert.ok(error instanceof ApiError)
+      assert.equal(error.status, status)
+      assert.equal(error.retryAfterMs, null)
+      return true
+    })
+  }
 })

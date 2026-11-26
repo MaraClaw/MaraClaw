@@ -2,6 +2,7 @@ import { queryOptions, type QueryFunctionContext } from '@tanstack/react-query'
 
 import { getAgentOpenClawUpdate, upgradeAgentOpenClaw, type AgentUpdate, type OpenClawRun } from '../lib/openclaw-updates-api.ts'
 import { isActiveUpdate } from '../lib/openclaw-update-policy.ts'
+import { queryPollInterval } from '../lib/poll-policy.ts'
 import type { SessionQueryScope } from './session-query-scope.ts'
 
 export function agentUpdateKey(agentId: string) { return ['openclaw-update', agentId] as const }
@@ -31,8 +32,7 @@ export function agentUpdateOptions(scope: SessionQueryScope, agentId: string) {
     staleTime: 0,
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
-    refetchInterval: (query) => isActiveUpdate(query.state.data?.run) ? 1500 : 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: queryPollInterval((update: AgentUpdate | undefined) => isActiveUpdate(update?.run) ? 1500 : 30_000),
   }), queryFn }
 }
 

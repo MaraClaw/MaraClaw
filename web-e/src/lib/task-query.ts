@@ -3,6 +3,7 @@ import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryFuncti
 import type { SessionQueryScope } from '../hooks/session-query-scope.ts'
 import { getTask, listTaskLogPage, listTaskPage, type TaskOut, type TaskTarget } from './agent-work-api.ts'
 import type { TaskLogPage, TaskPage } from './engine-contracts.generated.ts'
+import { queryPollInterval } from './poll-policy.ts'
 
 function compareTimestamp(left: string, right: string) {
   return Date.parse(left) - Date.parse(right) ||
@@ -57,7 +58,8 @@ export function doingTasksQuery(scope: SessionQueryScope, agentId: string) {
   })
   return { ...queryOptions({
     queryKey, queryFn,
-    refetchInterval: 4000,
+    refetchInterval: queryPollInterval(() => 4000),
+    refetchOnWindowFocus: 'always',
     retry: false,
   }), queryFn }
 }

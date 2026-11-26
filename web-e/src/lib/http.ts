@@ -15,19 +15,30 @@ export class StaleSessionError extends Error {
 export class ApiError extends Error {
   status: number
   detail: unknown
+  readonly retryAfterMs: number | null
 
-  constructor(status: number, detail: unknown, message?: string) {
+  constructor(status: number, detail: unknown, message?: string, retryAfterMs: number | null = null) {
     super(formatApiDetail(message) ?? formatApiDetail(detail) ?? (status >= 500
       ? 'The service is temporarily unavailable. Please try again.' : `Request failed (${status})`))
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
+    this.retryAfterMs = retryAfterMs
   }
 
   get isMemberAudienceRejection(): boolean {
     return this.status === 403 && this.detail !== null && typeof this.detail === 'object' &&
       'code' in this.detail && this.detail.code === 'member_audience_rejected'
   }
+}
+
+// Retry-After is a count of seconds or an HTTP-date (RFC 9110); anything else is ignored.
+export function parseRetryAfter(value: string | null, now: number): number | null {
+  const text = value?.trim()
+  if (!text) return null
+  if (/^\d+$/.test(text)) return Number(text) * 1000
+  const date = /^[A-Za-z]{3}/.test(text) ? Date.parse(text) : Number.NaN
+  return Number.isNaN(date) ? null : Math.max(0, date - now)
 }
 
 export function userFacingRequestError(error: unknown, fallback: string): string {
@@ -125,6 +136,7 @@ export function createHttpClient(
   session: Pick<AuthSessionStore, 'capture' | 'getSnapshot' | 'isCurrent' | 'expire'>,
   fetchRequest: typeof fetch = (...args) => fetch(...args),
   url: (path: string) => string = apiUrl,
+  now: () => number = Date.now,
 ) {
   const assertCurrent = (owner: SessionOwner): void => {
     if (!session.isCurrent(owner)) throw new StaleSessionError(owner)
@@ -183,7 +195,9 @@ export function createHttpClient(
     if (!response.ok) {
       const detail = data && typeof data === 'object' && 'detail' in data ? data.detail : data
       if (response.status === 401 && token) session.expire(owner)
-      throw new ApiError(response.status, detail)
+      const throttled = response.status === 429 || response.status === 503
+      throw new ApiError(response.status, detail, undefined,
+        throttled ? parseRetryAfter(response.headers.get('Retry-After'), now()) : null)
     }
     return data
   }

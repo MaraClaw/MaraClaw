@@ -7,6 +7,7 @@ import { fenceMutationOptions, RetiredWorkspaceError } from '../src/hooks/sessio
 import { ApiError } from '../src/lib/http.ts'
 import { updateWorkGate } from '../src/lib/openclaw-update-policy.ts'
 import { agentId, fixture, notice, run, update } from './openclaw-update-fixture.ts'
+import { assertBackedOff, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
 
 test('explicit Upgrade immediately caches an active run and blocks even optional work', async (t) => {
   // Given
@@ -121,4 +122,65 @@ test('a status poll retired before completion cannot refresh agent caches', asyn
   assert.equal(client.getQueryData(agentUpdateKey(agentId)), undefined)
   assert.equal(client.getQueryState(['agent', agentId])?.isInvalidated, false)
   assert.throws(scope.assertCurrent, RetiredWorkspaceError)
+})
+
+for (const [name, status, cadence] of [['no run', null, 30_000], ['an active run', 'pending', 1500], ['a finished run', 'succeeded', 30_000]] as const) {
+  test(`update status polls every ${cadence} ms with ${name} and never in a background tab`, (t) => {
+    // Given
+    const { client, scope } = fixture()
+    t.after(() => client.clear())
+    const options = agentUpdateOptions(scope, agentId)
+    client.setQueryData(agentUpdateKey(agentId), { ...update, run: status && { ...run, state: status } })
+    // When / Then
+    assert.equal(pollInterval(client, options), cadence)
+    assert.equal('refetchIntervalInBackground' in options, false)
+    assert.equal(options.refetchOnWindowFocus, true)
+    assert.equal(options.staleTime, 0)
+  })
+}
+
+test('a hidden page stops the update poll and a visible one restores its cadence', (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  const page = pageVisibility(t, 'hidden')
+  const options = agentUpdateOptions(scope, agentId)
+  client.setQueryData(agentUpdateKey(agentId), { ...update, run })
+  // When / Then
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 1500)
+})
+
+test('an outage backs the update poll off with every failed read and the first success restores its cadence', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  let healthy = false
+  t.mock.method(globalThis, 'fetch', async () => healthy ? Response.json({ ...update, run }) : throttled(503))
+  const options = agentUpdateOptions(scope, agentId)
+  client.setQueryData(agentUpdateKey(agentId), { ...update, run })
+  assert.equal(pollInterval(client, options), 1500)
+  // When / Then
+  for (const ceiling of [3000, 6000, 12_000, 24_000, 48_000, 60_000, 60_000]) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), ceiling)
+  }
+  healthy = true
+  await client.fetchQuery(options)
+  assert.equal(pollInterval(client, options), 1500)
+})
+
+test('a Retry-After on the failed update read holds the poll back for that long, but never past the ceiling', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  t.mock.method(globalThis, 'fetch', async () => throttled(429, '90'))
+  const options = agentUpdateOptions(scope, agentId)
+  client.setQueryData(agentUpdateKey(agentId), { ...update, run })
+  assert.equal(pollInterval(client, options), 1500)
+  // When
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 90_000)
+  // Then
+  assert.equal(pollInterval(client, options), 60_000)
 })

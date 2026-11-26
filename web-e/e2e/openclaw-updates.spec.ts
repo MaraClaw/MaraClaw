@@ -137,8 +137,11 @@ for (const width of [390, 1440, 1920]) {
       await page.screenshot({ path: testInfo.outputPath('completed-settings.png') })
       await page.getByLabel('Active hours', { exact: true }).scrollIntoViewIfNeeded()
       await page.screenshot({ path: testInfo.outputPath('settings-end.png') })
+      // The breadcrumb renders before the listing request reaches the stub, so wait for the listing itself.
+      const listing = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/agents/${agentId}/files/page`)
       await page.getByRole('link', { name: 'Files', exact: true }).click()
       await expect(page.getByRole('button', { name: 'Root', exact: true })).toBeVisible()
+      await listing
       expect(state.fileReads).toBe(1)
       expect(state.upgrades).toBe(2)
       expect(state.starts).toBe(1)

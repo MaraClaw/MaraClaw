@@ -7,6 +7,7 @@ import { fenceMutationOptions } from '../src/hooks/session-query-scope.ts'
 import type { AgentSetup } from '../src/lib/agent-setup-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { agentId, fixture } from './openclaw-update-fixture.ts'
+import { assertBackedOff, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
 
 const failed: AgentSetup = { setup_pending: true, state: 'failed', failure_code: 'sensitive-internal-code', retryable: true }
 const pending: AgentSetup = { setup_pending: true, state: 'pending', failure_code: null, retryable: false }
@@ -154,3 +155,65 @@ for (const action of ['poll', 'retry'] as const) {
     assert.equal(client.getQueryState(['agent', agentId])?.isInvalidated, false)
   })
 }
+
+test('setup polls only in the foreground: a hidden page stops it and a visible one restores 1.5 s', (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  const page = pageVisibility(t, 'hidden')
+  const options = agentSetupOptions(scope, agentId, true)
+  client.setQueryData(agentSetupKey(agentId), pending)
+  // When / Then
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 1500)
+  assert.equal('refetchIntervalInBackground' in options, false)
+  assert.equal(options.refetchOnWindowFocus, true)
+  assert.equal(options.staleTime, 0)
+})
+
+test('an outage backs the setup poll off with every failed read and the first success restores 1.5 s', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  let healthy = false
+  t.mock.method(globalThis, 'fetch', async () => healthy ? Response.json(pending) : throttled(503))
+  const options = agentSetupOptions(scope, agentId, true)
+  client.setQueryData(agentSetupKey(agentId), pending)
+  assert.equal(pollInterval(client, options), 1500)
+  // When / Then
+  for (const ceiling of [3000, 6000, 12_000, 24_000, 48_000, 60_000, 60_000]) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), ceiling)
+  }
+  healthy = true
+  await client.fetchQuery(options)
+  assert.equal(pollInterval(client, options), 1500)
+})
+
+test('a Retry-After on the failed setup read holds the poll back for that long', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  t.mock.method(globalThis, 'fetch', async () => throttled(503, '20'))
+  const options = agentSetupOptions(scope, agentId, true)
+  client.setQueryData(agentSetupKey(agentId), pending)
+  assert.equal(pollInterval(client, options), 1500)
+  // When
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 20_000)
+  // Then
+  assert.equal(pollInterval(client, options), 20_000)
+})
+
+test('a failed read never starts polling a setup with nothing pending', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  t.mock.method(globalThis, 'fetch', async () => throttled(503, '20'))
+  const options = agentSetupOptions(scope, agentId, true)
+  client.setQueryData(agentSetupKey(agentId), { ...pending, state: 'succeeded', setup_pending: false })
+  // When
+  await assert.rejects(client.fetchQuery(options), ApiError)
+  // Then
+  assert.equal(pollInterval(client, options), false)
+})

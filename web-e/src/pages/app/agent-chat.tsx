@@ -37,6 +37,7 @@ import { recoverRejectedTurn } from '@/lib/chat/turn-rejection'
 import { isOwnConversation, isWritableSession } from '@/lib/chat/sessions'
 import { ChatEventType, readOnlySessionId } from '@/lib/chat/protocol'
 import { userFacingRequestError } from '@/lib/http'
+import { startPollLoop } from '@/lib/poll-loop'
 import { chatUploadLimit, formatUploadLimit, getUploadPolicy } from '@/lib/upload-policy-api'
 import {
   createSession,
@@ -268,11 +269,16 @@ export function AgentChatPage() {
 
   useEffect(() => {
     if (!isCurrent(owner) || (!busy && !own) || !activeId) return
-    const timer = window.setInterval(() => {
-      if (!isCurrent() || !submissions.active) return
-      void queryClient.invalidateQueries({ queryKey: ['messages', agent.id, activeId] })
-    }, 5000)
-    return () => window.clearInterval(timer)
+    const queryKey = ['messages', agent.id, activeId]
+    return startPollLoop({
+      cadence: 5000,
+      tick: async () => {
+        if (!isCurrent() || !submissions.active) return
+        await queryClient.invalidateQueries({ queryKey })
+        const refreshed = queryClient.getQueryState(queryKey)
+        if (refreshed?.status === 'error') throw refreshed.error
+      },
+    })
   }, [busy, own, activeId, agent.id, queryClient, owner, isCurrent, submissions])
 
   useEffect(() => {

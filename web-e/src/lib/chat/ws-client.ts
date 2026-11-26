@@ -1,6 +1,7 @@
 import { wsUrl } from '../api.ts'
 import { authSession } from '../auth-session.ts'
 import { issueChatTicket } from '../auth-api.ts'
+import { jitteredBackoff } from '../backoff.ts'
 import { ApiError } from '../http.ts'
 import type { AuthSessionStore, SessionOwner } from '../auth-session.ts'
 import { ChatEventType, inboundSchema, isTurnAccepted, isTurnRejected, type ChatInbound, type ChatOutbound } from './protocol.ts'
@@ -82,9 +83,8 @@ const browserVisible: ChatSignal = {
   },
 }
 
-// Half to all of the capped exponential delay, so clients dropped together do not reconnect in lockstep.
 function backoffDelay(attempt: number, random: () => number): number {
-  return Math.round(Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt) * (0.5 + 0.5 * random()))
+  return jitteredBackoff(attempt, BACKOFF_BASE_MS, BACKOFF_CAP_MS, random)
 }
 
 // Full jitter above a floor: uniform between the floor and a capped exponential ceiling, so a crowd closed together
