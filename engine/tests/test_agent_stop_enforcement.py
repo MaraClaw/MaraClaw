@@ -45,6 +45,8 @@ from test_db_session import _FakeRawConnection, _wrap
 def _isolated_workspace_locks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(agent_manager, "_agent_dir", lambda agent_id: tmp_path / str(agent_id))
     monkeypatch.setattr(company_transfer_cleanup, "reconcile_transfer_cleanup", AsyncMock())
+    # The strict fake connections here have no cursor; this module's subject is the stop order, not the lock timeout.
+    monkeypatch.setattr(session.get_settings(), "DATABASE_REQUEST_LOCK_TIMEOUT_MS", 0)
 
 
 def _agent() -> AgentRecord:

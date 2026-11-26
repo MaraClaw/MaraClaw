@@ -31,6 +31,15 @@ class PoolCheckoutTimeoutError(DbOverloadError):
         super().__init__(message, orig=orig)
 
 
+class PoolQueueFullError(DbOverloadError):
+    """Raised when the pool's wait queue (``DATABASE_POOL_MAX_WAITING``) is full, so the request is refused at once."""
+
+    def __init__(
+        self, message: str = "database connection queue is full", *, orig: BaseException | None = None
+    ) -> None:
+        super().__init__(message, orig=orig)
+
+
 class QueryCanceledError(DbOverloadError):
     """Raised when the server cancels a statement (``statement_timeout`` or a cancel request)."""
 
@@ -42,6 +51,17 @@ class LockNotAvailableError(DbError):
     """Raised when a requested row lock cannot be acquired immediately."""
 
     def __init__(self, message: str = "lock not available", *, orig: BaseException | None = None) -> None:
+        super().__init__(message, orig=orig)
+
+
+class LockWaitTimeoutError(LockNotAvailableError, DbOverloadError):
+    """A request's row-lock wait hit ``lock_timeout``.
+
+    Still a ``LockNotAvailableError``, so NOWAIT callers that treat SQLSTATE 55P03 as busy keep their handling; an
+    HTTP boundary that lets it through answers 503 with ``Retry-After`` like any other overload.
+    """
+
+    def __init__(self, message: str = "database lock wait timed out", *, orig: BaseException | None = None) -> None:
         super().__init__(message, orig=orig)
 
 
@@ -87,6 +107,10 @@ class CheckViolationError(DbError):
         self.constraint: str | None = constraint
 
 
+# PostgreSQL gives a ``lock_timeout`` expiry and a NOWAIT refusal the same SQLSTATE (55P03); only the text differs.
+_LOCK_TIMEOUT_MESSAGE = "canceling statement due to lock timeout"
+
+
 def _constraint_name(exc: object) -> str | None:
     from app.core.json_types import object_attr
 
@@ -100,19 +124,24 @@ def _constraint_name(exc: object) -> str | None:
 def overload_error(exc: BaseException) -> DbOverloadError | None:
     """Return the typed overload error for ``exc``, or None when it is not an overload.
 
-    Recognises a checkout ``PoolTimeout`` and a server ``QueryCanceled``, raw or as ``DbError.orig``, so callers that
-    bypass :func:`map_psycopg_error` (commit, rollback, direct ``get_pool().connection()``) classify the same way.
+    Recognises a checkout ``PoolTimeout``, a full wait queue (``TooManyRequests``), a server ``QueryCanceled`` and a
+    ``lock_timeout`` expiry, raw or as ``DbError.orig``, so callers that bypass :func:`map_psycopg_error` (commit,
+    rollback, direct ``get_pool().connection()``) classify the same way.
     """
     if isinstance(exc, DbOverloadError):
         return exc
     from psycopg import errors as pg_errors
-    from psycopg_pool import PoolTimeout
+    from psycopg_pool import PoolTimeout, TooManyRequests
 
     source = exc.orig if isinstance(exc, DbError) else exc
     if isinstance(source, PoolTimeout):
         return PoolCheckoutTimeoutError(orig=source)
+    if isinstance(source, TooManyRequests):
+        return PoolQueueFullError(orig=source)
     if isinstance(source, pg_errors.QueryCanceled):
         return QueryCanceledError(orig=source)
+    if isinstance(source, pg_errors.LockNotAvailable) and source.diag.message_primary == _LOCK_TIMEOUT_MESSAGE:
+        return LockWaitTimeoutError(orig=source)
     return None
 
 

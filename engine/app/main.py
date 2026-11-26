@@ -7,8 +7,8 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from psycopg.errors import QueryCanceled
-from psycopg_pool import PoolTimeout
+from psycopg.errors import LockNotAvailable, QueryCanceled
+from psycopg_pool import PoolTimeout, TooManyRequests
 from starlette.routing import Route
 
 from app.config import get_settings
@@ -87,7 +87,9 @@ async def company_account_limit(_request: Request, exc: CompanyAccountLimitReach
 
 @app.exception_handler(DbError)
 @app.exception_handler(PoolTimeout)
+@app.exception_handler(TooManyRequests)
 @app.exception_handler(QueryCanceled)
+@app.exception_handler(LockNotAvailable)
 async def database_overload(_request: Request, exc: Exception) -> JSONResponse:
     overload = overload_error(exc)
     if overload is None:

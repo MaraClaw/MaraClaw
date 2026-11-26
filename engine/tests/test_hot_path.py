@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any, Self
+from typing import Any, Self, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -16,6 +16,7 @@ from app.core import redis_cache
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao
 from app.db import pool as pool_module, session as session_module
+from app.db.connection import DbConnection
 from app.services import agent_context, agent_context_cache, chat_persist
 from app.services.llm import caller
 from app.services.llm.turn import TurnContext
@@ -514,6 +515,7 @@ def _pool_settings(**overrides: object) -> Any:
         "DATABASE_POOL_MIN_SIZE": 1,
         "DATABASE_POOL_MAX_SIZE": 2,
         "DATABASE_POOL_TIMEOUT": 5.0,
+        "DATABASE_POOL_MAX_WAITING": 7,
         "DATABASE_POOL_MAX_IDLE": 600.0,
         "DATABASE_POOL_MAX_LIFETIME": 1800.0,
         "DATABASE_STATEMENT_TIMEOUT_MS": 30000,
@@ -586,6 +588,8 @@ async def test_init_pool_passes_hygiene_kwargs(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(pool_module, "get_settings", _pool_settings)
     try:
         await pool_module.init_pool()
+        assert captured["max_waiting"] == 7
+        assert captured["reset"] is pool_module._reset_request_lock_timeout
         assert captured["max_idle"] == 600.0
         assert captured["max_lifetime"] == 1800.0
         assert captured["check"] is pool_module._check_pooled_connection
@@ -618,6 +622,10 @@ async def test_both_pools_apply_session_limits_and_leave_no_open_transaction(
 
     # Then
     main, durable = recording_pools
+    assert main.kwargs["max_waiting"] == 7
+    assert main.kwargs["reset"] is pool_module._reset_request_lock_timeout
+    assert "max_waiting" not in durable.kwargs
+    assert "reset" not in durable.kwargs
     for pool in (main, durable):
         conn = _ConfigureConnection()
         await pool.kwargs["configure"](conn)
@@ -649,6 +657,51 @@ async def test_durable_pool_size_is_independent_of_main_pool(
     assert durable.conninfo == main.conninfo
 
 
+@pytest.mark.asyncio
+async def test_pool_reset_clears_only_connections_that_carry_a_request_lock_timeout() -> None:
+    # Given one connection a request gave a lock_timeout and one that never had it.
+    tracked, untouched = _ResetConnection(), _ResetConnection()
+    await pool_module.set_request_lock_timeout(DbConnection(cast("Any", tracked)), 1500)
+    assert tracked.executed == [("SELECT set_config('lock_timeout', %(ms)s, false)", {"ms": "1500"})]
+
+    # When the pool resets both.
+    await pool_module._reset_request_lock_timeout(cast("Any", tracked))
+    await pool_module._reset_request_lock_timeout(cast("Any", untouched))
+
+    # Then the first is cleared in autocommit mode (no transaction left open) and the second is untouched.
+    assert tracked.events == ["autocommit:True", "execute:RESET lock_timeout", "autocommit:False"]
+    assert untouched.events == []
+    await pool_module._reset_request_lock_timeout(cast("Any", tracked))
+    assert len(tracked.events) == 3
+
+
+class _ResetConnection:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.executed: list[tuple[str, object]] = []
+
+    def cursor(self) -> Any:
+        parent = self
+
+        class Cursor:
+            async def __aenter__(self) -> Any:
+                return self
+
+            async def __aexit__(self, *_args: object) -> bool:
+                return False
+
+            async def execute(self, query: str, params: object = None) -> None:
+                parent.executed.append((query, params))
+
+        return Cursor()
+
+    async def execute(self, query: str) -> None:
+        self.events.append(f"execute:{query}")
+
+    async def set_autocommit(self, value: bool) -> None:
+        self.events.append(f"autocommit:{value}")
+
+
 def test_database_limit_settings_defaults_and_boundaries() -> None:
     from pydantic import ValidationError
 
@@ -658,6 +711,10 @@ def test_database_limit_settings_defaults_and_boundaries() -> None:
     assert defaults.DATABASE_STATEMENT_TIMEOUT_MS == 30000
     assert defaults.DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS == 60000
     assert defaults.DATABASE_DURABLE_POOL_MAX_SIZE == 4
+    assert defaults.DATABASE_POOL_MAX_WAITING == 60
+    assert defaults.DATABASE_REQUEST_LOCK_TIMEOUT_MS == 5000
+    assert Settings.model_validate({"DATABASE_POOL_MAX_WAITING": 0}).DATABASE_POOL_MAX_WAITING == 0
+    assert Settings.model_validate({"DATABASE_REQUEST_LOCK_TIMEOUT_MS": 0}).DATABASE_REQUEST_LOCK_TIMEOUT_MS == 0
 
     assert Settings.model_validate({"DATABASE_DURABLE_POOL_MAX_SIZE": 1}).DATABASE_DURABLE_POOL_MAX_SIZE == 1
     assert Settings.model_validate({"DATABASE_STATEMENT_TIMEOUT_MS": 0}).DATABASE_STATEMENT_TIMEOUT_MS == 0
@@ -667,6 +724,8 @@ def test_database_limit_settings_defaults_and_boundaries() -> None:
     )
     for invalid in (
         {"DATABASE_DURABLE_POOL_MAX_SIZE": 0},
+        {"DATABASE_POOL_MAX_WAITING": -1},
+        {"DATABASE_REQUEST_LOCK_TIMEOUT_MS": -1},
         {"DATABASE_STATEMENT_TIMEOUT_MS": -1},
         {"DATABASE_STATEMENT_TIMEOUT_MS": 2147483648},
         {"DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": -1},

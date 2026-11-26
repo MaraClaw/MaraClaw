@@ -12,6 +12,7 @@ from app.records.schedule import AgentScheduleRecord
 
 NOW = datetime(2026, 10, 15, 12, tzinfo=UTC)
 NEXT = NOW + timedelta(days=1)
+LOCK_TIMEOUT_SQL = "SELECT set_config('lock_timeout',"
 SLOT_COLUMNS = (
     "pending_due_at",
     "pending_instruction",
@@ -38,6 +39,8 @@ class _Cursor:
         sql = " ".join(query.split())
         self.raw.executed.append((sql, params))
         self.rows = []
+        if sql.startswith(LOCK_TIMEOUT_SQL):
+            return
         pool = self.raw.pool
         if sql.startswith("SELECT"):
             if "FOR UPDATE SKIP LOCKED" in sql:

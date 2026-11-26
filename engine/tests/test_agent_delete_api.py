@@ -80,6 +80,8 @@ def delete_runtime(monkeypatch):
         yield raw
 
     monkeypatch.setattr(session, "get_pool", lambda: SimpleNamespace(connection=connection))
+    # The strict fake connection has no cursor; this module's subject is the commit order, not the lock timeout.
+    monkeypatch.setattr(session.get_settings(), "DATABASE_REQUEST_LOCK_TIMEOUT_MS", 0)
     monkeypatch.setattr(agents_api, "assert_agent_deletion_allowed", AsyncMock())
 
     async def snapshot(agents):

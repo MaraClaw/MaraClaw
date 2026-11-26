@@ -123,12 +123,16 @@ class Settings(BaseSettings):
     DATABASE_POOL_MIN_SIZE: int = 2
     DATABASE_POOL_MAX_SIZE: int = 30
     DATABASE_POOL_TIMEOUT: float = 30.0
+    # Requests allowed to queue for a pooled connection; the next one fails fast with a 503 (0 = unbounded queue).
+    DATABASE_POOL_MAX_WAITING: int = Field(default=60, ge=0, le=100000)
     # Recycle idle / long-lived sockets before Aiven (or a LB) silently drops them.
     DATABASE_POOL_MAX_IDLE: float = 600.0
     DATABASE_POOL_MAX_LIFETIME: float = 1800.0
     # Session limits applied to every pooled connection of both pools (milliseconds; 0 disables a limit).
     DATABASE_STATEMENT_TIMEOUT_MS: int = Field(default=30000, ge=0, le=2147483647)
     DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS: int = Field(default=60000, ge=0, le=2147483647)
+    # Row-lock wait allowed to a request-bound connection only (milliseconds; 0 disables); workers never see it.
+    DATABASE_REQUEST_LOCK_TIMEOUT_MS: int = Field(default=5000, ge=0, le=2147483647)
     # The durable pool is sized on its own; it no longer inherits DATABASE_POOL_MAX_SIZE.
     DATABASE_DURABLE_POOL_MAX_SIZE: int = Field(default=4, ge=1, le=1000)
     # Days to keep chat_history_changes journal rows; 0 keeps them forever.

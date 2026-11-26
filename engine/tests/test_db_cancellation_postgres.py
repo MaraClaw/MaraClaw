@@ -10,9 +10,11 @@ from psycopg import AsyncConnection
 from psycopg.errors import UniqueViolation
 from psycopg.pq import TransactionStatus
 from psycopg.rows import DictRow, dict_row
+from psycopg_pool import AsyncConnectionPool
 
+from app.db import pool as pool_module
 from app.db.connection import DbConnection
-from app.db.errors import UniqueViolationError
+from app.db.errors import DbOverloadError, LockNotAvailableError, LockWaitTimeoutError, UniqueViolationError
 from app.db.session import get_connection, run_after_commit, transaction
 
 
@@ -119,3 +121,56 @@ async def test_sql_error_keeps_original_error_rolls_back_and_runs_rollback_callb
     assert effects == ["rollback"]
     assert db.raw.info.transaction_status == TransactionStatus.IDLE
     assert await db.fetchval("SELECT count(*) FROM cancellation_probe") == 0
+
+
+async def test_request_lock_timeout_is_a_503_overload_while_nowait_keeps_its_busy_error(
+    connections: tuple[DbConnection, AsyncConnection[DictRow]],
+) -> None:
+    # Given a row another session holds locked, and a request connection carrying the request lock_timeout.
+    db, holder = connections
+    await holder.execute("CREATE TABLE request_lock_probe (id integer PRIMARY KEY)")
+    await holder.execute("INSERT INTO request_lock_probe VALUES (1)")
+    try:
+        async with holder.transaction():
+            _ = await holder.execute("SELECT id FROM request_lock_probe FOR UPDATE")
+            await pool_module.set_request_lock_timeout(db, 150)
+
+            # When the request waits for that row, its wait expires as an overload that is still a lock error.
+            with pytest.raises(LockWaitTimeoutError) as waited:
+                _ = await db.fetchone("SELECT id FROM request_lock_probe FOR UPDATE")
+            assert isinstance(waited.value, LockNotAvailableError)
+            assert isinstance(waited.value, DbOverloadError)
+            await db.rollback()
+
+            # Then a NOWAIT caller on the same SQLSTATE still gets the plain busy error, not an overload.
+            with pytest.raises(LockNotAvailableError) as busy:
+                _ = await db.fetchone("SELECT id FROM request_lock_probe FOR UPDATE NOWAIT")
+            assert not isinstance(busy.value, DbOverloadError)
+            await db.rollback()
+    finally:
+        await holder.execute("DROP TABLE request_lock_probe")
+
+
+async def test_pool_reset_removes_the_request_lock_timeout_before_the_connection_is_reused() -> None:
+    conninfo = os.environ.get("BOOTSTRAP_TEST_DATABASE_URL", "")
+    if not conninfo:
+        pytest.skip("BOOTSTRAP_TEST_DATABASE_URL is required for isolated PostgreSQL QA")
+    pool = AsyncConnectionPool[AsyncConnection[DictRow]](
+        conninfo,
+        min_size=1,
+        max_size=1,
+        open=False,
+        reset=pool_module._reset_request_lock_timeout,
+        kwargs={"autocommit": False, "row_factory": dict_row},
+    )
+    await pool.open()
+    try:
+        async with pool.connection() as raw:
+            await pool_module.set_request_lock_timeout(DbConnection(raw), 4321)
+            await raw.commit()
+            assert await DbConnection(raw).fetchval("SHOW lock_timeout") == "4321ms"
+            await raw.commit()
+        async with pool.connection() as reused:
+            assert await DbConnection(reused).fetchval("SHOW lock_timeout") == "0"
+    finally:
+        await pool.close()

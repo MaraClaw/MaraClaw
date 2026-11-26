@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from weakref import WeakSet
 
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow, dict_row
@@ -11,6 +12,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.config import get_settings
 from app.core.logging import logger
+from app.db.connection import DbConnection
 from app.db.errors import DbError
 from app.db.types import configure_connection
 from app.db.url import normalize_psycopg_conninfo
@@ -21,6 +23,8 @@ type PoolConfigure = Callable[[AsyncConnection[DictRow]], Awaitable[None]]
 
 _pool: EnginePool | None = None
 _durable: tuple[EnginePool, EnginePool] | None = None
+# Connections of the main pool whose session currently carries a request lock_timeout; only these need the reset.
+_request_lock_timeout_set: WeakSet[AsyncConnection[DictRow]] = WeakSet()
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,30 @@ def _pool_configure(limits: SessionLimits) -> PoolConfigure:
         await conn.commit()
 
     return configure
+
+
+async def set_request_lock_timeout(db: DbConnection, timeout_ms: int) -> None:
+    """Give one checked-out connection a session-level ``lock_timeout`` for the request that holds it.
+
+    Session level on purpose: ``SET LOCAL`` would vanish at the first mid-request commit
+    (``flush_request_transaction``). Only a connection of the main pool that a request bound ever carries it, and
+    :func:`_reset_request_lock_timeout` clears it before the connection is reused, so workers, the durable pool and
+    bootstrap never see it.
+    """
+    await db.execute("SELECT set_config('lock_timeout', %(ms)s, false)", {"ms": str(timeout_ms)})
+    _request_lock_timeout_set.add(db.raw)
+
+
+async def _reset_request_lock_timeout(conn: AsyncConnection[DictRow]) -> None:
+    """Pool ``reset`` hook: runs on an idle connection, so autocommit makes the clear one statement with no commit."""
+    if conn not in _request_lock_timeout_set:
+        return
+    _request_lock_timeout_set.discard(conn)
+    await conn.set_autocommit(True)
+    try:
+        await conn.execute("RESET lock_timeout")
+    finally:
+        await conn.set_autocommit(False)
 
 
 def _session_limits() -> SessionLimits:
@@ -85,6 +113,7 @@ async def init_pool(
     pool_min = min_size if min_size is not None else settings.DATABASE_POOL_MIN_SIZE
     pool_max = max_size if max_size is not None else settings.DATABASE_POOL_MAX_SIZE
     wait_timeout = pool_timeout if pool_timeout is not None else settings.DATABASE_POOL_TIMEOUT
+    max_waiting = settings.DATABASE_POOL_MAX_WAITING
 
     if pool_min < 0:
         raise ValueError("DATABASE_POOL_MIN_SIZE must be >= 0")
@@ -103,9 +132,11 @@ async def init_pool(
         min_size=pool_min,
         max_size=pool_max,
         timeout=wait_timeout,
+        max_waiting=max_waiting,
         open=False,
         configure=_pool_configure(limits),
         check=_check_pooled_connection,
+        reset=_reset_request_lock_timeout,
         kwargs={"autocommit": False, "row_factory": dict_row},
         name="maraclaw",
         max_idle=max_idle,
@@ -115,7 +146,7 @@ async def init_pool(
     typed_pool = pool
     _pool = typed_pool
     logger.info(
-        f"[db] psycopg pool opened min={pool_min} max={pool_max} timeout={wait_timeout}s "
+        f"[db] psycopg pool opened min={pool_min} max={pool_max} timeout={wait_timeout}s max_waiting={max_waiting} "
         f"max_idle={max_idle}s max_lifetime={max_lifetime}s statement_timeout={limits.statement_timeout_ms}ms "
         f"idle_in_transaction_session_timeout={limits.idle_in_transaction_session_timeout_ms}ms"
     )
@@ -181,7 +212,6 @@ async def close_pool() -> None:
 async def ping_pool() -> bool:
     """Return True when the pool can run ``SELECT 1``."""
     from app.core.json_types import int_from_row
-    from app.db.connection import DbConnection
 
     pool = get_pool()
     async with pool.connection() as conn:

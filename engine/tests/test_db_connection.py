@@ -12,7 +12,10 @@ from app.db.connection import DbConnection
 from app.db.errors import (
     DbError,
     ForeignKeyViolationError,
+    LockNotAvailableError,
+    LockWaitTimeoutError,
     PoolCheckoutTimeoutError,
+    PoolQueueFullError,
     QueryCanceledError,
     UniqueViolationError,
     map_psycopg_error,
@@ -250,3 +253,30 @@ async def test_commit_and_rollback_map_overload_only(method: str) -> None:
     with pytest.raises(UniqueViolation) as raw_caught:
         await getattr(db, method)()
     assert raw_caught.value is other
+
+
+def _lock_not_available(message: str) -> Any:
+    from psycopg.errors import LockNotAvailable
+    from psycopg.pq import DiagnosticField
+
+    return LockNotAvailable(message, info={DiagnosticField.MESSAGE_PRIMARY: message.encode()})
+
+
+def test_overload_error_classifies_full_queue_and_lock_timeout_but_not_nowait() -> None:
+    # Given a refused queue slot, a lock_timeout expiry and a NOWAIT refusal (same SQLSTATE 55P03).
+    from psycopg_pool import TooManyRequests
+
+    full = TooManyRequests("too many requests")
+    timeout = _lock_not_available("canceling statement due to lock timeout")
+    nowait = _lock_not_available('could not obtain lock on row in relation "agents"')
+
+    # Then only the first two are overloads, and the lock wait is still a LockNotAvailableError.
+    assert isinstance(overload_error(full), PoolQueueFullError)
+    waited = overload_error(timeout)
+    assert isinstance(waited, LockWaitTimeoutError)
+    assert isinstance(waited, LockNotAvailableError)
+    assert waited.orig is timeout
+    assert overload_error(nowait) is None
+    mapped = map_psycopg_error(nowait)
+    assert type(mapped) is LockNotAvailableError
+    assert isinstance(map_psycopg_error(timeout), LockWaitTimeoutError)
