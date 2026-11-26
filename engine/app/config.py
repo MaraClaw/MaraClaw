@@ -274,6 +274,11 @@ class Settings(BaseSettings):
     CHANNEL_DEDUP_TTL_SECONDS: int = 86400
     # Most attachments the engine fetches from one native channel message; later ones are skipped with one notice.
     CHANNEL_MEDIA_MAX_ATTACHMENTS: int = Field(default=10, ge=1, le=10)
+    # Gateway report relay: a failing delivery ends as failed once it has been attempted this many times or is this
+    # many hours old, and one tenant takes at most this many rows into a single claim batch.
+    GATEWAY_REPORT_MAX_ATTEMPTS: int = Field(default=30, ge=1)
+    GATEWAY_REPORT_MAX_AGE_HOURS: int = Field(default=24, ge=1)
+    GATEWAY_REPORT_TENANT_CLAIM_LIMIT: int = Field(default=5, ge=1)
     # Master switch for Feishu/WeCom/DingTalk token sharing. 0 disables.
     IM_TOKEN_CACHE_TTL_SECONDS: int = 1
 

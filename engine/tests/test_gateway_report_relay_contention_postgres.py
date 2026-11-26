@@ -202,6 +202,7 @@ async def test_postsend_checkpoint_55p03_keeps_provider_backoff(whatsapp_relay_d
         return await retry(*args, **kwargs)
 
     monkeypatch.setattr(relay, "send_chunk", sender)
+    monkeypatch.setattr(relay, "jitter_unit", lambda: 1.0)
     monkeypatch.setattr(dao, "checkpoint_chunk", bounded_checkpoint)
     monkeypatch.setattr(dao, "retry", released_retry)
     # When the real checkpoint UPDATE raises mapped 55P03 after the send boundary.

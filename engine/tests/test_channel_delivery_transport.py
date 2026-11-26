@@ -7,13 +7,19 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.config import get_settings
 from app.core.json_types import json_object_from_response
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.records.outbound_plan import OutboundChunk, OutboundProvider, OutboundTarget
 from app.services import gateway_report_relay as relay
 from app.services.channels import google_chat, outbound_transport
-from app.services.channels.outbound_errors import ProviderDeliveryError, ProviderPayloadRejectedError, retry_at
+from app.services.channels.outbound_errors import (
+    ProviderDeliveryError,
+    ProviderPayloadRejectedError,
+    ProviderPermanentError,
+    retry_at,
+)
 from app.services.channels.outbound_http import reset_outbound_client
 from app.services.channels.outbound_plan import ConfiguredOutbound
 from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
@@ -189,7 +195,7 @@ async def test_provider_deadline_longer_than_local_cap_is_preserved(monkeypatch,
     store = RelayStore()
     store.install(monkeypatch)
     row = store.intent("im")
-    row.attempts = 10000
+    row.attempts = get_settings().GATEWAY_REPORT_MAX_ATTEMPTS - 2
     deadline = store.now + timedelta(seconds=900)
     headers = {"Retry-After": "900" if kind == "seconds" else format_datetime(deadline, usegmt=True)}
     if kind == "discord_body":
@@ -229,6 +235,41 @@ async def test_http_and_application_errors_are_conservative(monkeypatch, status,
         await outbound_transport.send_chunk(configured(OutboundProvider.SLACK), OutboundChunk(text="text", key=uuid4()))
 
     assert isinstance(failure.value, ProviderPayloadRejectedError) == terminal
+
+
+@pytest.mark.parametrize(
+    ("body", "permanent"),
+    [
+        ({"ok": False, "error": "channel_not_found"}, True),
+        ({"ok": False, "error": "is_archived"}, True),
+        ({"ok": False, "error": "ratelimited"}, False),
+        ({"ok": False, "error": "not_in_channel"}, False),
+        ({"ok": False, "error": "invalid_auth"}, False),
+    ],
+)
+async def test_slack_destination_gone_errors_are_permanent_and_the_rest_are_not(monkeypatch, body, permanent):
+    transport(monkeypatch, lambda _request: httpx.Response(200, json=body))
+
+    with pytest.raises(ProviderDeliveryError) as failure:
+        await outbound_transport.send_chunk(configured(OutboundProvider.SLACK), OutboundChunk(text="text", key=uuid4()))
+
+    assert isinstance(failure.value, ProviderPermanentError) == permanent
+    assert failure.value.code == body["error"]
+
+
+@pytest.mark.parametrize(
+    ("body", "permanent"),
+    [({"code": 10003, "message": "Unknown Channel"}, True), ({"code": 10004, "message": "Unknown Guild"}, False)],
+)
+async def test_discord_unknown_channel_is_permanent_and_other_404s_are_not(monkeypatch, body, permanent):
+    transport(monkeypatch, lambda _request: httpx.Response(404, json=body))
+
+    with pytest.raises((ProviderDeliveryError, httpx.HTTPStatusError)) as failure:
+        await outbound_transport.send_chunk(
+            configured(OutboundProvider.DISCORD), OutboundChunk(text="text", key=uuid4())
+        )
+
+    assert isinstance(failure.value, ProviderPermanentError) == permanent
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,9 @@
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+import anyio
 import pytest
 from psycopg.types.json import Jsonb
 
@@ -181,3 +183,134 @@ async def test_real_schema_rejects_invalid_plan_cursor_states(delivery_db, chang
                 "UPDATE gateway_report_deliveries SET im_plan = %(plan)s, next_chunk = %(cursor)s WHERE id = %(id)s",
                 {"id": row.id, "plan": Jsonb(plan) if plan else None, "cursor": cursor},
             )
+
+
+BIG_BACKLOG = 12
+SMALL_BACKLOG = 3
+TENANT_CAP = 4
+
+
+@pytest.fixture
+async def tenant_backlog(receipt_db: ReceiptDatabase) -> tuple[ReceiptDatabase, UUID, list[UUID], UUID, list[UUID]]:
+    db = receipt_db
+    big, small = uuid4(), uuid4()
+    due_since = datetime.now(UTC) - timedelta(hours=1)
+    ids: dict[UUID, list[UUID]] = {big: [], small: []}
+    async with transaction(db.first):
+        for tenant, name in ((big, "big"), (small, "small")):
+            await db.first.execute(
+                "INSERT INTO tenants (id, name, slug, tier) VALUES (%(id)s, %(name)s, %(name)s, 'ultra')",
+                {"id": tenant, "name": name},
+            )
+        for tenant, count in ((big, BIG_BACKLOG), (small, SMALL_BACKLOG)):
+            for position in range(count):
+                message_id = uuid4()
+                await db.first.execute(
+                    "INSERT INTO gateway_messages (id, agent_id, content, status, result) "
+                    "VALUES (%(id)s, %(agent)s, 'request', 'completed', 'result')",
+                    {"id": message_id, "agent": db.agent.id},
+                )
+                created = await dao.create_intent(
+                    message_id=message_id, destination_kind="im", destination_id=db.session_id, tenant_id=tenant
+                )
+                assert created is not None
+                await db.first.execute(
+                    "UPDATE gateway_report_deliveries SET available_at = %(at)s WHERE id = %(id)s",
+                    {"id": created.id, "at": due_since + timedelta(seconds=position)},
+                )
+                ids[tenant].append(created.id)
+    return db, big, ids[big], small, ids[small]
+
+
+async def test_two_relays_and_two_tenants_cap_the_noisy_tenant_without_blocking_or_double_claims(tenant_backlog):
+    db, big, big_ids, small, small_ids = tenant_backlog
+    now = datetime.now(UTC)
+
+    async with transaction(db.first):
+        first = await dao.claim_batch(limit=20, lease_seconds=60, now=now, per_tenant_limit=TENANT_CAP)
+        async with transaction(db.second):
+            with anyio.fail_after(5):
+                concurrent = await dao.claim_batch(limit=20, lease_seconds=60, now=now, per_tenant_limit=TENANT_CAP)
+
+    assert [r.id for r in first if r.tenant_id == big] == big_ids[:TENANT_CAP]
+    assert [r.id for r in first if r.tenant_id == small] == small_ids
+    assert [r.tenant_id for r in first[:2]] == [big, small] or [r.tenant_id for r in first[:2]] == [small, big]
+    assert concurrent == []
+
+    async with transaction(db.second):
+        second = await dao.claim_batch(limit=20, lease_seconds=60, now=now, per_tenant_limit=TENANT_CAP)
+    async with transaction(db.first):
+        third = await dao.claim_batch(limit=20, lease_seconds=60, now=now, per_tenant_limit=TENANT_CAP)
+        drained = await dao.claim_batch(limit=20, lease_seconds=60, now=now, per_tenant_limit=TENANT_CAP)
+
+    assert [r.id for r in second] == big_ids[TENANT_CAP : 2 * TENANT_CAP]
+    assert [r.id for r in third] == big_ids[2 * TENANT_CAP :]
+    assert drained == []
+    claimed = [r.id for r in (*first, *second, *third)]
+    assert len(claimed) == len(set(claimed)) == BIG_BACKLOG + SMALL_BACKLOG
+
+
+async def test_racing_relays_never_claim_one_row_twice_or_exceed_the_tenant_cap(tenant_backlog):
+    db, big, _big_ids, small, _small_ids = tenant_backlog
+    now = datetime.now(UTC)
+
+    async def relay_claim(connection):
+        async with transaction(connection):
+            return await dao.claim_batch(limit=20, lease_seconds=60, now=now, per_tenant_limit=TENANT_CAP)
+
+    first, second = await asyncio.gather(relay_claim(db.first), relay_claim(db.second))
+
+    claimed = [r.id for r in (*first, *second)]
+    assert len(claimed) == len(set(claimed))
+    for batch in (first, second):
+        for tenant in (big, small):
+            assert sum(r.tenant_id == tenant for r in batch) <= TENANT_CAP
+
+
+async def test_failed_delivery_keeps_its_reason_and_only_a_finished_one_is_purgeable(delivery_db):
+    db, row = delivery_db
+    horizon = datetime.now(UTC) + timedelta(hours=1)
+    async with transaction(db.first):
+        current = await claim(db)
+        assert await dao.purge_finished_before(finished_before=horizon, limit=10) == 0
+        assert current.claim_token is not None
+        assert await dao.finish_terminal(
+            current.id,
+            current.claim_token,
+            "provider_permanent_error",
+            now=datetime.now(UTC),
+            detail="slack: channel_not_found",
+        )
+    async with transaction(db.second):
+        stored = await dao.get(row.id)
+        assert stored is not None
+        assert (stored.terminal_reason, stored.failure_detail) == (
+            "provider_permanent_error",
+            "slack: channel_not_found",
+        )
+        assert stored.terminal_at is not None
+        assert stored.created_at is not None
+        assert await dao.claim_batch(limit=20, lease_seconds=60, now=horizon) == []
+        assert await dao.purge_finished_before(finished_before=horizon, limit=10) == 1
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE gateway_report_deliveries SET failure_detail = 'x' WHERE id = %(id)s",
+        (
+            "UPDATE gateway_report_deliveries SET terminal_reason = 'age_exhausted', terminal_at = now(), "
+            "failure_detail = repeat('x', 201) WHERE id = %(id)s"
+        ),
+    ],
+    ids=["pending_with_detail", "oversized_detail"],
+)
+async def test_real_schema_rejects_failure_detail_outside_a_bounded_terminal_row(delivery_db, statement):
+    db, row = delivery_db
+    with pytest.raises(CheckViolationError):
+        await update_in_transaction(db, statement, row.id)
+
+
+async def update_in_transaction(db, statement, row_id):
+    async with transaction(db.first):
+        await db.first.execute(statement, {"id": row_id})

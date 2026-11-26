@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.config import get_settings
 from app.records.outbound_plan import OutboundChunk, OutboundProvider
 from app.services import gateway_report_relay as relay
 from app.services.channels import outbound_plan
@@ -115,11 +116,11 @@ async def test_expired_chunk_ack_cannot_advance_new_claim(monkeypatch):
 
 
 @pytest.mark.parametrize("error", [ValueError("config"), RuntimeError("scope"), OSError("network")])
-async def test_repairable_chunk_failure_recovers_after_ten_thousand_attempts(monkeypatch, error):
+async def test_repairable_chunk_failure_recovers_on_the_last_attempt_below_the_ceiling(monkeypatch, error):
     store = RelayStore()
     store.install(monkeypatch)
     row = store.intent("im")
-    row.attempts = 10000
+    row.attempts = get_settings().GATEWAY_REPORT_MAX_ATTEMPTS - 2
     store.send_error = error
 
     await relay.relay_batch(store.clock)

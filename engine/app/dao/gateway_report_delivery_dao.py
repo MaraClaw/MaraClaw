@@ -27,14 +27,22 @@ _COLUMNS = (
     "delivered_at",
     "terminal_reason",
     "terminal_at",
+    "failure_detail",
+    "created_at",
     "im_plan",
     "next_chunk",
 )
+_DETAIL_LIMIT = 200
 _FENCE = """
     id = %(id)s AND claim_token = %(claim_token)s
     AND delivered_at IS NULL AND terminal_at IS NULL AND lease_expires_at > %(now)s
     AND lease_expires_at > clock_timestamp()
 """
+
+
+def _due(alias: str) -> str:
+    return f"""{alias}.delivered_at IS NULL AND {alias}.terminal_at IS NULL AND {alias}.available_at <= %(now)s
+        AND ({alias}.lease_expires_at IS NULL OR {alias}.lease_expires_at <= %(now)s)"""
 
 
 @final
@@ -83,18 +91,31 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
         limit: int,
         lease_seconds: float,
         now: datetime,
+        per_tenant_limit: int | None = None,
     ) -> list[GatewayReportDeliveryRecord]:
+        """Lease up to ``limit`` due deliveries, at most ``per_tenant_limit`` per tenant (default: no cap beyond ``limit``).
+
+        Rows are taken round-robin across tenants (each tenant's oldest first, then each one's next), so a tenant with a
+        backlog cannot crowd out one with a few due rows. The ranking is read without locks; the locking select re-checks
+        the due predicates on the row itself, and ``SKIP LOCKED`` keeps two relays from claiming one row or waiting on
+        each other. A row another relay holds still counts toward its tenant's rank in this batch.
+        """
         async with self.session() as db:
             rows = await db.fetchall(
-                f"""WITH due AS (
-                    SELECT id FROM {self.table}
-                    WHERE delivered_at IS NULL AND terminal_at IS NULL AND available_at <= %(now)s
-                      AND (lease_expires_at IS NULL OR lease_expires_at <= %(now)s)
+                f"""WITH ranked AS (
+                    SELECT id, available_at,
+                           row_number() OVER (PARTITION BY tenant_id ORDER BY available_at, id) AS tenant_rank
+                    FROM {self.table}
+                    WHERE {_due(self.table)}
                       AND EXISTS (SELECT 1 FROM gateway_messages AS message
                                   WHERE message.id = gateway_report_deliveries.message_id
                                     AND message.status = 'completed')
-                    ORDER BY available_at, id
-                    LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ), due AS (
+                    SELECT candidate.id FROM {self.table} AS candidate
+                    JOIN ranked ON ranked.id = candidate.id
+                    WHERE ranked.tenant_rank <= %(per_tenant_limit)s AND {_due("candidate")}
+                    ORDER BY ranked.tenant_rank, ranked.available_at, ranked.id
+                    LIMIT %(limit)s FOR UPDATE OF candidate SKIP LOCKED
                 )
                 UPDATE {self.table} AS delivery
                 SET claim_token = gen_random_uuid(),
@@ -102,7 +123,12 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
                     attempts = delivery.attempts + 1
                 FROM due WHERE delivery.id = due.id
                 RETURNING {self._select_list("delivery")}""",
-                {"limit": limit, "now": now, "lease_expires_at": now + timedelta(seconds=lease_seconds)},
+                {
+                    "limit": limit,
+                    "per_tenant_limit": limit if per_tenant_limit is None else per_tenant_limit,
+                    "now": now,
+                    "lease_expires_at": now + timedelta(seconds=lease_seconds),
+                },
             )
         return [self.record_factory(row) for row in rows]
 
@@ -194,13 +220,20 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
         reason: TerminalReason,
         *,
         now: datetime,
+        detail: str | None = None,
     ) -> bool:
         async with self.session() as db:
             row = await db.fetchone(
                 f"""UPDATE {self.table} SET terminal_reason = %(reason)s, terminal_at = %(now)s,
-                    claim_token = NULL, lease_expires_at = NULL
+                    failure_detail = %(detail)s, claim_token = NULL, lease_expires_at = NULL
                     WHERE {_FENCE} RETURNING id""",
-                {"id": delivery_id, "claim_token": claim_token, "reason": reason, "now": now},
+                {
+                    "id": delivery_id,
+                    "claim_token": claim_token,
+                    "reason": reason,
+                    "now": now,
+                    "detail": detail[:_DETAIL_LIMIT] if detail is not None else None,
+                },
             )
         return row is not None
 
@@ -223,7 +256,8 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
     async def purge_finished_before(self, *, finished_before: datetime, limit: int) -> int:
         """Delete up to ``limit`` deliveries that finished before ``finished_before``, oldest first, and return how many.
 
-        Only a delivered row (``delivered_at``) or a terminal one (``terminal_at``) is eligible, dated by whichever is
+        Only a delivered row (``delivered_at``) or a terminal one (``terminal_at``, which includes a failed one: a
+        permanent provider error, an exhausted attempt or age limit) is eligible, dated by whichever is
         set; a pending delivery, leased or waiting to retry, is never deleted however old. The gateway message
         it reported stays. The first predicate is the partial index predicate of
         ``ix_gateway_report_deliveries_finished_at`` verbatim so the planner can use the index. Rows another

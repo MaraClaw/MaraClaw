@@ -2003,9 +2003,12 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
         'source_agent_unavailable', 'source_tenant_changed',
         'destination_agent_unavailable', 'destination_tenant_changed',
         'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected',
-        'whatsapp_window_unavailable', 'whatsapp_window_expired'
+        'whatsapp_window_unavailable', 'whatsapp_window_expired',
+        'provider_permanent_error', 'attempts_exhausted', 'age_exhausted'
     )),
     terminal_at TIMESTAMP WITH TIME ZONE,
+    failure_detail TEXT CHECK (char_length(failure_detail) <= 200),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     im_plan JSONB,
     next_chunk INTEGER NOT NULL DEFAULT 0 CHECK (next_chunk >= 0),
     CHECK (im_plan IS NOT NULL OR next_chunk = 0),
@@ -2017,6 +2020,7 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     ) IS TRUE),
     CHECK ((terminal_reason IS NULL) = (terminal_at IS NULL)),
     CHECK (terminal_at IS NULL OR delivered_at IS NULL),
+    CHECK (failure_detail IS NULL OR terminal_at IS NOT NULL),
     UNIQUE (message_id, destination_kind, destination_id)
 );
 

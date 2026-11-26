@@ -208,19 +208,37 @@ async def test_claim_sql_bounds_due_rows_excludes_active_leases_and_rotates_toke
     # Given
     raw.rows = [row]
     # When
-    claims = await dao.claim_batch(limit=7, lease_seconds=12.5, now=NOW)
+    claims = await dao.claim_batch(limit=7, lease_seconds=12.5, now=NOW, per_tenant_limit=3)
     # Then
     assert claims == [GatewayReportDeliveryRecord.from_row(row)]
     assert len(raw.executed) == 1
     sql, params = raw.executed[0]
-    assert "WITH due AS ( SELECT id" in sql
-    assert "delivered_at IS NULL AND terminal_at IS NULL AND available_at <= %(now)s" in sql
-    assert "lease_expires_at IS NULL OR lease_expires_at <= %(now)s" in sql
-    assert "ORDER BY available_at, id LIMIT %(limit)s FOR UPDATE SKIP LOCKED" in sql
+    assert "WITH ranked AS ( SELECT id, available_at," in sql
+    assert "row_number() OVER (PARTITION BY tenant_id ORDER BY available_at, id) AS tenant_rank" in sql
+    assert "gateway_report_deliveries.delivered_at IS NULL AND gateway_report_deliveries.terminal_at IS NULL" in sql
+    assert "WHERE ranked.tenant_rank <= %(per_tenant_limit)s AND candidate.delivered_at IS NULL" in sql
+    assert sql.count("lease_expires_at IS NULL OR") == 2
+    assert "ORDER BY ranked.tenant_rank, ranked.available_at, ranked.id LIMIT %(limit)s" in sql
+    assert "FOR UPDATE OF candidate SKIP LOCKED" in sql
     assert "claim_token = gen_random_uuid()" in sql
     assert "attempts = delivery.attempts + 1" in sql
     assert "FROM due WHERE delivery.id = due.id RETURNING delivery.id" in sql
-    assert params == {"limit": 7, "now": NOW, "lease_expires_at": NOW + timedelta(seconds=12.5)}
+    assert params == {
+        "limit": 7,
+        "per_tenant_limit": 3,
+        "now": NOW,
+        "lease_expires_at": NOW + timedelta(seconds=12.5),
+    }
+
+
+async def test_claim_without_a_tenant_cap_ranks_no_tighter_than_the_batch_limit(
+    raw: _FakeRawConnection, row: Row
+) -> None:
+    # Given / When
+    raw.rows = [row]
+    await dao.claim_batch(limit=7, lease_seconds=12.5, now=NOW)
+    # Then
+    assert raw.executed[0][1]["per_tenant_limit"] == 7
 
 
 @pytest.mark.parametrize("operation", ["lock", "acknowledge", "retry", "terminal"])
@@ -247,7 +265,9 @@ async def test_claim_operations_fence_on_id_token_live_expiry_and_undelivered(
         case "retry":
             result = await dao.retry(claim, available_at=available_at, now=NOW)
         case "terminal":
-            result = await dao.finish_terminal(claim.id, claim.claim_token, "source_tenant_changed", now=NOW)
+            result = await dao.finish_terminal(
+                claim.id, claim.claim_token, "source_tenant_changed", now=NOW, detail="d" * 300
+            )
         case _:
             pytest.fail("Unknown test operation")
     # Then
@@ -268,9 +288,10 @@ async def test_claim_operations_fence_on_id_token_live_expiry_and_undelivered(
             assert params["available_at"] == available_at
         case "terminal":
             assert "SET terminal_reason = %(reason)s, terminal_at = %(now)s," in sql
-            assert "claim_token = NULL, lease_expires_at = NULL" in sql
+            assert "failure_detail = %(detail)s, claim_token = NULL, lease_expires_at = NULL" in sql
             assert "delivered_at =" not in sql
             assert params["reason"] == "source_tenant_changed"
+            assert params["detail"] == "d" * 200
 
 
 def test_schema_contract_uniqueness_cascades_defaults_and_due_index() -> None:
@@ -298,7 +319,11 @@ def test_schema_contract_uniqueness_cascades_defaults_and_due_index() -> None:
     )
     assert "'destination_agent_unavailable', 'destination_tenant_changed'," in table
     assert "'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected'," in table
-    assert "'whatsapp_window_unavailable', 'whatsapp_window_expired' ))" in table
+    assert "'whatsapp_window_unavailable', 'whatsapp_window_expired'," in table
+    assert "'provider_permanent_error', 'attempts_exhausted', 'age_exhausted' ))" in table
     assert "terminal_at TIMESTAMP WITH TIME ZONE," in table
+    assert "failure_detail TEXT CHECK (char_length(failure_detail) <= 200)," in table
+    assert "created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()," in table
+    assert "CHECK (failure_detail IS NULL OR terminal_at IS NOT NULL)" in table
     assert "CHECK ((terminal_reason IS NULL) = (terminal_at IS NULL))" in table
     assert "CHECK (terminal_at IS NULL OR delivered_at IS NULL)" in table

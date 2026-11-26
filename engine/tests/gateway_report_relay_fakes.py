@@ -1,3 +1,4 @@
+from collections import Counter
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -58,6 +59,8 @@ class RelayStore:
         self.send_error: Exception | None = None
         self.block_enqueue = False
         self.enqueue_entered = anyio.Event()
+        self.claim_calls: list[int | None] = []
+        self.jitter = 1.0
 
     def clock(self) -> datetime:
         return self.now
@@ -71,14 +74,15 @@ class RelayStore:
             self.destination.id if kind == "agent" else self.session.id,
             tenant_id=self.source.tenant_id,
             available_at=self.now,
+            created_at=self.now,
         )
         self.rows[row.id] = row
         return row
 
     async def claim_batch(
-        self, *, limit: int, lease_seconds: float, now: datetime
+        self, *, limit: int, lease_seconds: float, now: datetime, per_tenant_limit: int | None = None
     ) -> list[GatewayReportDeliveryRecord]:
-        due = [
+        eligible = [
             r
             for r in self.rows.values()
             if r.delivered_at is None
@@ -86,7 +90,15 @@ class RelayStore:
             and r.available_at is not None
             and r.available_at <= now
             and (r.lease_expires_at is None or r.lease_expires_at <= now)
-        ][:limit]
+        ]
+        ranks = Counter[UUID | None]()
+        ranked: list[tuple[int, GatewayReportDeliveryRecord]] = []
+        for r in eligible:
+            ranks[r.tenant_id] += 1
+            ranked.append((ranks[r.tenant_id], r))
+        cap = limit if per_tenant_limit is None else per_tenant_limit
+        due = [r for rank, r in sorted(ranked, key=lambda item: item[0]) if rank <= cap][:limit]
+        self.claim_calls.append(per_tenant_limit)
         for row in due:
             row.claim_token = uuid4()
             row.lease_expires_at = now + timedelta(seconds=lease_seconds)
@@ -140,13 +152,13 @@ class RelayStore:
         return True
 
     async def finish_terminal(
-        self, delivery_id: UUID, claim_token: UUID, reason: TerminalReason, *, now: datetime
+        self, delivery_id: UUID, claim_token: UUID, reason: TerminalReason, *, now: datetime, detail: str | None = None
     ) -> bool:
         row = self.rows[delivery_id]
         claim = replace(row, claim_token=claim_token)
         if not await self.lock_claim(claim, now=now):
             return False
-        row.terminal_reason, row.terminal_at = reason, now
+        row.terminal_reason, row.terminal_at, row.failure_detail = reason, now, detail
         row.claim_token, row.lease_expires_at = None, None
         return True
 
@@ -254,3 +266,4 @@ class RelayStore:
         monkeypatch.setattr(relay, "configured_outbound", self.outbound)
         monkeypatch.setattr(relay, "preflight_outbound", self.preflight)
         monkeypatch.setattr(relay, "send_chunk", self.send_chunk)
+        monkeypatch.setattr(relay, "jitter_unit", lambda: self.jitter)

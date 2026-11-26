@@ -53,9 +53,11 @@ def _spy_claims(store: RelayStore, monkeypatch: pytest.MonkeyPatch) -> tuple[any
     idle_poll, claimed, limits = anyio.Event(), anyio.Event(), list[int]()
     real = store.claim_batch
 
-    async def claim_batch(*, limit: int, lease_seconds: float, now: datetime) -> list[GatewayReportDeliveryRecord]:
+    async def claim_batch(
+        *, limit: int, lease_seconds: float, now: datetime, per_tenant_limit: int | None = None
+    ) -> list[GatewayReportDeliveryRecord]:
         limits.append(limit)
-        rows = await real(limit=limit, lease_seconds=lease_seconds, now=now)
+        rows = await real(limit=limit, lease_seconds=lease_seconds, now=now, per_tenant_limit=per_tenant_limit)
         (claimed if rows else idle_poll).set()
         return rows
 

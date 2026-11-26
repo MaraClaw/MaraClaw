@@ -8,7 +8,12 @@ import httpx
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from, json_object_from_response
 from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundProvider
 from app.services import im_token_cache
-from app.services.channels.outbound_errors import ProviderDeliveryError, provider_deadline, response_body
+from app.services.channels.outbound_errors import (
+    ProviderDeliveryError,
+    delivery_error,
+    provider_deadline,
+    response_body,
+)
 from app.services.channels.outbound_http import outbound_client
 from app.services.channels.outbound_plan import ConfiguredOutbound
 from app.services.channels.whatsapp_window import require_reply_window, utcnow
@@ -16,7 +21,7 @@ from app.services.channels.whatsapp_window import require_reply_window, utcnow
 
 def require_ack(response: httpx.Response, provider: OutboundProvider, acknowledged: bool, code: str) -> None:
     if not acknowledged:
-        raise ProviderDeliveryError(provider, code, provider_deadline(response, datetime.now(UTC)))
+        raise delivery_error(provider, code, provider_deadline(response, datetime.now(UTC)))
 
 
 # Feishu "missing/invalid access token" business codes, the token subset of `_check_feishu_err` in
