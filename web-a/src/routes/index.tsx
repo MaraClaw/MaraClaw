@@ -1,43 +1,45 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
 import { AdminShell } from '@/components/layout/admin-shell'
+import { RouteErrorBoundary } from '@/components/route-error-boundary'
 import { useAuth } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
+import { retryingLazy } from '@/lib/retrying-import'
 import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewCapacityPayments, canReviewOrganizationAdmissions, canSendBroadcast, canViewCapacityOrders, canViewClawbook } from '@/lib/types/auth'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
 import { TransferReviewRoute } from '@/routes/transfer-review'
 
-const BroadcastPage = lazy(() => import('@/pages/broadcast').then((module) => ({ default: module.BroadcastPage })))
-const InvitationsPage = lazy(() => import('@/pages/invitations').then((module) => ({ default: module.InvitationsPage })))
-const ForgotPasswordPage = lazy(() => import('@/pages/forgot-password').then((module) => ({ default: module.ForgotPasswordPage })))
-const LoginPage = lazy(() => import('@/pages/login').then((module) => ({ default: module.LoginPage })))
-const CompaniesPage = lazy(() => import('@/pages/companies').then((module) => ({ default: module.CompaniesPage })))
-const CompanyDetailPage = lazy(() => import('@/pages/company-detail').then((module) => ({ default: module.CompanyDetailPage })))
-const CompanyRuntimePage = lazy(() => import('@/pages/company-runtime-page').then((module) => ({ default: module.CompanyRuntimePage })))
-const OverviewPage = lazy(() => import('@/pages/overview').then((module) => ({ default: module.OverviewPage })))
-const OpenClawUpdatesPage = lazy(() => import('@/pages/openclaw-updates').then((module) => ({ default: module.OpenClawUpdatesPage })))
-const UpgradeSignalsPage = lazy(() => import('@/pages/upgrade-signals').then((module) => ({ default: module.UpgradeSignalsPage })))
-const UpgradeSignalsDetailPage = lazy(() => import('@/pages/upgrade-signals-detail').then((module) => ({ default: module.UpgradeSignalsDetailPage })))
-const ToolsPage = lazy(() => import('@/pages/tools').then((module) => ({ default: module.ToolsPage })))
-const ResetPasswordPage = lazy(() => import('@/pages/reset-password').then((module) => ({ default: module.ResetPasswordPage })))
-const SearchEnginePage = lazy(() => import('@/pages/search-engine').then((module) => ({ default: module.SearchEnginePage })))
-const SettingsPage = lazy(() => import('@/pages/settings').then((module) => ({ default: module.SettingsPage })))
-const LlmModelsPage = lazy(() => import('@/pages/llm-models').then((module) => ({ default: module.LlmModelsPage })))
-const UserDetailPage = lazy(() => import('@/pages/user-detail').then((module) => ({ default: module.UserDetailPage })))
-const UsersPage = lazy(() => import('@/pages/users').then((module) => ({ default: module.UsersPage })))
-const NotificationsPage = lazy(() => import('@/pages/notifications').then((module) => ({ default: module.NotificationsPage })))
-const AdminAuditPage = lazy(() => import('@/pages/admin-audit').then((module) => ({ default: module.AdminAuditPage })))
-const AdmissionApprovalsPage = lazy(() => import('@/pages/admission-approvals').then((module) => ({ default: module.AdmissionApprovalsPage })))
-const AdmissionApprovalDetailPage = lazy(() => import('@/pages/admission-approval-detail').then((module) => ({ default: module.AdmissionApprovalDetailPage })))
-const PaymentsPage = lazy(() => import('@/pages/payments').then((module) => ({ default: module.PaymentsPage })))
-const TransferPaymentDetailPage = lazy(() => import('@/pages/transfer-payment-detail').then((module) => ({ default: module.TransferPaymentDetailPage })))
-const AgentDeletionRequestsPage = lazy(() => import('@/pages/agent-deletion-requests').then((module) => ({ default: module.AgentDeletionRequestsPage })))
-const AgentDeletionRequestDetailPage = lazy(() => import('@/pages/agent-deletion-request-detail').then((module) => ({ default: module.AgentDeletionRequestDetailPage })))
-const ClawbookPage = lazy(() => import('@/pages/clawbook').then((module) => ({ default: module.ClawbookPage })))
-const CapacityOrderPage = lazy(() => import('@/pages/capacity-order').then((module) => ({ default: module.CapacityOrderPage })))
-const CapacityPaymentDetailPage = lazy(() => import('@/pages/capacity-payment-detail').then((module) => ({ default: module.CapacityPaymentDetailPage })))
+const BroadcastPage = retryingLazy(() => import('@/pages/broadcast').then((module) => module.BroadcastPage))
+const InvitationsPage = retryingLazy(() => import('@/pages/invitations').then((module) => module.InvitationsPage))
+const ForgotPasswordPage = retryingLazy(() => import('@/pages/forgot-password').then((module) => module.ForgotPasswordPage))
+const LoginPage = retryingLazy(() => import('@/pages/login').then((module) => module.LoginPage))
+const CompaniesPage = retryingLazy(() => import('@/pages/companies').then((module) => module.CompaniesPage))
+const CompanyDetailPage = retryingLazy(() => import('@/pages/company-detail').then((module) => module.CompanyDetailPage))
+const CompanyRuntimePage = retryingLazy(() => import('@/pages/company-runtime-page').then((module) => module.CompanyRuntimePage))
+const OverviewPage = retryingLazy(() => import('@/pages/overview').then((module) => module.OverviewPage))
+const OpenClawUpdatesPage = retryingLazy(() => import('@/pages/openclaw-updates').then((module) => module.OpenClawUpdatesPage))
+const UpgradeSignalsPage = retryingLazy(() => import('@/pages/upgrade-signals').then((module) => module.UpgradeSignalsPage))
+const UpgradeSignalsDetailPage = retryingLazy(() => import('@/pages/upgrade-signals-detail').then((module) => module.UpgradeSignalsDetailPage))
+const ToolsPage = retryingLazy(() => import('@/pages/tools').then((module) => module.ToolsPage))
+const ResetPasswordPage = retryingLazy(() => import('@/pages/reset-password').then((module) => module.ResetPasswordPage))
+const SearchEnginePage = retryingLazy(() => import('@/pages/search-engine').then((module) => module.SearchEnginePage))
+const SettingsPage = retryingLazy(() => import('@/pages/settings').then((module) => module.SettingsPage))
+const LlmModelsPage = retryingLazy(() => import('@/pages/llm-models').then((module) => module.LlmModelsPage))
+const UserDetailPage = retryingLazy(() => import('@/pages/user-detail').then((module) => module.UserDetailPage))
+const UsersPage = retryingLazy(() => import('@/pages/users').then((module) => module.UsersPage))
+const NotificationsPage = retryingLazy(() => import('@/pages/notifications').then((module) => module.NotificationsPage))
+const AdminAuditPage = retryingLazy(() => import('@/pages/admin-audit').then((module) => module.AdminAuditPage))
+const AdmissionApprovalsPage = retryingLazy(() => import('@/pages/admission-approvals').then((module) => module.AdmissionApprovalsPage))
+const AdmissionApprovalDetailPage = retryingLazy(() => import('@/pages/admission-approval-detail').then((module) => module.AdmissionApprovalDetailPage))
+const PaymentsPage = retryingLazy(() => import('@/pages/payments').then((module) => module.PaymentsPage))
+const TransferPaymentDetailPage = retryingLazy(() => import('@/pages/transfer-payment-detail').then((module) => module.TransferPaymentDetailPage))
+const AgentDeletionRequestsPage = retryingLazy(() => import('@/pages/agent-deletion-requests').then((module) => module.AgentDeletionRequestsPage))
+const AgentDeletionRequestDetailPage = retryingLazy(() => import('@/pages/agent-deletion-request-detail').then((module) => module.AgentDeletionRequestDetailPage))
+const ClawbookPage = retryingLazy(() => import('@/pages/clawbook').then((module) => module.ClawbookPage))
+const CapacityOrderPage = retryingLazy(() => import('@/pages/capacity-order').then((module) => module.CapacityOrderPage))
+const CapacityPaymentDetailPage = retryingLazy(() => import('@/pages/capacity-payment-detail').then((module) => module.CapacityPaymentDetailPage))
 
 function BroadcastRoute() {
   const { user } = useAuth()
@@ -91,57 +93,59 @@ export function AppRouter() {
 
           <Route element={<ProtectedRoute />}>
             <Route element={<AdminShell />}>
-              <Route index element={<OverviewPage />} />
-              <Route path="account" element={<Navigate to="/settings" replace />} />
-              <Route path="notifications" element={<NotificationsPage />} />
-              <Route path="activity" element={<AdminAuditPage />} />
-              <Route element={<AgentDeletionReviewRoute />}>
-                <Route path="agent-deletion-requests" element={<AgentDeletionRequestsPage />} />
-                <Route path="agent-deletion-requests/:id" element={<AgentDeletionRequestDetailPage />} />
+              <Route element={<RouteErrorBoundary />}>
+                <Route index element={<OverviewPage />} />
+                <Route path="account" element={<Navigate to="/settings" replace />} />
+                <Route path="notifications" element={<NotificationsPage />} />
+                <Route path="activity" element={<AdminAuditPage />} />
+                <Route element={<AgentDeletionReviewRoute />}>
+                  <Route path="agent-deletion-requests" element={<AgentDeletionRequestsPage />} />
+                  <Route path="agent-deletion-requests/:id" element={<AgentDeletionRequestDetailPage />} />
+                </Route>
+                <Route element={<TransferReviewRoute />}>
+                  <Route path="payments" element={<PaymentsPage />} />
+                  <Route path="transfer-payments" element={<Navigate to="/payments" replace />} />
+                  <Route path="transfer-payments/:id" element={<TransferPaymentDetailPage />} />
+                </Route>
+                <Route element={<CapacityReviewRoute />}>
+                  <Route path="capacity-payments" element={<Navigate to="/payments?tab=capacity" replace />} />
+                  <Route path="capacity-payments/:orderId" element={<CapacityPaymentDetailPage />} />
+                </Route>
+                <Route element={<CapacityOrderRoute />}>
+                  <Route path="capacity-orders/:orderId" element={<CapacityOrderPage />} />
+                </Route>
+                <Route element={<AdmissionReviewRoute />}>
+                  <Route path="admission-approvals" element={<AdmissionApprovalsPage />} />
+                  <Route path="admission-approvals/:id" element={<AdmissionApprovalDetailPage />} />
+                </Route>
+                <Route element={<OrganizationAdmissionReviewRoute />}>
+                  <Route path="organization-admissions" element={<Navigate to="/payments?tab=admissions" replace />} />
+                </Route>
+                <Route element={<BroadcastRoute />}>
+                  <Route path="broadcast" element={<BroadcastPage />} />
+                </Route>
+                <Route element={<InvitationsRoute />}>
+                  <Route path="invitations" element={<InvitationsPage />} />
+                </Route>
+                <Route element={<PlatformAdminRoute />}>
+                  <Route path="openclaw-updates" element={<OpenClawUpdatesPage />} />
+                  <Route path="upgrade-signals" element={<UpgradeSignalsPage />} />
+                  <Route path="upgrade-signals/:tenantId" element={<UpgradeSignalsDetailPage />} />
+                  <Route path="companies" element={<CompaniesPage />} />
+                  <Route path="companies/:companyId" element={<CompanyDetailPage />} />
+                  <Route path="companies/:companyId/runtimes" element={<CompanyRuntimePage />} />
+                  <Route path="search-engine" element={<SearchEnginePage />} />
+                </Route>
+                <Route path="users" element={<UsersPage />} />
+                <Route path="users/:userId" element={<UserDetailPage />} />
+                <Route element={<ClawbookRoute />}>
+                  <Route path="clawbook" element={<ClawbookPage />} />
+                </Route>
+                <Route path="models" element={<LlmModelsPage />} />
+                <Route path="tools" element={<ToolsPage />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
-              <Route element={<TransferReviewRoute />}>
-                <Route path="payments" element={<PaymentsPage />} />
-                <Route path="transfer-payments" element={<Navigate to="/payments" replace />} />
-                <Route path="transfer-payments/:id" element={<TransferPaymentDetailPage />} />
-              </Route>
-              <Route element={<CapacityReviewRoute />}>
-                <Route path="capacity-payments" element={<Navigate to="/payments?tab=capacity" replace />} />
-                <Route path="capacity-payments/:orderId" element={<CapacityPaymentDetailPage />} />
-              </Route>
-              <Route element={<CapacityOrderRoute />}>
-                <Route path="capacity-orders/:orderId" element={<CapacityOrderPage />} />
-              </Route>
-              <Route element={<AdmissionReviewRoute />}>
-                <Route path="admission-approvals" element={<AdmissionApprovalsPage />} />
-                <Route path="admission-approvals/:id" element={<AdmissionApprovalDetailPage />} />
-              </Route>
-              <Route element={<OrganizationAdmissionReviewRoute />}>
-                <Route path="organization-admissions" element={<Navigate to="/payments?tab=admissions" replace />} />
-              </Route>
-              <Route element={<BroadcastRoute />}>
-                <Route path="broadcast" element={<BroadcastPage />} />
-              </Route>
-              <Route element={<InvitationsRoute />}>
-                <Route path="invitations" element={<InvitationsPage />} />
-              </Route>
-              <Route element={<PlatformAdminRoute />}>
-                <Route path="openclaw-updates" element={<OpenClawUpdatesPage />} />
-                <Route path="upgrade-signals" element={<UpgradeSignalsPage />} />
-                <Route path="upgrade-signals/:tenantId" element={<UpgradeSignalsDetailPage />} />
-                <Route path="companies" element={<CompaniesPage />} />
-                <Route path="companies/:companyId" element={<CompanyDetailPage />} />
-                <Route path="companies/:companyId/runtimes" element={<CompanyRuntimePage />} />
-                <Route path="search-engine" element={<SearchEnginePage />} />
-              </Route>
-              <Route path="users" element={<UsersPage />} />
-              <Route path="users/:userId" element={<UserDetailPage />} />
-              <Route element={<ClawbookRoute />}>
-                <Route path="clawbook" element={<ClawbookPage />} />
-              </Route>
-              <Route path="models" element={<LlmModelsPage />} />
-              <Route path="tools" element={<ToolsPage />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Route>
         </Routes>

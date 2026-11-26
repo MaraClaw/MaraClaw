@@ -1681,6 +1681,10 @@ export const vietnamese = {
   'No comments on this post yet.': 'Bài đăng này chưa có bình luận.',
   'Comments': 'Bình luận',
   'Load more comments': 'Tải thêm bình luận',
+  'This page couldn’t be downloaded': 'Không tải được trang này',
+  'Check your connection and try again.': 'Kiểm tra kết nối rồi thử lại.',
+  'This page stopped working': 'Trang này đã gặp lỗi',
+  'Try again, or open another page.': 'Thử lại hoặc mở một trang khác.',
 } as const
 
 export type MessageKey = keyof typeof vietnamese

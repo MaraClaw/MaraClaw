@@ -38,13 +38,13 @@ Admin path table + RBAC gates. Parent: `../../AGENTS.md`. Screens: `../pages/AGE
 Every row except public ones sits under `ProtectedRoute`; while `mustChangePassword`, everything but `/settings` redirects to `/settings`.
 Analytics is `?tab=analytics` on `/search-engine`; payment tabs are query values on `/payments`. `/settings` is the separate account/organization settings route.
 
-**Nesting:** public routes bare → `ProtectedRoute` → `AdminShell` → optional gate route (`AgentDeletionReviewRoute`, `ClawbookRoute`, `TransferReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `BroadcastRoute`, `InvitationsRoute`, `PlatformAdminRoute`). A failed gate `Navigate`s to `/` (replace).
+**Nesting:** public routes bare → `ProtectedRoute` → `AdminShell` → `RouteErrorBoundary` (`../components/route-error-boundary.tsx`: a page that throws or fails to download leaves the shell and nav mounted; resets on every location change; Try again re-imports a failed page without a reload) → optional gate route (`AgentDeletionReviewRoute`, `ClawbookRoute`, `TransferReviewRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `BroadcastRoute`, `InvitationsRoute`, `PlatformAdminRoute`). A failed gate `Navigate`s to `/` (replace).
 
 ## WHERE TO LOOK
 
 | File | Role |
 |------|------|
-| `index.tsx` | `AppRouter`, routed pages lazy under one `Suspense`, plus `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `AgentDeletionReviewRoute`, `ClawbookRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`. |
+| `index.tsx` | `AppRouter`, routed pages loaded through `retryingLazy` (`../lib/retrying-import.ts`) under one `Suspense`, `RouteErrorBoundary` as the pathless layout route directly inside `AdminShell`, plus `BroadcastRoute`, `InvitationsRoute`, `AdmissionReviewRoute`, `OrganizationAdmissionReviewRoute`, `AgentDeletionReviewRoute`, `ClawbookRoute`, `CapacityReviewRoute`, `CapacityOrderRoute`. |
 | `protected.tsx` | Auth + `isAdmin`. Loading spinner. Unauth / non-admin → `/login`. Force-pw allowlist: `/settings` (and `/*` under it) until cleared; else `/settings`. |
 | `platform-admin.tsx` | `isPlatformAdminUser` else `/`. Wraps `/companies*`, `/search-engine`, `/openclaw-updates` and `/upgrade-signals`; their nav items use `platformAdminOnly`. |
 | `transfer-review.tsx` | `TransferReviewRoute`: `useTransferReviewAccess().canReview ? Outlet : /`. |

@@ -1,4 +1,5 @@
 import type { MessageKey, vietnamese } from './translations.ts'
+import { retryingImport } from './retrying-import.ts'
 
 export type Locale = 'en' | 'vi'
 export const languageStorageKey = 'maraclaw-admin-language'
@@ -7,16 +8,9 @@ export const localeTag = { en: 'en-US', vi: 'vi-VN' } as const
 export const languageName = { en: 'English', vi: 'Tiếng Việt' } as const satisfies Record<Locale, string>
 // The dictionary is type-only here: its strings are their own chunk, fetched by `loadVietnamese`.
 let dictionary: typeof vietnamese | null = null
-let loading: Promise<void> | null = null
 
 /** Fetches the Vietnamese strings once. Rejects (and lets a later call retry) when the chunk cannot load. */
-export function loadVietnamese(): Promise<void> {
-  loading ??= import('./translations.ts').then(
-    (module) => { dictionary = module.vietnamese },
-    (error: unknown) => { loading = null; throw error },
-  )
-  return loading
-}
+export const loadVietnamese: () => Promise<void> = retryingImport(() => import('./translations.ts').then((module) => { dictionary = module.vietnamese }))
 
 export type MessageValues = Readonly<Record<string, string | number>>
 export type LocalMessage = { readonly key: MessageKey; readonly values: MessageValues }
