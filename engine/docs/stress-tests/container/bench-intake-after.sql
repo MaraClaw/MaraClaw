@@ -6,8 +6,9 @@
 \set submission random(1, 4611686018427387904)
 BEGIN;
 SELECT 1 FROM agents WHERE id = md5('a' || :n)::uuid FOR KEY SHARE;
-SELECT * FROM chat_sessions
-WHERE id = md5('s' || :n || '-' || :k)::uuid AND agent_id = md5('a' || :n)::uuid FOR UPDATE;
+-- Seeded sessions are still titled "Session k", the state in which accept_submission asks the first-message probe below.
+SELECT (title LIKE 'Session %')::int AS untitled FROM chat_sessions
+WHERE id = md5('s' || :n || '-' || :k)::uuid AND agent_id = md5('a' || :n)::uuid FOR UPDATE \gset
 
 -- A matched fingerprint is a replay; a different one is a refusal. Neither runs the quota checks.
 SELECT COALESCE((SELECT CASE WHEN submission_fingerprint = 'v1:' || repeat('a', 64) THEN 1 ELSE -1 END
@@ -16,6 +17,12 @@ SELECT COALESCE((SELECT CASE WHEN submission_fingerprint = 'v1:' || repeat('a', 
       AND client_submission_id = md5('c' || :submission)::uuid), 0) AS existing \gset
 \set reserved 0
 \if :existing = 0
+-- chat_message_dao.conversation_has_messages, which replaced the transcript read: one index probe, asked only for a
+-- session that is still untitled and before the reservation, so the new message cannot count.
+\if :untitled
+SELECT EXISTS (SELECT 1 FROM chat_messages WHERE agent_id = md5('a' || :n)::uuid
+    AND conversation_id = md5('s' || :n || '-' || :k)::uuid::text) AS has_messages;
+\endif
 WITH reservation AS (
     INSERT INTO chat_messages (id, user_id, agent_id, role, content, conversation_id, client_submission_id,
                                submission_fingerprint, attachments)
