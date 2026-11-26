@@ -5606,7 +5606,10 @@
           "submission_conflict",
           "invalid_attachments",
           "openclaw_update_required",
-          "openclaw_update_in_progress"
+          "openclaw_update_in_progress",
+          "message_too_long",
+          "file_name_too_long",
+          "rate_limited"
         ],
         "title": "ChatRejectionReason",
         "type": "string",
@@ -5620,7 +5623,10 @@
           "SUBMISSION_CONFLICT",
           "INVALID_ATTACHMENTS",
           "OPENCLAW_UPDATE_REQUIRED",
-          "OPENCLAW_UPDATE_IN_PROGRESS"
+          "OPENCLAW_UPDATE_IN_PROGRESS",
+          "MESSAGE_TOO_LONG",
+          "FILE_NAME_TOO_LONG",
+          "RATE_LIMITED"
         ]
       },
       "ChatServerEvent": {
@@ -11167,6 +11173,19 @@
           }
         },
         "title": "LivePreview",
+        "type": "object"
+      },
+      "LiveResponse": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "LiveResponse",
         "type": "object"
       },
       "LockRequest": {
@@ -17651,7 +17670,10 @@
           {
             "enum": [
               "submission_conflict",
-              "invalid_attachments"
+              "invalid_attachments",
+              "message_too_long",
+              "file_name_too_long",
+              "rate_limited"
             ],
             "type": "string"
           }
@@ -41629,6 +41651,25 @@
         "tags": [
           "health"
         ]
+      }
+    },
+    "/api/live": {
+      "get": {
+        "description": "Container liveness: 503 only once a required loop has used up its restarts; the answer itself proves the process runs.",
+        "operationId": "get_2f6170692f6c697665",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Live"
       }
     },
     "/api/member/auth/login": {
