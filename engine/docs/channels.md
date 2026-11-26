@@ -395,6 +395,22 @@ using separate API/connector roles must run the `bootstrap` role first.
 
 | Surface | Purpose |
 |---------|---------|
+## Provider access tokens
+
+Google Chat and Microsoft Teams outbound calls and Google Chat media downloads use the same Redis-backed
+IM token cache as Feishu, WeCom and DingTalk (`app/services/im_token_cache.py`):
+
+- A burst of replies costs one token exchange per account per expiry window across all workers, not one per
+  message. Entries live for the provider's reported `expires_in` less five minutes.
+- Google Chat entries are keyed by the service-account email, a SHA-256 digest of its private key and the
+  scopes; Teams entries by app id, tenant and a SHA-256 digest of the client secret (managed identity has no
+  secret). A rotated key or secret therefore never reuses an old token, and no key or secret is stored in Redis
+  or logged.
+- When Google Chat or Teams answers `401`, the rejected token is dropped (only if it is still the cached one)
+  and the call is retried once with a fresh token. Google Chat keeps the same `requestId`, so a message that
+  was already delivered is not duplicated. A media download that is still denied reports its usual `422`.
+- A refused exchange is never cached and Redis errors fall open to a direct exchange.
+
 | Google Chat **channel** (this doc) | Bot HTTP app on MaraClaw |
 | `google_workspace` SSO | Login/identity binding, not Chat messaging; provider directory sync is retired |
 | gogcli `gog chat` CLI | User OAuth CLI inside agent workspace |

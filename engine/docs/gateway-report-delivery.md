@@ -103,10 +103,12 @@ advancements release the claim for the next chunk. Restart and later-chunk failu
 do not replay already checkpointed chunks. Public strict/best-effort send helpers
 remain separate from this durable relay transport.
 `channels/outbound_http.py` pools outbound HTTP connections per event loop and
-closes them at runtime shutdown. Feishu bearer tokens use `im_token_cache`; a
-token-invalid response drops the cache entry and retries once with the same
-provider request key. WeCom KF inbound `sync_msg` uses the existing WeCom token
-cache with the same single-refresh policy. These caches do not change delivery
+closes them at runtime shutdown. Feishu, Google Chat and Teams bearer tokens use
+`im_token_cache`; a token-invalid response (Feishu business codes, HTTP 401 for
+Google Chat and Teams) drops the cache entry and retries once, with the same
+provider request key (`uuid` for Feishu, `requestId` for Google Chat). WeCom KF
+inbound `sync_msg` uses the existing WeCom token cache with the same
+single-refresh policy. These caches do not change delivery
 fences or provider idempotency guarantees.
 The current session channel must still normalize to a registered inbound IM channel
 and have a nonblank external conversation ID. Web, agent, unknown and skill-only

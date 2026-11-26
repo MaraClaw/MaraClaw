@@ -1,6 +1,5 @@
 import json
-from dataclasses import replace
-from uuid import uuid4, uuid5
+from uuid import uuid4
 
 import httpx
 
@@ -11,23 +10,40 @@ from app.services.channels.outbound_plan import ConfiguredOutbound
 from app.services.channels.outbound_transport import require_ack
 
 
+async def _send_teams_activity(
+    client: httpx.AsyncClient, outbound: ConfiguredOutbound, chunk: OutboundChunk
+) -> httpx.Response:
+    """Post one activity with the shared bot token; a 401 drops the rejected token and retries once."""
+    from app.api.teams import _drop_rejected_teams_token, _get_teams_access_token
+
+    target, config = outbound.target, outbound.config
+
+    async def post(token: str) -> httpx.Response:
+        return await client.post(
+            f"{target.endpoint}/v3/conversations/{target.destination}/activities",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"type": "message", "text": chunk.text, "conversation": {"id": target.destination}},
+        )
+
+    token = await _get_teams_access_token(config)
+    if token is None or not token:
+        raise ValueError("Teams credentials are unavailable")
+    response = await post(token)
+    if response.status_code != 401:
+        return response
+    await _drop_rejected_teams_token(config, token)
+    renewed = await _get_teams_access_token(config)
+    if renewed is None or not renewed:
+        raise ValueError("Teams credentials are unavailable")
+    return await post(renewed)
+
+
 async def send_enterprise_chunk(client: httpx.AsyncClient, outbound: ConfiguredOutbound, chunk: OutboundChunk) -> None:
     target, config = outbound.target, outbound.config
     app_id, app_secret = config.app_id or "", config.app_secret or ""
     match target.provider:
         case OutboundProvider.MICROSOFT_TEAMS:
-            from app.api.teams import _get_teams_access_token
-
-            token = await _get_teams_access_token(
-                replace(config, agent_id=uuid5(config.id, f"{target.account}:{config.app_secret}"))
-            )
-            if token is None or not token:
-                raise ValueError("Teams credentials are unavailable")
-            response = await client.post(
-                f"{target.endpoint}/v3/conversations/{target.destination}/activities",
-                headers={"Authorization": f"Bearer {token}"},
-                json={"type": "message", "text": chunk.text, "conversation": {"id": target.destination}},
-            )
+            response = await _send_teams_activity(client, outbound, chunk)
             body = response_body(response, target.provider)
             require_ack(response, target.provider, bool(body.get("id")), "missing_ack")
         case OutboundProvider.WECOM:
