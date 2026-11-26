@@ -607,6 +607,23 @@ class AgentDAO(BaseDAO[AgentRecord]):
             )
             return [AgentRecord.from_row(row) for row in rows]
 
+    async def list_workspace_quota_priority_page(self, after_id: UUID | None, limit: int) -> Sequence[AgentRecord]:
+        """Keyset page, by id, of the quota candidates whose usage row asks to be measured first.
+
+        An agent is asked for by a failed directory walk (``walk_failed_at``) or by a request path that handed its
+        re-measure to the worker (``remeasure_requested_at``).
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list()} FROM agents "
+                "WHERE tenant_id IS NOT NULL AND is_system IS NOT TRUE "
+                "AND EXISTS (SELECT 1 FROM agent_workspace_usage usage WHERE usage.agent_id = agents.id "
+                "AND (usage.walk_failed_at IS NOT NULL OR usage.remeasure_requested_at IS NOT NULL)) "
+                "AND (%(after_id)s::uuid IS NULL OR id > %(after_id)s) ORDER BY id LIMIT %(limit)s",
+                {"after_id": after_id, "limit": limit},
+            )
+            return [AgentRecord.from_row(row) for row in rows]
+
     async def list_workspace_mirror_page(self, after_id: UUID | None, limit: int) -> Sequence[AgentRecord]:
         """Keyset page, by id, of the OpenClaw agents, system agents included, whose workspace the mirror covers."""
         async with self.session() as db:

@@ -19,6 +19,8 @@ class AgentWorkspaceUsageRecord:
     measured_at: datetime | None = None
     over_since: datetime | None = None
     notified_at: datetime | None = None
+    walk_failed_at: datetime | None = None
+    remeasure_requested_at: datetime | None = None
 
     @property
     def used_bytes(self) -> int:
@@ -34,4 +36,6 @@ class AgentWorkspaceUsageRecord:
             measured_at=datetime_from_row(row.get("measured_at")),
             over_since=datetime_from_row(row.get("over_since")),
             notified_at=datetime_from_row(row.get("notified_at")),
+            walk_failed_at=datetime_from_row(row.get("walk_failed_at")),
+            remeasure_requested_at=datetime_from_row(row.get("remeasure_requested_at")),
         )

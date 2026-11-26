@@ -921,15 +921,21 @@ CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
 
 -- Last measured host workspace directory plus guest writable-layer bytes per agent (agents of organizations only).
 -- over_since is set while the measurement exceeds limit_bytes and blocks new human work; notified_at records the one
--- in-app alert of that overage.
+-- in-app alert of that overage. walk_failed_at is the start of the latest attempt whose directory walk passed its
+-- deadline, and remeasure_requested_at the moment a request path handed its re-measure to the worker; either makes the
+-- next pass measure the agent first, and the first stored measurement that started at or after it clears it. A failed
+-- walk never changes the stored sizes or over_since; for an agent never measured it leaves a row with NULL measured_at
+-- whose zero sizes are placeholders.
 CREATE TABLE IF NOT EXISTS agent_workspace_usage (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     dir_bytes BIGINT NOT NULL CHECK (dir_bytes >= 0),
     layer_bytes BIGINT NOT NULL CHECK (layer_bytes >= 0),
     limit_bytes BIGINT NOT NULL CHECK (limit_bytes > 0),
-    measured_at TIMESTAMPTZ NOT NULL,
+    measured_at TIMESTAMPTZ,
     over_since TIMESTAMPTZ,
-    notified_at TIMESTAMPTZ
+    notified_at TIMESTAMPTZ,
+    walk_failed_at TIMESTAMPTZ,
+    remeasure_requested_at TIMESTAMPTZ
 );
 
 -- Last reconciled state of the durable workspace mirror, one row per agent and workspace-relative path. The local_*

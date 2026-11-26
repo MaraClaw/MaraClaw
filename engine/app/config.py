@@ -402,6 +402,9 @@ class Settings(BaseSettings):
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
     # Seconds between passes of the worker that measures each tier-governed agent's workspace disk usage.
     AGENT_WORKSPACE_QUOTA_INTERVAL_SECONDS: float = Field(default=600.0, ge=30, le=86400, allow_inf_nan=False)
+    # How many agents that worker measures at once. Each in-flight measurement holds one directory-walk thread and may
+    # run one Docker layer read, so this also bounds the walk threads and the Docker lane share a pass takes.
+    AGENT_WORKSPACE_QUOTA_CONCURRENCY: int = Field(default=4, ge=1, le=32)
     # With S3 storage, a worker mirrors each guest's user files (workspace/, memory/, skills/ ...) with the agent's
     # managed storage both ways. Local storage is the guest directory itself, so the mirror is idle there.
     WORKSPACE_MIRROR_ENABLED: bool = True
