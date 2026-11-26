@@ -121,14 +121,18 @@ def _file_too_large(max_bytes: int) -> HTTPException:
     )
 
 
-async def _read_text_within_limit(storage: StorageBackend, key: str) -> str:
-    """A file's text, read within ``WORKSPACE_FILE_CONTENT_MAX_BYTES``; a larger file answers 413, never a cut-off body."""
+async def _read_bytes_within_limit(storage: StorageBackend, key: str) -> bytes:
+    """A file's bytes, read within ``WORKSPACE_FILE_CONTENT_MAX_BYTES``; a larger file answers 413, never a cut-off body."""
     max_bytes = settings.WORKSPACE_FILE_CONTENT_MAX_BYTES
     try:
-        data = await storage.read_bytes_bounded(key, max_bytes)
+        return await storage.read_bytes_bounded(key, max_bytes)
     except StorageReadLimitExceededError as exc:
         raise _file_too_large(max_bytes) from exc
-    return data.decode("utf-8", errors="replace")
+
+
+async def _read_text_within_limit(storage: StorageBackend, key: str) -> str:
+    """A file's text, read within ``WORKSPACE_FILE_CONTENT_MAX_BYTES``; a larger file answers 413, never a cut-off body."""
+    return (await _read_bytes_within_limit(storage, key)).decode("utf-8", errors="replace")
 
 
 async def _fresh_agent_authority(current_user: UserRecord, agent: AgentRecord) -> tuple[UserRecord, AgentRecord, str]:
@@ -1432,12 +1436,11 @@ async def read_enterprise_file(
     if not await storage.exists(storage_key) or not await storage.is_file(storage_key):
         raise HTTPException(status_code=404, detail="File not found")
 
+    data = await _read_bytes_within_limit(storage, storage_key)
     try:
-        content = await storage.read_text(storage_key, encoding="utf-8", errors="replace")
-        return {"path": path, "content": content}
-    except Exception:
-        stat = await storage.stat(storage_key)
-        return {"path": path, "content": f"[Binary file: {Path(path).name}, {stat.size} bytes]"}
+        return {"path": path, "content": data.decode("utf-8")}
+    except UnicodeDecodeError:
+        return {"path": path, "content": f"[Binary file: {Path(path).name}, {len(data)} bytes]"}
 
 
 @enterprise_kb_router.put("/content", response_model=None)

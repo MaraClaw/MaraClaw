@@ -647,3 +647,67 @@ async def test_restore_refuses_stored_text_larger_than_the_current_limit(monkeyp
         "max_bytes": content_limit,
     }
     write.assert_not_awaited()
+
+
+@pytest.fixture
+def enterprise_storage(monkeypatch, tmp_path, content_limit):
+    """A local knowledge base behind the enterprise files API for a member of one tenant."""
+    user = make_user()
+    storage = LocalStorageBackend(str(tmp_path))
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    return SimpleNamespace(user=user, storage=storage, root=f"enterprise_info_{user.tenant_id}")
+
+
+@pytest.mark.parametrize(("extra", "too_large"), [(-1, False), (0, False), (1, True)])
+async def test_enterprise_content_read_returns_a_file_up_to_the_limit_and_refuses_one_byte_over(
+    enterprise_storage, extra, too_large
+):
+    # Given a file whose character count stays under the limit while its UTF-8 size is under, at or over it
+    user, storage = enterprise_storage.user, enterprise_storage.storage
+    text = "é" * 7 + "x" * (2 + extra)
+    assert len(text.encode("utf-8")) == LIMIT + extra
+    await storage.write_bytes(f"{enterprise_storage.root}/handbook.txt", text.encode("utf-8"))
+    # When
+    request = files_api.read_enterprise_file(path="handbook.txt", current_user=user)
+    # Then
+    if too_large:
+        with pytest.raises(HTTPException) as exc:
+            await request
+        assert exc.value.status_code == 413
+        assert exc.value.detail == {
+            "code": "file_too_large",
+            "message": f"File is larger than the {LIMIT}-byte limit. Download it instead.",
+            "max_bytes": LIMIT,
+        }
+    else:
+        assert await request == {"path": "handbook.txt", "content": text}
+
+
+@pytest.mark.parametrize(("size", "too_large"), [(LIMIT, False), (LIMIT + 1, True)])
+async def test_enterprise_content_read_answers_a_placeholder_for_binary_up_to_the_limit(
+    enterprise_storage, size, too_large
+):
+    # Given a binary file at or one byte over the limit
+    user, storage = enterprise_storage.user, enterprise_storage.storage
+    await storage.write_bytes(f"{enterprise_storage.root}/docs/logo.png", b"\x89PNG\r\n\x1a\n" + b"\xff" * (size - 8))
+    # When
+    request = files_api.read_enterprise_file(path="docs/logo.png", current_user=user)
+    # Then the size check comes first, and bytes that are not UTF-8 are described instead of returned as text
+    if too_large:
+        with pytest.raises(HTTPException) as exc:
+            await request
+        assert exc.value.status_code == 413
+    else:
+        assert await request == {"path": "docs/logo.png", "content": f"[Binary file: logo.png, {size} bytes]"}
+
+
+async def test_enterprise_content_read_never_turns_a_storage_failure_into_the_binary_placeholder(
+    monkeypatch, enterprise_storage
+):
+    # Given a stored file whose bounded read fails
+    user, storage = enterprise_storage.user, enterprise_storage.storage
+    await storage.write_bytes(f"{enterprise_storage.root}/handbook.txt", b"policy")
+    monkeypatch.setattr(storage, "read_bytes_bounded", AsyncMock(side_effect=PermissionError("denied")))
+    # When / Then the failure reaches the caller
+    with pytest.raises(PermissionError):
+        await files_api.read_enterprise_file(path="handbook.txt", current_user=user)

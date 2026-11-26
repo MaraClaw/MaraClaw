@@ -548,8 +548,8 @@ The Google Workspace admin-sync authorization endpoint, stored sync authorizatio
 |--------|------|-------|---------|------------------|
 | `GET` | `/api/enterprise/knowledge-base/files` | auth + tenant | Query: `path?` | List dir entries |
 | `POST` | `/api/enterprise/knowledge-base/upload` | **admin** | Multipart `file`, `sub_path?` | May auto-extract text from binaries |
-| `GET` | `/api/enterprise/knowledge-base/content` | auth | Query: `path` | File content |
-| `PUT` | `/api/enterprise/knowledge-base/content` | **admin** | Query: `path` + body content | Write file |
+| `GET` | `/api/enterprise/knowledge-base/content` | auth | Query: `path` | `{path, content}`. Read through `read_bytes_bounded` within `WORKSPACE_FILE_CONTENT_MAX_BYTES`: a larger file (an upload may be) is 413 `{code: file_too_large, message, max_bytes}`, never a cut-off body. Bytes that are not UTF-8 answer `[Binary file: <name>, <n> bytes]`; a storage failure is never turned into that placeholder |
+| `PUT` | `/api/enterprise/knowledge-base/content` | **admin** | Query: `path` + body content | Write file; content over the same limit is 422 before any storage call |
 | `DELETE` | `/api/enterprise/knowledge-base/content` | **admin** | Query: `path` | File or tree delete |
 
 ### B7. Tools catalog - `/api/tools/*`

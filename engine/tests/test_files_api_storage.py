@@ -685,3 +685,33 @@ async def test_s3_text_preview_refuses_an_object_over_the_limit_instead_of_trunc
         "max_bytes": CONTENT_LIMIT,
     }
     assert all(read is not None and read <= CONTENT_LIMIT + 1 for read in source.read_sizes)
+
+
+@pytest.mark.parametrize("reported", [None, 1])
+@pytest.mark.parametrize(
+    ("size", "too_large"), [(CONTENT_LIMIT - 1, False), (CONTENT_LIMIT, False), (CONTENT_LIMIT + 1, True)]
+)
+async def test_s3_enterprise_content_read_never_pulls_more_than_one_byte_past_the_limit(
+    monkeypatch: pytest.MonkeyPatch, size: int, too_large: bool, reported: int | None
+):
+    # Given a knowledge base object whose HEAD size is the truth or a stale small number
+    monkeypatch.setattr(files.settings, "WORKSPACE_FILE_CONTENT_MAX_BYTES", CONTENT_LIMIT)
+    user = make_tenant_user()
+    source = GatedObject(f"enterprise_info_{user.tenant_id}/handbook.txt", b"x" * size)
+    source.reported_size = reported
+    use_storage(monkeypatch, source.backend(monkeypatch))
+    # When
+    request = files.read_enterprise_file(path="handbook.txt", current_user=user)
+    # Then
+    if too_large:
+        with pytest.raises(HTTPException) as exc:
+            await request
+        assert exc.value.status_code == 413
+        assert exc.value.detail == {
+            "code": "file_too_large",
+            "message": f"File is larger than the {CONTENT_LIMIT}-byte limit. Download it instead.",
+            "max_bytes": CONTENT_LIMIT,
+        }
+    else:
+        assert await request == {"path": "handbook.txt", "content": "x" * size}
+    assert all(read is not None and read <= CONTENT_LIMIT + 1 for read in source.read_sizes)
