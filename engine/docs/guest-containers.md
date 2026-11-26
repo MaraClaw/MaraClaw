@@ -401,8 +401,10 @@ and not measured again in that pass.
   once per overage, and each stored measurement feeds the resource-pressure episodes once.
 - A directory walk that passes its 120-second deadline stops and is recorded on the
   agent's row (`walk_failed_at`), so it is visible and the next pass measures that agent
-  first. It is not a measurement: the stored sizes, `over_since` and alert state stay as
-  they were, so it neither lifts nor creates a block, and nothing is sampled or alerted.
+  first. The platform-admin runtime inventory (`GET /api/admin/companies/{id}/runtime`)
+  returns it per agent with `remeasure_requested_at` and `measured_at`. It is not a
+  measurement: the stored sizes, `over_since` and alert state stay as they were, so it
+  neither lifts nor creates a block, and nothing is sampled or alerted.
   An agent that was never measured gets a row with an empty `measured_at` and zero
   placeholder sizes, which blocks nothing; any later measurement replaces it. A stored
   measurement that started at or after the failure clears it.

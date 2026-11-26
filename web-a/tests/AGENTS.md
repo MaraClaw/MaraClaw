@@ -18,7 +18,7 @@ npm test
 ## What CI runs
 
 - `../../.github/workflows/frontend-ci.yml`, `web-a` matrix entry: `contracts:check`, then Unit tests (`npm test`) on Node `26.13.1`.
-- The separate `admin-browser` job runs `npm run test:e2e` for company validation/submission, payment aliases and admin access. Legacy standalone browser QA files remain outside CI; browser evidence from those files does not imply CI execution.
+- The separate `admin-browser` job runs `npm run test:e2e` for company validation/submission, payment aliases, admin access and the company runtime measurement status. Legacy standalone browser QA files remain outside CI; browser evidence from those files does not imply CI execution.
 
 ## Conventions
 

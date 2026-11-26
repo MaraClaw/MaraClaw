@@ -1,14 +1,24 @@
-import type { ReactNode } from 'react'
+import { CircleCheck, CircleDashed, Clock, TriangleAlert, type LucideIcon } from 'lucide-react'
+import type { ComponentProps, ReactNode } from 'react'
 
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/hooks/use-translation'
 import type { CompanyRuntimePage } from '@/lib/companies-api'
 import { dateTimeFormat, formatBytes } from '@/lib/resource-pressure-format'
+import { workspaceMeasurementStatuses, type WorkspaceMeasurementKind } from './company-runtime-measurement'
 
 type RuntimeAgent = CompanyRuntimePage['items'][number]
 const observationLabels = {
   observed: 'Observed', missing: 'Missing container', foreign: 'Foreign container', unavailable: 'Observation unavailable',
 } as const satisfies Record<RuntimeAgent['observation']['state'], string>
+// The text carries each status; the icon and tint only repeat it.
+const measurementPresentation = {
+  walk_failed: { icon: TriangleAlert, variant: 'warning' },
+  never_measured: { icon: CircleDashed, variant: 'secondary' },
+  succeeded: { icon: CircleCheck, variant: 'outline' },
+  remeasure_requested: { icon: Clock, variant: 'secondary' },
+} as const satisfies Record<WorkspaceMeasurementKind, { readonly icon: LucideIcon; readonly variant: ComponentProps<typeof Badge>['variant'] }>
 
 function RuntimeField({ label, children }: { readonly label: string; readonly children: ReactNode }) {
   return <div className="min-w-0"><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 whitespace-pre-wrap">{children}</dd></div>
@@ -17,6 +27,7 @@ function RuntimeField({ label, children }: { readonly label: string; readonly ch
 export function CompanyRuntimeRow({ agent }: { readonly agent: RuntimeAgent }) {
   const { t, number, date } = useTranslation()
   const observation = agent.observation
+  const workspace = agent.workspace
   const unknown = t('Unknown')
   const at = (value: string | null | undefined) => value ? date(value, dateTimeFormat) : t('None')
   const yesNo = (value: boolean | null | undefined) => value === null || value === undefined ? unknown : t(value ? 'Yes' : 'No')
@@ -50,9 +61,18 @@ export function CompanyRuntimeRow({ agent }: { readonly agent: RuntimeAgent }) {
           <RuntimeField label={t('Last start failure')}>{agent.start?.last_failure_code ?? t('None')}</RuntimeField>
           <RuntimeField label={t('Upgrade in progress')}>{yesNo(agent.upgrade_in_progress)}</RuntimeField>
           <RuntimeField label={t('Blocking codes')}>{agent.blocking_codes.length ? agent.blocking_codes.join(', ') : t('None')}</RuntimeField>
-          <RuntimeField label={t('Workspace used / limit')}>{agent.workspace ? `${bytes(agent.workspace.used_bytes)} / ${bytes(agent.workspace.limit_bytes)}` : unknown}</RuntimeField>
-          <RuntimeField label={t('Workspace measured')}>{at(agent.workspace?.measured_at)}</RuntimeField>
-          <RuntimeField label={t('Workspace over limit since')}>{at(agent.workspace?.over_since)}</RuntimeField>
+          {/* A never-measured row holds placeholder sizes; only its limit is real. */}
+          <RuntimeField label={t('Workspace used / limit')}>{workspace ? `${workspace.measured_at === null ? unknown : bytes(workspace.used_bytes)} / ${bytes(workspace.limit_bytes)}` : unknown}</RuntimeField>
+          <RuntimeField label={t('Workspace measurement status')}>
+            <ul className="flex flex-wrap gap-2">
+              {workspaceMeasurementStatuses(workspace, { t, date }).map(({ kind, label }) => {
+                const { icon: Icon, variant } = measurementPresentation[kind]
+                return <li key={kind}><Badge variant={variant} className="whitespace-normal"><Icon className="size-3 shrink-0" aria-hidden />{label}</Badge></li>
+              })}
+            </ul>
+          </RuntimeField>
+          <RuntimeField label={t('Workspace measured')}>{at(workspace?.measured_at)}</RuntimeField>
+          <RuntimeField label={t('Workspace over limit since')}>{at(workspace?.over_since)}</RuntimeField>
         </dl>
       </CardContent>
     </Card>

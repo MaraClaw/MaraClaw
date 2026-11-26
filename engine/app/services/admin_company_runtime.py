@@ -58,6 +58,8 @@ async def company_runtime_page(company_id: UUID, cursor: str | None, limit: int)
                         limit_bytes=workspace.limit_bytes,
                         measured_at=workspace.measured_at,
                         over_since=workspace.over_since,
+                        walk_failed_at=workspace.walk_failed_at,
+                        remeasure_requested_at=workspace.remeasure_requested_at,
                     )
                     if workspace is not None
                     else None,

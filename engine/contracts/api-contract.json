@@ -6882,6 +6882,7 @@
                 "type": "null"
               }
             ],
+            "description": "Start of the stored measurement; null while the agent was never measured (sizes are placeholders).",
             "title": "Measured At"
           },
           "over_since": {
@@ -6896,16 +6897,44 @@
             ],
             "title": "Over Since"
           },
+          "remeasure_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When a request path handed its re-measure to the quota worker; cleared by a stored measurement that started at or after it.",
+            "title": "Remeasure Requested At"
+          },
           "used_bytes": {
             "title": "Used Bytes",
             "type": "integer"
+          },
+          "walk_failed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Start of the latest attempt whose directory walk passed its deadline; cleared by a stored measurement that started at or after it.",
+            "title": "Walk Failed At"
           }
         },
         "required": [
           "used_bytes",
           "limit_bytes",
           "measured_at",
-          "over_since"
+          "over_since",
+          "walk_failed_at",
+          "remeasure_requested_at"
         ],
         "title": "CompanyRuntimeWorkspaceOut",
         "type": "object"
