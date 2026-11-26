@@ -499,7 +499,7 @@ async def test_a_session_cache_hit_request_costs_one_redis_round_trip_and_one_sq
 
     # Then the principal came from the cache in one Redis call and both generations from one SQL statement.
     assert loaded.id == user.id
-    assert redis.commands == ["eval"]
+    assert redis.commands == ["pipeline"]
     assert redis.round_trips == 1
     assert len(raw.executed) == 1
     assert "auth_generation" in raw.executed[0][0]

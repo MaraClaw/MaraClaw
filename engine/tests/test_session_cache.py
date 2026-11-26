@@ -37,7 +37,9 @@ def fake_cache(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(redis_cache, "_client", get_cache_redis)
     monkeypatch.setattr(session_cache, "_ttl", lambda: 20)
+    session_cache._identity_hints.clear()
     yield client
+    session_cache._identity_hints.clear()
     redis_cache.reset_circuit()
     clear_row_memo()
 
@@ -94,6 +96,7 @@ async def test_session_cache_roundtrip_strips_hash_and_quota(fake_cache: FakeRed
 async def test_a_session_hit_reads_the_snapshot_and_both_generations_in_one_round_trip(fake_cache: FakeRedis) -> None:
     # Given a warm snapshot and no request memo.
     user = _user()
+    assert user.identity_id is not None
     await session_cache.set_cached_user(user, observed=await _observation(user))
     clear_row_memo()
     fake_cache.commands.clear()
@@ -101,11 +104,138 @@ async def test_a_session_hit_reads_the_snapshot_and_both_generations_in_one_roun
     # When the next request reads it.
     loaded = await session_cache.get_cached_user(user.id)
 
-    # Then one Redis call covered the snapshot, the user generation and the identity generation.
+    # Then one pipeline of single-key GETs, each key named explicitly, covered the snapshot and both generations.
     assert loaded is not None
     assert loaded.id == user.id
-    assert fake_cache.commands == ["eval"]
+    assert fake_cache.commands == ["pipeline"]
     assert fake_cache.round_trips == 1
+    assert fake_cache.pipelines[-1] == [
+        ("get", (session_cache._sess_key(user.id),), None),
+        ("get", (session_cache.user_version_key(user.id),), None),
+        ("get", (session_cache.identity_version_key(user.identity_id),), None),
+    ]
+
+
+async def test_the_first_read_of_a_membership_takes_two_round_trips_and_every_later_one_takes_one(
+    fake_cache: FakeRedis,
+) -> None:
+    # Given a warm snapshot in a process that has not served this membership yet.
+    user = _user()
+    await session_cache.set_cached_user(user, observed=await _observation(user))
+    session_cache._identity_hints.clear()
+    clear_row_memo()
+    fake_cache.commands.clear()
+
+    # When the membership is read twice.
+    first = await session_cache.get_cached_user(user.id)
+    clear_row_memo()
+    after_first = list(fake_cache.commands)
+    second = await session_cache.get_cached_user(user.id)
+
+    # Then only the first read pays a second trip, for the identity generation the snapshot names.
+    assert first is not None
+    assert second is not None
+    assert after_first == ["pipeline", "get"]
+    assert fake_cache.commands == ["pipeline", "get", "pipeline"]
+    assert [len(ops) for ops in fake_cache.pipelines[-2:]] == [2, 3]
+
+
+@pytest.mark.parametrize("filled", [True, False])
+async def test_a_membership_loaded_from_sql_teaches_the_identity_hint_whether_or_not_it_is_cached(
+    fake_cache: FakeRedis, filled: bool
+) -> None:
+    user = _user()
+
+    await session_cache.set_cached_user(user, observed=await _observation(user) if filled else None)
+
+    assert session_cache._identity_hints == {user.id: user.identity_id}
+
+
+async def test_a_hint_naming_another_identity_is_a_miss_and_is_corrected_for_the_next_read(
+    fake_cache: FakeRedis,
+) -> None:
+    # Given a warm snapshot, and a hint naming an identity whose generation happens to equal the snapshot's.
+    user = _user()
+    observed = await _observation(user)
+    assert observed is not None
+    await session_cache.set_cached_user(user, observed=observed)
+    wrong = uuid4()
+    fake_cache.store[session_cache.identity_version_key(wrong)] = observed.identity_version
+    session_cache._identity_hints[user.id] = wrong
+    clear_row_memo()
+
+    # When the membership is read.
+    assert await session_cache.get_cached_user(user.id) is None
+
+    # Then the wrong key's matching generation vouched for nothing, and the next read hits with the corrected hint.
+    assert session_cache._identity_hints[user.id] == user.identity_id
+    fake_cache.commands.clear()
+    loaded = await session_cache.get_cached_user(user.id)
+    assert loaded is not None
+    assert loaded.id == user.id
+    assert fake_cache.commands == ["pipeline"]
+
+
+@pytest.mark.parametrize("hinted", [True, False])
+@pytest.mark.parametrize("moved", ["user", "identity"])
+async def test_a_moved_generation_refuses_the_snapshot_whether_or_not_the_identity_is_hinted(
+    fake_cache: FakeRedis, moved: str, hinted: bool
+) -> None:
+    # Given a warm snapshot, read through the hint or by naming the identity from the snapshot.
+    user = _user()
+    assert user.identity_id is not None
+    await session_cache.set_cached_user(user, observed=await _observation(user))
+    if not hinted:
+        session_cache._identity_hints.clear()
+    clear_row_memo()
+
+    # When one generation moves while the snapshot itself stays in Redis.
+    await redis_cache.bump_version(
+        session_cache.user_version_key(user.id)
+        if moved == "user"
+        else session_cache.identity_version_key(user.identity_id)
+    )
+
+    # Then the generation alone refuses the snapshot.
+    assert session_cache._sess_key(user.id) in fake_cache.store
+    assert await session_cache.get_cached_user(user.id) is None
+
+
+async def test_a_membership_without_an_identity_hits_in_one_round_trip_and_forgets_a_stale_hint(
+    fake_cache: FakeRedis,
+) -> None:
+    # Given a warm snapshot of a membership with no identity, and a hint left over from an earlier identity.
+    user = _user(identity_id=None, identity=None)
+    await session_cache.set_cached_user(user, observed=await _observation(user))
+    session_cache._identity_hints[user.id] = uuid4()
+    clear_row_memo()
+    fake_cache.commands.clear()
+
+    # When it is read.
+    loaded = await session_cache.get_cached_user(user.id)
+
+    # Then the snapshot hits without any identity generation, and the stale hint is gone.
+    assert loaded is not None
+    assert fake_cache.commands == ["pipeline"]
+    assert user.id not in session_cache._identity_hints
+
+
+async def test_identity_hints_are_bounded_and_evict_the_least_recently_used(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given room for two hints, two filled memberships, and a hit that makes the first the most recently used.
+    monkeypatch.setattr(session_cache, "_IDENTITY_HINTS_MAX", 2)
+    first, second, third = _user(), _user(), _user()
+    for user in (first, second):
+        await session_cache.set_cached_user(user, observed=await _observation(user))
+    clear_row_memo()
+    assert await session_cache.get_cached_user(first.id) is not None
+
+    # When a third membership is loaded.
+    await session_cache.set_cached_user(third, observed=await _observation(third))
+
+    # Then the one nobody touched is forgotten.
+    assert list(session_cache._identity_hints) == [first.id, third.id]
 
 
 async def test_a_session_hit_through_the_dao_costs_one_round_trip_and_no_sql(
@@ -123,7 +253,7 @@ async def test_a_session_hit_through_the_dao_costs_one_round_trip_and_no_sql(
 
     # Then the cache answered in a single call.
     assert loaded is not None
-    assert fake_cache.commands == ["eval"]
+    assert fake_cache.commands == ["pipeline"]
 
 
 async def test_an_unavailable_cache_falls_open_to_sql_after_one_attempt(
@@ -143,7 +273,27 @@ async def test_an_unavailable_cache_falls_open_to_sql_after_one_attempt(
     # Then both are answered from SQL, and only the first paid for a Redis attempt before the breaker opened.
     assert (first, second) == (user, user)
     assert load.await_count == 2
-    assert fake_cache.commands == ["eval"]
+    assert fake_cache.commands == ["pipeline"]
+
+
+@pytest.mark.parametrize("hinted", [True, False])
+async def test_an_unavailable_cache_reads_as_a_miss_after_one_attempt(fake_cache: FakeRedis, hinted: bool) -> None:
+    # Given a warm snapshot, then a Redis that fails every call.
+    user = _user()
+    await session_cache.set_cached_user(user, observed=await _observation(user))
+    if not hinted:
+        session_cache._identity_hints.clear()
+    fake_cache.fail = True
+    clear_row_memo()
+    fake_cache.commands.clear()
+
+    # When the membership is read twice.
+    first = await session_cache.get_cached_user(user.id)
+    second = await session_cache.get_cached_user(user.id)
+
+    # Then both reads fall open to SQL and only the first reached Redis.
+    assert (first, second) == (None, None)
+    assert fake_cache.commands == ["pipeline"]
 
 
 @pytest.mark.parametrize("stored", ["not json", "[]", "5", '"text"', '{"user": 5}', '{"user": {}}'])
@@ -153,15 +303,7 @@ async def test_a_malformed_snapshot_is_a_miss_after_one_round_trip(fake_cache: F
     fake_cache.commands.clear()
 
     assert await session_cache.get_cached_user(user.id) is None
-    assert fake_cache.commands == ["eval"]
-
-
-def test_the_identity_generation_prefix_names_the_same_keys_as_the_key_builder() -> None:
-    identity_id = uuid4()
-
-    assert session_cache.identity_version_key_prefix() + str(identity_id) == session_cache.identity_version_key(
-        identity_id
-    )
+    assert fake_cache.commands == ["pipeline"]
 
 
 @pytest.mark.parametrize("timezone", ["UTC", "Etc/GMT-7", "Asia/Shanghai", None])
@@ -296,8 +438,11 @@ async def test_session_cache_redis_down_returns_none(fake_cache: FakeRedis) -> N
     assert await session_cache.get_cached_user(user.id) is None
 
 
+@pytest.mark.parametrize("hinted", [True, False])
 @pytest.mark.parametrize("dependency", ["user", "identity"])
-async def test_session_misses_when_only_generation_read_fails(fake_cache: FakeRedis, dependency: str) -> None:
+async def test_session_misses_when_only_generation_read_fails(
+    fake_cache: FakeRedis, dependency: str, hinted: bool
+) -> None:
     user = _user()
     assert user.identity_id is not None
     key = (
@@ -307,6 +452,8 @@ async def test_session_misses_when_only_generation_read_fails(fake_cache: FakeRe
     )
     fake_cache.store[key] = "0"
     await session_cache.set_cached_user(user, observed=await _observation(user))
+    if not hinted:
+        session_cache._identity_hints.clear()
     clear_row_memo()
     fake_cache.fail_gets.add(key)
 
@@ -315,10 +462,11 @@ async def test_session_misses_when_only_generation_read_fails(fake_cache: FakeRe
     assert loaded is None
 
 
+@pytest.mark.parametrize("hinted", [True, False])
 @pytest.mark.parametrize("dependency", ["user", "identity"])
 @pytest.mark.parametrize("recreate", [False, True])
 async def test_expired_generation_cannot_revalidate_old_session(
-    fake_cache: FakeRedis, dependency: str, recreate: bool
+    fake_cache: FakeRedis, dependency: str, recreate: bool, hinted: bool
 ) -> None:
     user = _user()
     assert user.identity_id is not None
@@ -329,6 +477,8 @@ async def test_expired_generation_cannot_revalidate_old_session(
     )
     await redis_cache.bump_version(key)
     await session_cache.set_cached_user(user, observed=await _observation(user))
+    if not hinted:
+        session_cache._identity_hints.clear()
     clear_row_memo()
     fake_cache.store.pop(key)
 

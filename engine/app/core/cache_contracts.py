@@ -12,7 +12,7 @@ class RedisValueRead:
 
 @dataclass(frozen=True, slots=True)
 class SessionKeysRead:
-    """One round trip's view of a session snapshot and the two generations that gate it (each None when absent)."""
+    """One round trip's view of a session snapshot and the generations that gate it (each None when absent or not read)."""
 
     snapshot: object | None
     user_version: str | None

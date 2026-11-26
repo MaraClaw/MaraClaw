@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Final, cast, final
+from typing import cast, final
 from uuid import uuid4
 
 from app.config import get_settings
@@ -29,22 +29,6 @@ from app.records.cache_invalidation import CacheInvalidation, CacheInvalidationK
 
 _COOLDOWN_SECONDS = 2.0
 _VERSION_MIN_TTL = 3600
-# One-trip session read: the identity generation key is named by an id inside the snapshot, so the script resolves it
-# server-side instead of costing the caller a dependent round trip. A missing or malformed snapshot returns no identity
-# generation, which the caller treats as a miss.
-_SESSION_READ_SCRIPT: Final = """
-local snapshot = redis.call('GET', KEYS[1])
-local identity_version = false
-if snapshot then
-  local ok, doc = pcall(cjson.decode, snapshot)
-  local user = ok and type(doc) == 'table' and doc.user
-  local identity_id = type(user) == 'table' and user.identity_id
-  if type(identity_id) == 'string' then
-    identity_version = redis.call('GET', ARGV[1] .. identity_id)
-  end
-end
-return {snapshot, redis.call('GET', KEYS[2]), identity_version}
-"""
 
 
 class _Admission(StrEnum):
@@ -289,32 +273,37 @@ def _decoded(value: object) -> str | None:
 
 
 async def read_session_keys(
-    snapshot_key: str, user_version_key: str, identity_version_key_prefix: str
+    snapshot_key: str, user_version_key: str, identity_version_key: str | None
 ) -> SessionKeysRead | None:
-    """Read a session snapshot, its user generation and the identity generation it names in one round trip.
+    """Read a session snapshot and the generations that gate it in one round trip.
 
-    The identity generation key is ``identity_version_key_prefix`` plus the ``user.identity_id`` stored in the snapshot.
+    One non-transactional pipeline of single-key GETs, every key named by the caller, so a cluster-aware client can
+    route each one. Without ``identity_version_key`` the identity generation is not read and comes back None.
     Returns None when the cache is unavailable, like ``read_version``; a successful miss has a None snapshot.
     """
+    keys = [snapshot_key, user_version_key]
+    if identity_version_key is not None:
+        keys.append(identity_version_key)
 
     async def read() -> object:
         client = await _client()
-        return cast(
-            "object",
-            await client.eval(_SESSION_READ_SCRIPT, 2, snapshot_key, user_version_key, identity_version_key_prefix),
-        )
+        async with client.pipeline(transaction=False) as pipe:
+            for key in keys:
+                _ = pipe.get(key)
+            return cast("object", await pipe.execute())
 
     try:
-        reply = await guarded(read)
+        replies = await guarded(read)
     except CacheUnavailableError as exc:
         logger.debug("redis_cache session read skipped: {}", exc)
         return None
-    if not is_any_list(reply) or len(reply) != 3:
+    if not is_any_list(replies) or len(replies) != len(keys):
         return None
-    snapshot, user_version, identity_version = reply
-    raw_snapshot = _decoded(snapshot)
+    raw_snapshot = _decoded(replies[0])
     return SessionKeysRead(
-        None if raw_snapshot is None else _parse_json(raw_snapshot), _decoded(user_version), _decoded(identity_version)
+        None if raw_snapshot is None else _parse_json(raw_snapshot),
+        _decoded(replies[1]),
+        None if identity_version_key is None else _decoded(replies[2]),
     )
 
 

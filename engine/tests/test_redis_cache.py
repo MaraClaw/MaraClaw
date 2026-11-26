@@ -15,7 +15,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError, RedisError
 
 from app.config import Settings
 from app.core import events, redis_cache
-from app.core.cache_contracts import RedisValueRead
+from app.core.cache_contracts import RedisValueRead, SessionKeysRead
 from app.core.row_memo import clear_row_memo, memo_drop, memo_get, memo_set
 from app.core.single_flight import SingleFlight
 
@@ -126,27 +126,6 @@ class FakeRedis:
             raise RuntimeError("redis down")
         self.expires[key] = ttl
 
-    async def eval(
-        self, script: str, key_count: int, snapshot_key: str, user_version_key: str, identity_prefix: str
-    ) -> list[str | None]:
-        """Mirror ``redis_cache._SESSION_READ_SCRIPT``; a real Redis runs the script in the PostgreSQL-backed suite."""
-        assert (script, key_count) == (redis_cache._SESSION_READ_SCRIPT, 2)
-        self.commands.append("eval")
-        self.round_trips += 1
-        snapshot = self.read(snapshot_key)
-        user_version = self.read(user_version_key)
-        identity_version = None
-        if snapshot is not None:
-            try:
-                document = json.loads(snapshot)
-            except ValueError:
-                document = None
-            user = document.get("user") if isinstance(document, dict) else None
-            identity_id = user.get("identity_id") if isinstance(user, dict) else None
-            if isinstance(identity_id, str):
-                identity_version = self.read(identity_prefix + identity_id)
-        return [snapshot, user_version, identity_version]
-
 
 @pytest.fixture
 def fake_cache(monkeypatch: pytest.MonkeyPatch):
@@ -200,6 +179,56 @@ async def test_version_failure_differs_from_successfully_missing_generation(fake
     failed = await redis_cache.read_version("ver")
 
     assert failed != missing
+
+
+async def test_session_keys_are_one_pipeline_of_single_key_gets_each_named_by_the_caller(
+    fake_cache: FakeRedis,
+) -> None:
+    fake_cache.store.update({"snap": json.dumps({"user": {"id": "u"}}), "uver": "1", "iver": "2"})
+
+    keys = await redis_cache.read_session_keys("snap", "uver", "iver")
+
+    assert keys == SessionKeysRead({"user": {"id": "u"}}, "1", "2")
+    assert (fake_cache.commands, fake_cache.round_trips) == (["pipeline"], 1)
+    assert fake_cache.pipelines == [[("get", ("snap",), None), ("get", ("uver",), None), ("get", ("iver",), None)]]
+
+
+async def test_session_keys_without_an_identity_key_read_two_keys_and_no_identity_generation(
+    fake_cache: FakeRedis,
+) -> None:
+    fake_cache.store.update({"snap": "{}", "uver": "1", "iver": "2"})
+
+    keys = await redis_cache.read_session_keys("snap", "uver", None)
+
+    assert keys == SessionKeysRead({}, "1", None)
+    assert fake_cache.pipelines == [[("get", ("snap",), None), ("get", ("uver",), None)]]
+
+
+@pytest.mark.parametrize("stored", [None, "{not json"])
+async def test_a_missing_or_unparseable_snapshot_reads_as_no_snapshot_beside_the_generations(
+    fake_cache: FakeRedis, stored: str | None
+) -> None:
+    fake_cache.store.update({"uver": "1", "iver": "2"})
+    if stored is not None:
+        fake_cache.store["snap"] = stored
+
+    assert await redis_cache.read_session_keys("snap", "uver", "iver") == SessionKeysRead(None, "1", "2")
+    assert fake_cache.round_trips == 1
+
+
+@pytest.mark.parametrize("failing", ["snap", "uver", "iver"])
+async def test_a_failed_session_read_is_unavailable_and_opens_the_breaker(
+    fake_cache: FakeRedis, breaker: tuple[redis_cache.CacheBreaker, _Clock], failing: str
+) -> None:
+    fake_cache.store.update({"snap": "{}", "uver": "1", "iver": "2"})
+    fake_cache.fail_gets.add(failing)
+
+    assert await redis_cache.read_session_keys("snap", "uver", "iver") is None
+
+    fake_cache.fail_gets.clear()
+    assert breaker[0].refusing()
+    assert await redis_cache.read_session_keys("snap", "uver", "iver") is None
+    assert fake_cache.round_trips == 1
 
 
 async def test_generations_are_stable_until_rotated(fake_cache: FakeRedis) -> None:
