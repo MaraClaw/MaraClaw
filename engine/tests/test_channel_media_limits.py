@@ -6,6 +6,7 @@ import zlib
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import override
 
+import anyio
 import httpx
 import pytest
 from pydantic import ValidationError
@@ -16,23 +17,26 @@ from app.services.channels.media_limits import (
     EVENT_MAX_BYTES,
     READ_CHUNK_BYTES,
     MediaBudget,
+    MediaDeadlineError,
     MediaTooLargeError,
     file_limit,
     limit_attachments,
     read_capped,
 )
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES, MAX_INPUT_BYTES
-from channel_media_fixtures import CountingStream, set_attachment_limit
+from channel_media_fixtures import CountingStream, FakeClock, SlowStream, set_ack_budget, set_attachment_limit
 
 LIMIT = 1024 * 1024
 
 
-async def read(handler: Callable[[httpx.Request], httpx.Response], limit: int = LIMIT) -> bytes:
+async def read(
+    handler: Callable[[httpx.Request], httpx.Response], limit: int = LIMIT, budget: MediaBudget | None = None
+) -> bytes:
     async with (
         httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client,
         client.stream("GET", "https://files.invalid/f") as response,
     ):
-        return await read_capped(response, limit)
+        return await read_capped(response, limit, budget)
 
 
 @pytest.mark.parametrize(
@@ -339,3 +343,114 @@ def test_attachment_limit_accepts_one_through_ten(limit):
 def test_attachment_limit_rejects_values_outside_one_through_ten(limit):
     with pytest.raises(ValidationError):
         Settings(CHANNEL_MEDIA_MAX_ATTACHMENTS=limit)
+
+
+def test_acknowledgement_budget_expires_the_configured_seconds_after_it_was_made(monkeypatch):
+    # Given: a setting of 1.5 seconds and a clock the test moves
+    set_ack_budget(monkeypatch, 1.5)
+    clock = FakeClock()
+    budget = MediaBudget.for_acknowledgement(clock)
+    # When: 1.4 seconds pass
+    clock.advance(1.4)
+    # Then: files can still be requested
+    budget.check()
+    assert budget.limit_for("photo.png") == IMAGE_UPLOAD_MAX_BYTES
+    # When: the setting's time is up
+    clock.advance(0.2)
+    # Then: no further file is requested
+    with pytest.raises(MediaDeadlineError):
+        budget.check()
+    with pytest.raises(MediaDeadlineError):
+        budget.limit_for("photo.png")
+
+
+def test_a_budget_without_a_deadline_never_expires():
+    # Given: the budget every other provider builds, and a clock that runs far ahead
+    clock = FakeClock()
+    budget = MediaBudget(clock=clock)
+    clock.advance(10**9)
+    # When / Then
+    budget.check()
+    assert budget.limit_for("photo.png") == IMAGE_UPLOAD_MAX_BYTES
+
+
+async def test_read_capped_abandons_a_transfer_once_the_deadline_passes():
+    # Given: a body that takes one clock second per chunk, and a budget that lasts 2.5 seconds
+    clock = FakeClock()
+    stream = SlowStream(clock, total=10 * LIMIT, step=1.0)
+    # When
+    with pytest.raises(MediaDeadlineError):
+        await read(
+            lambda _: httpx.Response(200, stream=stream),
+            limit=10 * LIMIT,
+            budget=MediaBudget(deadline=2.5, clock=clock),
+        )
+    # Then: it stopped at the first chunk that arrived late instead of pulling the whole body
+    assert stream.consumed == 3 * READ_CHUNK_BYTES
+
+
+async def test_read_capped_keeps_its_byte_limits_under_a_live_budget():
+    # Given: a budget with plenty of time left
+    budget = MediaBudget(deadline=100.0, clock=FakeClock())
+    stream = CountingStream(total=10 * LIMIT)
+    # When
+    with pytest.raises(MediaTooLargeError) as raised:
+        await read(lambda _: httpx.Response(200, stream=stream), budget=budget)
+    # Then: the size limit trips exactly as it does without a budget, and a body that fits is returned whole
+    assert LIMIT < stream.consumed <= LIMIT + READ_CHUNK_BYTES
+    assert raised.value.read == stream.consumed
+    assert len(await read(lambda _: httpx.Response(200, stream=CountingStream(total=LIMIT)), budget=budget)) == LIMIT
+
+
+async def test_window_cuts_off_a_host_that_sends_nothing():
+    # Given: a budget with a millisecond left
+    budget = MediaBudget(deadline=0.001, clock=FakeClock())
+    # When / Then: the awaited read is abandoned instead of waiting out the provider's own timeout
+    with pytest.raises(MediaDeadlineError):
+        async with budget.window():
+            await anyio.Event().wait()
+
+
+async def test_window_refuses_to_open_late_and_lets_other_errors_through():
+    # Given: a budget with time left
+    clock = FakeClock()
+    budget = MediaBudget(deadline=1.0, clock=clock)
+    # When / Then: the body runs, and its own failures are not mistaken for the deadline
+    async with budget.window():
+        pass
+    with pytest.raises(ValueError, match="not a deadline"):
+        async with budget.window():
+            raise ValueError("not a deadline")
+    # When: the deadline has passed
+    clock.advance(2.0)
+    entered = []
+    # Then: the body never runs
+    with pytest.raises(MediaDeadlineError):
+        async with budget.window():
+            entered.append(True)
+    assert entered == []
+
+
+async def test_window_of_a_budget_without_a_deadline_bounds_nothing():
+    # Given / When / Then
+    async with MediaBudget().window():
+        pass
+    with pytest.raises(ValueError, match="plain failure"):
+        async with MediaBudget().window():
+            raise ValueError("plain failure")
+
+
+def test_acknowledgement_budget_setting_defaults_to_two_seconds():
+    assert Settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS == 2.0
+
+
+@pytest.mark.parametrize("seconds", [0.5, 30])
+def test_acknowledgement_budget_setting_accepts_a_positive_time_up_to_thirty_seconds(seconds):
+    settings = Settings(CHANNEL_MEDIA_ACK_BUDGET_SECONDS=seconds)
+    assert seconds == settings.CHANNEL_MEDIA_ACK_BUDGET_SECONDS
+
+
+@pytest.mark.parametrize("seconds", [-1, 0, 31])
+def test_acknowledgement_budget_setting_rejects_values_outside_that_range(seconds):
+    with pytest.raises(ValidationError):
+        Settings(CHANNEL_MEDIA_ACK_BUDGET_SECONDS=seconds)

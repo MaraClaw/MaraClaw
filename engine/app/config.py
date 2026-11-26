@@ -313,6 +313,16 @@ class Settings(BaseSettings):
     # may carry. A larger file answers 413 `file_too_large` and is downloaded instead.
     WORKSPACE_FILE_CONTENT_MAX_BYTES: int = Field(default=1048576, gt=0, le=67108864)
 
+    # Document conversion (the convert_* tools). Blocking work (openpyxl, python-docx, WeasyPrint, large file reads) runs
+    # on a lane of this many threads of its own, never on the event loop or the default executor.
+    DOCUMENT_CONVERSION_LANE_THREADS: int = Field(default=4, ge=1, le=64)
+    # Seconds one convert_* call may take, waiting for a lane thread included. A call that outlives it returns an error;
+    # its thread cannot be interrupted, so it keeps its lane slot until it ends.
+    DOCUMENT_CONVERSION_TIMEOUT_SECONDS: float = Field(default=120.0, gt=0, le=3600, allow_inf_nan=False)
+    # Chrome processes HTML-to-PDF and slide rendering may run at once, shared by both. A render that cannot get one
+    # within 30 s falls back to WeasyPrint (PDF) or the DOM conversion (PPTX).
+    DOCUMENT_CHROME_MAX_CONCURRENCY: int = Field(default=2, ge=1, le=16)
+
     # Process role
     PROCESS_ROLE: str = "all"
     # Graceful stop: uvicorn finishes in-flight HTTP within the window (entrypoint.sh exports it as

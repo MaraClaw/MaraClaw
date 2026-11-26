@@ -75,6 +75,8 @@ async def channel_db(receipt_db: ReceiptDatabase, monkeypatch: pytest.MonkeyPatc
                 "is_connected": False,
             }
         )
+    # The rows above moved the creator and the agent into the new tenant; hand tests records that match them.
+    db = replace(db, user=replace(db.user, tenant_id=tenant_id), agent=replace(db.agent, tenant_id=tenant_id))
 
     async def prepare(*, agent: AgentRecord, content: str):
         return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "channel-qa")

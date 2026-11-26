@@ -44,6 +44,21 @@ with the durable receipt. Personal Zalo, Telegram and WhatsApp media keep their 
 The Slack fallback for events with neither `ts` nor `event_id` applies the same count and notice; a Feishu
 post without a message id has no retrievable images, so its text is processed with no media work.
 
+`CHANNEL_MEDIA_ACK_BUDGET_SECONDS` (above 0 up to 30, default 2) bounds the wall-clock time a Slack,
+Telegram or WhatsApp Cloud webhook spends fetching attachments before it answers; Slack gives up after
+3 seconds. Once it passes, no further file is requested, the transfer in progress is abandoned (a host that
+sends nothing is cut off too), and the transcript and model content carry one note for each file left out,
+next to the oversize and skipped-files notes. The text and the files already stored are still accepted, and
+the receipt fingerprint still covers every original attachment ID.
+
+Those webhooks also take a short in-flight claim before they fetch (Redis, keyed like the event receipt,
+lasting the budget plus ten seconds), so a provider retry that arrives while the first delivery is still
+downloading is acknowledged without a second download or storage write. The first delivery releases the
+claim when it ends, however it ends; one left by a dead process expires, and with Redis unavailable the
+webhook behaves as it did before. The claim is advisory: the durable receipt stays the only dedupe, and a
+replay after acceptance still answers through it. The Slack fallback for events with neither `ts` nor
+`event_id` has no event identity to claim and keeps no deadline.
+
 WhatsApp validates the raw-body signature before processing, visits every message
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed
 events replay safely when the provider redelivers the batch.
@@ -380,21 +395,6 @@ using separate API/connector roles must run the `bootstrap` role first.
 - Resolves DM sessions for the member first, then agent-scoped sessions including
   **group** rooms (creator-owned group sessions are included).
 
-## Security notes
-
-- Channel GET endpoints for Slack/Google Chat require **creator** and return
-  **redacted** secrets (`***` / metadata only).
-- Prefer service accounts scoped only to Chat bot; do not reuse org-admin keys.
-
-## Outbound tool routing
-
-`send_channel_message` dispatches through a registry in
-`agent_tool_exec/channel_messaging.py` using `channels.types.outbound_provider_key`.
-
-## Related but different
-
-| Surface | Purpose |
-|---------|---------|
 ## Provider access tokens
 
 Google Chat and Microsoft Teams outbound calls and Google Chat media downloads use the same Redis-backed
@@ -411,6 +411,21 @@ IM token cache as Feishu, WeCom and DingTalk (`app/services/im_token_cache.py`):
   was already delivered is not duplicated. A media download that is still denied reports its usual `422`.
 - A refused exchange is never cached and Redis errors fall open to a direct exchange.
 
+## Security notes
+
+- Channel GET endpoints for Slack/Google Chat require **creator** and return
+  **redacted** secrets (`***` / metadata only).
+- Prefer service accounts scoped only to Chat bot; do not reuse org-admin keys.
+
+## Outbound tool routing
+
+`send_channel_message` dispatches through a registry in
+`agent_tool_exec/channel_messaging.py` using `channels.types.outbound_provider_key`.
+
+## Related but different
+
+| Surface | Purpose |
+|---------|---------|
 | Google Chat **channel** (this doc) | Bot HTTP app on MaraClaw |
 | `google_workspace` SSO | Login/identity binding, not Chat messaging; provider directory sync is retired |
 | gogcli `gog chat` CLI | User OAuth CLI inside agent workspace |

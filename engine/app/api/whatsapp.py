@@ -323,13 +323,13 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                 )
                 try:
                     if media_id:
-                        from app.services.channels.submissions import is_channel_event_replay
+                        from app.services.channels.submissions import claim_channel_event, is_channel_event_replay
                         from app.services.channels.whatsapp_cloud_media import enrich_media
 
-                        if await is_channel_event_replay(native):
-                            continue
-                        enriched, content = await enrich_media(config, native, media)
-                        await accept_channel_event(enriched, content=content, saved_content=content)
+                        async with claim_channel_event(native) as claimed:
+                            if claimed and not await is_channel_event_replay(native):
+                                enriched, content = await enrich_media(config, native, media)
+                                await accept_channel_event(enriched, content=content, saved_content=content)
                     else:
                         await accept_channel_event(native)
                 except ChannelUserResolutionError, AgentExpired, QuotaExceeded:

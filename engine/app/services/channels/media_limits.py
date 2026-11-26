@@ -4,19 +4,25 @@ Web chat caps an upload at ``IMAGE_UPLOAD_MAX_BYTES`` for images and ``MAX_INPUT
 filename extension (``app/api/upload.py``). Channel media follows the same decision, but is streamed: decoded bytes are
 counted as they arrive and the read stops on the first decoded chunk past the limit. Decoding itself is bounded before
 allocation. ``Content-Length`` is only an early reject, never an admission ticket.
+
+A webhook that answers only after fetching its files also carries a wall-clock deadline on the same budget
+(``MediaBudget.for_acknowledgement``): once it passes, no further file is requested and the transfer in progress is
+abandoned, so the event is accepted with a note for each file left out.
 """
 
 from __future__ import annotations
 
 import io
 import tempfile
+import time
 import zlib
-from collections.abc import AsyncGenerator, AsyncIterator, Sequence
-from contextlib import aclosing
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Never, TypeIs, override
 
+import anyio
 import httpx
 
 from app.config import get_settings
@@ -46,6 +52,10 @@ class MediaTooLargeError(Exception):
         return f"Attachment is larger than {_size(self.limit)}"
 
 
+class MediaDeadlineError(Exception):
+    """The event's fetch window closed before this download finished. The file is fine, so callers leave it out with a note."""
+
+
 def file_limit(filename: str) -> int:
     """Web chat's per-file decision: image extensions get the image cap, everything else the file cap."""
     extension = Path(filename.lstrip(".")).suffix.lower()
@@ -54,24 +64,57 @@ def file_limit(filename: str) -> int:
 
 @dataclass(slots=True)
 class MediaBudget:
-    """Decoded-byte allowance shared by every attachment of one native event."""
+    """Decoded-byte allowance shared by every attachment of one native event, plus an optional wall-clock deadline.
+
+    ``deadline`` is a reading of ``clock``; a budget without one never expires.
+    """
 
     remaining: int = EVENT_MAX_BYTES
+    deadline: float | None = None
+    clock: Callable[[], float] = time.monotonic
+
+    @classmethod
+    def for_acknowledgement(cls, clock: Callable[[], float] = time.monotonic) -> MediaBudget:
+        """A budget that expires ``CHANNEL_MEDIA_ACK_BUDGET_SECONDS`` from now: what a webhook may spend before it answers."""
+        return cls(deadline=clock() + get_settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS, clock=clock)
+
+    def check(self) -> None:
+        """Raise ``MediaDeadlineError`` once the deadline has passed."""
+        if self.deadline is not None and self.clock() >= self.deadline:
+            raise MediaDeadlineError
 
     def limit_for(self, filename: str) -> int:
-        """Largest body to accept for ``filename``; raises once the event is spent so no further request is made."""
+        """Largest body to accept for ``filename``; raises once the event is spent or late so no further request is made."""
         limit = min(file_limit(filename), self.remaining)
         if limit <= 0:
             raise MediaTooLargeError(limit=0)
+        self.check()
         return limit
+
+    @asynccontextmanager
+    async def window(self) -> AsyncGenerator[None]:
+        """Bound everything awaited inside by the time left, so a host that stops sending cannot outlast the deadline."""
+        if self.deadline is None:
+            yield
+            return
+        left = self.deadline - self.clock()
+        if left <= 0:
+            raise MediaDeadlineError
+        with anyio.move_on_after(left) as scope:
+            yield
+        if scope.cancelled_caught:
+            raise MediaDeadlineError
 
     def spend(self, size: int) -> None:
         """Charge bytes actually read, whether or not the file was kept."""
         self.remaining = max(0, self.remaining - size)
 
 
-async def read_capped(response: httpx.Response, limit: int) -> bytes:
+async def read_capped(response: httpx.Response, limit: int, budget: MediaBudget | None = None) -> bytes:
     """Read an open streaming response, raising ``MediaTooLargeError`` the moment decoded bytes pass ``limit``.
+
+    With a ``budget`` the read is also abandoned with ``MediaDeadlineError`` once its deadline has passed, checked as each
+    chunk arrives; a host that sends nothing is bounded by ``MediaBudget.window`` around the request instead.
 
     HTTP errors (including 5xx) and timeouts propagate unchanged. A disk file with an 8 KiB buffer holds the body until
     decoding finishes; all streaming generators are released before the single final allocation of at most ``limit`` bytes.
@@ -101,6 +144,8 @@ async def read_capped(response: httpx.Response, limit: int) -> bytes:
     ):
         async with aclosing(_bounded_chunks(response, chunk_size)) as chunks:
             async for chunk in chunks:
+                if budget is not None:
+                    budget.check()
                 total = body.tell() + len(chunk)
                 if total > limit:
                     raise MediaTooLargeError(limit, read=total)
@@ -176,6 +221,11 @@ def skipped_attachments_note(skipped: int) -> str:
 def too_large_note(filename: str, limit: int) -> str:
     """Short transcript marker for a skipped file."""
     return f"[file skipped: {filename} exceeds the {_limit_label(filename, limit)}]"
+
+
+def deadline_note(filename: str) -> str:
+    """Short transcript marker for a file left out because the event's fetch window closed first."""
+    return f"[file skipped: {filename} was not downloaded in time]"
 
 
 def too_large_reply(filename: str, limit: int) -> str:

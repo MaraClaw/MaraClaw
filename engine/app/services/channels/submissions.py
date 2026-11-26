@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal, override
-from uuid import UUID
+from typing import TYPE_CHECKING, Final, Literal, override
+from uuid import UUID, uuid4
 
+import anyio
 from fastapi import HTTPException
 
+from app.config import get_settings
+from app.core.events import get_cache_redis
 from app.core.json_types import JsonObject
+from app.core.logging import logger
 from app.core.permissions import compute_agent_access_level
+from app.core.redis_cache import CacheUnavailableError, cache_key, guarded
 from app.core.row_memo import clear_entity_memo
 from app.core.security import load_user_principal
 from app.dao import agent_dao, channel_config_dao
@@ -180,10 +187,14 @@ async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
     return agent, principal
 
 
+def _receipt_provider(event: ChannelEvent) -> str:
+    return "zalo" if event.zalo_source is not None else event.provider
+
+
 def _receipt(event: ChannelEvent, agent: AgentRecord) -> ChannelEventReceiptRecord:
     return ChannelEventReceiptRecord(
         config_id=event.config_id,
-        provider="zalo" if event.zalo_source is not None else event.provider,
+        provider=_receipt_provider(event),
         event_key=event.event_key,
         agent_id=agent.id,
         tenant_id=agent.tenant_id,
@@ -210,6 +221,66 @@ async def is_channel_event_replay(event: ChannelEvent) -> bool:
     agent, _ = await _authorize(event)
     candidate = _receipt(event, agent)
     return _matching(await channel_event_receipt_dao.find(candidate), candidate)
+
+
+# How long an in-flight claim outlives the media fetch budget, to cover the stores and the acceptance after the last fetch.
+CLAIM_GRACE_SECONDS: Final = 10.0
+_CLAIM_RELEASE_SECONDS: Final = 1
+_RELEASE_IF_OWNER: Final = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+)
+
+
+def _claim_key(event: ChannelEvent) -> str:
+    identity = json.dumps([str(event.config_id), _receipt_provider(event), event.event_key], separators=(",", ":"))
+    return cache_key("channel-claim", hashlib.sha256(identity.encode()).hexdigest())
+
+
+async def _take_claim(key: str, token: str) -> bool | None:
+    """True when this delivery now holds the claim, False when another does, None when the claim store is unavailable."""
+    ttl_ms = round((get_settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS + CLAIM_GRACE_SECONDS) * 1000)
+
+    async def take() -> object:
+        return await (await get_cache_redis()).set(key, token, px=ttl_ms, nx=True)
+
+    try:
+        return bool(await guarded(take))
+    except CacheUnavailableError as exc:
+        logger.debug("channel event claim skipped: {}", exc)
+        return None
+
+
+async def _release_claim(key: str, token: str) -> None:
+    async def release() -> None:
+        await (await get_cache_redis()).eval(_RELEASE_IF_OWNER, 1, key, token)
+
+    with anyio.move_on_after(_CLAIM_RELEASE_SECONDS, shield=True):
+        try:
+            _ = await guarded(release)
+        except CacheUnavailableError as exc:
+            logger.debug("channel event claim release skipped: {}", exc)
+
+
+@asynccontextmanager
+async def claim_channel_event(event: ChannelEvent) -> AsyncGenerator[bool]:
+    """Hold the in-flight claim of ``event`` while a delivery of it is being processed; yields False when another holds it.
+
+    The claim is keyed like the receipt but advisory: the receipt reservation in ``accept_channel_event`` stays the only
+    durable dedupe. It lets a provider retry that lands while the first delivery is still fetching files be acknowledged
+    without a second download. The first delivery releases it when it ends, however it ends. One left by a process that died
+    expires after the media fetch budget plus ``CLAIM_GRACE_SECONDS``, and an unavailable store (Redis down or its pool
+    busy) yields True so the delivery proceeds as it did before claims existed.
+    """
+    key, token = _claim_key(event), uuid4().hex
+    claimed = await _take_claim(key, token)
+    if claimed is False:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        if claimed:
+            await _release_claim(key, token)
 
 
 async def _ensure_owner_transcript(agent_id: UUID) -> None:
