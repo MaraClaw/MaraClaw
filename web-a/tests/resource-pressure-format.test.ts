@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { localeTag, translate, type Locale, type Translator } from '../src/lib/i18n.ts'
+import { loadVietnamese, localeTag, translate, type Locale, type Translator } from '../src/lib/i18n.ts'
 import {
   dateTimeFormat, episodeRowView, formatBytes, formatDuration, formatMillicpus, formatRatio, formatResourceValue, kindLabels, resourceLabels, summaryRowView,
 } from '../src/lib/resource-pressure-format.ts'
 import { ResourcePressureEpisodeOutSchema, ResourcePressureTenantSummarySchema } from '../src/lib/engine-contracts.generated.ts'
 import { vietnamese } from '../src/lib/translations.ts'
 import { cpuEpisodeRow, episodeRow, quietSummaryRow, summaryRow } from './resource-pressure-fixtures.ts'
+
+await loadVietnamese()
 
 function formattersFor(locale: Locale) {
   const t: Translator = (key, ...values) => translate(locale, key, values[0])
