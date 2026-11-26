@@ -66,7 +66,7 @@ def pipeline(context, monkeypatch):
     async def locked(session_id, _agent_id):
         return shared if session_id == shared.id else route
 
-    async def prepare(*, agent, content, history):
+    async def prepare(*, agent, content):
         return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "channel-unit")
 
     monkeypatch.setattr(submissions, "compute_agent_access_level", access)
@@ -186,13 +186,13 @@ async def invoke_processor(name, pipeline, *, group=False, native_id="native-id"
 
 
 @pytest.mark.parametrize("processor", PROCESSORS)
-async def test_direct_processor_uses_sender_canonical_history_and_original_reply_address(pipeline, processor):
+async def test_direct_processor_uses_sender_canonical_transcript_and_original_reply_address(pipeline, processor):
     # Given
     _, _, shared, route, _, history, persist, enqueue = pipeline
     # When
     await invoke_processor(processor, pipeline)
     # Then
-    assert history.await_args.kwargs["conversation_id"] == str(shared.id)
+    history.assert_not_awaited()
     assert persist.await_args.kwargs["conversation_id"] == str(shared.id)
     assert enqueue.await_args.kwargs["conversation_id"] == str(shared.id)
     assert enqueue.await_args.kwargs["reply_session_id"] == route.id
@@ -202,14 +202,14 @@ async def test_direct_processor_uses_sender_canonical_history_and_original_reply
 
 
 @pytest.mark.parametrize("processor", GROUP_PROCESSORS)
-async def test_group_processor_preserves_legacy_provider_history(pipeline, processor):
+async def test_group_processor_keeps_provider_conversation(pipeline, processor):
     # Given
     _, _, _, route, _, history, persist, enqueue = pipeline
     assert not route.is_group
     # When
     await invoke_processor(processor, pipeline, group=True)
     # Then
-    assert history.await_args.kwargs["conversation_id"] == str(route.id)
+    history.assert_not_awaited()
     assert persist.await_args.kwargs["conversation_id"] == str(route.id)
     assert enqueue.await_args.kwargs["conversation_id"] == str(route.id)
     assert isinstance(binding.ensure_canonical_session, AsyncMock)

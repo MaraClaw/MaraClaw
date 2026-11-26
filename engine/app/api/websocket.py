@@ -21,7 +21,6 @@ from app.core.logging import logger, set_trace_id
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
-from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
 from app.schemas.chat_wire import ChatEventType, ChatRejectionReason, serialize_chat_server_event
 from app.services import chat_tickets
@@ -34,8 +33,6 @@ from app.services.chat_submissions import (
     SubmissionTooLongError,
     accept_submission,
 )
-from app.services.llm.types import OpenAIMessage
-from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.onboarding import is_onboarded, try_begin_onboarding_greeting
 from app.services.onboarding_greeting import build_greeting_request
 from app.services.openclaw_gateway_delivery import CHUNK_SEND_TIMEOUT_SECONDS
@@ -68,7 +65,6 @@ from app.services.realtime_runtime.router import (
 )
 from app.services.shared_chat import (
     SessionNotWritableError,
-    is_canonical,
     read_only_refusal,
     require_writable_session,
 )
@@ -532,11 +528,7 @@ class WebSocketChatHandler:
         self.agent_name: str = ""
         self.role_description: str = ""
         self.welcome_message: str = ""
-        self.ctx_size: int = 100
         self.user_display_name: str = ""
-        self.history_messages: list[ChatMessageRecord] = []
-        self._history_unavailable: bool = False
-        self.conversation: list[OpenAIMessage] = []
         self.current_user_text: str = ""
 
     async def run(self):
@@ -655,41 +647,30 @@ class WebSocketChatHandler:
         self.agent_name = self.agent.name
         self.role_description = self.agent.role_description or ""
         self.welcome_message = self.agent.welcome_message or ""
-        self.ctx_size = self.agent.context_window_size or 100
         self.user_display_name = (self.user.display_name or "").strip() or "there"
-        await self._load_history()
         await manager.connect(str(self.agent_id), self.websocket, self.conv_id, str(self.user.id))
         self._presence_task = asyncio.create_task(self._refresh_presence(), name="ws-presence-refresh")
         await _send_chat_event(self.websocket, {"type": ChatEventType.CONNECTED, "session_id": self.conv_id})
         if self.heartbeat:
             self._heartbeat_task = asyncio.create_task(self._send_heartbeats(), name="ws-heartbeat")
-        self.conversation = self._build_conversation_context()
         return True
 
-    async def _load_history(self):
-        """Loads and prepares history messages for the conversation."""
+    async def _greets_empty_session(self) -> bool:
+        """A configured welcome goes to an empty session; a failed probe skips it and never blocks the socket."""
+        if not self.welcome_message:
+            return False
         try:
-            self.history_messages = list(
-                await chat_message_dao.list_recent(
-                    agent_id=self.agent_id,
-                    conversation_id=self.conv_id,
-                    limit=self.ctx_size,
-                )
+            return not await chat_message_dao.conversation_has_messages(
+                agent_id=self.agent_id, conversation_id=self.conv_id
             )
-            logger.info(f"[WS] Loaded {len(self.history_messages)} history messages for session {self.conv_id}")
         except Exception as e:
-            self._history_unavailable = True
-            report_exception(e, source="websocket", operation="load-history")
-            logger.warning(f"[WS] History load failed (non-fatal): {e}")
-
-    def _build_conversation_context(self) -> list[OpenAIMessage]:
-        """Translates historical ChatMessages to LLM inputs."""
-        return convert_chat_messages_to_llm_format(self.history_messages)
+            report_exception(e, source="websocket", operation="welcome-probe")
+            logger.warning(f"[WS] Welcome probe failed (non-fatal): {e}")
+            return False
 
     async def message_loop(self):
         """Core message processing loop."""
-        # Send welcome message on new session (no history)
-        if self.welcome_message and not self.history_messages and not self._history_unavailable:
+        if await self._greets_empty_session():
             await _send_chat_event(
                 self.websocket, {"type": ChatEventType.DONE, "role": "assistant", "content": self.welcome_message}
             )
@@ -763,9 +744,6 @@ class WebSocketChatHandler:
                 require_writable_session(session, self.user.id)
             except SessionNotWritableError as refused:
                 raise await read_only_refusal(refused) from None
-            if is_canonical(session):
-                await self._load_history()
-                self.conversation = self._build_conversation_context()
             content = "Please begin the onboarding."
 
             self.current_user_text = content
@@ -777,7 +755,6 @@ class WebSocketChatHandler:
                 prepared = await prepare_openclaw_message(
                     agent=self.agent,
                     content=await build_greeting_request(self.agent, self.user),
-                    history=self.conversation,
                 )
             except NoCompanyModelError as exc:
                 logger.warning("[WS] OpenClaw preparation blocked: {}", exc)
@@ -813,7 +790,7 @@ class WebSocketChatHandler:
                             self.websocket, {"type": ChatEventType.ONBOARDED, "agent_id": str(self.agent_id)}
                         )
                         continue
-                    await self._save_user_message(content, display_content, file_name, is_onboarding_trigger)
+                    await self._save_onboarding_marker()
                     _ = await enqueue_prepared_openclaw_message(
                         prepared, sender_user_id=self.user.id, conversation_id=self.conv_id
                     )
@@ -838,7 +815,6 @@ class WebSocketChatHandler:
                 )
                 continue
 
-            self.conversation.append({"role": "user", "content": content})
             await _send_chat_event(self.websocket, {"type": ChatEventType.STATUS, "content": "thinking"})
             logger.info("[WS] OpenClaw: message queued for gateway poll")
 
@@ -853,7 +829,6 @@ class WebSocketChatHandler:
                 user=self.user,
                 agent=self.agent,
                 session_id=self.binding.session_id,
-                history=self.conversation,
             )
         except SubmissionConflictError:
             rejection.update(reason="submission_conflict", content="Submission UUID already used for another message.")
@@ -898,7 +873,6 @@ class WebSocketChatHandler:
             )
             if not accepted.replayed:
                 self.current_user_text = submission.content
-                self.conversation.append({"role": "user", "content": submission.content})
                 if accepted.canonical:
                     # Echo the turn to the owner's other tabs; only the owner's sockets may receive it.
                     _ = await manager.send_to_session(
@@ -949,41 +923,15 @@ class WebSocketChatHandler:
             )
             return False
 
-    async def _save_user_message(self, content: str, display_content: str, file_name: str, is_onboarding_trigger: bool):
-        """Saves user message to the database and updates session title/time."""
-        has_image_marker = "[image_data:" in content
-        if has_image_marker:
-            saved_content = f"[file:{file_name}]\n{content}" if file_name else content
-        else:
-            saved_content = display_content or content
-            if file_name:
-                saved_content = f"[file:{file_name}]\n{saved_content}"
-
-        if is_onboarding_trigger:
-            logger.info("[WS] Onboarding trigger - skipping user-message persistence")
-            await persist_chat_message(
-                agent_id=self.agent_id,
-                user_id=self.user.id,
-                conversation_id=self.conv_id,
-                role="user",
-                content="",
-                skip_insert=True,
-                title_if_default="Onboarding",
-            )
-        else:
-            title_src = display_content or content
-            clean_title = title_src.replace("[图片] ", "📷 ").replace("[image_data:", "").strip()
-            if file_name and not clean_title:
-                clean_title = f"📎 {file_name}"
-            title_if_default = None
-            if not self.history_messages:
-                title_if_default = clean_title[:40] if clean_title else content[:40]
-            await persist_chat_message(
-                agent_id=self.agent_id,
-                user_id=self.user.id,
-                conversation_id=self.conv_id,
-                role="user",
-                content=saved_content,
-                title_if_default=title_if_default,
-            )
-            logger.info("[WS] User message saved")
+    async def _save_onboarding_marker(self):
+        """Titles a default-named session "Onboarding"; the greeting turn stores no user message."""
+        logger.info("[WS] Onboarding trigger - skipping user-message persistence")
+        await persist_chat_message(
+            agent_id=self.agent_id,
+            user_id=self.user.id,
+            conversation_id=self.conv_id,
+            role="user",
+            content="",
+            skip_insert=True,
+            title_if_default="Onboarding",
+        )

@@ -26,7 +26,7 @@ This table covers transport-backed chat/IM channels only. `types.py` also regist
 |------|------|
 | `types.py` | Canonical `channel_type` registry (`ChannelKind` wraps `core/domain/channels.py` `ChannelType`), aliases, outbound keys |
 | `config.py` | Shared channel_config upsert/get/delete + creator checks |
-| `inbound.py` | Sender resolution, channel session, history, persist and reply-turn helpers; accepts through `submissions` |
+| `inbound.py` | Sender resolution, channel session, persist and reply-turn helpers; accepts through `submissions` |
 | `submissions.py` | Durable native-event acceptance. One transaction: fresh authorization, receipt reserve/replay, sender quota, transcript, gateway row and reply intent |
 | `outbound.py`, `outbound_*.py` | Deliver a completed gateway result to the originating IM thread after native engine settlement or the independent `/gateway/report` API; `outbound_plan` (configured outbound, chunking, `build_plan`), `outbound_identity` (preflight), `outbound_transport` / `outbound_enterprise` (chunk send, ack) and `outbound_errors` (delivery errors, retry times) |
 | `llm_bridge.py` | `_load_agent_and_model` plus engine LLM helpers for trigger/heartbeat only |

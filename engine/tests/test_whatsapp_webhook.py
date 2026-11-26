@@ -142,13 +142,13 @@ async def test_signed_batch_continues_after_failure_and_redelivery_replays_commi
     prepare_calls: list[str] = []
     fail_once = True
 
-    async def prepare(*, agent, content, history):
+    async def prepare(*, agent, content):
         nonlocal fail_once
         prepare_calls.append(content)
         if content == "transient" and fail_once:
             fail_once = False
             raise RuntimeError("transient preparation failure")
-        return await original_prepare(agent=agent, content=content, history=history)
+        return await original_prepare(agent=agent, content=content)
 
     async def accept(event):
         async with transaction(fixture.db.first):

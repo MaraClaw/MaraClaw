@@ -1,5 +1,4 @@
 import asyncio
-import json
 import uuid
 from collections.abc import Sequence
 from unittest.mock import AsyncMock, Mock
@@ -7,20 +6,20 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from tests.im_webhook_fixtures import channel_config
 
+from app.dao.chat_dao import chat_message_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
 from app.runtime import connectors
 from app.services import wechat_channel, wechat_message_processor
 from app.services.channels import binding, submissions
-from app.services.llm.types import OpenAIMessage
 from app.services.openclaw_routing import PreparedOpenClawMessage
 from worker_progress_fixtures import WorkerHTTP, worker_http
 
 __all__ = ["worker_http"]
 
 
-async def test_accept_wechat_event_converts_prior_tool_history_before_persisting_new_user(
+async def test_accept_wechat_event_prepares_and_persists_without_reading_prior_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent = AgentRecord(id=uuid.uuid4(), name="agent", creator_id=uuid.uuid4(), tenant_id=uuid.uuid4())
@@ -36,41 +35,8 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
         conversation_id="wechat_chat-1",
         text="Please check.",
     )
-    tool_id = uuid.UUID(int=2)
-    history_rows = [
-        ChatMessageRecord(
-            id=uuid.uuid4(),
-            agent_id=agent.id,
-            user_id=sender.id,
-            conversation_id=str(transcript.id),
-            role="user",
-            content="What is the status?",
-        ),
-        ChatMessageRecord(
-            id=tool_id,
-            agent_id=agent.id,
-            user_id=sender.id,
-            conversation_id=str(transcript.id),
-            role="tool_call",
-            content='{"name":"search_docs","args":{"query":"status"},"result":"found status"}',
-        ),
-    ]
-    expected_history: list[OpenAIMessage] = [
-        {"role": "user", "content": "What is the status?"},
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call_{tool_id}",
-                    "type": "function",
-                    "function": {"name": "search_docs", "arguments": json.dumps({"query": "status"})},
-                }
-            ],
-        },
-        {"role": "tool", "tool_call_id": f"call_{tool_id}", "content": "found status"},
-    ]
     prepared = PreparedOpenClawMessage(agent, event.text, "primary", None, "channel-test")
-    list_recent = AsyncMock(return_value=history_rows)
+    list_recent = AsyncMock()
     prepare = AsyncMock(return_value=prepared)
     insert_message = AsyncMock(
         return_value=ChatMessageRecord(
@@ -84,7 +50,6 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
     )
     enqueue = AsyncMock()
     order = Mock()
-    order.attach_mock(list_recent, "history")
     order.attach_mock(prepare, "prepare")
     order.attach_mock(insert_message, "persist")
     order.attach_mock(enqueue, "enqueue")
@@ -105,8 +70,8 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
         AsyncMock(return_value=binding.ChannelConversation(transcript, reply)),
     )
     monkeypatch.setattr(submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=transcript))
-    monkeypatch.setattr(submissions.chat_message_dao, "list_recent", list_recent)
-    monkeypatch.setattr(submissions.chat_message_dao, "insert_message", insert_message)
+    monkeypatch.setattr(chat_message_dao, "list_recent", list_recent)
+    monkeypatch.setattr(chat_message_dao, "insert_message", insert_message)
     monkeypatch.setattr(submissions.chat_session_dao, "get", AsyncMock(return_value=transcript))
     monkeypatch.setattr(submissions.chat_session_dao, "update", AsyncMock())
     monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
@@ -115,8 +80,8 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
     result = await submissions.accept_channel_event(event)
 
     assert result == submissions.AcceptedChannelEvent(replayed=False)
-    list_recent.assert_awaited_once_with(agent_id=agent.id, conversation_id=str(transcript.id), limit=8)
-    prepare.assert_awaited_once_with(agent=agent, content="Please check.", history=expected_history)
+    list_recent.assert_not_awaited()
+    prepare.assert_awaited_once_with(agent=agent, content="Please check.")
     insert_message.assert_awaited_once_with(
         agent_id=agent.id,
         user_id=sender.id,
@@ -133,7 +98,7 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
         reply_session_id=reply.id,
         deduplicate=False,
     )
-    assert [entry[0] for entry in order.mock_calls] == ["history", "prepare", "persist", "enqueue"]
+    assert [entry[0] for entry in order.mock_calls] == ["prepare", "persist", "enqueue"]
 
 
 async def test_process_wechat_message_remembers_context_before_accepting_native_identity_and_text(

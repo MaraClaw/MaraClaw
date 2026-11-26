@@ -18,14 +18,14 @@ __all__ = ["context", "pipeline", "webhook_pipeline"]
 
 
 @pytest.mark.parametrize("webhook", WEBHOOKS)
-async def test_direct_webhook_binds_before_history_and_attachment_persistence(webhook_pipeline, monkeypatch, webhook):
+async def test_direct_webhook_binds_before_attachment_persistence(webhook_pipeline, monkeypatch, webhook):
     # Given
     pipeline, _ = webhook_pipeline
     _, _, shared, route, _, history, persist, enqueue = pipeline
     # When
     await invoke_webhook(webhook, webhook_pipeline, monkeypatch)
     # Then
-    assert history.await_args.kwargs["conversation_id"] == str(shared.id)
+    history.assert_not_awaited()
     assert persist.await_args.kwargs["conversation_id"] == str(shared.id)
     assert enqueue.await_args.kwargs["conversation_id"] == str(shared.id)
     assert enqueue.await_args.kwargs["reply_session_id"] == route.id
@@ -40,7 +40,7 @@ async def test_group_webhook_keeps_provider_conversation(webhook_pipeline, monke
     # When
     await invoke_webhook(webhook, webhook_pipeline, monkeypatch, group=True)
     # Then
-    assert history.await_args.kwargs["conversation_id"] == str(route.id)
+    history.assert_not_awaited()
     assert persist.await_args.kwargs["conversation_id"] == str(route.id)
     assert isinstance(binding.ensure_canonical_session, AsyncMock)
     binding.ensure_canonical_session.assert_not_awaited()

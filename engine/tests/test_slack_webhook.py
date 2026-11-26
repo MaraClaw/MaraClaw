@@ -228,7 +228,6 @@ def legacy_slack(webhook_pipeline, monkeypatch):
         "bind_channel_conversation",
         AsyncMock(return_value=SimpleNamespace(transcript_session=session, reply_session=session)),
     )
-    monkeypatch.setattr(slack.chat_message_dao, "list_recent", AsyncMock(return_value=[]))
     persist = AsyncMock()
     monkeypatch.setattr(slack.channel_inbound, "persist_user_message", persist)
     assert isinstance(slack.store_agent_upload, AsyncMock)

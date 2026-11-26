@@ -96,15 +96,11 @@ async def test_locked_submission_replay_access_matrix(monkeypatch, source, viewe
 
     if viewer not in ("owner", "org_admin"):
         with pytest.raises(HTTPException) as error:
-            await chat_submissions.accept_submission(
-                submission, user=user, agent=agent, session_id=session.id, history=[]
-            )
+            await chat_submissions.accept_submission(submission, user=user, agent=agent, session_id=session.id)
         assert error.value.status_code == 403
         find_receipt.assert_not_awaited()
     else:
-        accepted = await chat_submissions.accept_submission(
-            submission, user=user, agent=agent, session_id=session.id, history=[]
-        )
+        accepted = await chat_submissions.accept_submission(submission, user=user, agent=agent, session_id=session.id)
         assert accepted.replayed
         assert accepted.message.id == receipt.id
     assert state.locked
@@ -147,7 +143,6 @@ async def test_new_submission_access_and_write_guard(monkeypatch, source, viewer
     monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=session))
     monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock(return_value=session))
     monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", AsyncMock(return_value=None))
-    monkeypatch.setattr(chat_submissions.chat_message_dao, "list_recent", AsyncMock(return_value=[]))
     monkeypatch.setattr(chat_submissions.chat_message_dao, "reserve_submission", reserve)
     monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock())
     monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
@@ -158,9 +153,7 @@ async def test_new_submission_access_and_write_guard(monkeypatch, source, viewer
 
     if viewer not in ("owner", "org_admin") or not writable:
         with pytest.raises(HTTPException) as error:
-            await chat_submissions.accept_submission(
-                submission, user=user, agent=agent, session_id=session.id, history=[]
-            )
+            await chat_submissions.accept_submission(submission, user=user, agent=agent, session_id=session.id)
         if viewer in ("owner", "org_admin"):
             assert error.value.status_code == 409
             assert error.value.detail == read_only_detail(callers_canonical.id)
@@ -172,9 +165,7 @@ async def test_new_submission_access_and_write_guard(monkeypatch, source, viewer
         charge.assert_not_awaited()
         enqueue.assert_not_awaited()
     else:
-        accepted = await chat_submissions.accept_submission(
-            submission, user=user, agent=agent, session_id=session.id, history=[]
-        )
+        accepted = await chat_submissions.accept_submission(submission, user=user, agent=agent, session_id=session.id)
         assert not accepted.replayed
         assert (accepted.message.user_id, accepted.message.conversation_id) == (user.id, str(session.id))
         charge.assert_awaited_once_with(user)
@@ -285,7 +276,6 @@ async def test_enqueue_failure_rolls_back_receipt_charge_session_and_gateway(can
                 user=db.user,
                 agent=db.agent,
                 session_id=db.session_id,
-                history=[],
             )
 
     async with transaction(db.second):
@@ -310,7 +300,6 @@ async def test_failed_session_delete_retains_receipt_and_parent(receipt_db, monk
             user=db.user,
             agent=db.agent,
             session_id=db.session_id,
-            history=[],
         )
     monkeypatch.setattr(chat_sessions.chat_session_dao, "delete", AsyncMock(side_effect=RuntimeError("delete failed")))
 
@@ -351,9 +340,7 @@ async def test_text_limit_boundary_refuses_before_any_lock_or_write(canonical_re
     if offset > 0:
         monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", lock)
         with pytest.raises(SubmissionTooLongError) as refused:
-            await chat_submissions.accept_submission(
-                submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
-            )
+            await chat_submissions.accept_submission(submission, user=db.user, agent=db.agent, session_id=db.session_id)
         assert refused.value.limit == limit
         assert refused.value.reason == (
             ChatRejectionReason.FILE_NAME_TOO_LONG if field == "file_name" else ChatRejectionReason.MESSAGE_TOO_LONG
@@ -362,7 +349,7 @@ async def test_text_limit_boundary_refuses_before_any_lock_or_write(canonical_re
     else:
         async with transaction(db.first):
             accepted = await chat_submissions.accept_submission(
-                submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
+                submission, user=db.user, agent=db.agent, session_id=db.session_id
             )
         assert accepted.message.content == submission.saved_content()  # stored whole, never truncated
     async with transaction(db.second):
@@ -370,3 +357,102 @@ async def test_text_limit_boundary_refuses_before_any_lock_or_write(canonical_re
             "SELECT (SELECT count(*) FROM chat_messages) AS messages, (SELECT count(*) FROM gateway_messages) AS enqueued"
         )
     assert stored == {"messages": int(offset <= 0), "enqueued": int(offset <= 0)}
+
+
+@pytest.fixture
+def lock_transaction(monkeypatch):
+    """accept_submission with every collaborator replaced, recording the order of what runs inside the session lock."""
+    state = SimpleNamespace(in_transaction=False, events=[], updates=[], has_messages=False, session=None)
+
+    @asynccontextmanager
+    async def connection():
+        state.in_transaction = True
+        try:
+            yield
+        finally:
+            state.in_transaction = False
+
+    async def lock(_session_id, _agent_id):
+        assert state.in_transaction
+        return state.session
+
+    async def probe(**_kwargs):
+        assert state.in_transaction
+        state.events.append("probe")
+        return state.has_messages
+
+    async def reserve(candidate):
+        assert state.in_transaction
+        state.events.append("reserve")
+        return candidate
+
+    async def update(*, db_obj, obj_in):
+        state.updates.append(obj_in)
+        return db_obj
+
+    history = AsyncMock(side_effect=AssertionError("Accepting a turn must not read the transcript"))
+    state.history = history
+    monkeypatch.setattr(chat_submissions, "connection_ctx", connection)
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", lock)
+    monkeypatch.setattr(chat_submissions.chat_session_dao, "update", update)
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", AsyncMock(return_value=None))
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "list_recent", history)
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "conversation_has_messages", probe)
+    monkeypatch.setattr(chat_submissions.chat_message_dao, "reserve_submission", reserve)
+    monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock())
+    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", AsyncMock())
+    monkeypatch.setattr(chat_submissions, "charge_conversation_quota", AsyncMock())
+    monkeypatch.setattr(chat_submissions, "enqueue_prepared_openclaw_message", AsyncMock())
+    return state
+
+
+async def accept_into(state, submission: ChatSubmission, *, title: str):
+    user = UserRecord(id=uuid4())
+    agent = AgentRecord(id=uuid4(), name="Agent", creator_id=uuid4())
+    state.session = ChatSessionRecord(
+        id=uuid4(), agent_id=agent.id, user_id=user.id, source_channel="web", is_primary=True, title=title
+    )
+    return await chat_submissions.accept_submission(submission, user=user, agent=agent, session_id=state.session.id)
+
+
+@pytest.mark.parametrize(
+    ("content", "display_content", "file_name", "expected"),
+    [
+        ("x" * 60, "", "", "x" * 40),
+        ("raw model text", "shown text", "", "shown text"),
+        ("", "", "notes.txt", "📎 notes.txt"),
+    ],
+)
+async def test_first_message_titles_the_default_session_from_an_existence_probe_before_the_reservation(
+    lock_transaction, content, display_content, file_name, expected
+):
+    submission = ChatSubmission(
+        client_submission_id=uuid4(), content=content, display_content=display_content, file_name=file_name
+    )
+
+    await accept_into(lock_transaction, submission, title="Session 7")
+
+    assert lock_transaction.events == ["probe", "reserve"]
+    assert lock_transaction.updates[0]["title"] == expected
+    lock_transaction.history.assert_not_awaited()
+
+
+async def test_later_message_keeps_the_title_and_reads_no_transcript(lock_transaction):
+    lock_transaction.has_messages = True
+    submission = ChatSubmission(client_submission_id=uuid4(), content="second message")
+
+    await accept_into(lock_transaction, submission, title="Session 7")
+
+    assert lock_transaction.events == ["probe", "reserve"]
+    assert [set(update) for update in lock_transaction.updates] == [{"last_message_at"}]
+    lock_transaction.history.assert_not_awaited()
+
+
+async def test_an_already_titled_session_skips_the_existence_probe(lock_transaction):
+    submission = ChatSubmission(client_submission_id=uuid4(), content="first in a named session")
+
+    await accept_into(lock_transaction, submission, title="Quarterly plan")
+
+    assert lock_transaction.events == ["reserve"]
+    assert [set(update) for update in lock_transaction.updates] == [{"last_message_at"}]
+    lock_transaction.history.assert_not_awaited()

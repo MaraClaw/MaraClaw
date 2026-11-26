@@ -56,7 +56,7 @@ async def lifecycle(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Lifecycle]
     monkeypatch.setattr(chat_tickets, "redeem", AsyncMock(return_value=binding))
     monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(user, agent, "use")))
     monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
-    monkeypatch.setattr(websocket.chat_message_dao, "list_recent", AsyncMock(return_value=[]))
+    monkeypatch.setattr(websocket.chat_message_dao, "conversation_has_messages", AsyncMock(return_value=True))
     # Keep Redis's real pipeline and command queue; replace only the network execution.
     monkeypatch.setattr(Pipeline, "execute", execute)
     async with Redis() as redis:
@@ -122,16 +122,18 @@ async def test_peer_disconnect_during_error_reporting_is_contained(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("history_failed", [False, True])
-async def test_welcome_requires_successfully_loaded_empty_history(
-    lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch, history_failed: bool
+@pytest.mark.parametrize("probe", ["empty", "non_empty", "failed"])
+async def test_welcome_requires_a_successfully_probed_empty_session(
+    lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch, probe: Literal["empty", "non_empty", "failed"]
 ) -> None:
     binding, _manager, _execute = lifecycle
     user = UserRecord(id=binding.user_id, tenant_id=binding.tenant_id)
     agent = AgentRecord(id=binding.agent_id, creator_id=user.id, name="Agent", welcome_message="Welcome")
     monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(user, agent, "use")))
-    history = AsyncMock(return_value=[], side_effect=RuntimeError("history unavailable") if history_failed else None)
-    monkeypatch.setattr(websocket.chat_message_dao, "list_recent", history)
+    has_messages = AsyncMock(
+        return_value=probe == "non_empty", side_effect=RuntimeError("probe unavailable") if probe == "failed" else None
+    )
+    monkeypatch.setattr(websocket.chat_message_dao, "conversation_has_messages", has_messages)
     report = Mock()
     monkeypatch.setattr(websocket, "report_exception", report)
     sent: list[Message] = []
@@ -140,9 +142,10 @@ async def test_welcome_requires_successfully_loaded_empty_history(
     await handler.run()
 
     events = [json.loads(frame["text"]) for frame in sent if frame["type"] == "websocket.send"]
-    assert [event["type"] for event in events] == (["connected"] if history_failed else ["connected", "done"])
+    assert [event["type"] for event in events] == (["connected", "done"] if probe == "empty" else ["connected"])
     assert not any(frame["type"] == "websocket.close" for frame in sent)
-    assert report.call_count == int(history_failed)
+    assert report.call_count == int(probe == "failed")
+    has_messages.assert_awaited_once_with(agent_id=binding.agent_id, conversation_id=str(binding.session_id))
 
 
 @pytest.mark.asyncio
@@ -400,10 +403,10 @@ async def open_session(
     agent = AgentRecord(id=binding.agent_id, creator_id=user.id, name="Agent")
     authorize = AsyncMock(return_value=(user, agent, "use"))
     authorized_session = AsyncMock()
-    history = AsyncMock(return_value=[])
+    history = AsyncMock(return_value=True)
     monkeypatch.setattr(chat_tickets, "authorize", authorize)
     monkeypatch.setattr(chat_tickets, "authorized_session", authorized_session)
-    monkeypatch.setattr(websocket.chat_message_dao, "list_recent", history)
+    monkeypatch.setattr(websocket.chat_message_dao, "conversation_has_messages", history)
     monkeypatch.setattr(websocket, "_heartbeat_sleep", cadence.sleep)
     monkeypatch.setattr(websocket, "report_exception", Mock())
     query = f"ticket=opaque&session_id={binding.session_id}" + ("&heartbeat=1" if heartbeat else "")

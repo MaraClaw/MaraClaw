@@ -99,7 +99,7 @@ async def test_new_turn_on_a_read_only_session_is_rejected_after_the_exact_recei
     async with transaction(db.first):
         await chat_message_dao.reserve_submission(original)
         replay = await chat_submissions.accept_submission(
-            submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
+            submission, user=db.user, agent=db.agent, session_id=db.session_id
         )
         with pytest.raises(HTTPException) as rejection:
             await chat_submissions.accept_submission(
@@ -107,7 +107,6 @@ async def test_new_turn_on_a_read_only_session_is_rejected_after_the_exact_recei
                 user=db.user,
                 agent=db.agent,
                 session_id=db.session_id,
-                history=[],
             )
         canonical = await chat_session_dao.get_primary_platform(agent_id=db.agent.id, user_id=db.user.id)
 
@@ -132,7 +131,6 @@ async def test_read_only_rejection_precedes_preparation_and_quota(receipt_db, mo
                 user=receipt_db.user,
                 agent=receipt_db.agent,
                 session_id=receipt_db.session_id,
-                history=[],
             )
 
     assert rejected.value.status_code == 409
@@ -159,7 +157,6 @@ async def test_refusal_names_the_callers_canonical_session_created_on_its_own_co
                 user=viewer,
                 agent=db.agent,
                 session_id=owners.id,
-                history=[],
             )
     finally:
         await close_pool()

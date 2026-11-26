@@ -90,7 +90,6 @@ async def test_open_loop_revocation_blocks_next_turn_before_persistence(monkeypa
     monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=session))
     monkeypatch.setattr(chat_submissions.chat_session_dao, "update", AsyncMock())
     monkeypatch.setattr(chat_submissions.chat_message_dao, "find_submission", AsyncMock(return_value=None))
-    monkeypatch.setattr(chat_submissions.chat_message_dao, "list_recent", AsyncMock(return_value=[]))
     persist = AsyncMock(
         return_value=ChatMessageRecord(id=uuid4(), agent_id=agent.id, user_id=user.id, role="user", content="hello")
     )

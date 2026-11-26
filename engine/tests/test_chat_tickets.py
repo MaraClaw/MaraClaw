@@ -86,7 +86,6 @@ def context(monkeypatch):
     )
     monkeypatch.setattr(websocket.manager, "connect", AsyncMock())
     monkeypatch.setattr(websocket.manager, "disconnect", AsyncMock())
-    monkeypatch.setattr(websocket.WebSocketChatHandler, "_load_history", AsyncMock())
     return redis, binding, user, agent
 
 
@@ -422,10 +421,9 @@ async def test_socket_deadline_cancels_inflight_phase(context, monkeypatch, phas
             cancelled.append(True)
 
     if phase == "setup":
-        monkeypatch.setattr(websocket.WebSocketChatHandler, "_load_history", blocked)
+        monkeypatch.setattr(websocket.manager, "connect", blocked)
     else:
         monkeypatch.setattr(websocket, "accept_submission", blocked)
-    monkeypatch.setattr(websocket.WebSocketChatHandler, "_save_user_message", AsyncMock())
     monkeypatch.setattr(websocket.WebSocketChatHandler, "_check_quotas", AsyncMock(return_value=True))
     monkeypatch.setattr(websocket.time, "time", lambda: binding.auth_deadline - 0.05)
     app = FastAPI()

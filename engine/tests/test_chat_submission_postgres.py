@@ -21,7 +21,6 @@ from app.records.user import UserRecord
 from app.scripts import bootstrap_db
 from app.services import chat_submissions, openclaw_routing
 from app.services.chat_submissions import AcceptedSubmission, ChatSubmission
-from app.services.llm.types import OpenAIMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +88,7 @@ async def receipt_db(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureReq
                         {"id": session_id, "agent": agent.id, "user": user.id},
                     )
 
-                async def prepare(*, agent: AgentRecord, content: str, history):
+                async def prepare(*, agent: AgentRecord, content: str):
                     return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "receipt-qa")
 
                 async def access(_user: UserRecord, _agent: UUID):
@@ -147,7 +146,7 @@ async def test_parent_lock_serializes_acceptance_replay_and_deletion(receipt_db,
                     await chat_sessions.delete_session(db.agent.id, db.session_id, db.user)
                 else:
                     result = await chat_submissions.accept_submission(
-                        submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
+                        submission, user=db.user, agent=db.agent, session_id=db.session_id
                     )
             if result is not None:
                 accepted.append(result)
@@ -229,7 +228,6 @@ async def test_receipt_metadata_is_immutable_but_content_can_be_scrubbed(writabl
             user=db.user,
             agent=db.agent,
             session_id=db.session_id,
-            history=[],
         )
         await db.first.execute(
             "UPDATE chat_messages SET content = 'scrubbed' WHERE id = %(id)s", {"id": accepted.message.id}
@@ -262,7 +260,6 @@ async def test_distinct_submission_uuids_enqueue_identical_content_twice(writabl
                 user=db.user,
                 agent=db.agent,
                 session_id=db.session_id,
-                history=[],
             )
 
     async with transaction(db.first):
@@ -275,23 +272,34 @@ async def test_distinct_submission_uuids_enqueue_identical_content_twice(writabl
     assert counts == {"messages": 2, "enqueued": 2, "charged": 2}
 
 
-async def test_a_canonical_turn_prepares_from_the_stored_transcript(writable_receipt_db, monkeypatch):
-    # Given the owner's canonical conversation, open in two tabs whose socket histories have gone stale.
+def record_statements(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every statement the application sends, in order; `fetchval` reaches the database through `fetchone`."""
+    statements: list[str] = []
+    for name in ("execute", "fetchone", "fetchall"):
+        original = getattr(DbConnection, name)
+
+        async def recorded(self: DbConnection, query: str, *args: object, _original=original, **kwargs: object):
+            statements.append(query)
+            return await _original(self, query, *args, **kwargs)
+
+        monkeypatch.setattr(DbConnection, name, recorded)
+    return statements
+
+
+async def test_a_canonical_turn_titles_the_session_from_an_existence_probe_and_reads_no_transcript(
+    writable_receipt_db, monkeypatch
+):
+    # Given the owner's canonical conversation, still titled by default and open in two tabs.
     db = writable_receipt_db
-    histories: list[list[OpenAIMessage]] = []
-
-    async def prepare(*, agent: AgentRecord, content: str, history: list[OpenAIMessage]):
-        histories.append(list(history))
-        return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "receipt-qa")
-
-    monkeypatch.setattr(chat_submissions, "prepare_openclaw_message", prepare)
     async with transaction(db.first):
         await db.first.execute("UPDATE users SET quota_message_limit = 2 WHERE id = %(id)s", {"id": db.user.id})
-    stale: list[OpenAIMessage] = [{"role": "assistant", "content": "this socket's stale history"}]
+    statements = record_statements(monkeypatch)
 
     # When the owner sends one turn from each tab.
     accepted: list[AcceptedSubmission] = []
+    per_turn: list[list[str]] = []
     for content in ("from the first tab", "from the second tab"):
+        start = len(statements)
         async with transaction(db.first):
             accepted.append(
                 await chat_submissions.accept_submission(
@@ -299,10 +307,21 @@ async def test_a_canonical_turn_prepares_from_the_stored_transcript(writable_rec
                     user=db.user,
                     agent=db.agent,
                     session_id=db.session_id,
-                    history=stale,
                 )
             )
+        per_turn.append(statements[start:])
+    async with transaction(db.first):
+        title = await db.first.fetchval("SELECT title FROM chat_sessions WHERE id = %(id)s", {"id": db.session_id})
 
-    # Then each turn is prepared from what is stored, including the other tab's turn, and is marked canonical.
-    assert histories == [[], [{"role": "user", "content": "from the first tab"}]]
+    # Then the first turn names the session after probing for stored messages once, the second finds it named, and
+    # neither turn selects any message row.
+    assert title == "from the first tab"
     assert [turn.canonical for turn in accepted] == [True, True]
+    probes = [sum("SELECT EXISTS (SELECT 1 FROM chat_messages" in statement for statement in turn) for turn in per_turn]
+    assert probes == [1, 0]
+    assert not [
+        statement
+        for turn in per_turn
+        for statement in turn
+        if "FROM chat_messages" in statement and "ORDER BY" in statement
+    ]

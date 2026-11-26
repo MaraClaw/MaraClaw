@@ -169,7 +169,6 @@ async def test_generate_reply_preserves_explicit_provider_route(context, monkeyp
     await inbound.generate_channel_reply(
         agent_id=agent.id,
         user_text="hello",
-        history=[],
         user_id=user.id,
         session_id=str(canonical.id),
         reply_session_id=route_id,
@@ -209,7 +208,6 @@ async def test_enqueue_failure_rolls_back_channel_user_message(context, monkeypa
         await inbound.generate_channel_reply(
             agent_id=agent.id,
             user_text="with runtime markers",
-            history=[],
             user_id=user.id,
             session_id=str(canonical.id),
             reply_session_id=uuid.uuid4(),

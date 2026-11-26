@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock
@@ -9,7 +10,7 @@ import pytest
 from app.records.agent import AgentRecord
 from app.records.gateway_message import GatewayMessageRecord
 from app.records.llm import LLMModelRecord
-from app.services import openclaw_hot_cache, openclaw_routing as routing
+from app.services import openclaw_hot_cache, openclaw_model_selection, openclaw_routing as routing
 from app.services.agent_manager import agent_manager
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
@@ -44,6 +45,18 @@ async def test_preparation_selects_the_primary_without_guest_write(
 
     assert (prepared.selected_slot, prepared.guest_model_ref) == ("primary", "anthropic/opus")
     writer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        routing.prepare_openclaw_message,
+        routing.enqueue_openclaw_message,
+        openclaw_model_selection.prepare_shared_openclaw_message,
+    ],
+)
+def test_routing_entrypoints_take_no_history(prepare) -> None:
+    assert "history" not in inspect.signature(prepare).parameters
 
 
 async def test_preparation_gates_before_model_work(agent: AgentRecord, monkeypatch: pytest.MonkeyPatch) -> None:

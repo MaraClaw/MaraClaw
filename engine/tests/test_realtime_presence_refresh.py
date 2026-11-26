@@ -545,7 +545,7 @@ def handler_env(monkeypatch: pytest.MonkeyPatch) -> HandlerEnv:
     monkeypatch.setattr(chat_tickets, "redeem", AsyncMock(return_value=binding))
     monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(user, agent, "use")))
     monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
-    monkeypatch.setattr(websocket.chat_message_dao, "list_recent", AsyncMock(return_value=[]))
+    monkeypatch.setattr(websocket.chat_message_dao, "conversation_has_messages", AsyncMock(return_value=True))
     return HandlerEnv(binding, events, refreshed, refresh)
 
 

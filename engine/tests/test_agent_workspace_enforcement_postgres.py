@@ -74,7 +74,6 @@ async def test_a_blocked_agent_refuses_a_web_message_and_rolls_the_whole_turn_ba
                 user=replace(db.user, tenant_id=tenant_id),
                 agent=replace(db.agent, tenant_id=tenant_id),
                 session_id=db.session_id,
-                history=[],
             )
 
     with pytest.raises(WorkspaceDiskQuotaExceeded) as refused:

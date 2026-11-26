@@ -632,6 +632,17 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
             )
             return [ChatMessageRecord.from_row(row) for row in reversed(rows)]
 
+    async def conversation_has_messages(self, *, agent_id: UUID, conversation_id: str) -> bool:
+        """Whether the conversation holds any message; one index probe that reads no row."""
+        async with self.session() as db:
+            return bool(
+                await db.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM chat_messages "
+                    "WHERE agent_id = %(agent_id)s AND conversation_id = %(conversation_id)s)",
+                    {"agent_id": agent_id, "conversation_id": conversation_id},
+                )
+            )
+
     async def history_revision(self, session_id: UUID) -> str | None:
         async with self.session() as db:
             row = await db.fetchone(

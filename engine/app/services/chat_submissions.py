@@ -19,8 +19,6 @@ from app.schemas.chat_wire import ChatRejectionReason
 from app.services.agent_message_quota import charge_agent_daily_message
 from app.services.agent_workspace_quota import ensure_workspace_within_quota
 from app.services.chat_session_access import can_access_chat_session
-from app.services.llm.types import OpenAIMessage
-from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message, prepare_openclaw_message
 from app.services.quota_guard import charge_conversation_quota, check_agent_expired
 from app.services.shared_chat import (
@@ -105,7 +103,6 @@ async def accept_submission(
     user: UserRecord,
     agent: AgentRecord,
     session_id: UUID,
-    history: list[OpenAIMessage],
 ) -> AcceptedSubmission:
     submission.require_within_limits()
     candidate = ChatMessageRecord(
@@ -143,17 +140,13 @@ async def accept_submission(
             if not attachments_available:
                 raise InvalidChatAttachmentsError
             await check_agent_expired(agent.id, mark=False)
-            current_history = history
-            # Another tab of the owner may have added turns this socket's history has not seen.
-            if canonical:
-                current_history = convert_chat_messages_to_llm_format(
-                    list(
-                        await chat_message_dao.list_recent(
-                            agent_id=agent.id, conversation_id=str(session.id), limit=agent.context_window_size or 100
-                        )
-                    )
-                )
-            prepared = await prepare_openclaw_message(agent=agent, content=submission.content, history=current_history)
+            prepared = await prepare_openclaw_message(agent=agent, content=submission.content)
+            # Probe before the reservation below, which would itself make the conversation non-empty.
+            first_message = session.title.startswith(
+                "Session "
+            ) and not await chat_message_dao.conversation_has_messages(
+                agent_id=agent.id, conversation_id=str(session.id)
+            )
             reserved = await chat_message_dao.reserve_submission(candidate)
             if reserved is None:
                 existing = await chat_message_dao.find_submission(candidate)
@@ -168,7 +161,7 @@ async def accept_submission(
             if submission.file_name and not title:
                 title = f"📎 {submission.file_name}"
             updates: dict[str, object] = {"last_message_at": datetime.now(UTC)}
-            if not current_history and session.title.startswith("Session "):
+            if first_message:
                 updates["title"] = title[:40] if title else submission.content[:40]
             _ = await chat_session_dao.update(db_obj=session, obj_in=updates)
             _ = await enqueue_prepared_openclaw_message(

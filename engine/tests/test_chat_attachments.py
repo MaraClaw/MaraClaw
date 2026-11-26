@@ -126,7 +126,7 @@ async def test_unavailable_or_escaping_file_rejects_without_charge(monkeypatch, 
     assert state.frames[0]["reason"] == "invalid_attachments"
     assert raw.rollbacks == 1
     assert not state.committed
-    assert not state.prepared_history
+    assert not state.prepared_contents
 
 
 async def test_exact_replay_survives_removed_file_without_charge(monkeypatch, turn, attachment_file):

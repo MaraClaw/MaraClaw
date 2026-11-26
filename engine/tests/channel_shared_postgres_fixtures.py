@@ -80,7 +80,7 @@ async def live_channel(schema_db, monkeypatch):
     agent = await agent_dao.get(agent_id)
     assert agent is not None
 
-    async def prepare(*, agent, content, history=None):
+    async def prepare(*, agent, content):
         return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "qa")
 
     monkeypatch.setattr(openclaw_routing, "prepare_openclaw_message", prepare)

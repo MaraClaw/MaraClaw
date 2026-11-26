@@ -17,7 +17,7 @@ from app.dao import agent_dao, channel_config_dao
 from app.dao.channel_event_media_dao import channel_event_media_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.channel_source_lock import lock_channel_source
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.chat_dao import chat_session_dao
 from app.dao.company_admission_dao import company_admission_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
@@ -37,7 +37,6 @@ from app.services.channels.personal_burst_original import PERSONAL_REPLY_TITLE, 
 from app.services.channels.personal_burst_outcome import PersonalAdmission, PersonalReplayed
 from app.services.channels.stream_source import STREAM_MODES, StreamSource, check_stream_source, connection_mode
 from app.services.channels.types import normalize_channel_type
-from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_model_selection import prepare_shared_openclaw_message
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message
 from app.services.quota_guard import charge_conversation_quota
@@ -271,11 +270,8 @@ async def accept_channel_event(
             )
             return AcceptedChannelEvent(replayed=False, personal=await admit_personal_original(original))
         await charge_conversation_quota(sender)
-        history = convert_chat_messages_to_llm_format(
-            await chat_message_dao.list_recent(agent_id=agent.id, conversation_id=str(session.id), limit=8)
-        )
         prepared = await prepare_shared_openclaw_message(
-            agent=agent, content=event.text if content is None else content, history=history
+            agent=agent, content=event.text if content is None else content
         )
         _ = await persist_channel_user_message(
             agent_id=agent.id,

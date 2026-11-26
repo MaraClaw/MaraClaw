@@ -39,7 +39,7 @@ async def test_session_acceptance_commits_without_writing_guest_configuration(
     submission = ChatSubmission(client_submission_id=uuid4(), content="hello")
     async with transaction(db.first):
         accepted = await chat_submissions.accept_submission(
-            submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
+            submission, user=db.user, agent=db.agent, session_id=db.session_id
         )
     assert not accepted.replayed
     writer.assert_not_called()

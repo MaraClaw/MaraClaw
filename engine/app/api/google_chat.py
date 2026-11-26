@@ -198,16 +198,10 @@ async def _process_message_event(
     if not user_text:
         return
 
-    history = await channel_inbound.load_history_for_session(
-        agent_id=agent_id,
-        session=session,
-        context_window_size=agent.context_window_size,
-    )
     try:
         reply_text = await channel_inbound.generate_channel_reply(
             agent_id=agent_id,
             user_text=user_text,
-            history=history,
             user_id=platform_user.id,
             session_id=str(session.id),
             reply_session_id=conversation.reply_session.id,
@@ -371,17 +365,11 @@ async def google_chat_event_webhook(agent_id: uuid.UUID, request: Request) -> Re
             await channel_dedup.mark_processed_shared(_DEDUP_NS, dedupe_key)
             return {}
 
-        history = await channel_inbound.load_history_for_session(
-            agent_id=agent_id,
-            session=session,
-            context_window_size=agent.context_window_size,
-        )
         try:
             reply_text = await asyncio.wait_for(
                 channel_inbound.generate_channel_reply(
                     agent_id=agent_id,
                     user_text=event.text,
-                    history=history,
                     user_id=platform_user.id,
                     session_id=str(session.id),
                     reply_session_id=conversation.reply_session.id,

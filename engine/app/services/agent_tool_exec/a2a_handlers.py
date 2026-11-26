@@ -18,7 +18,6 @@ async def _a2a_handle_openclaw(ctx: A2AContext) -> str:
             sender_agent_id=ctx.source_agent.id,
             sender_user_id=ctx.owner_id,
             conversation_id=ctx.chat_session_id,
-            history=ctx.conversation_history,
         )
 
         await log_activity(

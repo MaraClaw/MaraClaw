@@ -97,6 +97,18 @@ async def test_list_latest_for_conversations_bounds_each_unique_id_in_one_query(
     assert params["limit"] == 3
 
 
+@pytest.mark.asyncio
+async def test_conversation_has_messages_is_one_existence_probe(raw: _FakeRawConnection) -> None:
+    agent_id = uuid4()
+
+    assert await chat_message_dao.conversation_has_messages(agent_id=agent_id, conversation_id="a") is False
+
+    assert len(raw.executed) == 1
+    query, params = raw.executed[0]
+    assert query.startswith("SELECT EXISTS (SELECT 1 FROM chat_messages")
+    assert params == {"agent_id": agent_id, "conversation_id": "a"}
+
+
 @pytest.mark.parametrize(("ids", "limit"), [([], 3), (["a"], 0), (["a"], -1)])
 @pytest.mark.asyncio
 async def test_list_latest_for_conversations_skips_empty_requests(

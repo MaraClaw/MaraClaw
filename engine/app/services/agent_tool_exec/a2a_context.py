@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.core.logging import logger
@@ -14,7 +14,6 @@ from app.dao.participant_dao import participant_dao
 from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.services.agent_tool_exec.registry import ToolArguments
-from app.services.llm.types import OpenAIMessage
 
 
 @dataclass
@@ -32,7 +31,6 @@ class A2AContext:
     origin_session_id: str | None
     primary_model: LLMModelRecord | None = None
     fallback_model: LLMModelRecord | None = None
-    conversation_history: list[OpenAIMessage] = field(default_factory=list[OpenAIMessage])
 
 
 async def _resolve_target_agent(

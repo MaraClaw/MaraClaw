@@ -7,7 +7,6 @@ import uuid
 from app.core.json_types import JsonObject
 from app.core.row_memo import clear_entity_memo
 from app.dao.agent_dao import agent_dao
-from app.dao.chat_dao import chat_message_dao
 from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
@@ -19,24 +18,8 @@ from app.services.channels.binding import bind_channel_conversation, persist_cha
 from app.services.channels.submissions import ChannelEvent, accept_channel_event
 from app.services.chat_persist import persist_chat_message
 from app.services.llm.base import ChunkCallback, ThinkingCallback, ToolCallback
-from app.services.llm.types import OpenAIMessage
-from app.services.llm.utils import convert_chat_messages_to_llm_format
 
-DEFAULT_CONTEXT_WINDOW_SIZE = 100
-ROUTING_HISTORY_LIMIT = 8
 CHANNEL_REPLY_QUEUED = "Message forwarded to the agent. Waiting for response..."
-
-
-def routing_history_limit(context_window_size: int | None = None) -> int:
-    """How many prior turns to load for OpenClaw slot routing.
-
-    Runtime sessions retain their own history; this window is for routing preflight.
-    """
-    if isinstance(context_window_size, int) and context_window_size > 0:
-        wanted = context_window_size
-    else:
-        wanted = DEFAULT_CONTEXT_WINDOW_SIZE
-    return min(wanted, ROUTING_HISTORY_LIMIT)
 
 
 def is_queued_channel_reply(text: str) -> bool:
@@ -90,22 +73,6 @@ async def open_channel_session(
     )
 
 
-async def load_history_for_session(
-    *,
-    agent_id: uuid.UUID,
-    session: ChatSessionRecord,
-    context_window_size: int | None,
-) -> list[OpenAIMessage]:
-    """Load prior turns for a session (does not include the current user message)."""
-    limit = routing_history_limit(context_window_size)
-    history_msgs = await chat_message_dao.list_recent(
-        agent_id=agent_id,
-        conversation_id=str(session.id),
-        limit=limit,
-    )
-    return convert_chat_messages_to_llm_format(history_msgs)
-
-
 async def persist_user_message(
     *,
     agent_id: uuid.UUID,
@@ -157,7 +124,6 @@ async def generate_channel_reply(
     *,
     agent_id: uuid.UUID,
     user_text: str,
-    history: list[OpenAIMessage],
     user_id: uuid.UUID,
     session_id: str,
     reply_session_id: uuid.UUID | None = None,
@@ -183,7 +149,6 @@ async def generate_channel_reply(
         target = await agent_dao.get(agent_id)
     if target is None:
         return "⚠️ Agent not found."
-    prior = history[-ROUTING_HISTORY_LIMIT:] if history else None
     async with optional_connection_ctx():
         if user_message_content is not None:
             await persist_channel_user_message(
@@ -198,7 +163,6 @@ async def generate_channel_reply(
             sender_user_id=user_id,
             conversation_id=session_id,
             reply_session_id=reply_session_id,
-            history=prior,
         )
     return CHANNEL_REPLY_QUEUED
 
@@ -222,11 +186,9 @@ async def run_text_turn(
     touch_last_active_on_reply: bool = True,
     native_event: ChannelEvent | None = None,
 ) -> str:
-    """Load history → persist user (optional) → enqueue for the OpenClaw guest.
+    """Persist user (optional) → enqueue for the OpenClaw guest.
 
-    History is loaded *before* persisting the current user message so
-    ``generate_channel_reply`` receives prior turns only. The assistant
-    reply is persisted later when the guest reports.
+    The assistant reply is persisted later when the guest reports.
     """
     if native_event is not None:
         await accept_channel_event(native_event, content=llm_user_text or user_text, saved_content=user_text)
@@ -235,15 +197,9 @@ async def run_text_turn(
         conversation = await bind_channel_conversation(agent=agent, platform_user=platform_user, reply_session=session)
         session = conversation.transcript_session
         reply_session_id = conversation.reply_session.id
-    history = await load_history_for_session(
-        agent_id=agent_id,
-        session=session,
-        context_window_size=agent.context_window_size,
-    )
     reply_text = await generate_channel_reply(
         agent_id=agent_id,
         user_text=llm_user_text if llm_user_text is not None else user_text,
-        history=history,
         user_id=platform_user.id,
         session_id=str(session.id),
         reply_session_id=reply_session_id,

@@ -16,7 +16,6 @@ from app.services.agent_manager import guest_model_ref
 from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.turn import ModelBundle, ModelSlot
-from app.services.llm.types import OpenAIMessage
 from app.services.openclaw_hot_cache import get_cached_bundle
 from app.services.openclaw_update_gate import assert_work_allowed
 
@@ -57,15 +56,11 @@ async def choose_route(agent: AgentRecord, *, fresh: bool = False) -> RouteChoic
     return RouteChoice(bundle, choice.model, choice.slot, choice.reason)
 
 
-async def prepare_shared_openclaw_message(
-    *, agent: AgentRecord, content: str, history: list[OpenAIMessage] | None = None
-) -> PreparedOpenClawMessage:
+async def prepare_shared_openclaw_message(*, agent: AgentRecord, content: str) -> PreparedOpenClawMessage:
     """Eligibility-checked routing metadata for a Shared-lane entry; nothing is written anywhere.
 
-    Raises ``OpenClawUpdateGateError`` before any selection, like the nonshared preparation. ``history`` is accepted
-    for call-site compatibility; routing no longer reads it.
+    Raises ``OpenClawUpdateGateError`` before any selection, like the nonshared preparation.
     """
-    del history
     await assert_work_allowed(agent.id)
     agent = await load_agent_for_new_work(agent.id)
     choice = await choose_route(agent)

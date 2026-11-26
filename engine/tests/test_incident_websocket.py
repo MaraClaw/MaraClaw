@@ -8,6 +8,8 @@ from starlette.types import Message
 
 from app.api import websocket
 from app.core import incident_reporting as capture
+from app.records.agent import AgentRecord
+from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.incident_report import IncidentReport
 from app.services.openclaw_routing import GuestConfigWriteError
@@ -33,14 +35,17 @@ async def test_unexpected_socket_failures_are_captured_without_changing_cleanup(
         case "disconnect":
             execute.side_effect = [[1], failure]
         case "history":
-            monkeypatch.setattr(websocket.chat_message_dao, "list_recent", AsyncMock(side_effect=failure))
+            user = UserRecord(id=binding.user_id, tenant_id=binding.tenant_id)
+            welcoming = AgentRecord(id=binding.agent_id, creator_id=user.id, name="Agent", welcome_message="Welcome")
+            monkeypatch.setattr(chat_tickets, "authorize", AsyncMock(return_value=(user, welcoming, "use")))
+            monkeypatch.setattr(websocket.chat_message_dao, "conversation_has_messages", AsyncMock(side_effect=failure))
     frames: list[Message] = []
     handler = websocket.WebSocketChatHandler(peer_socket(frames), binding.agent_id, "ticket", str(binding.session_id))
     # When
     await handler.run()
     # Then error visibility is additive; normal connection cleanup still completes.
     assert [report.operation for report in reports] == [
-        {"connect": "connect", "disconnect": "disconnect", "history": "load-history"}[site]
+        {"connect": "connect", "disconnect": "disconnect", "history": "welcome-probe"}[site]
     ]
     assert "private" not in reports[0].body
     assert manager.active_connections.get(str(binding.agent_id), []) == []
@@ -86,14 +91,13 @@ async def test_socket_turn_capture_preserves_rollback_and_expected_rejections(
         case "expected-gate":
             state.gate = OpenClawUpdateInProgressError()
     # When
-    handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
+    await drive_turn(monkeypatch, state, onboarding=onboarding)
     # Then capture neither commits rejected turns nor changes their protocol frames.
     expected = failure in ("enqueue", "config")
     assert len(reports) == int(expected)
     assert all(report.source == "websocket" and "private" not in report.body for report in reports)
     assert raw.commits == 0
     assert state.pending == state.committed == []
-    assert len(handler.conversation) == 1
     assert state.frames[0]["type"] == "turn_rejected"
 
 

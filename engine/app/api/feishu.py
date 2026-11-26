@@ -770,7 +770,7 @@ async def process_feishu_event(
                 raise
             platform_user_id = platform_user.id
 
-            # ── Shared inbound: session → history → user message ──
+            # ── Shared inbound: session → user message ──
             _is_group = chat_type == "group"
             _sess = await channel_inbound.open_channel_session(
                 agent_id=agent_id,
@@ -786,11 +786,6 @@ async def process_feishu_event(
             )
             _sess = conversation.transcript_session
             session_conv_id = str(_sess.id)
-            history = await channel_inbound.load_history_for_session(
-                agent_id=agent_id,
-                session=_sess,
-                context_window_size=agent_obj.context_window_size,
-            )
             # Prepend sender identity so the agent knows who is talking
             llm_user_text = user_text
             if sender_name:
@@ -1044,7 +1039,6 @@ async def process_feishu_event(
                 reply_text = await channel_inbound.generate_channel_reply(
                     agent_id=agent_id,
                     user_text=llm_user_text,
-                    history=history,
                     user_id=platform_user_id,
                     session_id=session_conv_id,
                     reply_session_id=conversation.reply_session.id,
@@ -1360,7 +1354,7 @@ async def _handle_feishu_file(
     else:
         conv_id = f"feishu_p2p_{sender_user_id_feishu or sender_open_id}"
 
-    # Shared inbound: session → history → user message
+    # Shared inbound: session → user message
     _is_group_file = chat_type == "group"
     # For group file sessions, use agent creator as placeholder user_id
     _file_user_id = agent_obj.creator_id if _is_group_file else platform_user_id
@@ -1389,11 +1383,6 @@ async def _handle_feishu_file(
     else:
         user_msg_content = f"[file:{filename}]"
 
-    _history = await channel_inbound.load_history_for_session(
-        agent_id=agent_id,
-        session=_sess,
-        context_window_size=agent_obj.context_window_size,
-    )
     if msg_type != "image":
         await channel_inbound.persist_user_message(
             agent_id=agent_id,
@@ -1508,7 +1497,6 @@ async def _handle_feishu_file(
             reply_text = await channel_inbound.generate_channel_reply(
                 agent_id=agent_id,
                 user_text=user_msg_content,
-                history=_history,
                 user_id=platform_user_id,
                 session_id=session_conv_id,
                 reply_session_id=conversation.reply_session.id,

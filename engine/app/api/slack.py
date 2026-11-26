@@ -233,14 +233,12 @@ async def slack_event_webhook(
     logger.info(f"[Slack] Message from={sender_id}, channel={channel_id}: {user_text[:80]}")
 
     from app.services.channels.llm_bridge import _load_agent_and_model
-    from app.services.llm.utils import convert_chat_messages_to_llm_format as _conv
 
     agent_obj = await agent_dao.get(agent_id)
     if not agent_obj:
         logger.warning(f"[Slack] Agent {agent_id} not found")
         return {"ok": True}
     creator_id = agent_obj.creator_id
-    ctx_size = channel_inbound.routing_history_limit(agent_obj.context_window_size)
 
     _bot_token_for_info = config.app_secret or ""
     _slack_real_name = ""
@@ -313,13 +311,6 @@ async def slack_event_webhook(
         return {"ok": True}
     sess = conversation.transcript_session
     session_conv_id = str(sess.id)
-
-    history_msgs = await chat_message_dao.list_recent(
-        agent_id=agent_id,
-        conversation_id=session_conv_id,
-        limit=ctx_size,
-    )
-    history = _conv(history_msgs)
 
     import asyncio as _asyncio
     import random as _random
@@ -466,7 +457,6 @@ async def slack_event_webhook(
     reply_text = await channel_inbound.generate_channel_reply(
         agent_id=agent_id,
         user_text=user_text,
-        history=history,
         user_id=platform_user_id,
         session_id=session_conv_id,
         reply_session_id=conversation.reply_session.id,

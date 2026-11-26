@@ -20,7 +20,6 @@ from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_ca
 from app.services.agent_work_eligibility import load_agent_for_new_work
 from app.services.enterprise_llm import ensure_agent_company_models
 from app.services.llm.router import load_agent_model_bundle, select_turn_model
-from app.services.llm.types import OpenAIMessage
 from app.services.openclaw_enqueue import insert_prepared_message as _insert_prepared_message
 from app.services.openclaw_guest_config import GuestConfigWriteError
 from app.services.openclaw_hot_cache import (
@@ -53,14 +52,11 @@ async def prepare_openclaw_message(
     *,
     agent: AgentRecord,
     content: str,
-    history: list[OpenAIMessage] | None = None,
 ) -> PreparedOpenClawMessage:
     """Ensure models and select routing metadata before queue insertion.
 
-    Raises ``OpenClawUpdateGateError`` before any config or model side effect. ``history`` is accepted for call-site
-    compatibility; routing no longer reads it.
+    Raises ``OpenClawUpdateGateError`` before any config or model side effect.
     """
-    del history
     await assert_work_allowed(agent.id)
     agent = await load_agent_for_new_work(agent.id)
     if not recently_ensured(agent):
@@ -113,11 +109,10 @@ async def enqueue_openclaw_message(
     sender_user_id: UUID | None = None,
     sender_agent_id: UUID | None = None,
     conversation_id: str | None = None,
-    history: list[OpenAIMessage] | None = None,
     reply_session_id: UUID | None = None,
 ) -> GatewayMessageRecord:
     """Prepare and commit a normal turn without waiting for inference."""
-    prepared = await prepare_openclaw_message(agent=agent, content=content, history=history)
+    prepared = await prepare_openclaw_message(agent=agent, content=content)
     async with connection_ctx():
         created = await _insert_prepared_message(
             prepared,

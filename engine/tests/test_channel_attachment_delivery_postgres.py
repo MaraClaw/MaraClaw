@@ -35,7 +35,7 @@ async def test_signed_im_attachment_persists_and_publishes_reference_once(
     published = AsyncMock()
     monkeypatch.setattr(manager, "send_to_session", published)
 
-    async def prepare(*, agent, content, history):
+    async def prepare(*, agent, content):
         return PreparedOpenClawMessage(agent, content, "primary", None, "attachment-qa")
 
     monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
