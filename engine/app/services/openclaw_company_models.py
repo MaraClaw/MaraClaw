@@ -17,7 +17,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from anyio import to_thread
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
@@ -29,6 +29,13 @@ from app.services.llm.router import load_agent_model_bundle
 from app.services.openclaw_guest_config import GuestConfigWriteError, apply_guest_model
 from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.openclaw_update_gate import OpenClawUpdateGateError
+
+
+def _guest_busy(exc: Exception) -> bool:
+    """A start, stop, upgrade or transfer cleanup owns the guest right now: an expected skip, not a failure."""
+    if isinstance(exc, HTTPException):
+        return exc.status_code == status.HTTP_423_LOCKED
+    return isinstance(exc, OpenClawUpdateGateError | WorkspaceLockTimeoutError)
 
 
 def schedule_company_models_push(tenant_id: UUID) -> None:
@@ -67,6 +74,14 @@ async def push_company_models_to_guests(tenant_id: UUID) -> None:
             OSError,
         ) as exc:
             # The next claimed turn rewrites this guest's configuration from the database.
+            if _guest_busy(exc):
+                logger.info(
+                    "Company model push deferred to next turn agent_id={} tenant_id={} reason={}",
+                    listed.id,
+                    tenant_id,
+                    type(exc).__name__,
+                )
+                continue
             logger.opt(exception=exc).warning(
                 "Company model push skipped agent_id={} tenant_id={} error={}",
                 listed.id,

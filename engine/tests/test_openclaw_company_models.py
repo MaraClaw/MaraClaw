@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -55,13 +56,21 @@ async def test_push_rewrites_every_company_guest_and_survives_a_blocked_one(monk
 
     follower = _agent(primary_model_id=new_primary.id, fallback_model_id=new_fallback.id)
     blocked = _agent(primary_model_id=new_primary.id, fallback_model_id=new_fallback.id)
+    starting = _agent(primary_model_id=new_primary.id, fallback_model_id=new_fallback.id)
     pinned = _agent(primary_model_id=old_primary.id, fallback_model_id=new_fallback.id)
     in_setup = _agent(primary_model_id=new_primary.id, setup_pending=True)
     no_guest = _agent(primary_model_id=new_primary.id)
-    for agent in (follower, blocked, pinned, in_setup):
+    for agent in (follower, blocked, starting, pinned, in_setup):
         (tmp_path / str(agent.id)).mkdir()
         _ = agent_manager.write_guest_config(agent, primary=old_primary, fallback=old_fallback)
-    rows = {agent.id: agent for agent in (follower, blocked, pinned, in_setup, no_guest)}
+    rows = {agent.id: agent for agent in (follower, blocked, starting, pinned, in_setup, no_guest)}
+    # A guest start holds the exclusive workspace lock for as long as the container takes to become ready.
+    (tmp_path / "_setup_locks").mkdir()
+    start_lock = (tmp_path / "_setup_locks" / f"{starting.id}.lock").open("a+b")
+    fcntl.flock(start_lock, fcntl.LOCK_EX)
+    monkeypatch.setattr(openclaw_update_exclusion, "GUEST_WRITE_LOCK_TIMEOUT_SECONDS", 0)
+    log = MagicMock()
+    monkeypatch.setattr(push, "logger", log)
 
     async def no_active_run(agent_id: uuid.UUID) -> None:
         if agent_id == blocked.id:
@@ -73,7 +82,10 @@ async def test_push_rewrites_every_company_guest_and_survives_a_blocked_one(monk
     monkeypatch.setattr(openclaw_update_exclusion, "assert_no_active_run", no_active_run)
     monkeypatch.setattr(openclaw_update_exclusion, "assert_transfer_ready", AsyncMock())
 
-    await push.push_company_models_to_guests(_TENANT)
+    try:
+        await push.push_company_models_to_guests(_TENANT)
+    finally:
+        start_lock.close()
 
     assert _defaults_model(tmp_path / str(follower.id)) == {
         "primary": "anthropic/new-main",
@@ -85,8 +97,13 @@ async def test_push_rewrites_every_company_guest_and_survives_a_blocked_one(monk
     }
     old = {"primary": "anthropic/old-main", "fallbacks": ["anthropic/old-fallback"]}
     assert _defaults_model(tmp_path / str(blocked.id)) == old
+    assert _defaults_model(tmp_path / str(starting.id)) == old
     assert _defaults_model(tmp_path / str(in_setup.id)) == old
     assert not (tmp_path / str(no_guest.id)).exists()
+    # A busy or upgrading guest is an expected deferral, not a failure with a traceback.
+    log.opt.assert_not_called()
+    deferred = {call.args[1]: call.args[3] for call in log.info.call_args_list if "deferred" in call.args[0]}
+    assert deferred == {blocked.id: "OpenClawUpdateInProgressError", starting.id: "WorkspaceLockTimeoutError"}
 
 
 @pytest.mark.asyncio

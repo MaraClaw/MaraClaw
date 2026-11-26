@@ -13,13 +13,13 @@ APPROVED_DIRECT_PINS: Final = (
     "tini=0.19.0-3+b8",
     "curl=8.14.1-2+deb13u7",
     "bubblewrap=0.12.0-1~deb13u1",
-    "chromium=156.0.8078.79-1~deb13u1",
+    "chromium=156.0.8078.108-1~deb13u1",
 )
 REGRESSION_CASES: Final = (
     ("ARG TINI_VERSION=0.19.0-3+b8", "ARG TINI_VERSION=0.19.0-3+b7", "stale tini pin"),
     ("curl=8.14.1-2+deb13u7", "curl=8.14.1-2+deb13u5", "stale curl pin"),
     ("bubblewrap=0.12.0-1~deb13u1", "bubblewrap=0.11.0-2+deb13u1", "stale bubblewrap pin"),
-    ("chromium=156.0.8078.79-1~deb13u1", "chromium=156.0.8078.47-1~deb13u1", "stale Chromium pin"),
+    ("chromium=156.0.8078.108-1~deb13u1", "chromium=156.0.8078.79-1~deb13u1", "stale Chromium pin"),
     ("curl=8.14.1-2+deb13u7", "", "missing curl direct entry"),
     ("curl=8.14.1-2+deb13u7", "curl", "unpinned curl direct entry"),
     (
@@ -28,8 +28,8 @@ REGRESSION_CASES: Final = (
         "duplicate curl direct entry",
     ),
     (
-        "chromium=156.0.8078.79-1~deb13u1",
-        "chromium=156.0.8078.79-1",
+        "chromium=156.0.8078.108-1~deb13u1",
+        "chromium=156.0.8078.108-1",
         "non-security Chromium replacement",
     ),
 )
@@ -59,7 +59,7 @@ def _production_direct_pins(source: str) -> tuple[str, ...]:
 
 def test_production_dockerfile_includes_linux_docker_cli() -> None:
     content = DOCKERFILE.read_text(encoding="utf-8")
-    assert "FROM docker:29.10.0-cli AS dockercli" in content
+    assert "FROM docker:29.10.1-cli AS dockercli" in content
     assert "COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker" in content
 
 
@@ -125,7 +125,7 @@ def _dependency_run(source: str) -> str:
 
 def _assert_locked_dependencies(source: str) -> None:
     deps, _, production = source.partition(PRODUCTION_STAGE)
-    assert "libc6-dev=2.41-12+deb13u4" in deps
+    assert "libc6-dev=2.41-12+deb13u5" in deps
     copies = [shlex.split(line) for line in deps.splitlines() if line.startswith("COPY ")]
     assert ["COPY", "pyproject.toml", "uv.lock", "./"] in copies
     run = _dependency_run(source)
@@ -231,7 +231,7 @@ def test_dependencies_are_locked_system_installs() -> None:
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
-        ("libc6-dev=2.41-12+deb13u4", ""),
+        ("libc6-dev=2.41-12+deb13u5", ""),
         ("COPY pyproject.toml uv.lock ./", "COPY pyproject.toml ./"),
         ("--locked", "--frozen"),
         ("--system", ""),
