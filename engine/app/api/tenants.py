@@ -10,12 +10,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import ClassVar
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse, Response
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
 from app.api.tenant_invitations import router as invitation_preview_router
+from app.core.client_address import get_client_ip
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, int_from_row, json_as_bool, object_mapping_from
 from app.core.security import get_current_user, require_role
@@ -60,12 +61,6 @@ from app.services.tenant_provisioning import (
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 router.include_router(invitation_preview_router)
-
-
-async def get_client_ip(request: Request) -> str | None:
-    if request.client is None:
-        return None
-    return request.client.host
 
 
 # ─── Schemas ────────────────────────────────────────────

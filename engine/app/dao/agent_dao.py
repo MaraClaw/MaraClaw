@@ -16,6 +16,7 @@ from app.dao.base import BaseDAO
 from app.dao.deletion_cleanup import execute_cleanup
 from app.dao.mention_patterns import like_patterns
 from app.dao.projection_contracts import AgentNameAvatarProjection
+from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import long_running_statement
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.schemas.agent_directory import AgentDirectoryPosition
@@ -98,6 +99,9 @@ _AGENT_COLUMNS = (
 
 _PERM_COLUMNS = ("id", "agent_id", "scope_type", "scope_id", "access_level")
 
+_TRIGGER_ZONE_COLUMNS = frozenset({"timezone", "tenant_id"})
+"""Agent columns that decide the zone its cron triggers are scheduled in."""
+
 _HEARTBEAT_CANDIDATE_COLUMNS = (
     "id",
     "name",
@@ -157,7 +161,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
         from app.db.session import optional_connection_ctx
 
         if not (_AGENT_POLICY_COLUMNS | {"status", "is_expired", "expires_at"}).intersection(obj_in):
-            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            updated = await self._write(db_obj, obj_in)
             memo_set("agent", updated.id, updated)
             return updated
 
@@ -179,7 +183,7 @@ class AgentDAO(BaseDAO[AgentRecord]):
 
                     await revoke(db_obj.id, purge="tenant_id" in obj_in or "creator_id" in obj_in)
                     await revoke_zalo(db_obj.id, purge="tenant_id" in obj_in or "creator_id" in obj_in)
-            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            updated = await self._write(db_obj, obj_in)
             memo_set("agent", updated.id, updated)
             if db is not None and (
                 obj_in.get("status") == "stopped"
@@ -194,6 +198,15 @@ class AgentDAO(BaseDAO[AgentRecord]):
             if _AGENT_POLICY_COLUMNS.intersection(obj_in):
                 await bump_agent_acl_version(updated.id)
             return updated
+
+    async def _write(self, db_obj: AgentRecord, obj_in: Mapping[str, object]) -> AgentRecord:
+        """Write the row; a new timezone or organization moves the schedules of its cron triggers in the same transaction."""
+        if _TRIGGER_ZONE_COLUMNS.isdisjoint(obj_in):
+            return await super().update(db_obj=db_obj, obj_in=obj_in)
+        async with self.session():
+            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            await agent_trigger_dao.reschedule_for_agent(updated.id)
+        return updated
 
     @override
     async def delete(self, *, record_id: UUID) -> AgentRecord | None:
@@ -527,13 +540,59 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 agent.cache_creation_tokens_month = 0
                 agent.last_monthly_reset = now
 
-    async def list_heartbeat_candidates(self) -> Sequence[AgentRecord]:
-        """Agents with heartbeat enabled and a runnable status (claim columns only)."""
-        cols = ", ".join(_HEARTBEAT_CANDIDATE_COLUMNS)
+    async def list_heartbeat_candidates(self, now: datetime, limit: int) -> Sequence[AgentRecord]:
+        """At most ``limit`` agents whose heartbeat is due at ``now``, longest overdue first (claim columns only).
+
+        Due means heartbeat enabled, a runnable status, not expired, an active organization, the interval elapsed
+        since ``last_heartbeat_at`` and ``now`` inside the active hours in the agent's effective timezone (agent,
+        then organization, then UTC; an unknown zone counts as UTC and unparsable hours as always active). An agent
+        whose ``expires_at`` has passed is returned too, so the tick persists its expiry.
+        """
+        cols = ", ".join(f"a.{col}" for col in _HEARTBEAT_CANDIDATE_COLUMNS)
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {cols} FROM agents WHERE heartbeat_enabled IS TRUE AND status = ANY(%(statuses)s)",
-                {"statuses": ["running", "idle"]},
+                f"""
+                WITH zones AS MATERIALIZED (SELECT name FROM pg_timezone_names)
+                SELECT {cols}
+                FROM agents a
+                LEFT JOIN tenants x ON x.id = a.tenant_id
+                LEFT JOIN zones z ON z.name = COALESCE(NULLIF(a.timezone, ''), NULLIF(x.timezone, ''), 'UTC')
+                CROSS JOIN LATERAL (
+                    SELECT regexp_match(
+                        COALESCE(NULLIF(a.heartbeat_active_hours, ''), '09:00-18:00'),
+                        '^\\s*(\\d{{1,15}})\\s*:\\s*(\\d{{1,15}})\\s*-\\s*(\\d{{1,15}})\\s*:\\s*(\\d{{1,15}})\\s*$'
+                    ) AS hours
+                ) AS h
+                CROSS JOIN LATERAL (
+                    SELECT EXTRACT(HOUR FROM local_now) * 60 + EXTRACT(MINUTE FROM local_now) AS minutes
+                    FROM (SELECT %(now)s AT TIME ZONE COALESCE(z.name, 'UTC') AS local_now) AS l
+                ) AS c
+                WHERE a.heartbeat_enabled IS TRUE AND a.status = ANY(%(statuses)s) AND a.is_expired IS FALSE
+                  AND (
+                    a.expires_at <= %(now)s
+                    OR (
+                        (a.tenant_id IS NULL OR x.is_active IS TRUE)
+                        AND (
+                            a.last_heartbeat_at IS NULL
+                            OR a.last_heartbeat_at
+                                <= %(now)s - make_interval(mins => COALESCE(NULLIF(a.heartbeat_interval_minutes, 0), 240))
+                        )
+                        AND (
+                            h.hours IS NULL
+                            OR CASE
+                                WHEN h.hours[1]::bigint * 60 + h.hours[2]::bigint <= h.hours[3]::bigint * 60 + h.hours[4]::bigint
+                                THEN c.minutes >= h.hours[1]::bigint * 60 + h.hours[2]::bigint
+                                    AND c.minutes < h.hours[3]::bigint * 60 + h.hours[4]::bigint
+                                ELSE c.minutes >= h.hours[1]::bigint * 60 + h.hours[2]::bigint
+                                    OR c.minutes < h.hours[3]::bigint * 60 + h.hours[4]::bigint
+                            END
+                        )
+                    )
+                  )
+                ORDER BY a.last_heartbeat_at NULLS FIRST, a.id
+                LIMIT %(limit)s
+                """,
+                {"now": now, "statuses": ["running", "idle"], "limit": limit},
             )
             return [AgentRecord.from_row(row) for row in rows]
 

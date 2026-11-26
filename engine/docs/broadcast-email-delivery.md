@@ -125,12 +125,22 @@ and leaves unsettled leases recoverable. It does not continue spawning batches
 behind abandoned threads. At most the current five threads can remain per
 worker invocation; process termination may wait on native thread shutdown.
 
+The runtime restarts an exited loop (never from its done-callback: each restart is a
+fresh coroutine from a supervisor task) with doubling delays from 1 s up to
+`WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS`. Before the new loop claims, the
+supervisor waits for every abandoned SMTP thread of the old one to end
+(`wait_for_abandoned_sends`, bounded by the SMTP socket timeout), so a new batch
+never runs beside leftovers. The restart count is a lifetime budget
+(`WORKER_LOOP_RESTART_BUDGET`); the exit after it is final.
+
 ## Operations
 
 Monitor `/api/ready` on worker-capable processes, pending age, expired leases,
-attempt counts, `last_error` and terminal failure counts in the outbox. A failed
-required loop requires process restart after fixing the underlying problem; no
-silent local restart hides a dead delivery worker. A missing schema or database
+attempt counts, `last_error` and terminal failure counts in the outbox. A crashed
+loop is restarted and logged (`Restarting required loop broadcast_email`) and stays
+unready until its first finished pass. Once the restart budget is spent the loop
+stays down, `/api/ready` stays 503 and `/api/live` fails, so the orchestrator
+replaces the container after fixing the underlying problem. A missing schema or database
 failure is not an excuse to bypass persistence. Correct SMTP configuration before
 creating a replacement broadcast for terminal failures. Retention removes
 terminal delivery evidence after its window, so export operational evidence

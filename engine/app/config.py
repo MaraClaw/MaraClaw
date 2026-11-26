@@ -5,6 +5,7 @@ import re
 import socket
 import uuid
 from functools import lru_cache
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Annotated, ClassVar, Final, Literal
 from urllib.parse import unquote, urlsplit
@@ -18,10 +19,21 @@ from app.services.sandbox.config import SandboxConfig, SandboxType
 MAX_RETENTION_DAYS: Final = 36500
 MIN_TRIGGER_EXECUTION_RETENTION_DAYS: Final = 7
 MIN_GATEWAY_MESSAGE_RETENTION_DAYS: Final = 7
+MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS: Final = 7
 # A container stop sends SIGTERM, waits its stop timeout, then SIGKILLs. Fargate allows a stopTimeout of at most 120 s,
 # and the stop timeout must cover the uvicorn window, the cleanup budget and this margin for interpreter exit.
 FARGATE_MAX_STOP_TIMEOUT_SECONDS: Final = 120
 SHUTDOWN_KILL_MARGIN_SECONDS: Final = 10
+# Processes that each hold one Pub/Sub connection for their whole lifetime: the realtime subscriber and the gateway
+# report wake listener. The Pub/Sub pool holds at least twice as many connections, so a resubscribe can open its new
+# connection before the old one is closed.
+REDIS_LONG_LIVED_SUBSCRIBERS: Final = 2
+# A chat frame is JSON text: a code point takes at most 4 UTF-8 bytes (a quote or newline escapes to 2), so the three
+# text limits times 4, plus room for the other fields (ten attachment references of up to 1024 + 255 characters
+# each, the submission id, the model id and the keys), bound every frame a limit-abiding client sends. The default
+# START_COMMAND in entrypoint.sh passes the sum to uvicorn as --ws-max-size.
+CHAT_FRAME_BYTES_PER_CHARACTER: Final = 4
+CHAT_FRAME_ENVELOPE_BYTES: Final = 64 * 1024
 
 
 def _running_in_container() -> bool:
@@ -121,6 +133,16 @@ class Settings(BaseSettings):
     DATABASE_DURABLE_POOL_MAX_SIZE: int = Field(default=4, ge=1, le=1000)
     # Days to keep chat_history_changes journal rows; 0 keeps them forever.
     CHAT_HISTORY_RETENTION_DAYS: int = Field(default=30, ge=0)
+    # Largest chat submission text, in characters (Unicode code points): content, display_content and file_name. A longer
+    # one is refused whole, never truncated.
+    CHAT_CONTENT_MAX_CHARS: int = Field(default=200_000, ge=1)
+    CHAT_DISPLAY_CONTENT_MAX_CHARS: int = Field(default=200_000, ge=1)
+    CHAT_FILE_NAME_MAX_CHARS: int = Field(default=255, ge=1)
+    # Chat sockets one user may hold at once across every engine process (counted from Redis presence).
+    CHAT_SOCKETS_PER_USER: int = Field(default=20, ge=1)
+    # Submissions one chat socket may send per window; the window lives in the handling process's memory.
+    CHAT_SUBMISSIONS_PER_WINDOW: int = Field(default=10, ge=1)
+    CHAT_SUBMISSION_WINDOW_SECONDS: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     # Days to keep agent_activity_logs rows, counted from created_at; 0 keeps them forever.
     ACTIVITY_LOG_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
     # Days to keep completed/failed trigger_executions rows, counted from finished_at; 0 keeps them forever.
@@ -154,15 +176,51 @@ class Settings(BaseSettings):
             )
         return value
 
+    # Days to keep notifications, counted from created_at; 0 keeps them forever.
+    NOTIFICATION_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+    # Days to keep done tasks with their logs, counted from completed_at (updated_at when it was never stamped);
+    # 0 keeps them forever. Tasks that are not done are never deleted.
+    TASK_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+    # Days to keep channel_event_receipts (provider event dedup records and their media descriptors and burst
+    # outcomes), counted from created_at; 0 keeps them forever.
+    CHANNEL_EVENT_RECEIPT_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+
+    @field_validator("CHANNEL_EVENT_RECEIPT_RETENTION_DAYS")
+    @classmethod
+    def validate_channel_event_receipt_retention(cls, value: int) -> int:
+        # A receipt is what makes a provider retry of the same event a duplicate; deleting it inside the provider's
+        # retry window would let the event run twice.
+        if 0 < value < MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS:
+            raise ValueError(
+                f"CHANNEL_EVENT_RECEIPT_RETENTION_DAYS must be 0 (keep everything) or at least "
+                f"{MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS}: a shorter window lets a provider retry run again"
+            )
+        return value
+
+    # Days to keep delivered or terminal gateway_report_deliveries, counted from delivered_at or terminal_at; 0 keeps
+    # them forever. A delivery still waiting to be sent is never deleted.
+    GATEWAY_REPORT_DELIVERY_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+    # Days to keep superseded workspace_file_revisions, counted from created_at; 0 keeps them forever. The newest
+    # revision of each file is never deleted.
+    WORKSPACE_REVISION_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_KEY_PREFIX: str = "mrc"
     REDIS_MAX_CONNECTIONS: int = 50
+    # How long a durable-pool command waits for a free connection before failing as pool overload (not as Redis down).
+    # Must stay below REDIS_SOCKET_TIMEOUT.
+    REDIS_COMMAND_WAIT_SECONDS: float = Field(default=1.0, gt=0)
+    # Dedicated pool of the long-lived Pub/Sub subscribers; the sum of all three pools is what one process may hold
+    # against the Redis/Valkey connection limit.
+    REDIS_PUBSUB_MAX_CONNECTIONS: int = Field(default=4, ge=2 * REDIS_LONG_LIVED_SUBSCRIBERS)
     REDIS_SOCKET_CONNECT_TIMEOUT: float = 2.0
     REDIS_SOCKET_TIMEOUT: float = 5.0
     REDIS_HEALTH_CHECK_INTERVAL: int = 30
     REDIS_CACHE_MAX_CONNECTIONS: int = 20
     REDIS_CACHE_SOCKET_TIMEOUT: float = 0.2
+    # Connect budget of the cache pool; must not exceed REDIS_CACHE_SOCKET_TIMEOUT, so a dead host costs one read budget.
+    REDIS_CACHE_CONNECT_TIMEOUT: float = Field(default=0.2, gt=0)
     REDIS_CACHE_WAIT_SECONDS: float = 0.2
     REDIS_CACHE_MAX_VALUE_BYTES: int = 65536
     INSTANCE_ID: str = _default_instance_id()
@@ -174,6 +232,30 @@ class Settings(BaseSettings):
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 60
     EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     EMAIL_VERIFICATION_REQUIRED: bool = False  # Require email verification for login
+    # Public auth throttling: fixed windows in Redis, checked before any password check or email send.
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=300, ge=1)
+    # Attempts per window for one account (login, forgot-password, resend-verification each count separately).
+    AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS: int = Field(default=10, ge=1)
+    # Attempts per window for one client address; sized for an office sharing one NAT address.
+    AUTH_RATE_LIMIT_ADDRESS_ATTEMPTS: int = Field(default=300, ge=1)
+    # Chat and download ticket requests per window for one signed-in user.
+    TICKET_RATE_LIMIT_USER_ATTEMPTS: int = Field(default=60, ge=1)
+    # Password checks admitted at once (running plus queued) before new ones are refused with 503.
+    BCRYPT_MAX_PENDING_CHECKS: int = Field(default=32, ge=1)
+    # Peers (IPs or CIDRs) whose X-Forwarded-For is believed when resolving the client address. Empty trusts none.
+    TRUSTED_PROXIES: list[str] = []
+
+    @field_validator("TRUSTED_PROXIES")
+    @classmethod
+    def validate_trusted_proxies(cls, value: list[str]) -> list[str]:
+        entries = [entry.strip() for entry in value]
+        for entry in entries:
+            try:
+                _ = ip_network(entry, strict=False)
+            except ValueError as exc:
+                raise ValueError(f"TRUSTED_PROXIES entry {entry!r} is not an IP address or CIDR network") from exc
+        return entries
+
     # Genesis platform admin credentials are required when the account is missing.
     PLATFORM_ADMIN_EMAIL: str = ""
     PLATFORM_ADMIN_PASSWORD: str = ""
@@ -209,7 +291,8 @@ class Settings(BaseSettings):
     S3_PREFIX: str = "agents"
     S3_PRESIGN_TTL_SECONDS: int = 3600
     S3_MAX_POOL_CONNECTIONS: int = 50
-    S3_WRITE_WORKERS: int = 32
+    # Threads the storage lane runs blocking S3 calls on; capped at S3_MAX_POOL_CONNECTIONS.
+    S3_THREAD_LANE_SIZE: int = Field(default=32, ge=1)
 
     # Process role
     PROCESS_ROLE: str = "all"
@@ -217,6 +300,22 @@ class Settings(BaseSettings):
     # UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN), then the lifespan cleanup runs within the budget.
     SHUTDOWN_HTTP_GRACE_SECONDS: int = Field(default=30, ge=1)
     SHUTDOWN_CLEANUP_BUDGET_SECONDS: int = Field(default=75, ge=1)
+    # Restarts a crashed auth/broadcast mail loop may use over the process lifetime; the next exit is final and
+    # fails /api/live so the orchestrator replaces the task. Delays double from 1 s up to the ceiling.
+    WORKER_LOOP_RESTART_BUDGET: int = Field(default=5, ge=0)
+    WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS: float = Field(default=30.0, gt=0)
+
+    @model_validator(mode="after")
+    def validate_redis_command_wait(self) -> Settings:
+        if self.REDIS_COMMAND_WAIT_SECONDS >= self.REDIS_SOCKET_TIMEOUT:
+            raise ValueError("REDIS_COMMAND_WAIT_SECONDS must be shorter than REDIS_SOCKET_TIMEOUT")
+        return self
+
+    @model_validator(mode="after")
+    def validate_redis_cache_connect(self) -> Settings:
+        if self.REDIS_CACHE_CONNECT_TIMEOUT > self.REDIS_CACHE_SOCKET_TIMEOUT:
+            raise ValueError("REDIS_CACHE_CONNECT_TIMEOUT must not exceed REDIS_CACHE_SOCKET_TIMEOUT")
+        return self
 
     @model_validator(mode="after")
     def validate_shutdown_window(self) -> Settings:
@@ -267,6 +366,10 @@ class Settings(BaseSettings):
     OPENCLAW_GUEST_LOG_MAX_FILE: int = Field(default=3, ge=1, le=100)
     # Deadline per Docker CLI launch of the guest-management client; 0 leaves launches unbounded.
     OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS: float = Field(default=120.0, ge=0, le=3600, allow_inf_nan=False)
+    # Docker CLI calls that run at once per event loop, and how many calls of each priority (interactive start and stop,
+    # background sweeps) may wait for a thread before the next one is refused as busy.
+    DOCKER_LANE_THREADS: int = Field(default=16, ge=1, le=256)
+    DOCKER_LANE_QUEUE_LIMIT: int = Field(default=256, ge=0, le=100000)
     # Guest image pulls (ordinary starts and upgrades) get this deadline instead of the per-launch one.
     OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
 
@@ -292,6 +395,9 @@ class Settings(BaseSettings):
     WORKSPACE_MIRROR_ENABLED: bool = True
     # Seconds between passes of the workspace mirror worker.
     WORKSPACE_MIRROR_INTERVAL_SECONDS: float = Field(default=60.0, ge=10, le=3600, allow_inf_nan=False)
+    # How many agents the workspace mirror worker mirrors at once, never two of the same organization. Each in-flight
+    # agent holds one transfer buffer, so this also bounds the mirror's memory.
+    WORKSPACE_MIRROR_CONCURRENCY: int = Field(default=4, ge=1, le=32)
     # Lifetime of a guest-minted share link for one workspace file (POST /api/gateway/file-links).
     FILE_SHARE_LINK_TTL_SECONDS: int = Field(default=900, ge=60, le=86400)
     # Seconds between passes of the worker that samples each tier-governed agent's guest memory, CPU and managed
@@ -431,6 +537,11 @@ class Settings(BaseSettings):
     SANDBOX_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1)
     # Seconds an execute_code call may wait for a free slot before it is refused.
     SANDBOX_EXECUTION_QUEUE_WAIT_SECONDS: float = Field(default=10.0, ge=0)
+
+    def chat_frame_max_bytes(self) -> int:
+        """Largest websocket message the default START_COMMAND lets uvicorn buffer: the text limits plus the envelope."""
+        characters = self.CHAT_CONTENT_MAX_CHARS + self.CHAT_DISPLAY_CONTENT_MAX_CHARS + self.CHAT_FILE_NAME_MAX_CHARS
+        return characters * CHAT_FRAME_BYTES_PER_CHARACTER + CHAT_FRAME_ENVELOPE_BYTES
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_file=[".env", "../.env"],

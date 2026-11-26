@@ -142,12 +142,23 @@ readiness keeps polling. What the caller does on a readiness failure is unchange
 newly created guest is stopped, and an existing resumed guest is left as is. The
 upgrade executor has its own readiness loop and does not use this early exit.
 
-Guest start, stop, admission, the image check, readiness and the metrics container
-status run their Docker CLI calls on the guest Docker lane
-([docker_capacity.py](../app/services/docker_capacity.py)): 16 threads per event loop,
-apart from the thread pool the rest of the engine borrows, so a stalled daemon
-delays only guest Docker work. Each call holds one thread until it returns. When the
-waiting start is cancelled, or its operation is stopped while a probe runs (checked
+Guest start, stop, admission, the image check, readiness, the metrics container
+status and every background Docker sweep (start reconciler, container recovery,
+deletion and transfer cleanup, orphan sweep, resource-pressure and workspace-quota
+sampling, the admin runtime and tier-change observations) run their Docker CLI calls
+on the guest Docker lane
+([docker_capacity.py](../app/services/docker_capacity.py)): `DOCKER_LANE_THREADS`
+threads (default 16) per event loop, apart from the thread pool the rest of the engine
+borrows, so a stalled daemon delays only guest Docker work. Each call holds one thread
+until it returns, and readiness holds one only while a probe attempt runs, never
+while it waits for the next attempt. Calls beyond the threads queue, interactive
+work (user start and stop) ahead of background work, and each priority queues at most
+`DOCKER_LANE_QUEUE_LIMIT` calls (default 256). A call arriving at a full queue gets
+`DockerBusyError`: an HTTP route answers 503 with `Retry-After`, a start refused
+this way stays pending and is retried by the start reconciler under the
+`capacity_exceeded` code, a stop refused this way changes nothing and can be retried,
+and a background loop skips that pass. A caller cancelled while queued leaves without
+running its call. When the waiting start is cancelled, or its operation is stopped while a probe runs (checked
 every 2 seconds during the probe as well as before it), ordinary readiness returns
 at once and kills the probe's CLI, which its lane thread reaps.
 

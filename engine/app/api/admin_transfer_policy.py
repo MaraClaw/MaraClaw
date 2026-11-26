@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 
+from app.core.client_address import get_client_ip
 from app.core.security import require_role
 from app.records.user import UserRecord
 from app.schemas.transfer_policy import TransferPolicy
@@ -21,5 +22,4 @@ async def replace_transfer_policy(
     request: Request,
     current_user: UserRecord = Depends(require_role("platform_admin")),
 ) -> TransferPolicy:
-    ip_address = request.client.host if request.client is not None else None
-    return await update_transfer_policy(body, current_user, ip_address)
+    return await update_transfer_policy(body, current_user, await get_client_ip(request))

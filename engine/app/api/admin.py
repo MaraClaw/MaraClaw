@@ -8,11 +8,12 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import ClassVar
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.api.admin_audit_dependencies import require_admin_audit_role
 from app.api.admin_transfer_policy import router as transfer_policy_router
+from app.core.client_address import get_client_ip
 from app.core.domain.users import UserRole
 from app.core.json_types import (
     date_from_row,
@@ -74,13 +75,6 @@ from app.services.admin_provisioning import (
 from app.services.org_membership import DefaultOrgUnavailableError, DomainClaimedError
 from app.services.tenant_lifecycle import change_tenant_active
 from app.services.tenant_provisioning import AdminEmailTakenError, create_tenant_with_org_admin
-
-
-async def get_client_ip(request: Request) -> str | None:
-    if request.client is None:
-        return None
-    return request.client.host
-
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 router.include_router(transfer_policy_router)

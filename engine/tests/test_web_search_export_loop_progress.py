@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import override
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,7 +11,7 @@ import pytest
 from app.db.errors import DbError
 from app.records.web_search_event import WebSearchEventRecord
 from app.services.tavily import export
-from worker_progress_fixtures import WorkerHTTP, worker_http
+from worker_progress_fixtures import Pacing, WorkerHTTP, worker_http
 
 __all__ = ["worker_http"]
 
@@ -40,11 +41,42 @@ class ExportStore:
     async def finish_export(self, event_ids: list[UUID], *, now: datetime, delete_payloads: bool) -> None:
         self.exported.extend(event_ids)
 
-    async def delete_older_than(self, cutoff: datetime) -> int:
+    async def delete_older_than(self, cutoff: datetime, *, limit: int) -> int:
         return 0
 
-    async def delete_orphaned_payloads(self) -> int:
+    async def delete_payloads_older_than(self, cutoff: datetime, *, limit: int) -> int:
         return 0
+
+    async def delete_orphaned_payloads(self, *, limit: int) -> int:
+        return 0
+
+
+class RetentionStore(ExportStore):
+    """Scripted retention batches; every batch costs ``batch_seconds`` on the injected clock."""
+
+    def __init__(self, pacing: Pacing, batch_seconds: float, scripts: dict[str, list[int]]) -> None:
+        super().__init__([])
+        self.pacing = pacing
+        self.batch_seconds = batch_seconds
+        self.scripts = scripts
+        self.calls: list[tuple[str, datetime | None, int]] = []
+
+    def batch(self, name: str, cutoff: datetime | None, limit: int) -> int:
+        self.calls.append((name, cutoff, limit))
+        self.pacing.now += self.batch_seconds
+        return self.scripts[name].pop(0)
+
+    @override
+    async def delete_older_than(self, cutoff: datetime, *, limit: int) -> int:
+        return self.batch("events", cutoff, limit)
+
+    @override
+    async def delete_payloads_older_than(self, cutoff: datetime, *, limit: int) -> int:
+        return self.batch("payloads", cutoff, limit)
+
+    @override
+    async def delete_orphaned_payloads(self, *, limit: int) -> int:
+        return self.batch("orphans", None, limit)
 
 
 class UnavailableSink:
@@ -127,3 +159,42 @@ async def test_object_store_failures_still_beat(monkeypatch: pytest.MonkeyPatch,
     assert store.released == [pending.id] * 5
     assert store.exported == []
     assert not task.done()
+
+
+async def test_retention_deletes_in_bounded_batches_and_beats_after_each_full_one(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
+) -> None:
+    # Given a backlog of three payload batches (two full), two event batches and one orphan batch, each costing a third
+    # of the progress budget on the injected clock, so only a beat after each full batch keeps the worker ready.
+    full = export._RETENTION_BATCH
+    store = RetentionStore(
+        worker_http.pacing,
+        export.PROGRESS_BUDGET_SECONDS / 3,
+        {"payloads": [full, full, 3], "events": [full, 2], "orphans": [4]},
+    )
+    # When the first pass runs its retention.
+    task = await start_export_loop(monkeypatch, worker_http, store)
+    # Then every call was one bounded batch, payloads before events, with one cutoff, and the loop never went stale.
+    assert [(name, limit) for name, _, limit in store.calls] == [
+        ("payloads", full),
+        ("payloads", full),
+        ("payloads", full),
+        ("events", full),
+        ("events", full),
+        ("orphans", full),
+    ]
+    assert len({cutoff for name, cutoff, _ in store.calls if name != "orphans"}) == 1
+    assert worker_http.pacing.now == export.PROGRESS_BUDGET_SECONDS * 2
+    await worker_http.ready(expected=True)
+    assert not task.done()
+
+
+async def test_retention_stops_at_the_first_short_batch(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
+) -> None:
+    # Given a table with nothing old to delete.
+    store = RetentionStore(worker_http.pacing, 0.0, {"payloads": [0], "events": [0], "orphans": [0]})
+    # When the first pass runs its retention.
+    _ = await start_export_loop(monkeypatch, worker_http, store)
+    # Then each statement ran exactly once.
+    assert [name for name, _, _ in store.calls] == ["payloads", "events", "orphans"]

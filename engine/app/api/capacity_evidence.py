@@ -9,6 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 
+from app.core.client_address import get_client_ip
 from app.core.security import get_current_user
 from app.records.user import UserRecord
 from app.schemas.capacity import CapacityOrderOut
@@ -20,10 +21,6 @@ from app.services.document_parser.service import read_bytes_limited
 router = APIRouter(prefix="/capacity", tags=["capacity"])
 
 
-def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client is not None else None
-
-
 @router.post("/orders/{order_id}/evidence", response_model=CapacityOrderOut)
 async def upload_capacity_evidence(
     order_id: UUID, request: Request, file: UploadFile = File(...), user: UserRecord = Depends(get_current_user)
@@ -33,7 +30,9 @@ async def upload_capacity_evidence(
         data = await read_bytes_limited(file.read, MAX_EVIDENCE_BYTES)
     except DocumentTooLargeError:
         raise HTTPException(413, "Payment evidence must be 10 MiB or smaller") from None
-    view = await submit_evidence(user.id, order_id, data=data, filename=file.filename, client_ip=_client_ip(request))
+    view = await submit_evidence(
+        user.id, order_id, data=data, filename=file.filename, client_ip=await get_client_ip(request)
+    )
     return CapacityOrderOut.from_record(view.order, view.tenant_name)
 
 

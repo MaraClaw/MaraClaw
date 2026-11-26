@@ -4,7 +4,7 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 
 ## Entry Points
 
-- `main.py` - `app.main:app`, middleware, router mounts, `/api/health` (pool ping), `/api/version`.
+- `main.py` - `app.main:app`, middleware, router mounts, `/api/health` (pool ping), `/api/version`; `/api/ready` and `/api/live` come from `runtime/readiness.py`.
 - `main.py` imports `lifespan()` from `runtime/lifecycle.py`: pool initialization, role-gated bootstrap, then realtime/worker/connector work. Ownership/readiness/shutdown: `runtime/AGENTS.md`.
 - `config.py` is the only pydantic-settings surface. New env vars need `.env.example` (includes `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD`).
 - `db/` is the live data layer. Persistence: `records/` dataclasses + `dao/` SQL. There is no `app/models/` or `app/database.py`.

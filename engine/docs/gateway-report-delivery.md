@@ -39,6 +39,8 @@ delayed-reply recovery still recognizes the run as native and still redacts the 
 a delivery that is neither delivered nor terminal is never reclaimed, so every claim still reloads its result. A
 reclaimed row is listed with an empty content and no result.
 
+Delivery rows grow without bound too. `GATEWAY_REPORT_DELIVERY_RETENTION_DAYS` (default 0 keeps everything) lets the same worker delete, in batches of at most 5000, deliveries whose `delivered_at` or `terminal_at` is older than the window. A delivery that is still pending, leased or waiting to retry, is never deleted, and the gateway message it reported stays. Once its delivery rows are gone a message no longer shows which destination it was relayed to.
+
 PostgreSQL is the queue. Each batch claims at most 20 due intents using row locks
 and skip-locked selection. Claims increment attempts and issue a new token with a
 60-second lease. The worker holds at most 20 concurrent deliveries and refills

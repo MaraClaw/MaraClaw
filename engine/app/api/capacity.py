@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
+from app.core.client_address import get_client_ip
 from app.core.security import get_current_user
 from app.records.user import UserRecord
 from app.schemas.capacity import (
@@ -25,10 +26,6 @@ from app.services.capacity_orders import (
 )
 
 router = APIRouter(prefix="/capacity", tags=["capacity"])
-
-
-def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client is not None else None
 
 
 def _order(view: CapacityOrderView) -> CapacityOrderOut:
@@ -73,7 +70,7 @@ async def get_capacity_overview(
 async def create_capacity_order(
     data: CapacityOrderCreateRequest, request: Request, user: UserRecord = Depends(get_current_user)
 ) -> CapacityOrderOut:
-    view = await create_order(user.id, data.extra_accounts, data.extra_agents, client_ip=_client_ip(request))
+    view = await create_order(user.id, data.extra_accounts, data.extra_agents, client_ip=await get_client_ip(request))
     return _order(view)
 
 
@@ -100,4 +97,4 @@ async def get_capacity_order(order_id: UUID, user: UserRecord = Depends(get_curr
 async def cancel_capacity_order(
     order_id: UUID, request: Request, user: UserRecord = Depends(get_current_user)
 ) -> CapacityOrderOut:
-    return _order(await cancel_order(user.id, order_id, client_ip=_client_ip(request)))
+    return _order(await cancel_order(user.id, order_id, client_ip=await get_client_ip(request)))

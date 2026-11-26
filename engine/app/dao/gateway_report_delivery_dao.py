@@ -220,5 +220,30 @@ class GatewayReportDeliveryDAO(BaseDAO[GatewayReportDeliveryRecord]):
             )
         return row is not None
 
+    async def purge_finished_before(self, *, finished_before: datetime, limit: int) -> int:
+        """Delete up to ``limit`` deliveries that finished before ``finished_before``, oldest first, and return how many.
+
+        Only a delivered row (``delivered_at``) or a terminal one (``terminal_at``) is eligible, dated by whichever is
+        set; a pending delivery, leased or waiting to retry, is never deleted however old. The gateway message
+        it reported stays. The first predicate is the partial index predicate of
+        ``ix_gateway_report_deliveries_finished_at`` verbatim so the planner can use the index. Rows another
+        transaction holds are skipped, never waited on. The picked rows are deleted by ``ctid`` (a TID scan), which
+        the statement's own row locks keep in place.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"""
+                WITH expired AS (
+                    SELECT ctid FROM {self.table}
+                    WHERE (delivered_at IS NOT NULL OR terminal_at IS NOT NULL)
+                      AND COALESCE(delivered_at, terminal_at) < %(cutoff)s
+                    ORDER BY COALESCE(delivered_at, terminal_at) LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ) DELETE FROM {self.table} WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING id
+                """,
+                {"cutoff": finished_before, "limit": limit},
+            )
+            return len(rows)
+
 
 gateway_report_delivery_dao = GatewayReportDeliveryDAO()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Final, Protocol, TypedDict, Unpack, cast
 from uuid import UUID, uuid4
@@ -20,6 +21,8 @@ _SAFE_INSTANCE = re.compile(r"[^A-Za-z0-9._-]+")
 _CLAIM_LIMIT = 500
 _STALE = timedelta(minutes=15)
 _MAX_BYTES = 8 * 1024 * 1024
+# One index-ordered statement per batch stays far below the pooled statement timeout.
+_RETENTION_BATCH: Final = 5000
 PROGRESS_BUDGET_SECONDS: Final = 300.0
 
 
@@ -180,10 +183,22 @@ async def drain_pending_exports(*, sink: AnalyticsObjectSink | None = None) -> i
     return len(ids)
 
 
+async def _purge_in_batches(purge: Callable[[int], Awaitable[int]]) -> int:
+    """Run ``purge`` (one committed batch per call) until a batch comes back short; beat after each full one."""
+    total = 0
+    while True:
+        deleted = await purge(_RETENTION_BATCH)
+        total += deleted
+        if deleted < _RETENTION_BATCH:
+            return total
+        loop_progress().beat()
+
+
 async def expire_old_events() -> int:
     days = max(1, get_settings().WEB_SEARCH_ANALYTICS_RETENTION_DAYS)
     cutoff = datetime.now(UTC) - timedelta(days=days)
-    return await web_search_event_dao.delete_older_than(cutoff)
+    _ = await _purge_in_batches(lambda limit: web_search_event_dao.delete_payloads_older_than(cutoff, limit=limit))
+    return await _purge_in_batches(lambda limit: web_search_event_dao.delete_older_than(cutoff, limit=limit))
 
 
 async def start_web_search_export_daemon() -> None:
@@ -205,7 +220,9 @@ async def start_web_search_export_daemon() -> None:
         if ticks % 240 == 1:
             try:
                 deleted = await expire_old_events()
-                orphaned = await web_search_event_dao.delete_orphaned_payloads()
+                orphaned = await _purge_in_batches(
+                    lambda limit: web_search_event_dao.delete_orphaned_payloads(limit=limit)
+                )
                 if deleted or orphaned:
                     logger.info(f"web search analytics expired {deleted} events, {orphaned} orphan payloads")
             except Exception:

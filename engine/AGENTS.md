@@ -12,7 +12,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 
 | Concern / symbol | Location and contract |
 |---|---|
-| `app`, `lifespan` | `app/main.py` assembles middleware, flat `app/api/` routers, health/version; imports lifespan from `app/runtime/lifecycle.py`. Read `app/runtime/AGENTS.md`. `/api/health` is a pool ping (503 if down). |
+| `app`, `lifespan` | `app/main.py` assembles middleware, flat `app/api/` routers, health/version; imports lifespan from `app/runtime/lifecycle.py`. Read `app/runtime/AGENTS.md`. `/api/health` is a pool ping (503 if down); `/api/live` is the dependency-free container liveness (503 only after a required loop spent its restarts). |
 | `Settings`, `get_settings` | `app/config.py`, `.env.example`: case-sensitive settings, JWT/Tavily/genesis env. |
 | `init_pool`, `ping_pool`, `connection_ctx`, `BaseDAO` | `app/db/pool.py`, `app/db/session.py`, `app/dao/base.py`: global pool, commit-on-success/nested join, CRUD + `app/records/` dataclass defaults/`from_row`, no ORM. `app/core/events.py` owns Redis events. |
 | Auth / authorization | `app/core/security.py`: JWT/bcrypt, `load_user_from_access_token`, `load_user_principal`; `app/core/permissions.py`: `check_agent_access(user, agent_id)`, no DB placeholder. |

@@ -1,6 +1,8 @@
 """Real PostgreSQL: status filtering, batch bounds, lock skipping and index use of the retention purges.
 
-Agent activity logs and trigger executions are deleted; completed gateway messages keep their row and lose only their
+Agent activity logs, trigger executions, notifications, done tasks with their logs, channel event receipts (with the
+media descriptors and burst outcomes that cascade from them), delivered or terminal gateway report deliveries and
+superseded workspace file revisions are deleted; completed gateway messages keep their row and lose only their
 content and result, so delayed-reply classification and pending relays still find them.
 
 Opt in with MARACLAW_TEST_POSTGRES_DSN; each test gets a unique schema built from the baseline, dropped afterwards.
@@ -22,12 +24,16 @@ from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 
-from app.config import MIN_GATEWAY_MESSAGE_RETENTION_DAYS, get_settings
+from app.config import MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS, MIN_GATEWAY_MESSAGE_RETENTION_DAYS, get_settings
 from app.dao.activity_log_dao import agent_activity_log_dao
+from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
+from app.dao.notification_dao import notification_dao
 from app.dao.openclaw_reply_dao import openclaw_reply_dao
+from app.dao.task_dao import task_dao
 from app.dao.trigger_dao import trigger_execution_dao
+from app.dao.workspace_dao import workspace_file_revision_dao
 from app.db.connection import DbConnection, Params, Row
 from app.db.session import transaction
 from app.scripts import bootstrap_db
@@ -49,6 +55,8 @@ class RetentionDatabase:
     second: DbConnection
     agent_id: UUID
     trigger_id: UUID
+    user_id: UUID
+    config_id: UUID
 
 
 @pytest.fixture
@@ -67,7 +75,7 @@ async def retention_db() -> AsyncIterator[RetentionDatabase]:
                 await AsyncConnection[DictRow].connect(isolated, row_factory=dict_row) as second,
             ):
                 db = DbConnection(first)
-                user_id, agent_id, trigger_id = uuid4(), uuid4(), uuid4()
+                user_id, agent_id, trigger_id, config_id = uuid4(), uuid4(), uuid4(), uuid4()
                 async with transaction(db):
                     statements = bootstrap_db._statement_bodies(bootstrap_db.SCHEMA_BASELINE.read_text())
                     # The baseline is rerunnable, so the second pass proves the new index is idempotent.
@@ -86,7 +94,12 @@ async def retention_db() -> AsyncIterator[RetentionDatabase]:
                         {"id": agent_id, "user": user_id},
                     )
                     await add_trigger(db, agent_id, trigger_id)
-                yield RetentionDatabase(db, DbConnection(second), agent_id, trigger_id)
+                    await db.execute(
+                        "INSERT INTO channel_configs (id, agent_id, channel_type, app_id, is_configured, is_connected) "
+                        "VALUES (%(id)s, %(agent)s, 'feishu', 'app', true, true)",
+                        {"id": config_id, "agent": agent_id},
+                    )
+                yield RetentionDatabase(db, DbConnection(second), agent_id, trigger_id, user_id, config_id)
         finally:
             await owner.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
@@ -158,7 +171,9 @@ async def add_gateway(
     return message_id
 
 
-async def add_delivery(h: RetentionDatabase, message_id: UUID, *, delivered: bool, terminal: bool) -> UUID:
+async def add_delivery(
+    h: RetentionDatabase, message_id: UUID, *, delivered: bool, terminal: bool, at: datetime = OLD
+) -> UUID:
     delivery_id = uuid4()
     await h.first.execute(
         "INSERT INTO gateway_report_deliveries (id, message_id, destination_kind, destination_id, available_at, "
@@ -169,12 +184,118 @@ async def add_delivery(h: RetentionDatabase, message_id: UUID, *, delivered: boo
             "message": message_id,
             "agent": h.agent_id,
             "at": OLD,
-            "delivered_at": OLD if delivered else None,
+            "delivered_at": at if delivered else None,
             "reason": "payload_rejected" if terminal else None,
-            "terminal_at": OLD if terminal else None,
+            "terminal_at": at if terminal else None,
         },
     )
     return delivery_id
+
+
+async def add_notification(h: RetentionDatabase, created_at: datetime, *, is_read: bool = False) -> UUID:
+    notification_id = uuid4()
+    await h.first.execute(
+        "INSERT INTO notifications (id, user_id, type, title, body, is_read, created_at) "
+        "VALUES (%(id)s, %(user)s, 'system', 'title', 'body', %(is_read)s, %(at)s)",
+        {"id": notification_id, "user": h.user_id, "is_read": is_read, "at": created_at},
+    )
+    return notification_id
+
+
+async def add_task(
+    h: RetentionDatabase,
+    *,
+    status: str,
+    completed_at: datetime | None,
+    updated_at: datetime | None = None,
+    logs: int = 2,
+) -> UUID:
+    task_id = uuid4()
+    finished = updated_at or completed_at or OLD
+    await h.first.execute(
+        "INSERT INTO tasks (id, agent_id, title, type, status, priority, assignee, created_by, created_at, "
+        "updated_at, completed_at) VALUES (%(id)s, %(agent)s, 'task', 'todo', %(status)s, 'low', 'agent', %(user)s, "
+        "%(at)s, %(updated_at)s, %(completed_at)s)",
+        {
+            "id": task_id,
+            "agent": h.agent_id,
+            "user": h.user_id,
+            "status": status,
+            "at": OLD - timedelta(days=1),
+            "updated_at": finished,
+            "completed_at": completed_at,
+        },
+    )
+    for _ in range(logs):
+        await h.first.execute(
+            "INSERT INTO task_logs (id, task_id, content, created_at) VALUES (%(id)s, %(task)s, 'log', %(at)s)",
+            {"id": uuid4(), "task": task_id, "at": OLD},
+        )
+    return task_id
+
+
+async def add_receipt(h: RetentionDatabase, created_at: datetime, *, dependents: bool = False) -> UUID:
+    """Insert a receipt whose event key is a UUID; ``dependents`` adds a media descriptor and a burst outcome."""
+    receipt_id = uuid4()
+    key = {"config_id": h.config_id, "key": str(receipt_id)}
+    await h.first.execute(
+        "INSERT INTO channel_event_receipts (config_id, provider, event_key, agent_id, fingerprint, created_at) "
+        "VALUES (%(config_id)s, 'feishu', %(key)s, %(agent)s, %(fingerprint)s, %(at)s)",
+        {**key, "agent": h.agent_id, "fingerprint": "v1:" + "a" * 64, "at": created_at},
+    )
+    if dependents:
+        await h.first.execute(
+            "INSERT INTO channel_event_media (config_id, provider, event_key, ordinal, gateway_message_id, stored_file) "
+            "VALUES (%(config_id)s, 'feishu', %(key)s, 0, %(message)s, '{}'::jsonb)",
+            {**key, "message": uuid4()},
+        )
+        await h.first.execute(
+            "INSERT INTO personal_burst_inputs (id, config_id, provider, event_key, outcome) "
+            "VALUES (%(id)s, %(config_id)s, 'feishu', %(key)s, 'capacity_rejected')",
+            {**key, "id": uuid4()},
+        )
+    return receipt_id
+
+
+async def add_revision(h: RetentionDatabase, path: str, created_at: datetime, *, agent_id: UUID | None = None) -> UUID:
+    revision_id = uuid4()
+    await h.first.execute(
+        "INSERT INTO workspace_file_revisions (id, agent_id, path, operation, actor_type, content_hash, created_at, "
+        "updated_at) VALUES (%(id)s, %(agent)s, %(path)s, 'write', 'user', 'hash', %(at)s, %(at)s)",
+        {"id": revision_id, "agent": agent_id or h.agent_id, "path": path, "at": created_at},
+    )
+    return revision_id
+
+
+async def add_agent(h: RetentionDatabase) -> UUID:
+    agent_id = uuid4()
+    await h.first.execute(
+        "INSERT INTO agents (id, name, creator_id, role_description, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) VALUES (%(id)s, "
+        "'Second QA', %(user)s, '', 20, 5, 5, 'private', 'use', 240)",
+        {"id": agent_id, "user": h.user_id},
+    )
+    return agent_id
+
+
+async def purge_notifications(db: DbConnection, limit: int) -> int:
+    return await notification_dao.purge_older_than(older_than=CUTOFF, limit=limit)
+
+
+async def purge_tasks(db: DbConnection, limit: int) -> int:
+    return await task_dao.purge_finished_before(finished_before=CUTOFF, limit=limit)
+
+
+async def purge_receipts(db: DbConnection, limit: int) -> int:
+    return await channel_event_receipt_dao.purge_older_than(older_than=CUTOFF, limit=limit)
+
+
+async def purge_deliveries(db: DbConnection, limit: int) -> int:
+    return await gateway_report_delivery_dao.purge_finished_before(finished_before=CUTOFF, limit=limit)
+
+
+async def purge_revisions(db: DbConnection, limit: int) -> int:
+    return await workspace_file_revision_dao.purge_superseded_before(created_before=CUTOFF, limit=limit)
 
 
 async def purge_activity(db: DbConnection, limit: int) -> int:
@@ -199,6 +320,31 @@ async def seed_expired_execution(h: RetentionDatabase, offset_minutes: int) -> U
 
 async def seed_expired_gateway(h: RetentionDatabase, offset_minutes: int) -> UUID:
     return await add_gateway(h, status="completed", completed_at=OLD + timedelta(minutes=offset_minutes))
+
+
+async def seed_expired_notification(h: RetentionDatabase, offset_minutes: int) -> UUID:
+    return await add_notification(h, OLD + timedelta(minutes=offset_minutes))
+
+
+async def seed_expired_task(h: RetentionDatabase, offset_minutes: int) -> UUID:
+    return await add_task(h, status="done", completed_at=OLD + timedelta(minutes=offset_minutes))
+
+
+async def seed_expired_receipt(h: RetentionDatabase, offset_minutes: int) -> UUID:
+    return await add_receipt(h, OLD + timedelta(minutes=offset_minutes))
+
+
+async def seed_expired_delivery(h: RetentionDatabase, offset_minutes: int) -> UUID:
+    message_id = await add_gateway(h, status="completed", completed_at=OLD)
+    return await add_delivery(h, message_id, delivered=True, terminal=False, at=OLD + timedelta(minutes=offset_minutes))
+
+
+async def seed_expired_revision(h: RetentionDatabase, offset_minutes: int) -> UUID:
+    """A superseded revision; its newer revision sits after the cutoff and so is never counted as remaining."""
+    path = f"notes/{uuid4()}.md"
+    revision_id = await add_revision(h, path, OLD + timedelta(minutes=offset_minutes))
+    _ = await add_revision(h, path, RECENT)
+    return revision_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +379,44 @@ TABLES = {
         "SELECT id FROM gateway_messages WHERE result IS NOT NULL",
         "ix_gateway_messages_completed_at",
     ),
+    "notifications": Table(
+        "notifications",
+        purge_notifications,
+        seed_expired_notification,
+        "SELECT id FROM notifications",
+        "ix_notifications_created_at",
+    ),
+    "tasks": Table("tasks", purge_tasks, seed_expired_task, "SELECT id FROM tasks", "ix_tasks_done_finished_at"),
+    "channel_event_receipts": Table(
+        "channel_event_receipts",
+        purge_receipts,
+        seed_expired_receipt,
+        "SELECT event_key::uuid AS id FROM channel_event_receipts",
+        "ix_channel_event_receipts_created_at",
+    ),
+    "gateway_report_deliveries": Table(
+        "gateway_report_deliveries",
+        purge_deliveries,
+        seed_expired_delivery,
+        "SELECT id FROM gateway_report_deliveries",
+        "ix_gateway_report_deliveries_finished_at",
+    ),
+    # The newer revision each expired one is judged by is after the cutoff, so only expired rows count as remaining.
+    "workspace_file_revisions": Table(
+        "workspace_file_revisions",
+        purge_revisions,
+        seed_expired_revision,
+        "SELECT id FROM workspace_file_revisions WHERE created_at < '2026-11-01T00:00:00+00'",
+        "ix_workspace_file_revisions_file_created",
+    ),
 }
+NEW_TABLES = [
+    "notifications",
+    "tasks",
+    "channel_event_receipts",
+    "gateway_report_deliveries",
+    "workspace_file_revisions",
+]
 
 
 async def purge_once(table: Table, db: DbConnection, limit: int) -> int:
@@ -601,6 +784,54 @@ async def test_purge_statement_can_use_the_cutoff_index(
                 "CASE WHEN g %% 3 = 1 THEN %(at)s + g * interval '1 minute' END FROM generate_series(1, 3000) g",
                 {"agent": h.agent_id, "at": OLD},
             )
+        elif name == "notifications":
+            await h.first.execute(
+                "INSERT INTO notifications (id, user_id, type, title, body, is_read, created_at) "
+                "SELECT gen_random_uuid(), %(user)s, 'system', 't', 'b', g %% 2 = 0, %(at)s + g * interval '1 minute' "
+                "FROM generate_series(1, 3000) g",
+                {"user": h.user_id, "at": OLD},
+            )
+        elif name == "tasks":
+            await h.first.execute(
+                "INSERT INTO tasks (id, agent_id, title, type, status, priority, assignee, created_by, created_at, "
+                "updated_at, completed_at) SELECT gen_random_uuid(), %(agent)s, 't', 'todo', "
+                "(CASE WHEN g %% 3 = 0 THEN 'pending' ELSE 'done' END)::task_status_enum, 'low', 'agent', %(user)s, "
+                "%(at)s, %(at)s + g * interval '1 minute', "
+                "CASE WHEN g %% 3 = 1 THEN %(at)s + g * interval '1 minute' END FROM generate_series(1, 3000) g",
+                {"agent": h.agent_id, "user": h.user_id, "at": OLD},
+            )
+            await h.first.execute(
+                "INSERT INTO task_logs (id, task_id, content, created_at) "
+                "SELECT gen_random_uuid(), id, 'log', %(at)s FROM tasks WHERE status = 'done'",
+                {"at": OLD},
+            )
+        elif name == "channel_event_receipts":
+            await h.first.execute(
+                "INSERT INTO channel_event_receipts (config_id, provider, event_key, agent_id, fingerprint, created_at) "
+                "SELECT %(config)s, 'feishu', gen_random_uuid()::text, %(agent)s, 'v1:' || repeat('a', 64), "
+                "%(at)s + g * interval '1 minute' FROM generate_series(1, 3000) g",
+                {"config": h.config_id, "agent": h.agent_id, "at": OLD},
+            )
+        elif name == "gateway_report_deliveries":
+            await h.first.execute(
+                "WITH m AS (INSERT INTO gateway_messages (id, agent_id, content, status, result, created_at, "
+                "completed_at) SELECT gen_random_uuid(), %(agent)s, 'question', 'completed', 'answer', %(at)s, %(at)s "
+                "FROM generate_series(1, 3000) RETURNING id) "
+                "INSERT INTO gateway_report_deliveries (id, message_id, destination_kind, destination_id, available_at, "
+                "delivered_at, terminal_reason, terminal_at) SELECT gen_random_uuid(), id, 'agent', %(agent)s, %(at)s, "
+                "CASE WHEN n %% 3 = 1 THEN %(at)s + n * interval '1 minute' END, "
+                "CASE WHEN n %% 3 = 2 THEN 'payload_rejected' END, "
+                "CASE WHEN n %% 3 = 2 THEN %(at)s + n * interval '1 minute' END "
+                "FROM (SELECT id, row_number() OVER () AS n FROM m) numbered",
+                {"agent": h.agent_id, "at": OLD},
+            )
+        elif name == "workspace_file_revisions":
+            await h.first.execute(
+                "INSERT INTO workspace_file_revisions (id, agent_id, path, operation, actor_type, content_hash, "
+                "created_at, updated_at) SELECT gen_random_uuid(), %(agent)s, 'file-' || (g %% 300), 'write', 'user', "
+                "'hash', %(at)s + g * interval '1 minute', %(at)s + g * interval '1 minute' FROM generate_series(1, 3000) g",
+                {"agent": h.agent_id, "at": OLD},
+            )
         else:
             await h.first.execute(
                 "INSERT INTO agent_activity_logs (id, agent_id, action_type, summary, created_at) "
@@ -617,7 +848,8 @@ async def test_purge_statement_can_use_the_cutoff_index(
         return await original(query, params)
 
     monkeypatch.setattr(h.first, "fetchall", spy)
-    _ = await purge_once(table, h.first, 5000)
+    # A batch far smaller than the table, as in production: with a limit above the row count a hash join is cheaper.
+    _ = await purge_once(table, h.first, 50)
     [(query, params)] = captured[-1:]
     # When the planner is asked about that statement with sequential scans forbidden: on a table this small it
     # could pick one on cost alone, so a plan that names the index shows the predicate can use it at all.
@@ -629,3 +861,283 @@ async def test_purge_statement_can_use_the_cutoff_index(
     assert table.index in plan
     assert "Tid Scan" in plan
     assert "Seq Scan" not in plan
+    if name == "workspace_file_revisions":
+        # The oldest-first scan itself walks the created_at index, and the newer-revision probe the per-file one.
+        assert "ix_workspace_file_revisions_created_at" in plan
+
+
+async def test_baseline_creates_the_append_only_cutoff_indexes_idempotently(retention_db: RetentionDatabase) -> None:
+    # Given the baseline applied twice by the fixture.
+    h = retention_db
+    names = [table.index for name, table in TABLES.items() if name in NEW_TABLES] + [
+        "ix_web_search_export_payloads_created_at"
+    ]
+    async with transaction(h.first):
+        rows = await h.first.fetchall(
+            "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = ANY(%(names)s)",
+            {"names": names},
+        )
+    # Then each index exists once, the task and delivery ones partial on the rows a purge may take.
+    definitions = {str(row["indexname"]): str(row["indexdef"]) for row in rows}
+    assert set(definitions) == set(names)
+    assert "COALESCE(completed_at, updated_at)" in definitions["ix_tasks_done_finished_at"]
+    assert "status = 'done'" in definitions["ix_tasks_done_finished_at"]
+    assert "COALESCE(delivered_at, terminal_at)" in definitions["ix_gateway_report_deliveries_finished_at"]
+    assert "delivered_at IS NOT NULL" in definitions["ix_gateway_report_deliveries_finished_at"]
+    assert "(agent_id, path, created_at DESC, id DESC)" in definitions["ix_workspace_file_revisions_file_created"]
+
+
+@pytest.mark.parametrize("name", NEW_TABLES)
+async def test_new_table_purge_batches_are_bounded_and_oldest_first(retention_db: RetentionDatabase, name: str) -> None:
+    # Given five expired rows with distinct ages.
+    h = retention_db
+    table = TABLES[name]
+    async with transaction(h.first):
+        ids = [await table.seed_expired(h, minutes) for minutes in range(5)]
+    # When batches of two are purged until one comes back short.
+    first = await purge_once(table, h.first, 2)
+    left_after_first = await remaining(h, table)
+    second = await purge_once(table, h.first, 2)
+    third = await purge_once(table, h.first, 2)
+    fourth = await purge_once(table, h.first, 2)
+    # Then no statement exceeded the limit, and the first one took the two oldest.
+    assert (first, second, third, fourth) == (2, 2, 1, 0)
+    assert left_after_first == set(ids[2:])
+    assert await remaining(h, table) == set()
+
+
+async def test_notification_purge_deletes_read_unread_and_archived_rows_older_than_the_cutoff_only(
+    retention_db: RetentionDatabase,
+) -> None:
+    # Given old notifications in every state, and notifications at and after the cutoff.
+    h = retention_db
+    async with transaction(h.first):
+        purged = {
+            await add_notification(h, OLD, is_read=True),
+            await add_notification(h, OLD - timedelta(days=30)),
+            await add_notification(h, CUTOFF - timedelta(microseconds=1)),
+        }
+        archived = await add_notification(h, OLD)
+        await h.first.execute(
+            "UPDATE notifications SET archived_at = %(at)s WHERE id = %(id)s", {"at": OLD, "id": archived}
+        )
+        purged.add(archived)
+        kept = {await add_notification(h, CUTOFF), await add_notification(h, RECENT, is_read=True)}
+    # When one batch runs.
+    deleted = await purge_once(TABLES["notifications"], h.first, 100)
+    # Then every old notification went and the others stay.
+    assert deleted == len(purged)
+    assert await remaining(h, TABLES["notifications"]) == kept
+
+
+async def test_task_purge_deletes_only_done_tasks_with_their_logs(retention_db: RetentionDatabase) -> None:
+    # Given done tasks past the cutoff (one never stamped completed_at), and tasks that must stay: done ones inside
+    # the window, a done one completed recently but touched long ago, and unfinished ones however old.
+    h = retention_db
+    async with transaction(h.first):
+        purged = {
+            await add_task(h, status="done", completed_at=OLD),
+            await add_task(h, status="done", completed_at=OLD - timedelta(days=9), logs=0),
+            await add_task(h, status="done", completed_at=None, updated_at=OLD),
+        }
+        kept = {
+            await add_task(h, status="done", completed_at=CUTOFF),
+            await add_task(h, status="done", completed_at=RECENT),
+            await add_task(h, status="done", completed_at=None, updated_at=RECENT),
+            await add_task(h, status="done", completed_at=RECENT, updated_at=OLD),
+            await add_task(h, status="pending", completed_at=None, updated_at=OLD),
+            await add_task(h, status="doing", completed_at=None, updated_at=OLD),
+            await add_task(h, status="pending", completed_at=OLD),
+        }
+    # When one batch runs, then another.
+    first = await purge_once(TABLES["tasks"], h.first, 100)
+    second = await purge_once(TABLES["tasks"], h.first, 100)
+    async with transaction(h.first):
+        logged = {row["task_id"] for row in await h.first.fetchall("SELECT DISTINCT task_id FROM task_logs")}
+        log_count = await h.first.fetchval("SELECT count(*) FROM task_logs")
+    # Then exactly the finished tasks went, and each kept task still has both of its logs and no log is orphaned.
+    assert (first, second) == (len(purged), 0)
+    assert await remaining(h, TABLES["tasks"]) == kept
+    assert logged == kept
+    assert log_count == 2 * len(kept)
+
+
+async def test_receipt_purge_deletes_old_receipts_with_their_cascaded_rows_and_keeps_the_rest(
+    retention_db: RetentionDatabase,
+) -> None:
+    # Given old receipts (two with a media descriptor and a burst outcome), and receipts after the cutoff with them too.
+    h = retention_db
+    async with transaction(h.first):
+        purged = {
+            await add_receipt(h, OLD, dependents=True),
+            await add_receipt(h, OLD - timedelta(days=30), dependents=True),
+            await add_receipt(h, OLD),
+        }
+        kept = {await add_receipt(h, CUTOFF, dependents=True), await add_receipt(h, RECENT, dependents=True)}
+    # When one batch runs.
+    deleted = await purge_once(TABLES["channel_event_receipts"], h.first, 100)
+    async with transaction(h.first):
+        media = await h.first.fetchall("SELECT event_key FROM channel_event_media")
+        outcomes = await h.first.fetchall("SELECT event_key FROM personal_burst_inputs")
+    # Then the old receipts went with their media descriptors and burst outcomes, and the others kept every row.
+    assert deleted == len(purged)
+    assert await remaining(h, TABLES["channel_event_receipts"]) == kept
+    assert {UUID(str(row["event_key"])) for row in media} == kept
+    assert {UUID(str(row["event_key"])) for row in outcomes} == kept
+
+
+async def test_delivery_purge_deletes_only_finished_deliveries_and_keeps_pending_ones_and_every_message(
+    retention_db: RetentionDatabase,
+) -> None:
+    # Given old delivered and terminal deliveries, and ones that must stay: finished inside the window, and pending
+    # ones however old (waiting, and leased by a relay).
+    h = retention_db
+    async with transaction(h.first):
+        delivered = await add_gateway(h, status="completed", completed_at=OLD)
+        terminal = await add_gateway(h, status="completed", completed_at=OLD)
+        recent_delivered = await add_gateway(h, status="completed", completed_at=OLD)
+        recent_terminal = await add_gateway(h, status="completed", completed_at=OLD)
+        waiting = await add_gateway(h, status="completed", completed_at=OLD)
+        leased = await add_gateway(h, status="completed", completed_at=OLD)
+        purged = {
+            await add_delivery(h, delivered, delivered=True, terminal=False, at=OLD),
+            await add_delivery(h, terminal, delivered=False, terminal=True, at=OLD - timedelta(days=9)),
+        }
+        kept = {
+            await add_delivery(h, recent_delivered, delivered=True, terminal=False, at=RECENT),
+            await add_delivery(h, recent_terminal, delivered=False, terminal=True, at=CUTOFF),
+            await add_delivery(h, waiting, delivered=False, terminal=False),
+            leased_delivery := await add_delivery(h, leased, delivered=False, terminal=False),
+        }
+        await h.first.execute(
+            "UPDATE gateway_report_deliveries SET claim_token = %(token)s, lease_expires_at = %(at)s WHERE id = %(id)s",
+            {"token": uuid4(), "at": OLD, "id": leased_delivery},
+        )
+    # When one batch runs, then another.
+    first = await purge_once(TABLES["gateway_report_deliveries"], h.first, 100)
+    second = await purge_once(TABLES["gateway_report_deliveries"], h.first, 100)
+    async with transaction(h.first):
+        messages = await h.first.fetchval("SELECT count(*) FROM gateway_messages")
+    # Then exactly the finished deliveries went, the pending ones stay claimable, and no message row was touched.
+    assert (first, second) == (len(purged), 0)
+    assert await remaining(h, TABLES["gateway_report_deliveries"]) == kept
+    assert messages == 6
+
+
+async def test_revision_purge_never_deletes_the_newest_revision_of_a_file(retention_db: RetentionDatabase) -> None:
+    # Given three old revisions of one file, an old file with a single revision, the same path under another agent,
+    # two old revisions that share a timestamp, and a superseded revision still inside the window.
+    h = retention_db
+    other_agent = await add_agent(h)
+    async with transaction(h.first):
+        oldest = await add_revision(h, "a.md", OLD - timedelta(days=2))
+        middle = await add_revision(h, "a.md", OLD - timedelta(days=1))
+        newest = await add_revision(h, "a.md", OLD)
+        only = await add_revision(h, "single.md", OLD - timedelta(days=5))
+        other_agents = await add_revision(h, "a.md", OLD - timedelta(days=5), agent_id=other_agent)
+        twin_one = await add_revision(h, "twin.md", OLD)
+        twin_two = await add_revision(h, "twin.md", OLD)
+        inside_old = await add_revision(h, "window.md", CUTOFF)
+        inside_new = await add_revision(h, "window.md", RECENT)
+    # When one batch runs, then another.
+    first = await purge_once(TABLES["workspace_file_revisions"], h.first, 100)
+    second = await purge_once(TABLES["workspace_file_revisions"], h.first, 100)
+    async with transaction(h.first):
+        rows = await h.first.fetchall("SELECT id FROM workspace_file_revisions")
+    left = {row["id"] for row in rows}
+    # Then only superseded revisions past the cutoff went: the newest of every file stays, and of two revisions with
+    # one timestamp exactly one stays.
+    assert (first, second) == (3, 0)
+    assert {oldest, middle}.isdisjoint(left)
+    assert {newest, only, other_agents, inside_old, inside_new} <= left
+    assert len({twin_one, twin_two} & left) == 1
+    assert len(left) == 6
+
+
+async def test_revision_purge_leaves_the_newest_revision_when_batches_run_in_parallel(
+    retention_db: RetentionDatabase,
+) -> None:
+    # Given one file with six old revisions.
+    h = retention_db
+    async with transaction(h.first):
+        ids = [await add_revision(h, "busy.md", OLD + timedelta(minutes=minutes)) for minutes in range(6)]
+    # When one purger deletes a batch and stays open while a second purger runs and commits.
+    async with transaction(h.first):
+        await h.first.execute(GUARD)
+        first = await purge_revisions(h.first, 3)
+        async with transaction(h.second):
+            await h.second.execute(GUARD)
+            with anyio.fail_after(FAIL_AFTER_SECONDS):
+                second = await purge_revisions(h.second, 3)
+    # Then the second neither waited nor took a row the first held, and the newest revision survived both.
+    assert (first, second) == (3, 2)
+    async with transaction(h.first):
+        rows = await h.first.fetchall("SELECT id FROM workspace_file_revisions")
+    assert {row["id"] for row in rows} == {ids[-1]}
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_worker_pass_purges_every_append_only_table_only_when_its_retention_is_set(
+    retention_db: RetentionDatabase, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    # Given an expired row and a protected row in each opt-in table, and a clock whose cutoff for all of them is
+    # CUTOFF when their retention is set.
+    h = retention_db
+    days = MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS + 3
+    async with transaction(h.first):
+        expired = {
+            "notifications": await add_notification(h, OLD),
+            "tasks": await add_task(h, status="done", completed_at=OLD),
+            "channel_event_receipts": await add_receipt(h, OLD, dependents=True),
+            "gateway_report_deliveries": await add_delivery(
+                h, await add_gateway(h, status="completed", completed_at=OLD), delivered=True, terminal=False
+            ),
+            "workspace_file_revisions": await add_revision(h, "worker.md", OLD),
+        }
+        protected = {
+            "notifications": await add_notification(h, RECENT),
+            "tasks": await add_task(h, status="pending", completed_at=None, updated_at=OLD),
+            "channel_event_receipts": await add_receipt(h, RECENT, dependents=True),
+            "gateway_report_deliveries": await add_delivery(
+                h, await add_gateway(h, status="completed", completed_at=OLD), delivered=False, terminal=False
+            ),
+            "workspace_file_revisions": await add_revision(h, "worker.md", OLD + timedelta(days=1)),
+        }
+
+    class Clock:
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return CUTOFF + timedelta(days=days)
+
+    async def finish_pass(seconds: float) -> None:
+        raise PassFinishedError
+
+    monkeypatch.setattr(worker, "datetime", Clock)
+    monkeypatch.setattr(worker, "sleep", finish_pass)
+    for setting in (
+        "NOTIFICATION_RETENTION_DAYS",
+        "TASK_RETENTION_DAYS",
+        "CHANNEL_EVENT_RECEIPT_RETENTION_DAYS",
+        "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS",
+        "WORKSPACE_REVISION_RETENTION_DAYS",
+    ):
+        monkeypatch.setattr(get_settings(), setting, days if enabled else 0)
+    for setting in (
+        "ACTIVITY_LOG_RETENTION_DAYS",
+        "TRIGGER_EXECUTION_RETENTION_DAYS",
+        "GATEWAY_MESSAGE_RETENTION_DAYS",
+    ):
+        monkeypatch.setattr(get_settings(), setting, 0)
+    # When one real worker pass runs on this schema.
+    async with transaction(h.first):
+        with pytest.raises(PassFinishedError):
+            await worker.start_operational_log_retention_worker()
+    # Then with retention set the expired rows are gone and the protected ones stay; with it at 0 nothing is deleted.
+    for name in NEW_TABLES:
+        present = await remaining(h, TABLES[name])
+        assert protected[name] in present
+        assert (expired[name] in present) is not enabled
+    async with transaction(h.first):
+        dependents = await h.first.fetchval("SELECT count(*) FROM channel_event_media")
+    assert dependents == (1 if enabled else 2)
