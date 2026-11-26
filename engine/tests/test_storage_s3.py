@@ -15,6 +15,7 @@ import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 from botocore.stub import Stubber
 
+from app.config import get_settings
 from app.services.storage_runtime.base import (
     MAX_DIR_PAGE_LIMIT,
     AtomicCreateUnsupportedError,
@@ -358,6 +359,31 @@ async def test_s3_bounded_read_counts_stream_not_metadata_and_closes(monkeypatch
     assert all(0 < size <= limit + 1 for size in body.requests)
     assert body.closed
     assert body.close_count == 1
+
+
+@pytest.mark.parametrize("extra", [-1, 0, 1])
+async def test_s3_bounded_read_at_the_workspace_content_limit_never_pulls_more_than_one_byte_past_it(
+    monkeypatch, extra
+):
+    limit = get_settings().WORKSPACE_FILE_CONTENT_MAX_BYTES
+    backend = S3StorageBackend(bucket="bucket", prefix="tenant")
+    body = CountedBody(b"x" * (limit + extra), chunk_size=limit)
+
+    class Client:
+        def get_object(self, **kwargs):
+            return {"Body": body, "ContentLength": 1}
+
+    monkeypatch.setattr(backend, "_client_or_raise", Client)
+
+    if extra > 0:
+        with pytest.raises(StorageReadLimitExceededError) as raised:
+            await backend.read_bytes_bounded("report.txt", limit)
+        assert raised.value.max_bytes == limit
+    else:
+        assert len(await backend.read_bytes_bounded("report.txt", limit)) == limit + extra
+
+    assert body.consumed <= limit + 1
+    assert body.closed
 
 
 async def test_s3_bounded_read_closes_body_on_read_error(monkeypatch):

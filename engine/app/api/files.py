@@ -22,7 +22,7 @@ from fastapi import (
 )
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError, field_validator
 from starlette.datastructures import Headers
 
 from app.config import get_settings
@@ -110,6 +110,27 @@ router = APIRouter(prefix="/agents/{agent_id}/files", tags=["files"])
 _BINARY_SAMPLE_BYTES = 1024 * 1024
 
 
+def _file_too_large(max_bytes: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+        detail={
+            "code": "file_too_large",
+            "message": f"File is larger than the {max_bytes}-byte limit. Download it instead.",
+            "max_bytes": max_bytes,
+        },
+    )
+
+
+async def _read_text_within_limit(storage: StorageBackend, key: str) -> str:
+    """A file's text, read within ``WORKSPACE_FILE_CONTENT_MAX_BYTES``; a larger file answers 413, never a cut-off body."""
+    max_bytes = settings.WORKSPACE_FILE_CONTENT_MAX_BYTES
+    try:
+        data = await storage.read_bytes_bounded(key, max_bytes)
+    except StorageReadLimitExceededError as exc:
+        raise _file_too_large(max_bytes) from exc
+    return data.decode("utf-8", errors="replace")
+
+
 async def _fresh_agent_authority(current_user: UserRecord, agent: AgentRecord) -> tuple[UserRecord, AgentRecord, str]:
     from app.api.skills import _fresh_import_actor
 
@@ -130,6 +151,7 @@ async def _persist_workspace_revision(
     after_content: str | None,
     session_id: str | None = None,
     merge_user_autosave: bool = False,
+    content_omitted: bool = False,
     source_revision: WorkspaceFileRevisionRecord | None = None,
 ) -> WorkspaceFileRevisionRecord | None:
     from app.api.background_tasks import schedule_background_task
@@ -163,6 +185,7 @@ async def _persist_workspace_revision(
             after_content=after_content,
             session_id=session_id,
             merge_user_autosave=merge_user_autosave,
+            content_omitted=content_omitted,
         )
         schedule_background_task(invalidate_for_workspace_paths(agent.id, path), "invalidate workspace context")
     return saved
@@ -183,9 +206,9 @@ async def _write_workspace_file(
     storage = workspace.get_storage_backend()
     storage_key = normalize_storage_key(f"{agent.id}/{normalized}")
     before = (
-        await storage.read_text(storage_key, encoding="utf-8", errors="replace")
+        await workspace.read_revision_text(storage, storage_key)
         if await storage.exists(storage_key)
-        else None
+        else workspace.RevisionText()
     )
     token = data.expected_version_token
     write_result = await storage.write_bytes_if_match(
@@ -201,10 +224,11 @@ async def _write_workspace_file(
         agent,
         path=normalized,
         operation=operation,
-        before_content=before,
+        before_content=before.text,
         after_content=data.content,
         session_id=data.session_id,
         merge_user_autosave=data.autosave,
+        content_omitted=before.omitted,
         source_revision=source_revision,
     )
     return workspace.WorkspaceWriteResult(
@@ -226,9 +250,9 @@ async def _delete_workspace_file(
     if not storage_exists and not storage_is_dir:
         return workspace.WorkspaceWriteResult(False, normalized, f"File not found: {normalized}")
     before = (
-        await storage.read_text(storage_key, encoding="utf-8", errors="replace")
+        await workspace.read_revision_text(storage, storage_key)
         if storage_exists and await storage.is_file(storage_key)
-        else None
+        else workspace.RevisionText()
     )
     failure: workspace.WorkspaceWriteResult | None = None
     async with workspace.workspace_locks(agent.id, [normalized]):
@@ -250,8 +274,9 @@ async def _delete_workspace_file(
         agent,
         path=normalized,
         operation="delete",
-        before_content=before,
+        before_content=before.text,
         after_content=None,
+        content_omitted=before.omitted,
     )
     if failure is not None:
         return failure
@@ -271,6 +296,13 @@ class FileWrite(BaseModel):
     autosave: bool = False
     session_id: str | None = None
     expected_version_token: str | None = None
+
+    @field_validator("content")
+    @classmethod
+    def _content_within_limit(cls, content: str) -> str:
+        if len(content.encode("utf-8")) > settings.WORKSPACE_FILE_CONTENT_MAX_BYTES:
+            raise ValueError(f"Content is larger than the {settings.WORKSPACE_FILE_CONTENT_MAX_BYTES}-byte file limit")
+        return content
 
 
 class FileLockBody(BaseModel):
@@ -513,10 +545,13 @@ async def read_file(
     key, _ = _visible_storage_key(agent_id, path, current_user.tenant_id)
     if not await storage.exists(key) or not await storage.is_file(key):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-    version = await storage.get_version(key)
+    try:
+        version = await storage.get_version_bounded(key, settings.WORKSPACE_FILE_CONTENT_MAX_BYTES)
+    except StorageReadLimitExceededError as exc:
+        raise _file_too_large(exc.max_bytes) from exc
 
     try:
-        content = await storage.read_text(key, encoding="utf-8", errors="replace")
+        content = await _read_text_within_limit(storage, key)
         return FileContent(path=path, content=content, version_token=version.token)
     except UnicodeDecodeError:
         stat = await storage.stat(key)
@@ -683,7 +718,7 @@ async def _read_storage_companion(
         try:
             if not await storage.is_file(key):
                 continue
-            content = await storage.read_text(key, encoding="utf-8", errors="replace")
+            content = await _read_text_within_limit(storage, key)
         except OSError, UnicodeError, HTTPException:
             continue
         if content:
@@ -754,7 +789,7 @@ async def preview_file(
     download_url = f"/api/agents/{agent_id}/files/download?path={path}"
 
     if kind in ("markdown", "html", "text"):
-        content = await storage.read_text(key, encoding="utf-8", errors="replace")
+        content = await _read_text_within_limit(storage, key)
         return {
             "path": path,
             "kind": kind,
@@ -764,7 +799,7 @@ async def preview_file(
             "download_url": download_url,
         }
     if kind == "csv":
-        content = await storage.read_text(key, encoding="utf-8", errors="replace")
+        content = await _read_text_within_limit(storage, key)
         rows = _parse_csv_rows(content)
         return {
             "path": path,
@@ -1044,6 +1079,7 @@ async def get_file_revisions(
             "session_id": rev.session_id,
             "before_content": rev.before_content,
             "after_content": rev.after_content,
+            "content_omitted": rev.content_omitted,
             "created_at": rev.created_at.isoformat() if rev.created_at else None,
             "updated_at": rev.updated_at.isoformat() if rev.updated_at else None,
         }
@@ -1064,13 +1100,24 @@ async def restore_file_revision(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found")
     require_member_visible_path(agent_id, revision.path)
     if revision.after_content is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot restore an empty/deleted revision")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Cannot restore this revision: its content was not stored because the file was binary or too large"
+                if revision.content_omitted
+                else "Cannot restore an empty/deleted revision"
+            ),
+        )
+    try:
+        restore = FileWrite(content=revision.after_content, expected_version_token=data.expected_version_token)
+    except ValidationError as exc:
+        raise _file_too_large(settings.WORKSPACE_FILE_CONTENT_MAX_BYTES) from exc
 
     restored = await _write_workspace_file(
         current_user,
         agent,
         revision.path,
-        FileWrite(content=revision.after_content, expected_version_token=data.expected_version_token),
+        restore,
         operation="restore",
         source_revision=revision,
     )

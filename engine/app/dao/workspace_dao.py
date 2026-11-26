@@ -23,6 +23,7 @@ _REVISION_COLUMNS = (
     "after_content",
     "content_hash",
     "group_key",
+    "content_omitted",
     "created_at",
     "updated_at",
 )

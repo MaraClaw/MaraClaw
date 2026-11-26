@@ -293,6 +293,9 @@ class Settings(BaseSettings):
     S3_MAX_POOL_CONNECTIONS: int = 50
     # Threads the storage lane runs blocking S3 calls on; capped at S3_MAX_POOL_CONNECTIONS.
     S3_THREAD_LANE_SIZE: int = Field(default=32, ge=1)
+    # Largest workspace file the editor and the text and CSV previews read into memory, and the most text one save
+    # may carry. A larger file answers 413 `file_too_large` and is downloaded instead.
+    WORKSPACE_FILE_CONTENT_MAX_BYTES: int = Field(default=1048576, gt=0, le=67108864)
 
     # Process role
     PROCESS_ROLE: str = "all"

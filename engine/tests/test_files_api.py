@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from tests.membership_generation_fixtures import pin_membership_generation
 
 from app.api import files as files_api
@@ -19,7 +20,8 @@ from app.core.domain.users import UserRole
 from app.core.security import create_access_token
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
-from app.services import file_download_tickets
+from app.records.workspace import WorkspaceFileRevisionRecord
+from app.services import file_download_tickets, workspace_collaboration
 from app.services.storage_runtime.disposition import content_disposition
 from app.services.storage_runtime.local import LocalStorageBackend
 from materialize_fixtures import GatedObject, temp_files, temp_root
@@ -435,3 +437,213 @@ async def test_download_rejects_query_jwt_and_missing_credentials(download, quer
     response = TestClient(app).get(url)
     assert response.status_code == 401
     download.loader.assert_not_awaited()
+
+
+LIMIT = 16
+
+
+@pytest.fixture
+def content_limit(monkeypatch):
+    monkeypatch.setattr(files_api.settings, "WORKSPACE_FILE_CONTENT_MAX_BYTES", LIMIT)
+    return LIMIT
+
+
+@pytest.fixture
+def workspace_storage(monkeypatch, tmp_path, content_limit):
+    """A local workspace behind the files API for a member with manage access."""
+    user = make_user()
+    agent = make_agent(user.id, tenant_id=user.tenant_id)
+    storage = LocalStorageBackend(str(tmp_path))
+
+    @asynccontextmanager
+    async def no_locks(*_args, **_kwargs):
+        yield
+
+    monkeypatch.setattr(files_api, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    monkeypatch.setattr("app.services.workspace_collaboration.get_storage_backend", lambda: storage)
+    monkeypatch.setattr("app.services.workspace_collaboration.workspace_locks", no_locks)
+    return SimpleNamespace(user=user, agent=agent, storage=storage)
+
+
+@pytest.mark.parametrize(("extra", "accepted"), [(-1, True), (0, True), (1, False)])
+def test_file_write_caps_content_by_encoded_bytes_at_the_limit(content_limit, extra, accepted):
+    # Given content whose character count stays under the limit while its UTF-8 size is at, under or over it
+    content = "é" * 7 + "x" * (2 + extra)
+    assert len(content.encode("utf-8")) == content_limit + extra
+    # When / Then
+    if accepted:
+        assert files_api.FileWrite(content=content).content == content
+    else:
+        with pytest.raises(ValidationError):
+            files_api.FileWrite(content=content)
+
+
+def test_an_oversized_save_fails_validation_before_any_storage_call(monkeypatch, content_limit):
+    # Given a route whose storage and access checks would fail the test if they ran
+    touched = AsyncMock(side_effect=AssertionError("storage must not be reached"))
+    monkeypatch.setattr(files_api, "check_agent_access", touched)
+    monkeypatch.setattr(files_api, "get_storage_backend", touched)
+    app = FastAPI()
+    app.include_router(files_api.router, prefix="/api")
+    app.dependency_overrides[files_api.get_current_user] = make_user
+    app.dependency_overrides[files_api.guest_write_exclusion] = lambda: None
+    # When
+    response = TestClient(app).put(
+        f"/api/agents/{uuid.uuid4()}/files/content",
+        params={"path": "workspace/log.txt"},
+        json={"content": "x" * (content_limit + 1)},
+    )
+    # Then
+    assert response.status_code == 422
+    touched.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("size", "too_large"), [(LIMIT - 1, False), (LIMIT, False), (LIMIT + 1, True)])
+async def test_content_read_returns_a_file_up_to_the_limit_and_refuses_one_byte_over(
+    workspace_storage, size, too_large
+):
+    # Given
+    user, agent, storage = workspace_storage.user, workspace_storage.agent, workspace_storage.storage
+    key = f"{agent.id}/workspace/log.txt"
+    await storage.write_bytes(key, b"x" * size)
+    # When
+    request = files_api.read_file(agent_id=agent.id, path="workspace/log.txt", current_user=user)
+    # Then
+    if too_large:
+        with pytest.raises(HTTPException) as exc:
+            await request
+        assert exc.value.status_code == 413
+        assert exc.value.detail == {
+            "code": "file_too_large",
+            "message": f"File is larger than the {LIMIT}-byte limit. Download it instead.",
+            "max_bytes": LIMIT,
+        }
+    else:
+        result = await request
+        assert result.content == "x" * size
+        assert result.version_token == (await storage.get_version(key)).token
+
+
+@pytest.mark.parametrize("name", ["log.txt", "rows.csv", "notes.md", "page.html"])
+@pytest.mark.parametrize(("size", "too_large"), [(LIMIT, False), (LIMIT + 1, True)])
+async def test_text_and_csv_previews_read_within_the_limit_and_refuse_a_larger_file(
+    workspace_storage, name, size, too_large
+):
+    # Given
+    user, agent, storage = workspace_storage.user, workspace_storage.agent, workspace_storage.storage
+    await storage.write_bytes(f"{agent.id}/workspace/{name}", b"x" * size)
+    # When
+    request = files_api.preview_file(agent_id=agent.id, path=f"workspace/{name}", current_user=user)
+    # Then
+    if too_large:
+        with pytest.raises(HTTPException) as exc:
+            await request
+        assert exc.value.status_code == 413
+        assert exc.value.detail == {
+            "code": "file_too_large",
+            "message": f"File is larger than the {LIMIT}-byte limit. Download it instead.",
+            "max_bytes": LIMIT,
+        }
+    else:
+        assert dict(await request)["path"] == f"workspace/{name}"
+
+
+@pytest.mark.parametrize(
+    ("size", "omitted"),
+    [
+        (workspace_collaboration.MAX_REVISION_TEXT_BYTES, False),
+        (workspace_collaboration.MAX_REVISION_TEXT_BYTES + 1, True),
+    ],
+)
+@pytest.mark.parametrize("operation", ["write", "delete"])
+async def test_member_write_and_delete_capture_previous_text_only_within_the_revision_limit(
+    monkeypatch, workspace_storage, operation, size, omitted
+):
+    # Given a stored file at or just over the revision limit and a spy on the persisted revision
+    user, agent, storage = workspace_storage.user, workspace_storage.agent, workspace_storage.storage
+    await storage.write_bytes(f"{agent.id}/workspace/log.txt", b"x" * size)
+    captured: list[dict[str, object]] = []
+
+    async def persist(*_args, **kwargs):
+        captured.append(kwargs)
+
+    monkeypatch.setattr(files_api, "_persist_workspace_revision", persist)
+    # When
+    if operation == "write":
+        result = await files_api._write_workspace_file(
+            user, agent, "workspace/log.txt", files_api.FileWrite(content="new")
+        )
+    else:
+        result = await files_api._delete_workspace_file(user, agent, "workspace/log.txt", None)
+    # Then the text is stored within the limit and marked as left out beyond it
+    assert result.ok
+    [revision] = captured
+    assert revision["content_omitted"] is omitted
+    assert revision["before_content"] == (None if omitted else "x" * size)
+
+
+@pytest.mark.parametrize(
+    ("revision", "restorable"),
+    [
+        (
+            WorkspaceFileRevisionRecord(
+                id=uuid.uuid4(), agent_id=uuid.uuid4(), path="workspace/big.log", content_omitted=True
+            ),
+            False,
+        ),
+        (WorkspaceFileRevisionRecord(id=uuid.uuid4(), agent_id=uuid.uuid4(), path="workspace/gone.txt"), False),
+        (
+            WorkspaceFileRevisionRecord(
+                id=uuid.uuid4(), agent_id=uuid.uuid4(), path="workspace/a.txt", after_content="x" * LIMIT
+            ),
+            True,
+        ),
+    ],
+)
+async def test_restore_refuses_a_revision_without_stored_content(monkeypatch, content_limit, revision, restorable):
+    # Given
+    user = make_user()
+    agent = make_agent(user.id, tenant_id=user.tenant_id)
+    write = AsyncMock(return_value=workspace_collaboration.WorkspaceWriteResult(True, revision.path, "ok"))
+    monkeypatch.setattr(files_api, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    monkeypatch.setattr(files_api.workspace_file_revision_dao, "get_for_agent", AsyncMock(return_value=revision))
+    monkeypatch.setattr(files_api, "_write_workspace_file", write)
+    body = files_api.RestoreRevisionBody(revision_id=revision.id)
+    # When
+    request = files_api.restore_file_revision(agent_id=agent.id, data=body, current_user=user)
+    # Then
+    if restorable:
+        assert (await request)["path"] == revision.path
+        write.assert_awaited_once()
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await request
+        assert exc.value.status_code == 400
+        write.assert_not_awaited()
+
+
+async def test_restore_refuses_stored_text_larger_than_the_current_limit(monkeypatch, content_limit):
+    # Given a revision stored under a larger limit than the configured one
+    user = make_user()
+    agent = make_agent(user.id, tenant_id=user.tenant_id)
+    revision = WorkspaceFileRevisionRecord(
+        id=uuid.uuid4(), agent_id=agent.id, path="workspace/a.txt", after_content="x" * (content_limit + 1)
+    )
+    write = AsyncMock()
+    monkeypatch.setattr(files_api, "check_agent_access", AsyncMock(return_value=(agent, "manage")))
+    monkeypatch.setattr(files_api.workspace_file_revision_dao, "get_for_agent", AsyncMock(return_value=revision))
+    monkeypatch.setattr(files_api, "_write_workspace_file", write)
+    # When
+    with pytest.raises(HTTPException) as exc:
+        await files_api.restore_file_revision(
+            agent_id=agent.id, data=files_api.RestoreRevisionBody(revision_id=revision.id), current_user=user
+        )
+    # Then
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {
+        "code": "file_too_large",
+        "message": f"File is larger than the {content_limit}-byte limit. Download it instead.",
+        "max_bytes": content_limit,
+    }
+    write.assert_not_awaited()

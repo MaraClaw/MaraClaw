@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from tests.membership_generation_fixtures import pin_membership_generation
 
-from app.api import file_previews
+from app.api import file_previews, files as files_api
 from app.core import security
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
@@ -60,3 +60,16 @@ async def preview_context(tmp_path, monkeypatch):
     app.include_router(file_previews.router, prefix="/api")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         yield PreviewContext(client, user, agent_id, tmp_path, storage, token, access, generation)
+
+
+CONTENT_LIMIT = 16
+
+
+@pytest.fixture
+async def content_context(preview_context, monkeypatch):
+    """The preview context with the files API reading its storage under a small content limit."""
+    ctx = preview_context
+    monkeypatch.setattr(files_api.settings, "WORKSPACE_FILE_CONTENT_MAX_BYTES", CONTENT_LIMIT)
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: ctx.storage)
+    monkeypatch.setattr(files_api, "check_agent_access", AsyncMock(return_value=(None, "use")))
+    return ctx

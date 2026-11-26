@@ -25,6 +25,7 @@ class WorkspaceFileRevisionRecord:
     after_content: str | None = None
     content_hash: str = ""
     group_key: str | None = None
+    content_omitted: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -42,6 +43,7 @@ class WorkspaceFileRevisionRecord:
             after_content=str_from_row(row["after_content"]) or None,
             content_hash=str_from_row(row.get("content_hash")),
             group_key=str_from_row(row["group_key"]) or None,
+            content_omitted=bool(row.get("content_omitted", False)),
             created_at=datetime_from_row(row.get("created_at")),
             updated_at=datetime_from_row(row.get("updated_at")),
         )

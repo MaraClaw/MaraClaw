@@ -6,17 +6,12 @@ rollback, and human edit locks remain consistent across REST APIs and tools.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import uuid
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import batched
 from pathlib import Path
-from typing import cast
-
-import aiofiles
 
 from app.dao.workspace_dao import workspace_edit_lock_dao, workspace_file_revision_dao
 from app.records.workspace import WorkspaceEditLockRecord, WorkspaceFileRevisionRecord
@@ -77,6 +72,14 @@ class WorkspaceWriteResult:
     rejected_paths: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class RevisionText:
+    """A file's text as a revision stores it; ``omitted`` when the file is binary or past ``MAX_REVISION_TEXT_BYTES``."""
+
+    text: str | None = None
+    omitted: bool = False
+
+
 def content_hash(content: str | None) -> str:
     """Return a stable hash for text content."""
     return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
@@ -95,25 +98,6 @@ def normalize_workspace_path(path: str) -> str:
             continue
         parts.append(part)
     return "/".join(parts)
-
-
-async def read_text_if_exists(path: Path) -> str | None:
-    """Read a UTF-8 text file if it exists; return None for missing/binary files."""
-    if not await asyncio.to_thread(path.exists) or not await asyncio.to_thread(path.is_file):
-        return None
-    if path.suffix.lower() in BINARY_REVISION_EXTENSIONS:
-        return None
-    try:
-        if (await asyncio.to_thread(path.stat)).st_size > MAX_REVISION_TEXT_BYTES:
-            return None
-    except OSError:
-        return None
-    async with aiofiles.open(path, "rb") as f:
-        read = cast("Callable[[], Awaitable[bytes]]", f.read)
-        data = await read()
-    if b"\x00" in data:
-        return None
-    return data.decode("utf-8", errors="replace")
 
 
 async def cleanup_expired_locks() -> None:
@@ -177,8 +161,13 @@ async def record_revision(
     after_content: str | None,
     session_id: str | None = None,
     merge_user_autosave: bool = False,
+    content_omitted: bool = False,
 ) -> WorkspaceFileRevisionRecord | None:
-    """Record a revision, optionally merging rapid user autosaves."""
+    """Record a revision, optionally merging rapid user autosaves.
+
+    ``content_omitted`` marks a revision whose file text was left out because it was binary or too large to read for
+    history; it is always recorded, even when the stored texts match, and it cannot be restored.
+    """
     normalized = normalize_workspace_path(path)
     # PostgreSQL text columns cannot store NUL bytes. Treat such content as
     # non-text revision data so binary files can still be moved/deleted safely.
@@ -186,7 +175,7 @@ async def record_revision(
     after_content = after_content.replace("\x00", "") if after_content is not None else None
     before = before_content or ""
     after = after_content or ""
-    if before == after and operation not in {"delete", "move_source", "move_destination"}:
+    if before == after and operation not in {"delete", "move_source", "move_destination"} and not content_omitted:
         return None
 
     group_key = None
@@ -222,6 +211,7 @@ async def record_revision(
             "after_content": after_content,
             "content_hash": content_hash(after_content),
             "group_key": group_key,
+            "content_omitted": content_omitted,
         }
     )
 
@@ -259,11 +249,7 @@ async def write_workspace_file(
 
     storage = get_storage_backend()
     storage_key = normalize_storage_key(f"{agent_id}/{normalized}")
-    before = (
-        await storage.read_text(storage_key, encoding="utf-8", errors="replace")
-        if await storage.exists(storage_key)
-        else None
-    )
+    before = await read_revision_text(storage, storage_key) if await storage.exists(storage_key) else RevisionText()
     write_result = await storage.write_bytes_if_match(
         storage_key,
         content.encode("utf-8"),
@@ -279,10 +265,11 @@ async def write_workspace_file(
         operation=operation,
         actor_type=actor_type,
         actor_id=actor_id,
-        before_content=before,
+        before_content=before.text,
         after_content=content,
         session_id=session_id,
         merge_user_autosave=merge_user_autosave,
+        content_omitted=before.omitted,
     )
     from app.services.agent_context_cache import invalidate_for_workspace_paths
 
@@ -323,9 +310,9 @@ async def delete_workspace_file(
     if not storage_exists and not storage_is_dir:
         return WorkspaceWriteResult(False, normalized, f"File not found: {normalized}")
     before = (
-        await storage.read_text(storage_key, encoding="utf-8", errors="replace")
+        await read_revision_text(storage, storage_key)
         if storage_exists and await storage.is_file(storage_key)
-        else None
+        else RevisionText()
     )
     failure: WorkspaceWriteResult | None = None
     tree: TreeOutcome | None = None
@@ -359,9 +346,10 @@ async def delete_workspace_file(
             operation="delete",
             actor_type=actor_type,
             actor_id=actor_id,
-            before_content=before,
+            before_content=before.text,
             after_content=None,
             session_id=session_id,
+            content_omitted=before.omitted,
         )
     from app.services.agent_context_cache import invalidate_for_workspace_paths
 
@@ -438,9 +426,13 @@ async def move_workspace_path(
     failure: WorkspaceWriteResult | None = None
     tree: TreeOutcome | None = None
     async with workspace_locks(agent_id, [source_normalized, destination_normalized]):
-        source_before = await _revision_text(storage, source_key) if source_exists and not source_is_dir else None
+        source_before = (
+            await read_revision_text(storage, source_key) if source_exists and not source_is_dir else RevisionText()
+        )
         destination_before = (
-            await _revision_text(storage, destination_key) if destination_exists and not destination_is_dir else None
+            await read_revision_text(storage, destination_key)
+            if destination_exists and not destination_is_dir
+            else RevisionText()
         )
         if destination_exists or destination_is_dir:
             if not overwrite:
@@ -486,7 +478,9 @@ async def move_workspace_path(
                 )
 
         destination_after = (
-            await _revision_text(storage, destination_key) if await storage.is_file(destination_key) else None
+            await read_revision_text(storage, destination_key)
+            if await storage.is_file(destination_key)
+            else RevisionText()
         )
 
     if tree is not None:
@@ -512,9 +506,10 @@ async def move_workspace_path(
             operation="move_source",
             actor_type=actor_type,
             actor_id=actor_id,
-            before_content=source_before,
+            before_content=source_before.text,
             after_content=None,
             session_id=session_id,
+            content_omitted=source_before.omitted,
         )
         destination_revision = await record_revision(
             agent_id=agent_id,
@@ -522,9 +517,10 @@ async def move_workspace_path(
             operation="move_destination",
             actor_type=actor_type,
             actor_id=actor_id,
-            before_content=destination_before,
-            after_content=destination_after,
+            before_content=destination_before.text,
+            after_content=destination_after.text,
             session_id=session_id,
+            content_omitted=destination_before.omitted or destination_after.omitted,
         )
         revision = destination_revision or source_revision
     from app.services.agent_context_cache import invalidate_for_workspace_paths
@@ -629,7 +625,7 @@ async def _record_each_file(
     session_id: str | None,
 ) -> WorkspaceFileRevisionRecord | None:
     """One revision per (path, operation), written in order on purpose: a folder must not open a pool's worth of
-    connections at once. A tree's files are not read back, so these carry no content. Returns the last one."""
+    connections at once. A tree's files are not read back, so these carry no content and say so. Returns the last one."""
     last: WorkspaceFileRevisionRecord | None = None
     for path, operation in entries:
         last = (
@@ -642,6 +638,7 @@ async def _record_each_file(
                 before_content=None,
                 after_content=None,
                 session_id=session_id,
+                content_omitted=True,
             )
             or last
         )
@@ -667,15 +664,17 @@ async def _collect_tree_versions(storage: StorageBackend, root_key: str) -> list
     return versions
 
 
-async def _revision_text(storage: StorageBackend, key: str) -> str | None:
-    """A file's text for a revision, read within ``MAX_REVISION_TEXT_BYTES``; binary and larger files have none."""
+async def read_revision_text(storage: StorageBackend, key: str) -> RevisionText:
+    """A file's text for a revision, read within ``MAX_REVISION_TEXT_BYTES``; a binary or larger file is omitted."""
     if Path(key).suffix.lower() in BINARY_REVISION_EXTENSIONS:
-        return None
+        return RevisionText(omitted=True)
     try:
         data = await storage.read_bytes_bounded(key, MAX_REVISION_TEXT_BYTES)
-    except StorageReadLimitExceededError, FileNotFoundError:
-        return None
-    return data.decode("utf-8", errors="replace")
+    except StorageReadLimitExceededError:
+        return RevisionText(omitted=True)
+    except FileNotFoundError:
+        return RevisionText()
+    return RevisionText(data.decode("utf-8", errors="replace"))
 
 
 async def list_revisions(

@@ -2288,3 +2288,128 @@ async def test_a_folder_delete_stops_when_a_renewal_finds_the_lock_taken(
     assert "lock lost" in result.message
     assert len(storage.files) == 500
     assert len(revisions) == 1000
+
+
+@pytest.fixture
+def captured_revisions(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    captured: list[dict[str, object]] = []
+
+    async def record(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(workspace_collaboration, "record_revision", record)
+    return captured
+
+
+REVISION_LIMIT = workspace_collaboration.MAX_REVISION_TEXT_BYTES
+# (file name, size, text kept): at the limit the text is stored, one byte over or for a binary type it is left out.
+REVISION_CASES = [
+    ("log.txt", REVISION_LIMIT, True),
+    ("log.txt", REVISION_LIMIT + 1, False),
+    ("image.png", 8, False),
+]
+
+
+@pytest.mark.parametrize(("name", "size", "kept"), REVISION_CASES)
+async def test_a_write_captures_the_previous_text_only_within_the_revision_limit(
+    monkeypatch, captured_revisions, name, size, kept
+):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/{name}": b"x" * size})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.write_workspace_file(
+        agent_id=agent_id,
+        path=f"workspace/{name}",
+        content="new",
+        actor_type="agent",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert result.ok is True
+    [revision] = captured_revisions
+    assert (revision["before_content"], revision["content_omitted"]) == ("x" * size if kept else None, not kept)
+    assert revision["after_content"] == "new"
+
+
+@pytest.mark.parametrize(("name", "size", "kept"), REVISION_CASES)
+async def test_a_delete_captures_the_previous_text_only_within_the_revision_limit(
+    monkeypatch, captured_revisions, name, size, kept
+):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/{name}": b"x" * size})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.delete_workspace_file(
+        agent_id=agent_id,
+        path=f"workspace/{name}",
+        actor_type="user",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert result.ok is True
+    [revision] = captured_revisions
+    assert (revision["before_content"], revision["content_omitted"]) == ("x" * size if kept else None, not kept)
+
+
+@pytest.mark.parametrize(("name", "size", "kept"), REVISION_CASES)
+async def test_a_move_captures_source_and_destination_text_only_within_the_revision_limit(
+    monkeypatch, captured_revisions, name, size, kept
+):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/{name}": b"x" * size})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.move_workspace_path(
+        agent_id=agent_id,
+        source_path=f"workspace/{name}",
+        destination_path=f"workspace/moved-{name}",
+        actor_type="user",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert result.ok is True
+    source, destination = captured_revisions
+    assert (source["operation"], source["before_content"], source["content_omitted"]) == (
+        "move_source",
+        "x" * size if kept else None,
+        not kept,
+    )
+    assert (destination["operation"], destination["after_content"], destination["content_omitted"]) == (
+        "move_destination",
+        "x" * size if kept else None,
+        not kept,
+    )
+
+
+async def test_a_new_file_and_a_missing_destination_are_not_marked_omitted(monkeypatch, captured_revisions):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/a.txt": b"small"})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    await workspace_collaboration.write_workspace_file(
+        agent_id=agent_id,
+        path="workspace/new.txt",
+        content="fresh",
+        actor_type="agent",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+    await workspace_collaboration.move_workspace_path(
+        agent_id=agent_id,
+        source_path="workspace/a.txt",
+        destination_path="workspace/b.txt",
+        actor_type="user",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert [(rev["operation"], rev["content_omitted"]) for rev in captured_revisions] == [
+        ("write", False),
+        ("move_source", False),
+        ("move_destination", False),
+    ]
+    assert captured_revisions[0]["before_content"] is None

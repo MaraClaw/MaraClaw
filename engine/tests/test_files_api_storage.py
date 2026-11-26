@@ -634,3 +634,54 @@ async def test_a_folder_delete_names_the_file_edited_after_the_listing_and_delet
 
     assert (result.ok, result.rejected_paths) == (False, ["workspace/dir/b.txt"])
     assert set(storage.objects) == {f"{folder}/b.txt"}
+
+
+CONTENT_LIMIT = 16
+
+
+@pytest.mark.parametrize("reported", [None, 1])
+@pytest.mark.parametrize(
+    ("size", "too_large"), [(CONTENT_LIMIT - 1, False), (CONTENT_LIMIT, False), (CONTENT_LIMIT + 1, True)]
+)
+async def test_s3_content_read_never_pulls_more_than_one_byte_past_the_limit(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, size: int, too_large: bool, reported: int | None
+):
+    # Given an object whose HEAD size is the truth or a stale small number
+    monkeypatch.setattr(files.settings, "WORKSPACE_FILE_CONTENT_MAX_BYTES", CONTENT_LIMIT)
+    source = preview_over_s3(monkeypatch, agent_id, "log.txt", b"x" * size)
+    source.reported_size = reported
+    # When
+    request = files.read_file(agent_id, path="workspace/log.txt", current_user=make_user())
+    # Then
+    if too_large:
+        with pytest.raises(HTTPException) as exc:
+            await request
+        assert exc.value.status_code == 413
+        assert exc.value.detail == {
+            "code": "file_too_large",
+            "message": f"File is larger than the {CONTENT_LIMIT}-byte limit. Download it instead.",
+            "max_bytes": CONTENT_LIMIT,
+        }
+    else:
+        assert (await request).content == "x" * size
+    assert all(read is not None and read <= CONTENT_LIMIT + 1 for read in source.read_sizes)
+
+
+@pytest.mark.parametrize("name", ["log.txt", "rows.csv", "notes.md"])
+async def test_s3_text_preview_refuses_an_object_over_the_limit_instead_of_truncating_it(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, name: str
+):
+    # Given
+    monkeypatch.setattr(files.settings, "WORKSPACE_FILE_CONTENT_MAX_BYTES", CONTENT_LIMIT)
+    source = preview_over_s3(monkeypatch, agent_id, name, b"x" * (CONTENT_LIMIT + 1))
+    # When
+    with pytest.raises(HTTPException) as exc:
+        await preview(agent_id, name)
+    # Then
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {
+        "code": "file_too_large",
+        "message": f"File is larger than the {CONTENT_LIMIT}-byte limit. Download it instead.",
+        "max_bytes": CONTENT_LIMIT,
+    }
+    assert all(read is not None and read <= CONTENT_LIMIT + 1 for read in source.read_sizes)

@@ -23,6 +23,7 @@ from app.core.row_memo import clear_row_memo
 from app.core.security import check_membership_generation, create_access_token, load_user_from_access_token
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.user_dao import user_dao
+from app.dao.workspace_dao import workspace_file_revision_dao
 from app.db.connection import DbConnection
 from app.db.errors import (
     CheckViolationError,
@@ -37,6 +38,7 @@ from app.main import app
 from app.records.channel_media import StoredFile
 from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundPlan, OutboundProvider, OutboundTarget
 from app.scripts import bootstrap_db
+from app.services import workspace_collaboration
 from organization_admission_fixtures import insert_admission_row
 
 
@@ -119,12 +121,19 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         ("tenants", "is_system"): "false",
         ("tenants", "is_default_end_user_org"): "false",
         ("local_departments", "description"): "''::text",
+        ("workspace_file_revisions", "content_omitted"): "false",
     }
     assert {key: defaults[key] for key in expected} == expected
     description = next(
         row for row in columns if (row["table_name"], row["column_name"]) == ("local_departments", "description")
     )
     assert (description["data_type"], description["is_nullable"]) == ("text", "NO")
+    omitted = next(
+        row
+        for row in columns
+        if (row["table_name"], row["column_name"]) == ("workspace_file_revisions", "content_omitted")
+    )
+    assert (omitted["data_type"], omitted["is_nullable"]) == ("boolean", "NO")
     required = {
         ("users", "quota_period_start"),
         ("tools", "tenant_id"),
@@ -1402,3 +1411,55 @@ async def test_reply_binding_accepts_only_web_sessions_and_burst_tables_name_the
     assert await schema_db.fetchval(bind, {"agent": agent_id, "conversation": str(shared_id)}) is None
     assert await schema_db.fetchall(_TRANSCRIPT_COLUMNS) == columns
     assert await schema_db.fetchall(_TRANSCRIPT_INDEXES) == indexes
+
+
+async def test_workspace_revisions_keep_the_omitted_content_marker_through_the_dao(schema_db: DbConnection) -> None:
+    # Given a fresh baseline with an agent.
+    await bootstrap_db.main()
+    user_id, agent_id = uuid4(), uuid4()
+    await schema_db.execute(
+        "INSERT INTO users (id, display_name, quota_message_limit) VALUES (%(id)s, 'Revision QA', 1)", {"id": user_id}
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, creator_id, role_description, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) VALUES (%(id)s, "
+        "'Revision QA', %(user)s, '', 20, 5, 5, 'private', 'use', 240)",
+        {"id": agent_id, "user": user_id},
+    )
+    _ = await bootstrap_db.init_pool()
+
+    async def record(path: str, operation: str, before: str | None, after: str | None, *, omitted: bool) -> UUID:
+        revision = await workspace_collaboration.record_revision(
+            agent_id=agent_id,
+            path=path,
+            operation=operation,
+            actor_type="user",
+            actor_id=user_id,
+            before_content=before,
+            after_content=after,
+            content_omitted=omitted,
+        )
+        assert revision is not None
+        return revision.id
+
+    # When an ordinary write, a delete of a file too large to store, and an overwrite that changed nothing stored
+    # are recorded.
+    ordinary = await record("workspace/a.txt", "write", "old", "new", omitted=False)
+    deleted = await record("workspace/big.log", "delete", None, None, omitted=True)
+    overwritten = await record("workspace/big.log", "write", None, "small", omitted=True)
+    # Then the marker is stored per row, defaults to false, and reads back through the DAO.
+    stored = {
+        row["id"]: row["content_omitted"]
+        for row in await schema_db.fetchall("SELECT id, content_omitted FROM workspace_file_revisions")
+    }
+    assert stored == {ordinary: False, deleted: True, overwritten: True}
+    revision = await workspace_file_revision_dao.get_for_agent(deleted, agent_id)
+    assert revision is not None
+    assert (revision.content_omitted, revision.before_content, revision.after_content) == (True, None, None)
+    listed = await workspace_file_revision_dao.list_for_path(agent_id, "workspace/big.log")
+    assert {row.id: row.content_omitted for row in listed} == {deleted: True, overwritten: True}
+    # And a rerun of the baseline keeps the data and the marker.
+    await bootstrap_db.main()
+    _ = await bootstrap_db.init_pool()
+    assert await workspace_file_revision_dao.get_for_agent(ordinary, agent_id) is not None
+    assert await schema_db.fetchval("SELECT count(*) FROM workspace_file_revisions WHERE content_omitted") == 2

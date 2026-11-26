@@ -2533,6 +2533,7 @@ CREATE TABLE IF NOT EXISTS workspace_file_revisions (
 	after_content TEXT, 
 	content_hash VARCHAR(64) NOT NULL, 
 	group_key VARCHAR(200), 
+	content_omitted BOOLEAN NOT NULL DEFAULT false, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 

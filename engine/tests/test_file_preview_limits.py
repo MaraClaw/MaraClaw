@@ -2,15 +2,16 @@ import os
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
-from app.api import file_previews
+from app.api import file_previews, files as files_api
 from app.services.storage_runtime import local
 from app.services.storage_runtime.base import StorageReadLimitExceededError
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
-from file_preview_fixtures import preview_context
+from file_preview_fixtures import CONTENT_LIMIT, content_context, preview_context
 
-__all__ = ["preview_context"]
+__all__ = ["content_context", "preview_context"]
 
 
 async def test_bytes_conflict_when_requested_version_is_stale(preview_context, monkeypatch):
@@ -239,3 +240,38 @@ async def test_fallback_version_uses_primary_winner_when_upload_races_promotion(
     expected = await primary.get_version("report.pdf")
     assert version.token == expected.token
     assert version.size == len(b"winning upload")
+
+
+@pytest.mark.parametrize("route", ["content", "text-preview", "csv-preview"])
+async def test_a_file_one_byte_over_the_content_limit_answers_413_after_a_read_bounded_by_the_limit(
+    content_context, monkeypatch, route
+):
+    # Given a file one byte over the limit and a spy on the bounded read
+    ctx = content_context
+    name = "rows.csv" if route == "csv-preview" else "log.txt"
+    await ctx.storage.write_bytes(f"{ctx.agent_id}/workspace/{name}", b"x" * (CONTENT_LIMIT + 1))
+    original = ctx.storage.read_bytes_bounded
+    limits: list[int] = []
+
+    async def spy(key, maximum, **kwargs):
+        limits.append(maximum)
+        return await original(key, maximum, **kwargs)
+
+    monkeypatch.setattr(ctx.storage, "read_bytes_bounded", spy)
+    # When
+    path = f"workspace/{name}"
+    request = (
+        files_api.read_file(agent_id=ctx.agent_id, path=path, current_user=ctx.user)
+        if route == "content"
+        else files_api.preview_file(agent_id=ctx.agent_id, path=path, current_user=ctx.user)
+    )
+    with pytest.raises(HTTPException) as exc:
+        await request
+    # Then the limit is named, nothing beyond it was requested, and no body came back
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {
+        "code": "file_too_large",
+        "message": f"File is larger than the {CONTENT_LIMIT}-byte limit. Download it instead.",
+        "max_bytes": CONTENT_LIMIT,
+    }
+    assert set(limits) <= {CONTENT_LIMIT}
