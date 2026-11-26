@@ -6,7 +6,8 @@ Parent: [lib guide](../AGENTS.md), which owns endpoint/client and generated-cont
 
 | Source | Local schema seam |
 |--------|-------------------|
-| `auth.ts` | User/token defaults, login/join unions, response guards and password-change flags |
+| `auth.ts` | User/token defaults, login/join unions and the types they infer |
+| `auth-guards.ts` | Response branch guards and password-change flags; type-only imports, because the entry chunk's session store and auth provider use them |
 | `company-admissions.ts` | Shared summary/detail shapes, applicant paging and admission filters |
 | `company-transfers.ts` | Fee/consent fields, quote/payment-review shapes, transfer paging and input types |
 
@@ -16,8 +17,9 @@ Parent: [lib guide](../AGENTS.md), which owns endpoint/client and generated-cont
 - `memberTokenSchema` defaults user to null; identity may be absent or null, message is optional, and admission_request may be absent or null. Preserve those distinctions in `TokenResponse`.
 - Register adaptation requires the local user schema. Multi-tenant adaptation fixes `requires_tenant_selection` to literal true; login is the union of token and multi-tenant schemas.
 - `joinOrgResponseSchema` has approved, pending and immediate-join branches. Approved refines the nested request status to approved; the pending branch reuses the summary schema. Immediate join carries tenant, role and a nullable access_token.
-- `isMultiTenantResponse`, `isTokenResponse` and `isNeedsVerificationDetail` are structural branch guards, not full schema parsers. Keep runtime parsing at the consuming client boundary.
-- `sessionMustChangePassword` checks the token, user and identity flags; checking only the nested user loses a valid forced-change signal.
+- `isMultiTenantResponse`, `isTokenResponse` and `isNeedsVerificationDetail` (`auth-guards.ts`) are structural branch guards, not full schema parsers. Keep runtime parsing at the consuming client boundary.
+- `sessionMustChangePassword` (`auth-guards.ts`) checks the token, user and identity flags; checking only the nested user loses a valid forced-change signal.
+- `auth-guards.ts` imports types only. A value import of `auth.ts`, zod or the generated contracts there (or in `auth-session.ts`, `auth-session-controller.ts`, `http.ts`, `hooks/auth-provider.tsx`) pulls the schemas back into the entry chunk; `tests/entry-imports.test.ts` fails when that happens.
 
 ## ADMISSION AND TRANSFER SHAPES
 

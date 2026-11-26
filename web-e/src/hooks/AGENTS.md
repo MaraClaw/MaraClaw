@@ -6,7 +6,7 @@ Scope: auth/theme/translation context lifetimes, session-fenced query adapters, 
 
 ### Providers
 
-- `auth-provider.tsx`: `AuthProvider`, external auth-store subscription and context action wiring.
+- `auth-provider.tsx`: `AuthProvider`, external auth-store subscription and context action wiring. It imports `lib/auth-api.ts` on demand (`retryingImport`), so the stored-session check and `login` wait for that chunk; a failed download fails the check like a failed request.
 - `theme-provider.tsx`: `ThemeProvider`, stored/system theme resolution and document updates.
 - `translation-provider.tsx`: `TranslationProvider`, persisted language, HTML `lang`, translation callbacks and locale-aware date/number formatting.
 

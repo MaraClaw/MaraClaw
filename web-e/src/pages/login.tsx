@@ -16,12 +16,8 @@ import { Label } from '@/components/ui/label'
 import { PasswordField } from '@/components/ui/password-field'
 import { useAuth } from '@/hooks/use-auth'
 import { ApiError, userFacingRequestError } from '@/lib/http'
-import {
-  isMultiTenantResponse,
-  isNeedsVerificationDetail,
-  isTokenResponse,
-  type TenantChoice,
-} from '@/lib/types/auth'
+import type { TenantChoice } from '@/lib/types/auth'
+import { isMultiTenantResponse, isNeedsVerificationDetail, isTokenResponse } from '@/lib/types/auth-guards'
 import { cn } from '@/lib/utils'
 
 const loginSchema = z.object({

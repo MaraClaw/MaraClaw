@@ -12,13 +12,8 @@ import { memberAuthHighlights } from '@/lib/auth-highlights'
 import { bindProvider, oauthCallback } from '@/lib/auth-api'
 import { consumeSsoTransaction, readSsoContinuation, SSO_INTENT_KEY, SSO_PROVIDER_KEY, SSO_STATE_KEY } from '@/lib/sso-storage'
 import { userFacingRequestError } from '@/lib/http'
-import {
-  isMultiTenantResponse,
-  isTokenResponse,
-  type MultiTenantResponse,
-  type TokenResponse,
-  type TenantChoice,
-} from '@/lib/types/auth'
+import type { MultiTenantResponse, TokenResponse, TenantChoice } from '@/lib/types/auth'
+import { isMultiTenantResponse, isTokenResponse } from '@/lib/types/auth-guards'
 import { cn } from '@/lib/utils'
 
 export function SsoCallbackPage() {

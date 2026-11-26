@@ -17,7 +17,7 @@ import { PasswordField } from '@/components/ui/password-field'
 import { useAuth } from '@/hooks/use-auth'
 import { checkDuplicate, fetchRegistrationConfig, registerRequest } from '@/lib/auth-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
-import { isNeedsVerificationDetail } from '@/lib/types/auth'
+import { isNeedsVerificationDetail } from '@/lib/types/auth-guards'
 import type { SuggestedOrg } from '@/lib/types/auth'
 
 const registerSchema = z.object({

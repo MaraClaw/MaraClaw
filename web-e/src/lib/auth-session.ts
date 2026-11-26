@@ -1,5 +1,5 @@
 import { clearStoredToken, getStoredToken, setStoredToken } from './auth-storage.ts'
-import { sessionMustChangePassword } from './types/auth.ts'
+import { sessionMustChangePassword } from './types/auth-guards.ts'
 import type { TokenResponse, UserOut } from './types/auth.ts'
 
 const ownerBrand: unique symbol = Symbol('session owner')
