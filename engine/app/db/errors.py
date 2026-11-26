@@ -107,8 +107,19 @@ class CheckViolationError(DbError):
         self.constraint: str | None = constraint
 
 
-# PostgreSQL gives a ``lock_timeout`` expiry and a NOWAIT refusal the same SQLSTATE (55P03); only the text differs.
+# PostgreSQL gives a ``lock_timeout`` expiry and a NOWAIT refusal the same SQLSTATE (55P03). Only ProcessInterrupts() in
+# src/backend/tcop/postgres.c raises it for an expired timeout; a NOWAIT refusal comes from the lock code. The report's
+# source function (libpq PG_DIAG_SOURCE_FUNCTION) is never translated, while the message follows the server's
+# ``lc_messages``, so the source function decides. The English message is the fallback only for a server answer that
+# carries no source function (a proxy that strips it).
+_LOCK_TIMEOUT_SOURCE_FUNCTION = "ProcessInterrupts"
 _LOCK_TIMEOUT_MESSAGE = "canceling statement due to lock timeout"
+
+
+def _is_lock_timeout(source_function: str | None, message_primary: str | None) -> bool:
+    if source_function is None:
+        return message_primary == _LOCK_TIMEOUT_MESSAGE
+    return source_function == _LOCK_TIMEOUT_SOURCE_FUNCTION
 
 
 def _constraint_name(exc: object) -> str | None:
@@ -140,7 +151,9 @@ def overload_error(exc: BaseException) -> DbOverloadError | None:
         return PoolQueueFullError(orig=source)
     if isinstance(source, pg_errors.QueryCanceled):
         return QueryCanceledError(orig=source)
-    if isinstance(source, pg_errors.LockNotAvailable) and source.diag.message_primary == _LOCK_TIMEOUT_MESSAGE:
+    if isinstance(source, pg_errors.LockNotAvailable) and _is_lock_timeout(
+        source.diag.source_function, source.diag.message_primary
+    ):
         return LockWaitTimeoutError(orig=source)
     return None
 

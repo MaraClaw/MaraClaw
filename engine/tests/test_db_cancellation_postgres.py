@@ -7,7 +7,7 @@ from typing import Literal
 import anyio
 import pytest
 from psycopg import AsyncConnection
-from psycopg.errors import UniqueViolation
+from psycopg.errors import LockNotAvailable, UniqueViolation
 from psycopg.pq import TransactionStatus
 from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -140,15 +140,38 @@ async def test_request_lock_timeout_is_a_503_overload_while_nowait_keeps_its_bus
                 _ = await db.fetchone("SELECT id FROM request_lock_probe FOR UPDATE")
             assert isinstance(waited.value, LockNotAvailableError)
             assert isinstance(waited.value, DbOverloadError)
+            assert isinstance(waited.value.orig, LockNotAvailable)
+            assert waited.value.orig.diag.source_function == "ProcessInterrupts"
             await db.rollback()
 
             # Then a NOWAIT caller on the same SQLSTATE still gets the plain busy error, not an overload.
             with pytest.raises(LockNotAvailableError) as busy:
                 _ = await db.fetchone("SELECT id FROM request_lock_probe FOR UPDATE NOWAIT")
             assert not isinstance(busy.value, DbOverloadError)
+            assert isinstance(busy.value.orig, LockNotAvailable)
+            assert busy.value.orig.diag.source_function not in (None, "ProcessInterrupts")
             await db.rollback()
     finally:
         await holder.execute("DROP TABLE request_lock_probe")
+
+
+async def test_a_55p03_raised_by_server_side_code_with_the_timeout_text_is_not_a_lock_timeout(
+    connections: tuple[DbConnection, AsyncConnection[DictRow]],
+) -> None:
+    # Given a refusal with SQLSTATE 55P03 and the lock timeout's English message, raised by PL/pgSQL.
+    db, _observer = connections
+    raising = "DO $$ BEGIN RAISE EXCEPTION 'canceling statement due to lock timeout' USING ERRCODE = '55P03'; END $$"
+
+    # When it reaches the application, its source function is not ProcessInterrupts.
+    with pytest.raises(LockNotAvailableError) as raised:
+        _ = await db.execute(raising)
+    await db.rollback()
+
+    # Then the message alone does not make it an overload.
+    assert not isinstance(raised.value, DbOverloadError)
+    assert isinstance(raised.value.orig, LockNotAvailable)
+    assert raised.value.orig.diag.message_primary == "canceling statement due to lock timeout"
+    assert raised.value.orig.diag.source_function not in (None, "ProcessInterrupts")
 
 
 async def test_pool_reset_removes_the_request_lock_timeout_before_the_connection_is_reused() -> None:

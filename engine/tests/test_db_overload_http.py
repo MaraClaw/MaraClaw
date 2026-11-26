@@ -66,6 +66,13 @@ def _raising(exc: BaseException) -> Callable[[], Awaitable[None]]:
         PoolQueueFullError(orig=TooManyRequests("too many requests")),
         LockWaitTimeoutError(),
         LockNotAvailable("lock", info={DiagnosticField.MESSAGE_PRIMARY: b"canceling statement due to lock timeout"}),
+        LockNotAvailable(
+            "lock",
+            info={
+                DiagnosticField.MESSAGE_PRIMARY: "hủy câu lệnh do hết thời gian chờ khóa".encode(),
+                DiagnosticField.SOURCE_FUNCTION: b"ProcessInterrupts",
+            },
+        ),
     ],
     ids=[
         "raw-pool-timeout",
@@ -78,6 +85,7 @@ def _raising(exc: BaseException) -> Callable[[], Awaitable[None]]:
         "typed-queue-full",
         "typed-lock-wait",
         "raw-lock-wait",
+        "raw-translated-lock-wait",
     ],
 )
 async def test_overload_answers_503_with_retry_after(
@@ -105,8 +113,15 @@ async def test_overload_answers_503_with_retry_after(
         RuntimeError("boom"),
         LockNotAvailableError(orig=LockNotAvailable("busy")),
         LockNotAvailable("could not obtain lock on row"),
+        LockNotAvailable(
+            "lock",
+            info={
+                DiagnosticField.MESSAGE_PRIMARY: b"canceling statement due to lock timeout",
+                DiagnosticField.SOURCE_FUNCTION: b"heap_lock_tuple",
+            },
+        ),
     ],
-    ids=["db-error", "unique-violation", "runtime-error", "nowait-busy", "raw-nowait-busy"],
+    ids=["db-error", "unique-violation", "runtime-error", "nowait-busy", "raw-nowait-busy", "raw-nowait-timeout-text"],
 )
 async def test_other_exceptions_keep_report_and_500(
     client: tuple[httpx.AsyncClient, list[BaseException]], exc: BaseException
