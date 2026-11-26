@@ -1,19 +1,24 @@
-"""FastAPI middleware for request tracing and logging."""
+"""ASGI middleware for request tracing, access logging and request metrics."""
 
+import re
 import time
 import uuid
-from typing import override
+from typing import Final
 
-from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.requests import Request
 from starlette.routing import Route
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.json_types import is_str_dict, object_attr
-from app.core.logging import logger, set_trace_id
+from app.core.logging import logger, trace_id_var
+from app.core.metrics import observe_http_request
 from app.core.row_memo import clear_row_memo
 
-_QUIET_EXACT_PATHS = frozenset({"/api/health", "/api/live", "/health", "/healthz"})
+_QUIET_EXACT_PATHS = frozenset({"/api/health", "/api/live", "/api/metrics", "/health", "/healthz"})
 _UNMATCHED_ROUTE = "unmatched-route"
+# A client-supplied trace id is echoed in a response header and every log line, so only a short, plain one is kept.
+_TRACE_ID: Final = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 
 def is_quiet_access_log(method: str, path: str) -> bool:
@@ -30,66 +35,84 @@ def is_quiet_access_log(method: str, path: str) -> bool:
     return False
 
 
-def route_label(request: Request) -> str:
+def route_label(scope: Scope) -> str:
     """Matched route template such as ``/api/agents/{id}``; never the concrete path or query.
 
     Read after routing has run: the router stores the matched route in the shared ASGI scope.
     """
-    route = request.scope.get("route")
+    route = scope.get("route")
     if not isinstance(route, Route):
         return _UNMATCHED_ROUTE
     # FastAPI keeps include_router prefixes out of route.path; its effective route context has the full template.
-    fastapi_scope: object = request.scope.get("fastapi")
+    fastapi_scope: object = scope.get("fastapi")
     context: object = fastapi_scope.get("effective_route_context") if is_str_dict(fastapi_scope) else None
     template = object_attr(context, "path_format")
     return template if isinstance(template, str) and template else route.path
 
 
-class TraceIdMiddleware(BaseHTTPMiddleware):
-    """Middleware to inject trace ID into request context and log requests.
+def _trace_id(scope: Scope) -> str:
+    """The client's ``X-Trace-Id`` when it passes the strict pattern, otherwise a new 12-character id."""
+    incoming = Headers(scope=scope).get("X-Trace-Id")
+    if incoming is not None and _TRACE_ID.fullmatch(incoming):
+        return incoming
+    return uuid.uuid4().hex[:12]
+
+
+class TraceIdMiddleware:
+    """Pure ASGI middleware: binds the trace id, adds ``X-Trace-Id`` to the response, logs and times each HTTP request.
 
     Access lines carry method, route template, status, timing and trace id, never the request target:
-    paths and queries can hold credentials (webhook tokens, callback secrets).
+    paths and queries can hold credentials (webhook tokens, callback secrets). The timing is seconds on the monotonic
+    clock from arrival to the response start; the latency histogram records the same value under the route template.
+    WebSocket and lifespan scopes pass through untouched.
     """
 
-    @override
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # Generate or extract trace ID from header
-        trace_id = request.headers.get("X-Trace-Id") or str(uuid.uuid4())[:12]
-        set_trace_id(trace_id)
+    def __init__(self, app: ASGIApp) -> None:
+        self.app: ASGIApp = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        scope_type: object = scope.get("type")
+        if scope_type != "http":
+            await self.app(scope, receive, send)
+            return
+        trace_id = _trace_id(scope)
+        token = trace_id_var.set(trace_id)
         clear_row_memo()
-
-        # Add trace ID to request state for access in endpoints
+        request = Request(scope)
         request.state.trace_id = trace_id
-
-        start_time = time.time()
-
-        # Log request. Routing has not run yet, so the arrival line names no target; the raw path only
-        # decides the log level.
-        client_host = request.client.host if request.client else "-"
-        quiet = is_quiet_access_log(request.method, request.url.path)
+        method = request.method
+        quiet = is_quiet_access_log(method, request.url.path)
         emit = logger.debug if quiet else logger.info
-        emit(f"--> {request.method} [client: {client_host}]")
+        # Routing has not run yet, so the arrival line names no target; the raw path only decides the log level.
+        emit(f"--> {method} [client: {request.client.host if request.client else '-'}]")
+        start_time = time.monotonic()
+        responded = False
+
+        async def send_traced(message: Message) -> None:
+            nonlocal responded
+            message_type: object = message.get("type")
+            status: object = message.get("status")
+            if message_type == "http.response.start" and isinstance(status, int) and not responded:
+                responded = True
+                duration = time.monotonic() - start_time
+                MutableHeaders(scope=message)["X-Trace-Id"] = trace_id
+                route = route_label(scope)
+                observe_http_request(method, route, status, duration)
+                # Failed probes stay visible; successes stay on debug.
+                emit_done = logger.debug if quiet and status < 400 else logger.info
+                emit_done(f"<-- {method} {route} {status} {duration:.3f}s")
+            await send(message)
 
         try:
-            response = await call_next(request)
-            duration = time.time() - start_time
-
-            # Add trace ID to response headers
-            response.headers["X-Trace-Id"] = trace_id
-
-            # Failed probes stay visible; successes stay on debug.
-            emit_done = logger.debug if quiet and response.status_code < 400 else logger.info
-            emit_done(f"<-- {request.method} {route_label(request)} {response.status_code} {duration:.3f}s")
-
-            return response
-
+            await self.app(scope, receive, send_traced)
         except Exception as exc:
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
+            route = route_label(scope)
+            if not responded:
+                observe_http_request(method, route, 500, duration)
             # The exception text can echo request data, so only its class is recorded.
-            logger.error(
-                f"<-- {request.method} {route_label(request)} ERROR {duration:.3f}s - error_type={type(exc).__name__}"
-            )
+            logger.error(f"<-- {method} {route} ERROR {duration:.3f}s - error_type={type(exc).__name__}")
             raise
         finally:
             clear_row_memo()
+            trace_id_var.reset(token)

@@ -169,6 +169,7 @@ from app.api.google_chat import router as google_chat_router
 from app.api.google_workspace import router as google_workspace_router
 from app.api.member_auth import router as member_auth_router
 from app.api.messages import router as messages_router
+from app.api.metrics import build_metrics_router
 from app.api.notification import router as notification_router
 from app.api.okr import regeneration_router as okr_regeneration_router, router as okr_router
 from app.api.onboarding import router as onboarding_router
@@ -290,6 +291,8 @@ app.include_router(gogcli_router, prefix=settings.API_PREFIX)
 app.include_router(okr_router, dependencies=_CRUD_DB)
 app.include_router(okr_regeneration_router)
 app.include_router(onboarding_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+if settings.METRICS_TOKEN:
+    app.include_router(build_metrics_router(settings.METRICS_TOKEN))
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["health"])

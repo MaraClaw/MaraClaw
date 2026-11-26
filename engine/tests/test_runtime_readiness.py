@@ -7,9 +7,9 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.core import events
+from app.core import events, metrics
 from app.process_roles import parse_process_roles
-from app.runtime import lifecycle, readiness
+from app.runtime import lifecycle, loop_lag, readiness
 from app.runtime.tasks import OwnedTasks, RestartPolicy, loop_progress
 from producer_admission_fixtures import producer_admission
 from worker_progress_fixtures import Incarnations, Pacing, WorkerHTTP, worker_http
@@ -495,3 +495,56 @@ async def test_liveness_answers_without_dependency_probes_or_runtime_state(probe
     # Then liveness is independent of the probes.
     assert (response.status_code, response.json()) == (200, {"status": "alive"})
     assert probes.calls == 0
+
+
+def lag_series(histogram: metrics.Histogram) -> dict[tuple[str, str | None], float]:
+    return {(sample.name, dict(sample.labels).get("le")): sample.value for sample in histogram.collect().samples}
+
+
+@pytest.mark.parametrize(("elapsed", "lag"), [(1.25, 0.25), (0.999, 0.0)])
+async def test_event_loop_lag_sampler_records_how_late_each_wake_up_was(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, elapsed: float, lag: float
+) -> None:
+    # Given a sampler on the paced clock and a fresh lag histogram.
+    histogram = metrics.Histogram("lag", "Lag.", (), (0.1, 1.0))
+    monkeypatch.setattr(metrics, "EVENT_LOOP_LAG_SECONDS", histogram)
+    pacing = worker_http.pacing
+    worker_http.start_loop(
+        "event_loop_lag",
+        loop_lag.sample_event_loop_lag(1.0, clock=pacing.clock, sleep=pacing.wait),
+        budget_seconds=loop_lag.PROGRESS_BUDGET_SECONDS,
+    )
+    assert await pacing.next_wait() == 1.0
+    # When the timer resumes late, or marginally early as a timer may.
+    await pacing.step(elapsed)
+    # Then the lateness, never negative, is one observation, and the loop sleeps the interval again.
+    series = lag_series(histogram)
+    assert series[("lag_count", None)] == 1
+    assert series[("lag_sum", None)] == pytest.approx(lag)
+    assert series[("lag_bucket", "0.1")] == (1 if lag <= 0.1 else 0)
+    assert series[("lag_bucket", "1")] == 1
+
+
+async def test_event_loop_lag_sampler_keeps_readiness_green_only_while_it_beats(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP
+) -> None:
+    # Given a running sampler.
+    monkeypatch.setattr(metrics, "EVENT_LOOP_LAG_SECONDS", metrics.Histogram("lag", "Lag.", (), (1.0,)))
+    pacing = worker_http.pacing
+    sampler = worker_http.start_loop(
+        "event_loop_lag",
+        loop_lag.sample_event_loop_lag(1.0, clock=pacing.clock, sleep=pacing.wait),
+        budget_seconds=loop_lag.PROGRESS_BUDGET_SECONDS,
+    )
+    await pacing.paused()
+    await worker_http.ready(expected=True)
+    # When the loop stops waking it for longer than its progress budget.
+    pacing.now += loop_lag.PROGRESS_BUDGET_SECONDS + 1
+    await worker_http.ready(expected=False)
+    # Then the sample that finally lands is a beat and readiness recovers.
+    pacing.release()
+    await pacing.paused()
+    await worker_http.ready(expected=True)
+    # And shutdown cancels the loop.
+    await worker_http.runtime.tasks.stop()
+    assert sampler.cancelled()

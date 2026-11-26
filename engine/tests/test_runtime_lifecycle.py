@@ -11,13 +11,19 @@ from fastapi import FastAPI
 
 from app.api import background_tasks
 from app.config import get_settings
-from app.runtime import lifecycle, tasks as owned_tasks
+from app.runtime import lifecycle, loop_lag, tasks as owned_tasks
 from app.runtime.tasks import OwnedTasks, RestartPolicy
 from app.services import mcp_client
 from app.services.mcp_client import MCPSessionPool
 from producer_admission_fixtures import producer_admission
 from test_mcp_recovery import TOOL_RESULT, FakeMCPServer, call
-from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS, Incarnations, Pacing
+from worker_progress_fixtures import (
+    CONNECTOR_BUDGETED_LOOPS,
+    PROCESS_BUDGETED_LOOPS,
+    WORKER_BUDGETED_LOOPS,
+    Incarnations,
+    Pacing,
+)
 
 __all__ = ["producer_admission"]
 
@@ -539,7 +545,9 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("transfer_cleanup" in names) == role_enabled(roles, "connector")
     assert ("ss-local-proxy" in names) == role_enabled(roles, "connector")
     assert ("child" in names) == role_enabled(roles, "connector")
-    budgeted: set[str] = set()
+    serving = any(role_enabled(roles, serving_role) for serving_role in ("api", "worker", "connector"))
+    assert ("event_loop_lag" in names) == serving
+    budgeted: set[str] = set(PROCESS_BUDGETED_LOOPS) if serving else set()
     if role_enabled(roles, "worker"):
         budgeted |= WORKER_BUDGETED_LOOPS
     if role_enabled(roles, "connector"):
@@ -928,7 +936,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
             await beat.wait()
             loop_progress().beat()
             beaten.append(name)
-            if len(beaten) == len(WORKER_BUDGETED_LOOPS):
+            if len(beaten) == len(WORKER_BUDGETED_LOOPS | PROCESS_BUDGETED_LOOPS):
                 all_beaten.set()
             await asyncio.Event().wait()
 
@@ -949,6 +957,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         (capacity_renewal_worker, "start_capacity_renewal_worker", "capacity_renewal"),
     ):
         monkeypatch.setattr(module, attribute, budgeted(name))
+    monkeypatch.setattr(lifecycle, "sample_event_loop_lag", lambda _interval: budgeted("event_loop_lag")())
     monkeypatch.setattr(trigger_daemon, "start_trigger_daemon", budgeted("trigger_daemon"))
     monkeypatch.setattr(agent_start_reconciler, "agent_start_reconciler_loop", budgeted("agent_start_reconciler"))
     monkeypatch.setattr(scheduler, "start_scheduler", budgeted("agent_scheduler"))
@@ -982,7 +991,8 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
     # When the worker starts and the clock passes every budget without a beat.
     await runtime.start(parse_process_roles("worker"))
     try:
-        assert set(runtime.tasks.progress) == WORKER_BUDGETED_LOOPS
+        assert set(runtime.tasks.progress) == WORKER_BUDGETED_LOOPS | PROCESS_BUDGETED_LOOPS
+        assert runtime.tasks.progress["event_loop_lag"].budget_seconds == loop_lag.PROGRESS_BUDGET_SECONDS
         assert await runtime.readiness.check()
         now = budget_seconds
         # The workspace quota loop sleeps its whole interval between beats, so its budget is that interval plus an hour.
@@ -999,7 +1009,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
             workspace_mirror_worker.progress_budget_seconds()
         )
         interval_loops = {"agent_workspace_quota", "agent_resource_pressure", "capacity_renewal", "workspace_mirror"}
-        slow = WORKER_BUDGETED_LOOPS - {"broadcast_fanout", *interval_loops}
+        slow = (WORKER_BUDGETED_LOOPS | PROCESS_BUDGETED_LOOPS) - {"broadcast_fanout", *interval_loops}
         boundary_workers = {"broadcast_fanout"} if budget_seconds == 90 else slow
         assert all(not runtime.tasks.progress[name].stale() for name in boundary_workers)
         now += 1
@@ -1045,6 +1055,7 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
     setup_entered, setup_gate, cleanup_entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
     beat, all_beaten = asyncio.Event(), asyncio.Event()
     beaten: list[str] = []
+    expected_beats = len(CONNECTOR_BUDGETED_LOOPS | PROCESS_BUDGETED_LOOPS) + 1
 
     async def noop(*_args: object) -> None:
         return None
@@ -1057,7 +1068,7 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
             await beat.wait()
             loop_progress().beat()
             beaten.append(name)
-            if len(beaten) == len(CONNECTOR_BUDGETED_LOOPS) + 1:
+            if len(beaten) == expected_beats:
                 all_beaten.set()
             await asyncio.Event().wait()
 
@@ -1080,12 +1091,13 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
         nonlocal loop_paced
         if loop_paced:
             beaten.append("wechat-reconcile")
-            if len(beaten) == len(CONNECTOR_BUDGETED_LOOPS) + 1:
+            if len(beaten) == expected_beats:
                 all_beaten.set()
             await asyncio.Event().wait()
         loop_paced = True
         await beat.wait()
 
+    monkeypatch.setattr(lifecycle, "sample_event_loop_lag", lambda _interval: budgeted("event_loop_lag")())
     monkeypatch.setattr(whatsapp_personal_supervisor, "personal_supervisor", budgeted("whatsapp_personal"))
     monkeypatch.setattr(zalo_personal_supervisor, "personal_supervisor", budgeted("zalo_personal"))
     monkeypatch.setattr(company_transfer_cleanup, "start_transfer_cleanup_reconciler", reconcile_transfers)
@@ -1119,7 +1131,7 @@ async def test_connector_start_registers_progress_budgets_and_only_the_setup_wai
         # When the setup finishes, the cleanup loop starts and WeChat registers its ongoing loop.
         setup_gate.set()
         await asyncio.wait_for(cleanup_entered.wait(), 5)
-        assert set(progress) == {*CONNECTOR_BUDGETED_LOOPS, "wechat-reconcile"}
+        assert set(progress) == {*CONNECTOR_BUDGETED_LOOPS, *PROCESS_BUDGETED_LOOPS, "wechat-reconcile"}
         assert progress["wechat-reconcile"].budget_seconds == connectors.PROGRESS_BUDGET_SECONDS
         # Then the setup wait left the cleanup budget whole, and passing it makes readiness fail.
         now += 42
@@ -1402,3 +1414,56 @@ async def test_worker_start_supervises_only_the_mail_loops_with_the_configured_b
         assert not runtime.readiness.alive()
     finally:
         await runtime.stop()
+
+
+async def test_runtime_runs_the_event_loop_lag_sampler_from_settings_and_cancels_it_before_the_pool_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an API runtime whose lag sampler is replaced by a recorder.
+    from app.process_roles import parse_process_roles
+    from app.services import audit_logger
+
+    events: list[str] = []
+    fake_resources(monkeypatch, events)
+    intervals: list[float] = []
+    started = asyncio.Event()
+
+    async def noop(*_args: object) -> None:
+        return None
+
+    async def sampler(interval_seconds: float) -> None:
+        intervals.append(interval_seconds)
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            events.append("sampler")
+
+    monkeypatch.setattr(get_settings(), "EVENT_LOOP_LAG_INTERVAL_SECONDS", 2.5)
+    monkeypatch.setattr(lifecycle, "sample_event_loop_lag", sampler)
+    monkeypatch.setattr(lifecycle, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
+    monkeypatch.setattr(lifecycle, "log_bwrap_startup_status", lambda: None)
+    monkeypatch.setattr(lifecycle, "init_pool", noop)
+    monkeypatch.setattr(lifecycle, "get_redis", noop)
+    monkeypatch.setattr(lifecycle.realtime_router, "start", noop)
+    monkeypatch.setattr(audit_logger, "write_audit_log", noop)
+    runtime = lifecycle.Runtime()
+    monkeypatch.setattr(runtime.incidents, "start", lambda: None)
+    monkeypatch.setattr(runtime.incidents, "stop", noop)
+
+    # When the runtime starts.
+    await runtime.start(parse_process_roles("api"))
+    try:
+        await asyncio.wait_for(started.wait(), 5)
+        # Then the sampler runs once as a required, budgeted loop with the configured interval.
+        sampler_task, finite = runtime.tasks.required["event_loop_lag"]
+        assert not finite
+        assert intervals == [2.5]
+        assert runtime.tasks.progress["event_loop_lag"].budget_seconds == loop_lag.PROGRESS_BUDGET_SECONDS
+    finally:
+        await runtime.stop()
+
+    # And shutdown cancels it with the other owned loops, before the database closes.
+    assert sampler_task.cancelled()
+    assert events.index("sampler") < events.index("database")

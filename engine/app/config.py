@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "text"
     LOG_QUEUE_SIZE: int = 8192
     LOG_COLOR: bool = True
+    # Bearer token of the Prometheus scrape route GET /api/metrics; the route exists only while it is set (404 when empty).
+    METRICS_TOKEN: str = ""
+    # Seconds between event-loop lag samples. At most 60 so one sample always fits the sampler's 300 s progress budget.
+    EVENT_LOOP_LAG_INTERVAL_SECONDS: float = Field(default=1.0, ge=0.1, le=60)
     SECRET_KEY: str = "change-me-in-production"  # noqa: S105
     API_PREFIX: str = "/api"
 

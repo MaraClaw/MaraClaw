@@ -8,15 +8,21 @@ import re
 import sys
 import threading
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any, override
+from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import APIRouter, FastAPI, Response
+from fastapi import APIRouter, FastAPI, Response, WebSocket
+from starlette.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 
+from app.core import metrics, middleware
 from app.core.logging import (
     configure_logging,
     get_logger,
+    get_trace_id,
     intercept_standard_logging,
     logger,
     set_trace_id,
@@ -307,6 +313,8 @@ def test_stop_with_a_full_queue_reports_pending_drops_and_never_drains_on_the_ca
     assert threading.current_thread().name not in sink.writers
     assert sink.written == 3
     assert sink.reported == 8
+    # And the total the metrics read still counts them although each report reset the writer's pending count.
+    assert service.dropped_total == 8
 
 
 def test_flush_returns_only_after_the_pending_drops_are_reported() -> None:
@@ -323,6 +331,7 @@ def test_flush_returns_only_after_the_pending_drops_are_reported() -> None:
     # Then every accepted record is written and the notice has already counted the three drops.
     assert sink.written == 3
     assert sink.reported == 3
+    assert service.dropped_total == 3
     service.stop()
 
 
@@ -372,10 +381,17 @@ def _access_text(sink: ListSink) -> str:
     return "\n".join(line for line in sink.lines if "app.core.middleware:" in line)
 
 
-async def _get(url: str) -> httpx.Response:
+async def _request(url: str, trace_id: str | bytes | None) -> httpx.Response:
+    headers: list[tuple[bytes, bytes]] = []
+    if trace_id is not None:
+        headers.append((b"X-Trace-Id", trace_id.encode() if isinstance(trace_id, str) else trace_id))
     transport = httpx.ASGITransport(app=_traced_app(), raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.get(url, headers={"X-Trace-Id": TRACE_ID})
+        return await client.get(url, headers=headers)
+
+
+async def _get(url: str) -> httpx.Response:
+    return await _request(url, TRACE_ID)
 
 
 @pytest.mark.parametrize(
@@ -416,3 +432,192 @@ async def test_quiet_probes_stay_off_info_until_they_fail() -> None:
     down = await _get("/api/health?status=503")
     assert down.status_code == 503
     assert "<-- GET /api/health 503" in _access_text(sink)
+
+
+GENERATED_TRACE_ID = re.compile(r"[0-9a-f]{12}")
+
+
+def _fresh_latency_histogram(monkeypatch: pytest.MonkeyPatch) -> metrics.Histogram:
+    histogram = metrics.Histogram("latency", "Latency.", ("method", "route", "status"), (1.0, 2.0))
+    monkeypatch.setattr(metrics, "HTTP_REQUEST_SECONDS", histogram)
+    return histogram
+
+
+def _recorded_requests(histogram: metrics.Histogram) -> dict[tuple[str, str, str], float]:
+    """Observation count per (method, route, status)."""
+    return {
+        (dict(sample.labels)["method"], dict(sample.labels)["route"], dict(sample.labels)["status"]): sample.value
+        for sample in histogram.collect().samples
+        if sample.name == "latency_count"
+    }
+
+
+async def test_each_request_logs_a_targetless_arrival_line_then_a_completion_line() -> None:
+    sink = _capture(level="INFO")
+
+    await _get(f"/api/webhooks/t/{CANARY}")
+
+    arrival, completion = _access_text(sink).splitlines()
+    assert arrival.endswith("--> GET [client: 127.0.0.1]")
+    assert "<-- GET /api/webhooks/t/{token} 200 " in completion
+
+
+@pytest.mark.parametrize("incoming", [TRACE_ID, str(uuid4()), "a" * 64, "Req_1.2-x"])
+async def test_a_plain_incoming_trace_id_is_kept_in_the_header_and_every_access_line(incoming: str) -> None:
+    sink = _capture(level="INFO")
+
+    response = await _request("/api/webhooks/t/x", incoming)
+
+    assert response.headers["X-Trace-Id"] == incoming
+    lines = _access_text(sink).splitlines()
+    assert len(lines) == 2
+    assert all(incoming in line for line in lines)
+
+
+@pytest.mark.parametrize("incoming", ["a" * 65, "has space", "semi;colon", "<script>", b"caf\xe9", ""])
+async def test_an_unsafe_incoming_trace_id_is_replaced_by_a_generated_one(incoming: str | bytes) -> None:
+    sink = _capture(level="INFO")
+
+    response = await _request("/api/webhooks/t/x", incoming)
+
+    generated = response.headers["X-Trace-Id"]
+    assert GENERATED_TRACE_ID.fullmatch(generated)
+    lines = _access_text(sink).splitlines()
+    assert len(lines) == 2
+    assert all(generated in line for line in lines)
+    rejected = incoming.decode("latin-1") if isinstance(incoming, bytes) else incoming
+    assert not rejected or not any(rejected in line for line in lines)
+
+
+async def test_a_request_without_a_trace_id_gets_a_new_one_and_the_binding_ends_with_the_request() -> None:
+    first = await _request("/api/webhooks/t/x", None)
+    second = await _request("/api/webhooks/t/x", None)
+
+    assert GENERATED_TRACE_ID.fullmatch(first.headers["X-Trace-Id"])
+    assert first.headers["X-Trace-Id"] != second.headers["X-Trace-Id"]
+    assert get_trace_id() is None
+
+
+async def test_latency_runs_on_the_monotonic_clock_and_is_recorded_under_the_route_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a clock that reads 10.0 on arrival and 11.5 when the response starts.
+    sink = _capture(level="INFO")
+    histogram = _fresh_latency_histogram(monkeypatch)
+    ticks = iter([10.0, 11.5])
+    monkeypatch.setattr(middleware, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    # When a request carrying a credential in its path and query is served.
+    await _get(f"/api/webhooks/t/{CANARY}?callback={CANARY}")
+
+    # Then the access line and the histogram both carry 1.5 s under the template, and no canary.
+    assert "<-- GET /api/webhooks/t/{token} 200 1.500s" in _access_text(sink)
+    samples = histogram.collect().samples
+    sums = [sample for sample in samples if sample.name == "latency_sum"]
+    assert [(dict(sample.labels)["route"], sample.value) for sample in sums] == [("/api/webhooks/t/{token}", 1.5)]
+    assert CANARY not in repr(samples)
+
+
+async def test_metrics_are_labelled_by_route_template_and_status_never_by_raw_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    histogram = _fresh_latency_histogram(monkeypatch)
+
+    for url in (
+        f"/api/webhooks/t/{CANARY}?callback={CANARY}",
+        f"/api/gateway/poll/{CANARY}",
+        f"/api/missing/{CANARY}?token={CANARY}",
+        f"/api/boom/{CANARY}",
+    ):
+        await _get(url)
+
+    assert _recorded_requests(histogram) == {
+        ("GET", "/api/webhooks/t/{token}", "200"): 1,
+        ("GET", "/api/gateway/poll/{key}", "200"): 1,
+        ("GET", "unmatched-route", "404"): 1,
+        ("GET", "/api/boom/{token}", "500"): 1,
+    }
+    assert CANARY not in repr(histogram.collect().samples)
+
+
+async def test_websocket_and_lifespan_scopes_pass_through_untouched() -> None:
+    seen: list[tuple[Scope, object]] = []
+
+    async def inner(scope: Scope, receive: Any, send: Any) -> None:
+        seen.append((scope, send))
+
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(_message: Message) -> None:
+        return None
+
+    traced = middleware.TraceIdMiddleware(inner)
+    scopes: list[Scope] = [
+        {"type": "websocket", "path": "/ws", "headers": [(b"x-trace-id", b"client-trace")]},
+        {"type": "lifespan"},
+    ]
+
+    for scope in scopes:
+        await traced(scope, receive, send)
+
+    assert [(handed, sender) for handed, sender in seen] == [(scope, send) for scope in scopes]
+    assert "state" not in scopes[0]
+    assert get_trace_id() is None
+
+
+def test_a_websocket_session_works_through_the_trace_middleware() -> None:
+    app = FastAPI()
+    app.add_middleware(TraceIdMiddleware)
+
+    @app.websocket("/ws")
+    async def echo(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_text(await websocket.receive_text())
+        await websocket.close()
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as session:
+        session.send_text("hello")
+        assert session.receive_text() == "hello"
+
+
+async def test_an_error_after_the_response_started_is_counted_once_under_its_real_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an app that starts a 200 response and then fails mid-stream.
+    sink = _capture(level="INFO")
+    histogram = _fresh_latency_histogram(monkeypatch)
+    sent: list[Message] = []
+
+    async def inner(_scope: Scope, _receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        raise RuntimeError(CANARY)
+
+    async def receive() -> Message:
+        return {"type": "http.request"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    scope: Scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/stream",
+        "headers": [],
+        "query_string": b"",
+        "scheme": "http",
+        "server": ("test", 80),
+        "client": ("127.0.0.1", 1),
+    }
+
+    # When the middleware serves it.
+    with pytest.raises(RuntimeError):
+        await middleware.TraceIdMiddleware(inner)(scope, receive, send)
+
+    # Then the request is one observation under the status already sent, and the log names only the exception class.
+    assert _recorded_requests(histogram) == {("GET", "unmatched-route", "200"): 1}
+    assert [message["type"] for message in sent] == ["http.response.start"]
+    text = _access_text(sink)
+    assert "ERROR" in text
+    assert "error_type=RuntimeError" in text
+    assert CANARY not in text

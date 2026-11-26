@@ -9,10 +9,14 @@ from typing import Any, Self, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
+from fastapi import FastAPI
 from tests.test_redis_cache import FakeRedis
 
-from app.core import redis_cache
+from app.api.metrics import build_metrics_router
+from app.core import events, redis_cache
+from app.core.middleware import TraceIdMiddleware
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao
 from app.db import pool as pool_module, session as session_module
@@ -903,3 +907,100 @@ async def test_acl_miss_reads_user_and_agent_again_after_the_version_and_hit_rea
     assert agent_get.await_count - miss_reads == 1
     assert user_get.await_count == 2
     assert redis.round_trips == 3
+
+
+class _StatsPool:
+    """Exposes its own stats like a psycopg pool; any checkout is a test failure and counted."""
+
+    def __init__(self, stats: dict[str, int]) -> None:
+        self._stats = stats
+        self.checkouts = 0
+
+    def get_stats(self) -> dict[str, int]:
+        return dict(self._stats)
+
+    def connection(self) -> _PoolConnectionCM:
+        self.checkouts += 1
+        raise AssertionError("no request or scrape may check out a connection")
+
+
+_MAIN_STATS = {
+    "pool_min": 2,
+    "pool_max": 30,
+    "pool_size": 30,
+    "pool_available": 0,
+    "requests_waiting": 3,
+    "requests_num": 40,
+    "requests_queued": 5,
+    "requests_wait_ms": 1500,
+    "requests_errors": 1,
+}
+
+
+def test_pool_stats_is_empty_before_the_pool_opens() -> None:
+    pool_module.reset_pool_for_tests()
+
+    assert pool_module.pool_stats() == ()
+
+
+def test_pool_stats_reads_each_pools_own_counters_and_zeroes_what_it_has_not_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a busy request pool and a durable pool that has served nothing yet.
+    main = _StatsPool(_MAIN_STATS)
+    durable = _StatsPool({"pool_min": 0, "pool_max": 4, "pool_size": 1, "pool_available": 1, "requests_waiting": 0})
+    monkeypatch.setattr(pool_module, "_pool", main)
+
+    # When only the request pool exists, then once the durable pool does too.
+    request_only = pool_module.pool_stats()
+    monkeypatch.setattr(pool_module, "_durable", (main, durable))
+    both = pool_module.pool_stats()
+
+    # Then each reading maps that pool's stats, absent counters read 0, and no connection was checked out.
+    assert request_only == both[:1]
+    assert both == (
+        pool_module.PoolStats("main", 30, 30, 0, 3, 40, 5, 1, 1500),
+        pool_module.PoolStats("durable", 4, 1, 1, 0, 0, 0, 0, 0),
+    )
+    assert main.checkouts == durable.checkouts == 0
+    pool_module.reset_pool_for_tests()
+
+
+async def test_a_traced_request_and_a_metrics_scrape_check_out_no_connection_and_call_no_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a saturated pool whose checkout fails the test, and Redis entry points that count their callers.
+    pool = _StatsPool(_MAIN_STATS)
+    redis_calls: list[str] = []
+
+    def redis_entry(name: str) -> Any:
+        async def call() -> None:
+            redis_calls.append(name)
+            raise AssertionError("no request or scrape may call Redis")
+
+        return call
+
+    monkeypatch.setattr(pool_module, "_pool", pool)
+    monkeypatch.setattr(session_module, "get_pool", lambda: pool)
+    for name in ("get_redis", "get_cache_redis", "get_pubsub_redis"):
+        monkeypatch.setattr(events, name, redis_entry(name))
+    app = FastAPI()
+    app.add_middleware(TraceIdMiddleware)
+    app.include_router(build_metrics_router("hot-path-token"))
+
+    @app.get("/api/ping")
+    async def ping() -> dict[str, bool]:
+        return {"ok": True}
+
+    # When a traced API request and then an authorized scrape are served.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        served = await client.get("/api/ping")
+        scraped = await client.get("/api/metrics", headers={"Authorization": "Bearer hot-path-token"})
+
+    # Then both answered from process memory: the scrape shows the pool's queue and the request's latency series.
+    assert (served.status_code, scraped.status_code) == (200, 200)
+    assert 'maraclaw_db_pool_waiting_requests{pool="main"} 3' in scraped.text
+    assert 'route="/api/ping"' in scraped.text
+    assert pool.checkouts == 0
+    assert redis_calls == []
+    pool_module.reset_pool_for_tests()

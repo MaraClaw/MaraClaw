@@ -112,6 +112,7 @@ class LoggingService:
         "_color",
         "_drop_lock",
         "_dropped",
+        "_dropped_total",
         "_enqueue",
         "_formatter",
         "_min_level",
@@ -144,6 +145,7 @@ class LoggingService:
         self._thread: threading.Thread | None = None
         self._started: bool = False
         self._dropped: int = 0
+        self._dropped_total: int = 0
         self._drop_lock: threading.Lock = threading.Lock()
         self._stopping: threading.Event = threading.Event()
         self._write_lock: threading.Lock = threading.Lock()
@@ -206,6 +208,11 @@ class LoggingService:
             self.stop()
         self._enqueue = enqueue
 
+    @property
+    def dropped_total(self) -> int:
+        """Records rejected by a full queue since the service was created; a plain read, so no lock is taken."""
+        return self._dropped_total
+
     def is_enabled_for(self, level: int) -> bool:
         return level >= self._min_level
 
@@ -258,6 +265,7 @@ class LoggingService:
             except queue.Full:
                 with self._drop_lock:
                     self._dropped += 1
+                    self._dropped_total += 1
             return
         self._write(record)
 

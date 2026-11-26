@@ -4,12 +4,19 @@
 
 ## Trace And Logging
 
-- `TraceIdMiddleware` reads or creates `X-Trace-Id`, stores `request.state.trace_id`, adds the response header, and logs request/response lines.
+- `TraceIdMiddleware` is pure ASGI (no `BaseHTTPMiddleware`) and handles `http` scopes only: WebSocket and lifespan scopes pass through untouched. It keeps the client's `X-Trace-Id` only when it is 1 to 64 characters of `A-Za-z0-9._-` (anything else gets a new 12-hex id), binds it for the request and unbinds it after, stores `request.state.trace_id`, adds the response header, and logs a targetless arrival line plus one completion line (`<-- METHOD route-template status 0.000s`, or an `ERROR` line with only the exception class). Timing is `time.monotonic()` from arrival to response start. The route is the matched template (`/api/agents/{agent_id}`) or the fixed `unmatched-route`, never the raw path; the same label feeds the latency histogram. Quiet probes (`is_quiet_access_log`: health, live, metrics, unread counts, guest heartbeat) log at debug until they fail.
 - `app.main` installs trace middleware first. Preserve that order for request-wide tracing.
 - Starlette wraps middleware in reverse order; verify runtime behavior before relying on trace logs for CORS/error paths.
 - Use `from app.core.logging import logger`. `intercept_standard_logging()` redirects stdlib logging into the process logger at startup.
 - Background jobs that are not inside an HTTP request should call `new_trace_id()` before emitting related logs.
 - WebSocket flows set trace ids manually because they do not follow the normal HTTP request lifecycle.
+
+## Metrics
+
+- `metrics.py` owns the in-process instruments and renders Prometheus text exposition 0.0.4. It is a small typed implementation: `prometheus_client` is not in `uv.lock` and no dependency is added. `Histogram` keeps cumulative buckets per label set and is touched only on the event loop thread, so it needs no lock; `observe_http_request(method, route, status, seconds)` (methods outside the standard seven share `OTHER`), `observe_event_loop_lag(seconds)` and `render_metrics()` are the entry points.
+- Everything else is read at scrape time from state that already exists: `app.db.pool.pool_stats()` (each pool's own `get_stats()`: max, size, available and waiting gauges plus requests, queued, errors and wait-seconds counters per `pool="main"|"durable"`; the durable pool appears once something opened it) and `LoggingService.dropped_total` (`maraclaw_log_records_dropped_total`, cumulative, a plain read). A scrape takes no pool connection, no Redis call and no lock a request path uses; `tests/test_hot_path.py` fails if that changes.
+- Series: `maraclaw_http_request_duration_seconds{method,route,status}` (arrival to response start), `maraclaw_event_loop_lag_seconds` (sampler: `../runtime/AGENTS.md`), `maraclaw_db_pool_*{pool}` and `maraclaw_log_records_dropped_total`. A new label must be bounded (templates, fixed sets), never a path, id or user value.
+- `GET /api/metrics` (`app/api/metrics.py`, `build_metrics_router(token)`) exists only while `METRICS_TOKEN` is set: `app.main` mounts it then and otherwise nothing answers (404). It requires `Authorization: Bearer <token>`, compared with `hmac.compare_digest`, else 401 with `WWW-Authenticate: Bearer`. It is `include_in_schema=False`, so `contracts/api-contract.json` and the frontends are untouched, and an empty token raises at build time (it would match an empty credential).
 
 ## Security
 

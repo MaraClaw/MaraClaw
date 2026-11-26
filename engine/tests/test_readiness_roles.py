@@ -9,7 +9,7 @@ from app.process_roles import parse_process_roles, role_enabled
 from app.runtime import connectors, lifecycle, readiness
 from app.runtime.tasks import OwnedTasks
 from producer_admission_fixtures import producer_admission
-from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS
+from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, PROCESS_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS
 
 __all__ = ["producer_admission"]
 
@@ -177,7 +177,11 @@ async def test_actual_start_registers_required_role_evidence(
             {"auth_email", "broadcast_email"} if role_enabled(roles, "worker") else set()
         )
         assert runtime.readiness.alive()
-        budgeted: set[str] = set()
+        serving = any(role_enabled(roles, serving_role) for serving_role in ("api", "worker", "connector"))
+        assert ("event_loop_lag" in required) == serving
+        if serving:
+            assert required["event_loop_lag"][1] is False
+        budgeted: set[str] = set(PROCESS_BUDGETED_LOOPS) if serving else set()
         if role_enabled(roles, "worker"):
             budgeted |= WORKER_BUDGETED_LOOPS
         if role_enabled(roles, "connector"):

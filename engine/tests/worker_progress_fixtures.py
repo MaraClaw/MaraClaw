@@ -38,6 +38,8 @@ WORKER_BUDGETED_LOOPS: Final = frozenset(
     }
 )
 CONNECTOR_BUDGETED_LOOPS: Final = frozenset({"whatsapp_personal", "zalo_personal", "transfer_cleanup"})
+# The loop every serving process (api, worker or connector role) runs, whatever else its roles add.
+PROCESS_BUDGETED_LOOPS: Final = frozenset({"event_loop_lag"})
 
 
 @dataclass(slots=True)

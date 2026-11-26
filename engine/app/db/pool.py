@@ -219,6 +219,50 @@ async def ping_pool() -> bool:
         return int_from_row(await db.fetchval("SELECT 1")) == 1
 
 
+@dataclass(frozen=True, slots=True)
+class PoolStats:
+    """One pool's saturation: the first four fields are the moment of the read, the rest count since the pool opened."""
+
+    name: str
+    max_size: int
+    size: int
+    available: int
+    requests_waiting: int
+    requests: int
+    requests_queued: int
+    requests_errors: int
+    requests_wait_ms: int
+
+
+def _read_stats(name: str, pool: EnginePool) -> PoolStats:
+    stats = pool.get_stats()
+    return PoolStats(
+        name=name,
+        max_size=stats["pool_max"],
+        size=stats["pool_size"],
+        available=stats["pool_available"],
+        requests_waiting=stats["requests_waiting"],
+        requests=stats.get("requests_num", 0),
+        requests_queued=stats.get("requests_queued", 0),
+        requests_errors=stats.get("requests_errors", 0),
+        requests_wait_ms=stats.get("requests_wait_ms", 0),
+    )
+
+
+def pool_stats() -> tuple[PoolStats, ...]:
+    """Saturation of the request pool and, once something opened it, the durable pool; empty before ``init_pool``.
+
+    Each reading is the pool's own in-memory ``get_stats()``: no connection is checked out and no lock is taken, so a
+    scrape never queues behind the saturation it reports.
+    """
+    readings: list[PoolStats] = []
+    if _pool is not None:
+        readings.append(_read_stats("main", _pool))
+    if _durable is not None:
+        readings.append(_read_stats("durable", _durable[1]))
+    return tuple(readings)
+
+
 def reset_pool_for_tests() -> None:
     """Clear the module-global pool reference without closing (tests only)."""
     global _pool, _durable

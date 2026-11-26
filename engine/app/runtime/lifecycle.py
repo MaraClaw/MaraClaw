@@ -21,6 +21,7 @@ from app.runtime.bootstrap import bootstrap
 from app.runtime.connectors import ConnectorManager, ReconcileRuntime
 from app.runtime.diagnostics import log_bwrap_startup_status
 from app.runtime.incident_alerts import IncidentAlerts
+from app.runtime.loop_lag import PROGRESS_BUDGET_SECONDS as EVENT_LOOP_LAG_BUDGET_SECONDS, sample_event_loop_lag
 from app.runtime.proxy import ShadowsocksProxy
 from app.runtime.readiness import Readiness
 from app.runtime.shutdown_budget import SETTLE_FRACTION, ShutdownBudget, abandoned, joins_until
@@ -90,6 +91,12 @@ class Runtime:
             await bootstrap()
         if any(role_enabled(roles, role) for role in ("api", "worker", "connector")):
             _ = await get_redis()
+            self.tasks.start(
+                "event_loop_lag",
+                sample_event_loop_lag(settings.EVENT_LOOP_LAG_INTERVAL_SECONDS),
+                requirement="loop",
+                progress_budget_seconds=EVENT_LOOP_LAG_BUDGET_SECONDS,
+            )
         if role_enabled(roles, "api"):
             from app.api.websocket import manager as ws_manager
 
