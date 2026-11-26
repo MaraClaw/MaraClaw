@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { isTranslationKey } from '../src/lib/i18n/translation.ts'
+import { isTranslationKey, loadVietnamese } from '../src/lib/i18n/translation.ts'
 import { ApiError } from '../src/lib/http.ts'
 import {
   isOrganizationQuoteLapsed, organizationAdmissionErrorKey, RECEIPT_MAX_BYTES, receiptFileProblem,
 } from '../src/lib/organization-admission-errors.ts'
+
+await loadVietnamese()
 
 const conflict = (code: string) => new ApiError(409, { code, message: 'Engine message.' })
 
