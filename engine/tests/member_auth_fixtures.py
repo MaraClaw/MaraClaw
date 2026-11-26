@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from tests.membership_generation_fixtures import pin_membership_generation
 from tests.oauth_state_fakes import install_state_redis
+from tests.rate_limit_fakes import install_limiter_redis
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
@@ -99,6 +100,7 @@ def oauth_setup(monkeypatch: pytest.MonkeyPatch, setup: MemberAuthSetup) -> tupl
     monkeypatch.setattr(sso_service, "link_identity", link)
     monkeypatch.setattr(registration_service, "ensure_web_org_member", AsyncMock())
     install_state_redis(monkeypatch)
+    install_limiter_redis(monkeypatch)
     pending = auth.OAuthPendingCache(
         provider_type="feishu",
         audience=AuthAudience.MEMBER,

@@ -12,7 +12,7 @@ from app.core.json_types import is_str_dict, object_attr
 from app.core.logging import logger, set_trace_id
 from app.core.row_memo import clear_row_memo
 
-_QUIET_EXACT_PATHS = frozenset({"/api/health", "/health", "/healthz"})
+_QUIET_EXACT_PATHS = frozenset({"/api/health", "/api/live", "/health", "/healthz"})
 _UNMATCHED_ROUTE = "unmatched-route"
 
 

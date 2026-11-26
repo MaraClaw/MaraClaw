@@ -26,9 +26,11 @@ from app.core.session_cache import (
     peek_user_version,
     set_cached_user,
 )
+from app.core.single_flight import SingleFlight
 from app.dao.base import BaseDAO, as_uuid
 from app.dao.mention_patterns import like_patterns
 from app.dao.projection_contracts import UserNameAvatarProjection
+from app.db.session import get_connection
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
@@ -124,6 +126,9 @@ def _user_from_joined_row(row: Mapping[str, object]) -> UserRecord:
         )
     user_row = {col: row.get(col) for col in _USER_COLUMNS}
     return UserRecord.from_row(user_row, identity=identity)
+
+
+_loads: SingleFlight[tuple[UUID, str], UserRecord | None] = SingleFlight()
 
 
 @final
@@ -222,6 +227,16 @@ class UserDAO(BaseDAO[UserRecord]):
             if cached is not None:
                 return cached
             observed_user_ver = await peek_user_version(uid)
+        if uid is not None and observed_user_ver is not None and get_connection() is None:
+            # Misses of one version share a load and a fill; inside a transaction the load must see its own writes.
+            return await _loads.run(
+                (uid, observed_user_ver), lambda: self._load_with_identity(user_id, uid, observed_user_ver, fresh)
+            )
+        return await self._load_with_identity(user_id, uid, observed_user_ver, fresh)
+
+    async def _load_with_identity(
+        self, user_id: UUID, uid: UUID | None, observed_user_ver: str | None, fresh: bool
+    ) -> UserRecord | None:
         async with self.session() as db:
             observed = None
             if observed_user_ver is not None:

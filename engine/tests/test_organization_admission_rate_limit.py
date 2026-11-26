@@ -1,66 +1,17 @@
 """The per-client-IP budget of the public organization admission submit: fixed hourly window, fails open."""
 
-from datetime import UTC, datetime, timedelta
-from types import TracebackType
-from typing import Self
+from datetime import timedelta
 
 import pytest
+from fastapi import HTTPException
+from tests.rate_limit_fakes import NOW, FakeRedis, install_limiter_redis
 
-from app.services import organization_admission_rate_limit as rate_limit
+from app.core import rate_limit
 from app.services.organization_admission_rate_limit import (
     SUBMISSIONS_PER_WINDOW,
     WINDOW_SECONDS,
     allow_submission,
 )
-
-NOW = datetime(2030, 1, 1, 10, 30, tzinfo=UTC)
-
-
-class FakePipeline:
-    def __init__(self, redis: FakeRedis) -> None:
-        self.redis = redis
-        self.commands: list[tuple[str, str, int | None]] = []
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None
-    ) -> None:
-        return None
-
-    def incr(self, key: str) -> FakePipeline:
-        self.commands.append(("incr", key, None))
-        return self
-
-    def expire(self, key: str, seconds: int) -> FakePipeline:
-        self.commands.append(("expire", key, seconds))
-        return self
-
-    async def execute(self) -> list[int | bool]:
-        if self.redis.broken_on_execute:
-            raise ConnectionError("redis went away")
-        results: list[int | bool] = []
-        for name, key, seconds in self.commands:
-            if name == "incr":
-                self.redis.counts[key] = self.redis.counts.get(key, 0) + 1
-                results.append(self.redis.counts[key])
-            else:
-                assert seconds is not None
-                self.redis.ttls[key] = seconds
-                results.append(True)
-        return results
-
-
-class FakeRedis:
-    def __init__(self) -> None:
-        self.counts: dict[str, int] = {}
-        self.ttls: dict[str, int] = {}
-        self.broken_on_execute = False
-
-    def pipeline(self, *, transaction: bool) -> FakePipeline:
-        assert transaction
-        return FakePipeline(self)
 
 
 class RecordingLogger:
@@ -70,19 +21,13 @@ class RecordingLogger:
     def bind(self, **_extra: object) -> RecordingLogger:
         return self
 
-    def warning(self, message: str) -> None:
-        self.warnings.append(message)
+    def warning(self, message: str, *args: object) -> None:
+        self.warnings.append(message.format(*args))
 
 
 @pytest.fixture
 def redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
-    fake = FakeRedis()
-
-    async def get_redis() -> FakeRedis:
-        return fake
-
-    monkeypatch.setattr(rate_limit, "get_redis", get_redis)
-    return fake
+    return install_limiter_redis(monkeypatch)
 
 
 async def test_five_submissions_per_hour_are_allowed_and_the_sixth_is_not(redis: FakeRedis):
@@ -128,7 +73,7 @@ async def test_an_unreachable_redis_allows_the_request_and_logs_a_warning(monkey
     monkeypatch.setattr(rate_limit, "logger", recorder)
 
     assert await allow_submission("203.0.113.7", now=NOW)
-    assert recorder.warnings == ["[organization-admission] submit rate limiter unavailable; allowing the request"]
+    assert recorder.warnings == ["[rate-limit] organization_admission:submit limiter unavailable; allowing the request"]
 
 
 async def test_a_pipeline_that_fails_midway_allows_the_request_and_logs_a_warning(
@@ -140,3 +85,38 @@ async def test_a_pipeline_that_fails_midway_allows_the_request_and_logs_a_warnin
 
     assert await allow_submission("203.0.113.7", now=NOW)
     assert len(recorder.warnings) == 1
+
+
+async def test_the_window_key_keeps_its_client_and_hour(redis: FakeRedis):
+    _ = await allow_submission("203.0.113.7", now=NOW)
+
+    assert list(redis.counts) == [f"organization_admission:submit:203.0.113.7:{int(NOW.timestamp()) // WINDOW_SECONDS}"]
+
+
+async def test_a_spent_budget_reports_the_seconds_until_the_window_renews(redis: FakeRedis):
+    limit = rate_limit.Limit("test:scope", "subject", 2, 600)
+
+    results = [await rate_limit.consume(limit) for _ in range(4)]
+
+    renews_in = 600 - int(NOW.timestamp()) % 600
+    assert results == [None, None, renews_in, renews_in]
+
+
+async def test_enforce_refuses_with_the_shared_429_and_counts_no_later_limit(redis: FakeRedis):
+    address = rate_limit.Limit("test:address", "a", 1, 600)
+    account = rate_limit.Limit("test:account", "b", 5, 600)
+    await rate_limit.enforce(address, account)
+
+    with pytest.raises(HTTPException) as refused:
+        await rate_limit.enforce(address, account)
+
+    assert refused.value.status_code == 429
+    assert refused.value.detail == rate_limit.TOO_MANY_REQUESTS_DETAIL
+    assert refused.value.headers == {"Retry-After": str(600 - int(NOW.timestamp()) % 600)}
+    assert {key.split(":")[1]: count for key, count in redis.counts.items()} == {"address": 2, "account": 1}
+
+
+async def test_enforce_allows_every_limit_when_redis_is_down(redis: FakeRedis):
+    redis.broken_on_execute = True
+
+    await rate_limit.enforce(rate_limit.Limit("test:one", "s", 1, 600), rate_limit.Limit("test:two", "s", 1, 600))

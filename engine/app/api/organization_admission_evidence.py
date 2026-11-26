@@ -9,6 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 
+from app.core.client_address import get_client_ip
 from app.core.security import get_current_user
 from app.records.user import UserRecord
 from app.schemas.organization_admission import OrganizationAdmissionAcknowledgment
@@ -18,10 +19,6 @@ from app.services.document_parser.service import read_bytes_limited
 from app.services.organization_admissions import read_evidence, submit_request, verify_submission_token
 
 router = APIRouter(tags=["organization-admissions"])
-
-
-def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client is not None else None
 
 
 @router.post(
@@ -38,7 +35,7 @@ async def submit_organization_admission(
         data = await read_bytes_limited(file.read, MAX_EVIDENCE_BYTES)
     except DocumentTooLargeError:
         raise HTTPException(413, "Payment evidence must be 10 MiB or smaller") from None
-    reference = await submit_request(terms, data=data, filename=file.filename, client_ip=_client_ip(request))
+    reference = await submit_request(terms, data=data, filename=file.filename, client_ip=await get_client_ip(request))
     return OrganizationAdmissionAcknowledgment(status="pending", reference=reference)
 
 

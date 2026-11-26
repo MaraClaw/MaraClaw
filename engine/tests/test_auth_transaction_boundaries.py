@@ -10,17 +10,24 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient
 from tests.membership_generation_fixtures import pin_membership_generation
 from tests.oauth_state_fakes import REDIRECT_URI, install_state_redis, sign_in_state
+from tests.rate_limit_fakes import FakeRedis, install_limiter_redis
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
 from app.api.background_tasks import drain_background_tasks, start_background_tasks
 from app.config import get_settings
-from app.core import security
+from app.core import rate_limit, security
 from app.dao.auth_email_dao import auth_email_dao
 from app.db import session
 from app.records.identity import IdentityProviderRecord, IdentityRecord
 from app.records.user import UserRecord
-from app.schemas.schemas import ForgotPasswordRequest, IdentityBindRequest, OAuthCallbackRequest, UserLogin
+from app.schemas.schemas import (
+    ForgotPasswordRequest,
+    IdentityBindRequest,
+    OAuthCallbackRequest,
+    ResendVerificationRequest,
+    UserLogin,
+)
 from app.services import oauth_state, password_reset_service, system_email_service
 from app.services.auth_registry import auth_provider_registry
 from app.services.email_verification_service import email_verification_service
@@ -396,3 +403,109 @@ async def test_logout_all_preserves_authentication_gates_and_never_bumps_rejecte
         bump.assert_awaited_once_with(identity.id)
     else:
         bump.assert_not_awaited()
+
+
+ROUTES = ["login", "forgot-password", "resend-verification"]
+
+
+class _Throttled:
+    """The three account routes with their lookups and the work behind them (password check, email) counted."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, redis: FakeRedis) -> None:
+        self.redis = redis
+        self.known = IdentityRecord(
+            id=uuid4(), email="known@example.com", is_active=True, email_verified=True, password_hash="hash"
+        )
+        self.lookups = AsyncMock(side_effect=self._find)
+        self.password_checks = AsyncMock(return_value=False)
+        self.emails = AsyncMock()
+        monkeypatch.setattr(auth.identity_dao, "get_by_login_identifier", self.lookups)
+        monkeypatch.setattr(auth.identity_dao, "get_by_email", self.lookups)
+        monkeypatch.setattr(auth, "verify_password_async", self.password_checks)
+        monkeypatch.setattr(system_email_service, "resolve_email_config_async", self.emails)
+        settings = get_settings()
+        monkeypatch.setattr(settings, "AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS", 2)
+        monkeypatch.setattr(settings, "AUTH_RATE_LIMIT_ADDRESS_ATTEMPTS", 5)
+        monkeypatch.setattr(settings, "TRUSTED_PROXIES", [])
+
+    async def _find(self, email: str) -> IdentityRecord | None:
+        return self.known if email == self.known.email else None
+
+    async def call(self, route: str, email: str, host: str = "203.0.113.5") -> tuple[int, object, dict[str, str]]:
+        request = Request({"type": "http", "headers": [], "client": (host, 1)})
+        try:
+            if route == "login":
+                result: object = await auth.login(
+                    UserLogin(login_identifier=email, password="pw"), BackgroundTasks(), request
+                )
+            elif route == "forgot-password":
+                result = await auth.forgot_password(ForgotPasswordRequest(email=email), BackgroundTasks(), request)
+            else:
+                result = await auth.resend_verification(
+                    ResendVerificationRequest(email=email), BackgroundTasks(), request
+                )
+        except HTTPException as refused:
+            return refused.status_code, refused.detail, dict(refused.headers or {})
+        return 200, result, {}
+
+
+@pytest.fixture
+def throttled(monkeypatch: pytest.MonkeyPatch) -> _Throttled:
+    return _Throttled(monkeypatch, install_limiter_redis(monkeypatch))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ROUTES)
+async def test_a_spent_account_budget_answers_429_the_same_for_known_and_unknown_accounts(throttled, route):
+    # Given the account budget of two attempts, spent against a known and against an unknown account.
+    known, unknown = throttled.known.email or "", "nobody@example.com"
+    spent = {email: [await throttled.call(route, email) for _ in range(2)] for email in (known, unknown)}
+    allowed_before = (
+        throttled.lookups.await_count,
+        throttled.password_checks.await_count,
+        throttled.emails.await_count,
+    )
+
+    # When each is attempted again, then both are refused identically, before any lookup, password check or email.
+    refused = {email: await throttled.call(route, email) for email in (known, unknown)}
+    assert refused[known] == refused[unknown]
+    status_code, detail, headers = refused[known]
+    assert status_code == 429
+    assert detail == rate_limit.TOO_MANY_REQUESTS_DETAIL
+    assert int(headers["Retry-After"]) > 0
+    assert (throttled.lookups.await_count, throttled.password_checks.await_count, throttled.emails.await_count) == (
+        allowed_before
+    )
+
+    # And before the budget ran out the two accounts were already indistinguishable: 401 for login, generic otherwise.
+    assert spent[known][0][:2] == spent[unknown][0][:2]
+    assert spent[known][0][0] == (401 if route == "login" else 200)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ROUTES)
+async def test_a_spent_address_budget_refuses_other_accounts_but_not_other_addresses(throttled, route):
+    # Given five attempts from one shared address, each against a different account.
+    for number in range(5):
+        assert (await throttled.call(route, f"user{number}@example.com"))[0] != 429
+
+    # When a sixth account tries from that address, then it is refused; another address is not.
+    assert (await throttled.call(route, "user5@example.com"))[0] == 429
+    assert (await throttled.call(route, "user5@example.com", host="203.0.113.6"))[0] != 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ROUTES)
+async def test_the_throttle_fails_open_when_redis_is_down(throttled, route):
+    throttled.redis.broken_on_execute = True
+
+    outcomes = [await throttled.call(route, "known@example.com") for _ in range(6)]
+
+    assert all(outcome[0] != 429 for outcome in outcomes)
+    if route == "login":
+        assert throttled.password_checks.await_count == 6
+
+
+@pytest.fixture(autouse=True)
+def limiter_redis(monkeypatch):
+    return install_limiter_redis(monkeypatch)

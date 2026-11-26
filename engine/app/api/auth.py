@@ -63,19 +63,23 @@ from app.services import chat_tickets, oauth_state
 from app.services.auth_audience import AuthAudience, require_member_identity, require_member_user
 from app.services.auth_provider import BaseAuthProvider
 from app.services.auth_results import AuthRegistration, AuthSession
+from app.services.auth_throttle import throttle_account, throttle_ticket_address, throttle_ticket_user
 from app.services.oauth_state import MAX_REDIRECT_URI_LENGTH, OAuthIntent
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/chat-ticket", response_model=chat_tickets.ChatTicketResponse)
+@router.post(
+    "/chat-ticket", response_model=chat_tickets.ChatTicketResponse, dependencies=[Depends(throttle_ticket_address)]
+)
 async def create_chat_ticket(
     body: chat_tickets.ChatTicketRequest,
     response: Response,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> chat_tickets.ChatTicketResponse:
     payload = decode_access_token(credentials.credentials)
+    await throttle_ticket_user(payload["sub"])
     user = await load_user_from_access_token(credentials.credentials, fresh=True)
     result = await chat_tickets.create(body, user, payload["exp"], payload["gen"], payload["mgen"])
     response.headers["Cache-Control"] = "no-store"
@@ -436,6 +440,7 @@ async def login_flow(
     data: UserLogin, background_tasks: BackgroundTasks, request: Request, audience: AuthAudience
 ) -> AuthSession | MultiTenantResponse:
     """Login with email and password. Supports multi-tenant selection."""
+    await throttle_account("login", data.login_identifier, request)
     # 1. Query Identity
     identity = await identity_dao.get_by_login_identifier(data.login_identifier)
 
@@ -590,6 +595,7 @@ async def forgot_password(
 ) -> ForgotPasswordResponse:
     """Request a password reset link for a global Identity."""
     _ = background_tasks
+    await throttle_account("forgot-password", data.email, request)
     from app.services.system_email_service import resolve_email_config_async
 
     email_config = await resolve_email_config_async()
@@ -1320,6 +1326,7 @@ async def resend_verification(
     request: Request,
 ) -> ResendVerificationResponse:
     """Resend email verification link."""
+    await throttle_account("resend-verification", data.email, request)
     from app.config import get_settings
     from app.services.system_email_service import resolve_email_config_async
 

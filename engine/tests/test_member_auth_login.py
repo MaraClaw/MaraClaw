@@ -1,10 +1,13 @@
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from tests.member_auth_fixtures import member_auth_setup
+from tests.rate_limit_fakes import install_limiter_redis
 
 from app.api import auth
+from app.config import get_settings
 from app.core.domain.users import UserRole
 from app.core.json_types import json_object_from, json_object_from_response
 
@@ -133,3 +136,74 @@ async def test_member_login_keeps_multitenant_selection_without_minting(monkeypa
     assert response.json()["requires_tenant_selection"] is True
     assert len(response.json()["tenants"]) == 2
     setup.mint.assert_not_awaited()
+
+
+async def _post(setup, path, body, host="203.0.113.5"):
+    async with AsyncClient(transport=ASGITransport(app=setup.app, client=(host, 1)), base_url="http://test") as client:
+        return await client.post(path, json=body)
+
+
+def _outcome(response):
+    headers = {name: value for name, value in response.headers.items() if name != "x-trace-id"}
+    return response.status_code, response.json(), headers
+
+
+async def test_member_login_throttle_answers_known_and_unknown_accounts_alike_before_any_password_check(monkeypatch):
+    # Given an account budget of two, a known member and an address that matches no account.
+    setup = member_auth_setup(monkeypatch)
+    install_limiter_redis(monkeypatch)
+    monkeypatch.setattr(get_settings(), "AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS", 2)
+    monkeypatch.setattr(get_settings(), "TRUSTED_PROXIES", [])
+    checks = AsyncMock(return_value=False)
+    monkeypatch.setattr(auth, "verify_password_async", checks)
+
+    async def find(identifier):
+        return setup.identity if identifier == "member@example.com" else None
+
+    lookups = AsyncMock(side_effect=find)
+    monkeypatch.setattr(auth.identity_dao, "get_by_login_identifier", lookups)
+
+    async def login(identifier):
+        return await _post(setup, "/api/member/auth/login", {"login_identifier": identifier, "password": "wrong"})
+
+    # When both accounts spend their budget with wrong passwords, they were already indistinguishable.
+    for _ in range(2):
+        assert _outcome(await login("member@example.com")) == _outcome(await login("ghost@example.com"))
+    work = (lookups.await_count, checks.await_count)
+
+    # Then the next attempt of each is refused identically, without a lookup or a password check.
+    known, unknown = _outcome(await login("member@example.com")), _outcome(await login("ghost@example.com"))
+    assert known == unknown
+    assert known[0] == 429
+    assert int(known[2]["retry-after"]) > 0
+    assert (lookups.await_count, checks.await_count) == work
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "flow"),
+    [
+        ("/api/member/auth/register/init", {"email": "new@example.com", "password": "secret1"}, "register_init_flow"),
+        ("/api/member/auth/verify-email", {"token": "x" * 20}, "verify_email_flow"),
+        ("/api/member/auth/google/callback", {"code": "c", "state": "s"}, "oauth_callback_flow"),
+    ],
+    ids=["register-init", "verify-email", "oauth-callback"],
+)
+async def test_member_sign_in_routes_refuse_a_spent_address_before_their_flow(monkeypatch, path, body, flow):
+    # Given an address budget of one and a flow that refuses the request.
+    setup = member_auth_setup(monkeypatch)
+    install_limiter_redis(monkeypatch)
+    monkeypatch.setattr(get_settings(), "AUTH_RATE_LIMIT_ADDRESS_ATTEMPTS", 1)
+    monkeypatch.setattr(get_settings(), "TRUSTED_PROXIES", [])
+    run = AsyncMock(side_effect=HTTPException(status_code=400, detail="refused by the flow"))
+    monkeypatch.setattr(auth, flow, run)
+
+    # When the address calls again, then the second call is a 429 that never reaches the flow.
+    assert (await _post(setup, path, body)).status_code == 400
+    limited = await _post(setup, path, body)
+    assert limited.status_code == 429
+    assert int(limited.headers["retry-after"]) > 0
+    assert run.await_count == 1
+
+    # And another address is unaffected.
+    assert (await _post(setup, path, body, host="203.0.113.6")).status_code == 400
+    assert run.await_count == 2

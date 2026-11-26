@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
-from typing import Any, Self
-from unittest.mock import Mock
+from typing import Self
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import ValidationError
+from redis.exceptions import ConnectionError as RedisConnectionError, RedisError, TimeoutError as RedisTimeoutError
 
+from app.config import Settings
 from app.core import events, redis_cache
 from app.core.cache_contracts import RedisValueRead
 from app.core.row_memo import clear_row_memo, memo_drop, memo_get, memo_set
+from app.core.single_flight import SingleFlight
 
 
 class FakePipeline:
     def __init__(self, parent: FakeRedis) -> None:
         self._parent = parent
         self._ops: list[tuple[str, tuple[str, ...], int | None]] = []
+        self._nx: list[bool] = []
 
     async def __aenter__(self) -> Self:
         return self
@@ -24,25 +31,37 @@ class FakePipeline:
     async def __aexit__(self, *_args: object) -> None:
         return None
 
-    def set(self, key: str, value: str, ex: int | None = None) -> FakePipeline:
+    def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> FakePipeline:
         self._ops.append(("set", (key, value), ex))
+        self._nx.append(nx)
+        return self
+
+    def get(self, key: str) -> FakePipeline:
+        self._ops.append(("get", (key,), None))
+        self._nx.append(False)
         return self
 
     def delete(self, *keys: str) -> FakePipeline:
         self._ops.append(("delete", keys, None))
+        self._nx.append(False)
         return self
 
-    async def execute(self) -> list[bool]:
+    async def execute(self) -> list[bool | str | None]:
         parent = self._parent
+        parent.round_trips += 1
         if parent.fail:
             raise RuntimeError("redis down")
         parent.pipelines.append(self._ops)
-        for op, args, ex in self._ops:
+        results: list[bool | str | None] = []
+        for (op, args, ex), nx in zip(self._ops, self._nx, strict=True):
             if op == "set":
-                _ = await parent.set(args[0], args[1], ex=ex)
+                results.append(await parent.set(args[0], args[1], ex=ex, nx=nx))
+            elif op == "get":
+                results.append(await parent.get(args[0]))
             else:
                 await parent.delete(*args)
-        return [True] * len(self._ops)
+                results.append(True)
+        return results
 
 
 class FakeRedis:
@@ -52,6 +71,7 @@ class FakeRedis:
         self.fail_gets: set[str] = set()
         self.expires: dict[str, int] = {}
         self.pipelines: list[list[tuple[str, tuple[str, ...], int | None]]] = []
+        self.round_trips: int = 0
 
     def pipeline(self, transaction: bool = True) -> FakePipeline:
         return FakePipeline(self)
@@ -361,37 +381,353 @@ def test_row_memo_set_get_drop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_redis_passes_pool_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[dict[str, Any]] = []
-
-    def fake_from_url(url: str, **kwargs: Any) -> object:
-        captured.append({"url": url, **kwargs})
-        return SimpleNamespace()
-
+async def test_each_redis_client_gets_its_own_bounded_pool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(events, "_redis_client", None)
     monkeypatch.setattr(events, "_cache_redis_client", None)
-    monkeypatch.setattr(events.redis, "from_url", fake_from_url)
+    monkeypatch.setattr(events, "_pubsub_redis_client", None)
     monkeypatch.setattr(
         events,
         "get_settings",
         lambda: SimpleNamespace(
             REDIS_URL="redis://example:6379/0",
             REDIS_MAX_CONNECTIONS=40,
+            REDIS_COMMAND_WAIT_SECONDS=0.75,
+            REDIS_PUBSUB_MAX_CONNECTIONS=6,
             REDIS_CACHE_MAX_CONNECTIONS=12,
             REDIS_SOCKET_CONNECT_TIMEOUT=1.5,
             REDIS_SOCKET_TIMEOUT=4.0,
             REDIS_CACHE_SOCKET_TIMEOUT=0.25,
+            REDIS_CACHE_CONNECT_TIMEOUT=0.15,
             REDIS_HEALTH_CHECK_INTERVAL=15,
         ),
     )
 
-    await events.get_redis()
-    await events.get_cache_redis()
-    assert captured[0]["max_connections"] == 40
-    assert captured[0]["socket_timeout"] == 4.0
-    assert captured[1]["max_connections"] == 12
-    assert captured[1]["socket_timeout"] == 0.25
-    assert captured[1]["retry"].get_retries() == 0
-    assert "retry" not in captured[0]
-    events._redis_client = None
-    events._cache_redis_client = None
+    command = await events.get_redis()
+    cache = await events.get_cache_redis()
+    pubsub = await events.get_pubsub_redis()
+
+    command_pool, cache_pool, pubsub_pool = command.connection_pool, cache.connection_pool, pubsub.connection_pool
+    assert len({id(command_pool), id(cache_pool), id(pubsub_pool)}) == 3
+    # Only commands wait for a free connection, and only for the configured, shorter-than-socket-timeout bound.
+    assert isinstance(command_pool, events._CommandPool)
+    assert (command_pool.max_connections, command_pool.timeout) == (40, 0.75)
+    assert command_pool.connection_kwargs["socket_timeout"] == 4.0
+    assert "retry" not in command_pool.connection_kwargs
+    assert isinstance(cache_pool, events._FailFastPool)
+    assert cache_pool.max_connections == 12
+    assert cache_pool.connection_kwargs["socket_timeout"] == 0.25
+    # A dead cache host costs one read budget, not the durable pools' connect timeout.
+    assert cache_pool.connection_kwargs["socket_connect_timeout"] == 0.15
+    assert command_pool.connection_kwargs["socket_connect_timeout"] == 1.5
+    assert cache_pool.connection_kwargs["retry"].get_retries() == 0
+    assert isinstance(pubsub_pool, events._FailFastPool)
+    assert pubsub_pool.max_connections == 6
+    assert pubsub_pool.connection_kwargs["socket_timeout"] == 4.0
+    assert await events.get_pubsub_redis() is pubsub
+    await events.close_redis()
+    assert (events._redis_client, events._cache_redis_client, events._pubsub_redis_client) == (None, None, None)
+
+
+async def test_a_busy_command_pool_fails_as_overload_and_a_failed_connect_stays_a_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ensure = AsyncMock()
+    monkeypatch.setattr(events._CommandPool, "ensure_connection", ensure)
+    pool = events._CommandPool(max_connections=1, timeout=0.0)
+    held = await pool.get_connection()
+
+    # When every connection is in use the wait runs out as a pool overload, which is neither of the failures a down
+    # Redis shows.
+    with pytest.raises(events.RedisPoolOverloadError) as overload:
+        await pool.get_connection()
+    assert isinstance(overload.value, RedisError)
+    assert not isinstance(overload.value, (RedisConnectionError, RedisTimeoutError))
+
+    # Then a freed connection is served again, and a connect that fails is still the library's ConnectionError.
+    await pool.release(held)
+    held = await pool.get_connection()
+    await pool.release(held)
+    ensure.side_effect = RedisConnectionError("Error 111 connecting to redis")
+    with pytest.raises(RedisConnectionError, match="connecting"):
+        await pool.get_connection()
+    await pool.disconnect()
+
+
+async def test_pools_that_never_wait_fail_at_once_as_overload(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(events._FailFastPool, "ensure_connection", AsyncMock())
+    pool = events._FailFastPool(max_connections=1)
+    held = await pool.get_connection()
+
+    with pytest.raises(events.RedisPoolOverloadError):
+        await pool.get_connection()
+
+    await pool.release(held)
+    await pool.disconnect()
+
+
+async def test_readiness_probe_treats_a_busy_command_pool_as_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = Mock(ping=AsyncMock(side_effect=events.RedisPoolOverloadError("busy")))
+    monkeypatch.setattr(events, "_redis_client", client)
+    assert await events.ping_redis()
+
+    client.ping.side_effect = RedisConnectionError("refused")
+    with pytest.raises(RedisConnectionError):
+        await events.ping_redis()
+
+
+@pytest.mark.parametrize(
+    ("failure", "opens_circuit"),
+    [(events.RedisPoolOverloadError("busy"), False), (RedisConnectionError("refused"), True)],
+)
+async def test_only_a_down_redis_opens_the_cache_circuit_not_a_busy_pool(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception, opens_circuit: bool
+) -> None:
+    redis_cache.reset_circuit()
+    client = Mock(get=AsyncMock(side_effect=failure), set=AsyncMock(side_effect=failure))
+    monkeypatch.setattr(redis_cache, "_client", AsyncMock(return_value=client))
+
+    assert await redis_cache.cache_get("key") is None
+    assert redis_cache._cooling_down() is opens_circuit
+    redis_cache.reset_circuit()
+    assert not await redis_cache.cache_set("key", "value", ttl=10)
+    assert redis_cache._cooling_down() is opens_circuit
+    redis_cache.reset_circuit()
+    assert not await redis_cache.cache_set_nx("key", "value", ttl=10)
+    assert redis_cache._cooling_down() is opens_circuit
+    redis_cache.reset_circuit()
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def breaker(monkeypatch: pytest.MonkeyPatch) -> tuple[redis_cache.CacheBreaker, _Clock]:
+    clock = _Clock()
+    circuit = redis_cache.CacheBreaker(cooldown=2.0, clock=clock)
+    monkeypatch.setattr(redis_cache, "_breaker", circuit)
+    return circuit, clock
+
+
+def _outage() -> Callable[[], Awaitable[str]]:
+    async def down() -> str:
+        raise RedisConnectionError("refused")
+
+    return down
+
+
+def _healthy() -> Callable[[], Awaitable[str]]:
+    async def up() -> str:
+        return "ok"
+
+    return up
+
+
+async def test_a_failure_opens_the_breaker_and_refused_calls_never_reach_redis(
+    breaker: tuple[redis_cache.CacheBreaker, _Clock],
+) -> None:
+    calls: list[str] = []
+
+    async def counted() -> str:
+        calls.append("call")
+        return "ok"
+
+    with pytest.raises(redis_cache.CacheUnavailableError):
+        await redis_cache.guarded(_outage())
+
+    for _ in range(3):
+        with pytest.raises(redis_cache.CacheUnavailableError, match="circuit open"):
+            await redis_cache.guarded(counted)
+    assert calls == []
+
+
+async def test_after_the_cooldown_one_probe_decides_and_success_closes_the_breaker(
+    breaker: tuple[redis_cache.CacheBreaker, _Clock],
+) -> None:
+    _, clock = breaker
+    with pytest.raises(redis_cache.CacheUnavailableError):
+        await redis_cache.guarded(_outage())
+    clock.now += 2.0
+    release = asyncio.Event()
+    probing = asyncio.Event()
+    calls: list[str] = []
+
+    async def probe() -> str:
+        calls.append("probe")
+        probing.set()
+        await release.wait()
+        return "ok"
+
+    probe_task = asyncio.create_task(redis_cache.guarded(probe))
+    await probing.wait()
+
+    # While the probe is in flight every other caller is still refused.
+    with pytest.raises(redis_cache.CacheUnavailableError, match="circuit open"):
+        await redis_cache.guarded(_healthy())
+    release.set()
+    assert await probe_task == "ok"
+
+    # The successful probe closed it: calls flow again.
+    assert await redis_cache.guarded(_healthy()) == "ok"
+    assert calls == ["probe"]
+
+
+async def test_a_failed_probe_reopens_the_breaker_for_another_cooldown(
+    breaker: tuple[redis_cache.CacheBreaker, _Clock],
+) -> None:
+    _, clock = breaker
+    with pytest.raises(redis_cache.CacheUnavailableError):
+        await redis_cache.guarded(_outage())
+    clock.now += 2.0
+
+    with pytest.raises(redis_cache.CacheUnavailableError, match="ConnectionError"):
+        await redis_cache.guarded(_outage())
+    clock.now += 1.9
+    with pytest.raises(redis_cache.CacheUnavailableError, match="circuit open"):
+        await redis_cache.guarded(_healthy())
+
+    clock.now += 0.1
+    assert await redis_cache.guarded(_healthy()) == "ok"
+
+
+async def test_a_busy_pool_or_a_cancelled_probe_neither_trips_nor_closes_the_breaker(
+    breaker: tuple[redis_cache.CacheBreaker, _Clock],
+) -> None:
+    circuit, clock = breaker
+
+    async def busy() -> str:
+        raise events.RedisPoolOverloadError("busy")
+
+    with pytest.raises(redis_cache.CacheUnavailableError):
+        await redis_cache.guarded(busy)
+    assert not circuit.refusing()
+
+    circuit.trip()
+    clock.now += 2.0
+    started = asyncio.Event()
+
+    async def stalled() -> str:
+        started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    probe = asyncio.create_task(redis_cache.guarded(stalled))
+    await started.wait()
+    assert circuit.refusing()
+    _ = probe.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await probe
+
+    # The cancelled probe proved nothing, so the next caller becomes the probe.
+    assert not circuit.refusing()
+    assert await redis_cache.guarded(_healthy()) == "ok"
+    assert not circuit.refusing()
+
+
+async def test_a_straggler_failure_does_not_extend_an_open_breaker(
+    breaker: tuple[redis_cache.CacheBreaker, _Clock],
+) -> None:
+    circuit, clock = breaker
+    first, straggler = circuit.admit(), circuit.admit()
+    assert first is not None
+    assert straggler is not None
+    circuit.failed(first)
+    clock.now += 1.5
+    circuit.failed(straggler)
+    clock.now += 0.5
+    assert not circuit.refusing()
+
+
+async def test_cache_reads_and_fills_are_refused_at_once_while_the_breaker_is_open(
+    fake_cache: FakeRedis, breaker: tuple[redis_cache.CacheBreaker, _Clock]
+) -> None:
+    fake_cache.fail = True
+    assert await redis_cache.cache_get("k") is None
+    fake_cache.fail = False
+    fake_cache.store["k"] = "v"
+
+    assert await redis_cache.cache_get("k") is None
+    assert await redis_cache.read_version("k") is None
+    assert not await redis_cache.cache_set("k", "new", ttl=10)
+    assert not await redis_cache.cache_set_nx("n", "new", ttl=10)
+    assert fake_cache.store == {"k": "v"}
+
+    breaker[1].now += 2.0
+    assert await redis_cache.cache_get("k") == "v"
+
+
+async def test_a_single_flight_load_is_shared_by_concurrent_callers() -> None:
+    flights: SingleFlight[str, int] = SingleFlight()
+    release = asyncio.Event()
+    loads: list[str] = []
+
+    async def load() -> int:
+        loads.append("load")
+        await release.wait()
+        return 7
+
+    first = asyncio.create_task(flights.run("key", load))
+    second = asyncio.create_task(flights.run("key", load))
+    other = asyncio.create_task(flights.run("other", load))
+    await asyncio.sleep(0)
+    release.set()
+
+    assert await asyncio.gather(first, second, other) == [7, 7, 7]
+    assert loads == ["load", "load"]
+
+
+async def test_a_failed_single_flight_load_reaches_every_waiter_and_the_next_attempt_retries() -> None:
+    flights: SingleFlight[str, str] = SingleFlight()
+    release = asyncio.Event()
+    attempts: list[str] = []
+
+    async def broken() -> str:
+        attempts.append("broken")
+        await release.wait()
+        raise ValueError("load failed")
+
+    async def healthy() -> str:
+        attempts.append("healthy")
+        return "fresh"
+
+    waiters = [asyncio.create_task(flights.run("key", broken)) for _ in range(3)]
+    await asyncio.sleep(0)
+    release.set()
+    outcomes = await asyncio.gather(*waiters, return_exceptions=True)
+
+    assert [type(outcome) for outcome in outcomes] == [ValueError] * 3
+    assert await flights.run("key", healthy) == "fresh"
+    assert attempts == ["broken", "healthy"]
+
+
+async def test_cancelling_one_waiter_does_not_cancel_the_shared_load() -> None:
+    flights: SingleFlight[str, str] = SingleFlight()
+    release = asyncio.Event()
+    loads: list[str] = []
+
+    async def load() -> str:
+        loads.append("load")
+        await release.wait()
+        return "loaded"
+
+    leader = asyncio.create_task(flights.run("key", load))
+    follower = asyncio.create_task(flights.run("key", load))
+    await asyncio.sleep(0)
+
+    _ = leader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader
+    release.set()
+
+    assert await follower == "loaded"
+    assert loads == ["load"]
+
+
+def test_the_cache_connect_timeout_may_not_exceed_the_cache_read_budget() -> None:
+    assert Settings(REDIS_CACHE_CONNECT_TIMEOUT=0.2, REDIS_CACHE_SOCKET_TIMEOUT=0.2).REDIS_CACHE_CONNECT_TIMEOUT == 0.2
+    with pytest.raises(ValidationError, match="REDIS_CACHE_CONNECT_TIMEOUT"):
+        Settings(REDIS_CACHE_CONNECT_TIMEOUT=0.3, REDIS_CACHE_SOCKET_TIMEOUT=0.2)

@@ -10,8 +10,11 @@ from psycopg import OperationalError, ProgrammingError
 
 from app.db.errors import DbError
 from app.records.auth_email import AuthEmailClaim, AuthEmailKind, AuthEmailMaterial
+from app.runtime.tasks import OwnedTasks, RestartPolicy
 from app.services import auth_email_worker as worker
-from app.services.system_email_service import EmailAttemptOutcome
+from app.services.system_email_service import EmailAttemptOutcome, wait_for_abandoned_sends
+from progress_fakes import Pacer
+from worker_progress_fixtures import Pacing
 
 
 def _claim() -> AuthEmailClaim:
@@ -209,3 +212,31 @@ async def test_timeout_drains_owned_attempt_and_never_starts_next_batch(monkeypa
     assert finished == ["native sender joined"]
     assert claims.await_count == 1
     settle.assert_not_awaited()
+
+
+async def test_unexpected_error_restarts_the_loop_which_scans_again_and_beats(monkeypatch):
+    # Given the real loop as a supervised required loop whose first scan hits an unexpected error.
+    pacing, poll = Pacing(), Pacer()
+    claims = AsyncMock(side_effect=[RuntimeError("unexpected"), []])
+    monkeypatch.setattr(worker.emails, "claim_batch", claims)
+    monkeypatch.setattr(worker, "sleep", poll.sleep)
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    tasks.start_supervised(
+        "auth_email",
+        worker.start_auth_email_worker,
+        progress_budget_seconds=worker.PROGRESS_BUDGET_SECONDS,
+        policy=RestartPolicy(3, 30.0, wait_for_abandoned_sends),
+    )
+    try:
+        # When the crash is waiting out its backoff the loop is down.
+        assert await pacing.next_wait() == 1.0
+        assert not tasks.ready()
+        # Then the restarted loop scans again, finishes a pass and only then is ready.
+        pacing.release()
+        await poll.parked()
+        assert claims.await_count == 2
+        assert poll.waits == [worker.POLL_SECONDS]
+        assert tasks.restarts == {"auth_email": 1}
+        assert tasks.ready()
+    finally:
+        await tasks.stop()

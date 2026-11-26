@@ -18,6 +18,7 @@ from app.schemas.schemas import (
     VerifyEmailRequest,
 )
 from app.services.auth_audience import AuthAudience, require_member_user
+from app.services.auth_throttle import throttle_sign_in
 
 router = APIRouter(prefix="/member/auth", tags=["member-auth"])
 
@@ -45,7 +46,12 @@ async def login(
     return MemberTokenResponse.from_session(result)
 
 
-@router.post("/register/init", response_model=MemberRegisterInitResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register/init",
+    response_model=MemberRegisterInitResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(throttle_sign_in)],
+)
 async def register_init(
     data: RegisterInitRequest, background_tasks: BackgroundTasks, request: Request
 ) -> MemberRegisterInitResponse:
@@ -53,12 +59,16 @@ async def register_init(
     return MemberRegisterInitResponse.from_registration(result)
 
 
-@router.post("/verify-email", response_model=MemberTokenResponse)
+@router.post("/verify-email", response_model=MemberTokenResponse, dependencies=[Depends(throttle_sign_in)])
 async def verify_email(data: VerifyEmailRequest) -> MemberTokenResponse:
     return MemberTokenResponse.from_session(await auth.verify_email_flow(data, AuthAudience.MEMBER))
 
 
-@router.post("/{provider}/callback", response_model=MemberTokenResponse | MultiTenantResponse)
+@router.post(
+    "/{provider}/callback",
+    response_model=MemberTokenResponse | MultiTenantResponse,
+    dependencies=[Depends(throttle_sign_in)],
+)
 async def oauth_callback(provider: str, data: OAuthCallbackRequest) -> MemberTokenResponse | MultiTenantResponse:
     result = await auth.oauth_callback_flow(provider, data, AuthAudience.MEMBER)
     if isinstance(result, MultiTenantResponse):

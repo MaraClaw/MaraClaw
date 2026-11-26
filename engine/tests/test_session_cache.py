@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -9,14 +10,18 @@ import pytest
 from tests.test_db_session import _FakePool, _FakeRawConnection
 from tests.test_redis_cache import FakeRedis
 
-from app.core import redis_cache, session_cache
+from app.core import redis_cache, session_cache, tenant_cache
 from app.core.cache_contracts import SessionCacheObservation
 from app.core.domain.users import UserRole
 from app.core.json_types import is_json_object
 from app.core.row_memo import clear_row_memo
 from app.core.security import load_identity_for_password
+from app.dao.tenant_dao import tenant_dao
+from app.dao.user_dao import user_dao
 from app.db import session as db_session
 from app.records.identity import IdentityRecord
+from app.records.organization_plan import OrganizationPlanId
+from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 
 
@@ -331,3 +336,102 @@ def test_settings_exist() -> None:
         TENANT_CACHE_TTL_SECONDS=60,
     )
     assert settings.USER_SESSION_CACHE_TTL_SECONDS == 20
+
+
+class _HeldLoad:
+    """A DAO load held open until released, so a test controls which callers overlap it."""
+
+    def __init__(self, result: object) -> None:
+        self.result = result
+        self.calls: list[object] = []
+        self.release = asyncio.Event()
+        self.failure: Exception | None = None
+
+    async def __call__(self, *args: object) -> object:
+        self.calls.append(args)
+        await self.release.wait()
+        if self.failure is not None:
+            raise self.failure
+        return self.result
+
+
+async def test_concurrent_session_misses_share_one_load(fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
+    user = _user()
+    load = _HeldLoad(user)
+    monkeypatch.setattr(user_dao, "_load_with_identity", load)
+
+    readers = [asyncio.create_task(user_dao.get_with_identity(user.id)) for _ in range(3)]
+    await asyncio.sleep(0)
+    load.release.set()
+
+    assert await asyncio.gather(*readers) == [user, user, user]
+    assert len(load.calls) == 1
+
+
+async def test_a_failed_session_load_reaches_every_reader_and_the_next_read_retries(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = _user()
+    load = _HeldLoad(user)
+    load.failure = OSError("db down")
+    monkeypatch.setattr(user_dao, "_load_with_identity", load)
+
+    readers = [asyncio.create_task(user_dao.get_with_identity(user.id)) for _ in range(2)]
+    await asyncio.sleep(0)
+    load.release.set()
+    outcomes = await asyncio.gather(*readers, return_exceptions=True)
+
+    assert [type(outcome) for outcome in outcomes] == [OSError, OSError]
+    load.failure = None
+    assert await user_dao.get_with_identity(user.id) is user
+    assert len(load.calls) == 2
+
+
+async def test_a_session_miss_after_a_version_bump_does_not_share_the_older_load(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = _user()
+    load = _HeldLoad(user)
+    monkeypatch.setattr(user_dao, "_load_with_identity", load)
+
+    before = asyncio.create_task(user_dao.get_with_identity(user.id))
+    await asyncio.sleep(0)
+    await session_cache.bump_user_session(user.id)
+    after = asyncio.create_task(user_dao.get_with_identity(user.id))
+    await asyncio.sleep(0)
+    load.release.set()
+    await asyncio.gather(before, after)
+
+    assert len(load.calls) == 2
+
+
+async def test_session_loads_inside_a_transaction_are_never_shared(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(db_session, "get_pool", lambda: _FakePool(raw))
+    user = _user()
+    load = _HeldLoad(user)
+    monkeypatch.setattr(user_dao, "_load_with_identity", load)
+
+    async with db_session.connection_ctx():
+        readers = [asyncio.create_task(user_dao.get_with_identity(user.id)) for _ in range(2)]
+        await asyncio.sleep(0)
+        load.release.set()
+        await asyncio.gather(*readers)
+
+    assert len(load.calls) == 2
+
+
+async def test_concurrent_tenant_misses_share_one_load(fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant = TenantRecord(id=uuid4(), name="Acme", slug="acme", tier=OrganizationPlanId.PRO)
+    load = _HeldLoad(tenant)
+    monkeypatch.setattr(tenant_cache, "_ttl", lambda: 60)
+    monkeypatch.setattr(tenant_dao, "_load_and_cache", load)
+
+    readers = [asyncio.create_task(tenant_dao.get(tenant.id)) for _ in range(3)]
+    await asyncio.sleep(0)
+    load.release.set()
+
+    assert await asyncio.gather(*readers) == [tenant, tenant, tenant]
+    assert len(load.calls) == 1
