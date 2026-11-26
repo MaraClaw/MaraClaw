@@ -5,9 +5,12 @@ filename extension (``app/api/upload.py``). Channel media follows the same decis
 counted as they arrive and the read stops on the first decoded chunk past the limit. Decoding itself is bounded before
 allocation. ``Content-Length`` is only an early reject, never an admission ticket.
 
-A webhook that answers only after fetching its files also carries a wall-clock deadline on the same budget
-(``MediaBudget.for_acknowledgement``): once it passes, no further file is requested and the transfer in progress is
-abandoned, so the event is accepted with a note for each file left out.
+A webhook that answers only after fetching and storing its files also carries a wall-clock deadline on the same budget
+(``MediaBudget.for_acknowledgement``). Once it passes, no further file is fetched or stored: a fetch in progress is
+abandoned, and a store is not started. A store that has already started runs to completion and is attached, because
+storage cannot interrupt a write a worker thread has begun and abandoning it would leave a file in the workspace that no
+message refers to. The overrun is at most that one store, limited by the storage client's timeouts. The event is accepted
+with a note for each file left out.
 """
 
 from __future__ import annotations
@@ -53,7 +56,10 @@ class MediaTooLargeError(Exception):
 
 
 class MediaDeadlineError(Exception):
-    """The event's fetch window closed before this download finished. The file is fine, so callers leave it out with a note."""
+    """The event's window closed before this file was fetched or before its store could start.
+
+    The file is fine, so callers leave it out with a note.
+    """
 
 
 def file_limit(filename: str) -> int:
@@ -79,7 +85,10 @@ class MediaBudget:
         return cls(deadline=clock() + get_settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS, clock=clock)
 
     def check(self) -> None:
-        """Raise ``MediaDeadlineError`` once the deadline has passed."""
+        """Raise ``MediaDeadlineError`` once the deadline has passed.
+
+        Callers check before each fetch and before each store. A store that passed the check is never interrupted.
+        """
         if self.deadline is not None and self.clock() >= self.deadline:
             raise MediaDeadlineError
 
@@ -93,7 +102,11 @@ class MediaBudget:
 
     @asynccontextmanager
     async def window(self) -> AsyncGenerator[None]:
-        """Bound everything awaited inside by the time left, so a host that stops sending cannot outlast the deadline."""
+        """Bound everything awaited inside by the time left, so a host that stops sending cannot outlast the deadline.
+
+        For fetches only. Never wrap a store: storage finishes a write a worker thread has started before the cancellation
+        is delivered, so the file would land and the cancellation would discard its result.
+        """
         if self.deadline is None:
             yield
             return

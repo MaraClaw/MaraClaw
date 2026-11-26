@@ -4,7 +4,7 @@ import json
 import time
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 from uuid import uuid4
 
 import anyio
@@ -28,15 +28,18 @@ from app.services.channels.media_limits import (
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES
 from app.services.storage_runtime.quota_errors import StorageQuotaError
 from channel_media_fixtures import (
+    ClockedStream,
     CountingStream,
     GatedStream,
     SlowStream,
     StalledStream,
     ack_clock,
+    assert_in_flight_refusal,
     claim_store,
     serve,
     set_ack_budget,
     set_attachment_limit,
+    store_overrunning_the_deadline,
 )
 from channel_shared_webhook_fixtures import context, pipeline, request_for, webhook_pipeline
 
@@ -463,7 +466,7 @@ async def test_slack_files_fetched_before_the_deadline_are_kept_and_the_rest_are
     assert persist.await_args.kwargs["content"] == "\n".join([*expected, skipped_attachments_note(1)])
 
 
-async def test_a_retry_while_the_first_delivery_is_downloading_is_acknowledged_without_a_second_download(
+async def test_a_retry_while_the_first_delivery_is_downloading_is_refused_without_a_second_download(
     slack_acceptance, claim_store, monkeypatch
 ):
     # Given: a first delivery held in its file download
@@ -483,8 +486,9 @@ async def test_a_retry_while_the_first_delivery_is_downloading_is_acknowledged_w
         tasks.start_soon(slack_submissions.accept_slack_event, config, body)
         await gate.started.wait()
         # When: Slack redelivers the event while the first request is still working
-        assert await slack_submissions.accept_slack_event(config, body)
-        # Then: it is acknowledged with no new download, no storage write and no receipt reservation
+        with pytest.raises(submissions.ChannelEventInFlightError):
+            await slack_submissions.accept_slack_event(config, body)
+        # Then: it is refused rather than acknowledged, with no new download, no storage write and no receipt reservation
         assert requested == ["/photo.png"]
         upload.assert_not_awaited()
         receipts.reserve.assert_not_awaited()
@@ -528,8 +532,9 @@ async def test_a_claim_left_by_a_dead_process_expires_so_a_later_retry_is_proces
     budget = get_settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS
     assert budget < claim_store.lifetimes[key] <= budget + 30
     # When: a retry arrives while the claim is still alive
-    assert await slack_submissions.accept_slack_event(config, body)
-    # Then: it is acknowledged and nothing is fetched or stored again
+    with pytest.raises(submissions.ChannelEventInFlightError):
+        await slack_submissions.accept_slack_event(config, body)
+    # Then: it is refused and nothing is fetched or stored again
     assert upload.await_count == 1
     persist.assert_not_awaited()
     # When: the claim's lifetime has passed
@@ -538,6 +543,163 @@ async def test_a_claim_left_by_a_dead_process_expires_so_a_later_retry_is_proces
     assert await slack_submissions.accept_slack_event(config, body)
     assert upload.await_count == 2
     persist.assert_awaited_once()
+
+
+async def test_an_event_is_not_lost_when_the_delivery_that_held_its_claim_fails(
+    slack_acceptance, claim_store, monkeypatch
+):
+    # Given: a first delivery held in its file download, which will then fail to store the file
+    config, upload, persist, _ = slack_acceptance
+    upload.side_effect = [StorageQuotaError("agent storage is full"), ("key", "workspace/uploads/photo.png", "path")]
+    gate = GatedStream()
+    serve(monkeypatch, lambda _: httpx.Response(200, stream=gate))
+    body = slack_body([OVERSIZE_IMAGE])
+
+    async def first_delivery():
+        with pytest.raises(StorageQuotaError):
+            await slack_submissions.accept_slack_event(config, body)
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(first_delivery)
+        await gate.started.wait()
+        # And: Slack's retry arrives meanwhile and is refused, so Slack keeps the event pending
+        with pytest.raises(submissions.ChannelEventInFlightError):
+            await slack_submissions.accept_slack_event(config, body)
+        gate.release.set()
+    # When: Slack redelivers it after the first delivery failed and released its claim
+    assert claim_store.claims == {}
+    assert await slack_submissions.accept_slack_event(config, body)
+    # Then: the redelivery is processed in full, so the event is not lost
+    assert upload.await_count == 2
+    persist.assert_awaited_once()
+
+
+async def test_slacks_final_retry_proceeds_despite_a_held_claim_and_the_receipt_dedupes_it(
+    slack_acceptance, claim_store, monkeypatch
+):
+    # Given: a first delivery held in its file download, and a receipt store that reserves an event only once
+    config, upload, persist, _ = slack_acceptance
+    receipts = submissions.channel_event_receipt_dao
+    assert isinstance(receipts.reserve, AsyncMock)
+    assert isinstance(receipts.find, AsyncMock)
+    reserved = []
+
+    async def reserve(candidate):
+        reserved.append(candidate)
+        return len(reserved) == 1
+
+    receipts.reserve.side_effect = reserve
+    receipts.find.side_effect = lambda _: reserved[0] if reserved else None
+    gate = GatedStream()
+    requested = []
+
+    def handler(request):
+        requested.append(request.url.path)
+        return httpx.Response(200, stream=gate) if len(requested) == 1 else httpx.Response(200, content=b"file-bytes")
+
+    serve(monkeypatch, handler)
+    body = slack_body([OVERSIZE_IMAGE])
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(slack_submissions.accept_slack_event, config, body)
+        await gate.started.wait()
+        # When: Slack's last redelivery arrives while the first request still holds the claim
+        assert await slack_submissions.accept_slack_event(config, body, final_retry=True)
+        # Then: it proceeds without the claim and the event is accepted once
+        persist.assert_awaited_once()
+        gate.release.set()
+    # And: the first delivery finishing afterwards is answered by the receipt, at the cost of one repeated download
+    assert requested == ["/photo.png", "/photo.png"]
+    assert upload.await_count == 2
+    assert len(reserved) == 2
+    persist.assert_awaited_once()
+    assert claim_store.claims == {}
+
+
+async def test_a_slack_file_fetched_as_the_deadline_passes_is_not_stored_and_every_file_gets_a_note(
+    slack_acceptance, ack_clock, monkeypatch
+):
+    # Given: a 2 second budget, and a first file whose body ends after it
+    config, upload, persist, _ = slack_acceptance
+    set_ack_budget(monkeypatch, 2.0)
+    requested = []
+
+    def handler(request):
+        requested.append(request.url.path)
+        return httpx.Response(200, stream=ClockedStream(ack_clock, 3.0))
+
+    serve(monkeypatch, handler)
+    # When
+    assert await slack_submissions.accept_slack_event(config, slack_body(SMALL_FILES))
+    # Then: the file was fetched but not stored, the others were never requested, and each has a note
+    assert requested == ["/file1.txt"]
+    upload.assert_not_awaited()
+    assert persist.await_args.kwargs["attachments"] == ()
+    expected = "\n".join(["see attached", *(deadline_note(f"file{n}.txt") for n in (1, 2, 3))])
+    assert persist.await_args.kwargs["content"] == expected
+
+
+async def test_a_slack_store_that_starts_before_the_deadline_runs_to_completion_and_is_attached(
+    slack_acceptance, ack_clock, monkeypatch
+):
+    # Given: a 2 second budget, and a store that starts in time and finishes after the deadline
+    config, upload, persist, _ = slack_acceptance
+    set_ack_budget(monkeypatch, 2.0)
+
+    async def store(agent_id, filename, data, content_type=None):
+        return "key", f"workspace/uploads/{filename}", None
+
+    upload.side_effect = store_overrunning_the_deadline(ack_clock, store)
+    requested = []
+
+    def handler(request):
+        requested.append(request.url.path)
+        return httpx.Response(200, content=b"small")
+
+    serve(monkeypatch, handler)
+    # When
+    assert await slack_submissions.accept_slack_event(config, slack_body(SMALL_FILES[:1]))
+    # Then: the file was stored once and attached, with no note
+    assert requested == ["/file1.txt"]
+    upload.assert_awaited_once()
+    assert [ref.path for ref in persist.await_args.kwargs["attachments"]] == ["workspace/uploads/file1.txt"]
+    assert persist.await_args.kwargs["content"] == "see attached\n[file:workspace/uploads/file1.txt]"
+
+
+async def post_signed_slack_event(monkeypatch, config, *, retry_num=None):
+    body = json.dumps(slack_body([OVERSIZE_IMAGE])).encode()
+    timestamp = str(NOW)
+    digest = hmac.new(SECRET.encode(), b"v0:" + timestamp.encode() + b":" + body, hashlib.sha256).hexdigest()
+    headers = {"x-slack-request-timestamp": timestamp, "x-slack-signature": f"v0={digest}"}
+    if retry_num is not None:
+        headers["x-slack-retry-num"] = retry_num
+    monkeypatch.setattr(slack.time, "time", lambda: NOW)
+    monkeypatch.setattr(slack.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    async with webhook_client(slack.router) as client:
+        return await client.post(f"/api/channel/slack/{AGENT_ID}/webhook", content=body, headers=headers)
+
+
+async def test_slack_answers_a_held_claim_with_a_retryable_503(claim_store, monkeypatch):
+    # Given: a first delivery of the event still holding its claim
+    config = channel_config("slack")
+    event_key = json.dumps(["T1", "D123", "1700000000.000100"], separators=(",", ":"))
+    held = submissions.ChannelEvent(config.id, AGENT_ID, "slack", event_key, "U123", "slack_dm_U123", "see attached")
+    async with submissions.claim_channel_event(held):
+        # When: Slack redelivers the signed event
+        response = await post_signed_slack_event(monkeypatch, config, retry_num="1")
+    # Then: it gets the retryable refusal, not an acknowledgement
+    assert_in_flight_refusal(response)
+
+
+@pytest.mark.parametrize(("retry_num", "final"), [(None, False), ("1", False), ("2", False), ("3", True)])
+async def test_only_slacks_third_retry_is_the_final_delivery(monkeypatch, retry_num, final):
+    # Given: the event callback handler, which records how it was called
+    accept = AsyncMock(return_value=True)
+    monkeypatch.setattr(slack_submissions, "accept_slack_event", accept)
+    # When: the signed event arrives with the given X-Slack-Retry-Num
+    response = await post_signed_slack_event(monkeypatch, channel_config("slack"), retry_num=retry_num)
+    # Then: the final flag is set for the third retry only
+    assert response.status_code == 200
+    accept.assert_awaited_once_with(ANY, ANY, final_retry=final)
 
 
 @pytest.mark.parametrize("failure", [ConnectionError("redis down"), RedisPoolOverloadError("cache pool busy")])
@@ -558,12 +720,13 @@ async def test_the_claim_is_keyed_by_the_receipt_identity(claim_store):
     # Given: an event holding its claim
     event = submissions.ChannelEvent(uuid4(), uuid4(), "slack", "native-1", "sender", "conversation", "hello")
     async with (
-        submissions.claim_channel_event(event) as first,
-        submissions.claim_channel_event(replace(event, text="edited", sender_id="other")) as same_receipt,
-        submissions.claim_channel_event(replace(event, event_key="native-2")) as other_event,
-        submissions.claim_channel_event(replace(event, config_id=uuid4())) as other_config,
-        submissions.claim_channel_event(replace(event, provider="telegram")) as other_provider,
+        submissions.claim_channel_event(event),
+        submissions.claim_channel_event(replace(event, event_key="native-2")),
+        submissions.claim_channel_event(replace(event, config_id=uuid4())),
+        submissions.claim_channel_event(replace(event, provider="telegram")),
     ):
         # When / Then: only the same config, provider and event key is held, whatever else the delivery carries
-        assert (first, same_receipt, other_event, other_config, other_provider) == (True, False, True, True, True)
+        with pytest.raises(submissions.ChannelEventInFlightError):
+            async with submissions.claim_channel_event(replace(event, text="edited", sender_id="other")):
+                pass
     assert claim_store.claims == {}

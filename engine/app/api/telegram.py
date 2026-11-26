@@ -125,8 +125,8 @@ async def telegram_event_webhook(config_id: UUID, request: Request) -> OkAcknowl
                 from app.services.channels.submissions import is_channel_event_replay
                 from app.services.channels.telegram_media import enrich_media
 
-                async with claim_channel_event(event) as claimed:
-                    if claimed and not await is_channel_event_replay(event):
+                async with claim_channel_event(event):
+                    if not await is_channel_event_replay(event):
                         enriched, content = await enrich_media(config, event, update.message)
                         _ = await accept_channel_event(enriched, content=content, saved_content=content)
             else:

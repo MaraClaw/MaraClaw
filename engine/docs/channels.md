@@ -45,19 +45,44 @@ The Slack fallback for events with neither `ts` nor `event_id` applies the same 
 post without a message id has no retrievable images, so its text is processed with no media work.
 
 `CHANNEL_MEDIA_ACK_BUDGET_SECONDS` (above 0 up to 30, default 2) bounds the wall-clock time a Slack,
-Telegram or WhatsApp Cloud webhook spends fetching attachments before it answers; Slack gives up after
-3 seconds. Once it passes, no further file is requested, the transfer in progress is abandoned (a host that
-sends nothing is cut off too), and the transcript and model content carry one note for each file left out,
-next to the oversize and skipped-files notes. The text and the files already stored are still accepted, and
-the receipt fingerprint still covers every original attachment ID.
+Telegram or WhatsApp Cloud webhook spends starting fetches and stores for its attachments before it answers; Slack
+gives up after 3 seconds. Once it passes, no further file is requested and no further store starts: a fetch in
+progress is abandoned (a host that sends nothing is cut off too), and the transcript and model content carry one
+note for each file left out, next to the oversize and skipped-files notes. A store that started before the deadline
+runs to completion and its file is attached normally, with no note, because storage cannot interrupt a write a
+worker thread has begun and cancelling the call would leave a file in the workspace that no message refers to. The
+answer can therefore overrun the budget by one store, which is limited by the storage client's timeouts (the S3
+client uses a 5 second connect and a 30 second read timeout per attempt; the local backend writes to disk). The
+text and the files already stored are still accepted, and the receipt fingerprint still covers every original
+attachment ID. Accepting the event (`accept_channel_event`, one database transaction) and the replay check before
+the fetch run outside the budget.
 
 Those webhooks also take a short in-flight claim before they fetch (Redis, keyed like the event receipt,
-lasting the budget plus ten seconds), so a provider retry that arrives while the first delivery is still
-downloading is acknowledged without a second download or storage write. The first delivery releases the
-claim when it ends, however it ends; one left by a dead process expires, and with Redis unavailable the
-webhook behaves as it did before. The claim is advisory: the durable receipt stays the only dedupe, and a
-replay after acceptance still answers through it. The Slack fallback for events with neither `ts` nor
-`event_id` has no event identity to claim and keeps no deadline.
+lasting the budget plus ten seconds, which covers the replay check and the acceptance transaction that run
+outside the budget). A provider redelivery that arrives while the first delivery still holds the claim is
+refused with a retryable `503`, a `Retry-After` header (the claim's lifetime) and `detail.code`
+`channel_event_in_flight`, with no second download or storage write. It is never acknowledged with a 2xx,
+because the provider reads that as delivered and the event would be lost if the first delivery then failed.
+The first delivery releases the claim when it ends, however it ends, so the redelivery is answered by the
+durable receipt (a replay, acknowledged) or, when the first delivery failed, processed in full. How each
+provider redelivers:
+
+- Slack redelivers a non-2xx or slow (over 3 seconds) event up to three times, about immediately, after
+  about a minute and after about five, with `X-Slack-Retry-Num` 1 to 3
+  ([Slack retry behavior](https://slack.dev/keep-the-lights-on-error-handling-for-slack-apps),
+  [measured](https://slack.green/en/blog/slack-events-api-retry)). The third retry (`X-Slack-Retry-Num: 3`)
+  ignores a held claim and proceeds, because nothing follows it; the receipt reservation still keeps the
+  event from being accepted twice, at the cost of at most one repeated download.
+- Telegram repeats a non-2xx webhook request and gives up after a reasonable number of attempts
+  ([`setWebhook`](https://core.telegram.org/bots/api#setwebhook)).
+- WhatsApp Cloud retries a non-200 with decreasing frequency for up to 7 days. A batch processes its other
+  messages as before and then answers the whole delivery with the `503` when any message found its claim
+  held; the messages already accepted replay on the redelivery.
+
+A claim left by a dead process expires, and with Redis unavailable the webhook behaves as it did before. The
+claim is advisory: the durable receipt stays the only dedupe, and a replay after acceptance still answers
+through it. The Slack fallback for events with neither `ts` nor `event_id` has no event identity to claim and
+keeps no deadline.
 
 WhatsApp validates the raw-body signature before processing, visits every message
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed

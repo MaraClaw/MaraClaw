@@ -20,7 +20,17 @@ from app.services.channels.media_limits import READ_CHUNK_BYTES, deadline_note
 from app.services.channels.submissions import AcceptedChannelEvent, ChannelEventConflictError
 from app.services.storage_runtime import agent_files
 from app.services.storage_runtime.local import LocalStorageBackend
-from channel_media_fixtures import GatedStream, SlowStream, StalledStream, ack_clock, claim_store, set_ack_budget
+from channel_media_fixtures import (
+    ClockedStream,
+    GatedStream,
+    SlowStream,
+    StalledStream,
+    ack_clock,
+    assert_in_flight_refusal,
+    claim_store,
+    set_ack_budget,
+    store_overrunning_the_deadline,
+)
 
 __all__ = ["ack_clock", "claim_store"]
 
@@ -98,14 +108,15 @@ async def test_unbound_signed_media_never_downloads_or_persists(monkeypatch):
 class CloudMedia:
     """A signed WhatsApp Cloud document message with its media API served from memory.
 
-    ``post`` delivers it, ``serve_file`` answers the file download and ``calls`` records every media request.
+    ``post`` delivers it, together with any further messages of the same batch it is given, ``serve_file`` answers the
+    file download and ``calls`` records every media request.
     """
 
     accept: AsyncMock
     replay: AsyncMock
     storage: LocalStorageBackend
     serve_file: Callable[[httpx.Request], httpx.Response]
-    post: Callable[[], Awaitable[httpx.Response]]
+    post: Callable[..., Awaitable[httpx.Response]]
     calls: list[httpx.Request] = field(default_factory=list)
 
 
@@ -125,11 +136,11 @@ def cloud_media(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> CloudMedia:
         "type": "document",
         "document": {"id": "media1", "filename": "report.xlsx"},
     }
-    value = {"metadata": {"phone_number_id": config.app_id}, "messages": [message]}
-    body = json.dumps({"entry": [{"changes": [{"value": value}]}]}).encode()
-    headers = {"x-hub-signature-256": "sha256=" + hmac.new(b"app-secret", body, hashlib.sha256).hexdigest()}
 
-    async def post() -> httpx.Response:
+    async def post(*more_messages: dict[str, object]) -> httpx.Response:
+        value = {"metadata": {"phone_number_id": config.app_id}, "messages": [message, *more_messages]}
+        body = json.dumps({"entry": [{"changes": [{"value": value}]}]}).encode()
+        headers = {"x-hub-signature-256": "sha256=" + hmac.new(b"app-secret", body, hashlib.sha256).hexdigest()}
         async with webhook_client(whatsapp.router) as client:
             return await client.post(f"/api/channel/whatsapp/{AGENT_ID}/webhook", content=body, headers=headers)
 
@@ -182,7 +193,7 @@ async def test_slow_whatsapp_file_host_is_abandoned_at_the_budget_and_the_messag
     assert cloud_media.accept.await_args.kwargs["content"] == deadline_note("report.xlsx")
 
 
-async def test_a_retried_media_message_while_the_first_is_downloading_is_acknowledged_without_a_download(
+async def test_a_retried_media_message_while_the_first_is_downloading_is_refused_without_a_download(
     cloud_media, claim_store
 ):
     # Given: a first delivery held in its file download
@@ -198,8 +209,8 @@ async def test_a_retried_media_message_while_the_first_is_downloading_is_acknowl
         await gate.started.wait()
         # When: WhatsApp redelivers the message while the first request is still working
         retry = await cloud_media.post()
-        # Then: the answer is the usual one, with no new download and nothing accepted yet
-        assert (retry.status_code, retry.json()) == (200, {"ok": True})
+        # Then: WhatsApp gets the retryable refusal, with no new download and nothing accepted yet
+        assert_in_flight_refusal(retry)
         assert len(cloud_media.calls) == 2
         assert cloud_media.replay.await_count == 1
         cloud_media.accept.assert_not_awaited()
@@ -208,6 +219,91 @@ async def test_a_retried_media_message_while_the_first_is_downloading_is_acknowl
     assert first[0].status_code == 200
     cloud_media.accept.assert_awaited_once()
     assert claim_store.claims == {}
+
+
+async def test_a_batch_with_a_held_message_processes_the_rest_and_answers_the_whole_delivery_with_503(
+    cloud_media, claim_store
+):
+    # Given: a first delivery of the media message held in its file download, and a text message that arrives with it
+    gate = GatedStream()
+    cloud_media.serve_file = lambda _: httpx.Response(200, stream=gate)
+    text = {"id": "native-text", "from": "15550001", "type": "text", "text": {"body": "hello"}}
+    first: list[httpx.Response] = []
+
+    async def deliver() -> None:
+        first.append(await cloud_media.post())
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(deliver)
+        await gate.started.wait()
+        # When: WhatsApp redelivers the batch with the held media message and the text message
+        retry = await cloud_media.post(text)
+        # Then: the text message was accepted as usual, the held one was not downloaded again, and the delivery is refused
+        assert_in_flight_refusal(retry)
+        assert [call.args[0].event_key for call in cloud_media.accept.await_args_list] == ["native-text"]
+        assert len(cloud_media.calls) == 2
+        gate.release.set()
+    # And: the first delivery went on to accept the media message, then released the claim
+    assert first[0].status_code == 200
+    assert [call.args[0].event_key for call in cloud_media.accept.await_args_list] == ["native-text", "native-media"]
+    assert claim_store.claims == {}
+
+
+async def test_a_media_message_is_not_lost_when_the_delivery_that_held_its_claim_fails(cloud_media, claim_store):
+    # Given: a first delivery held in its file download, whose acceptance will then fail
+    cloud_media.accept.side_effect = [HTTPException(503, "retry"), AcceptedChannelEvent(replayed=False)]
+    gate = GatedStream()
+    cloud_media.serve_file = lambda _: httpx.Response(200, stream=gate)
+    first: list[httpx.Response] = []
+
+    async def deliver() -> None:
+        first.append(await cloud_media.post())
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(deliver)
+        await gate.started.wait()
+        # And: WhatsApp's retry arrives meanwhile and is refused, so WhatsApp keeps the message pending
+        assert_in_flight_refusal(await cloud_media.post())
+        gate.release.set()
+    assert first[0].status_code == 503
+    assert claim_store.claims == {}
+    # When: WhatsApp redelivers it after the first delivery failed and released its claim
+    retried = await cloud_media.post()
+    # Then: the redelivery is processed in full, so the message is not lost
+    assert (retried.status_code, retried.json()) == (200, {"ok": True})
+    assert cloud_media.accept.await_count == 2
+
+
+async def test_a_whatsapp_file_fetched_as_the_deadline_passes_is_not_stored_and_the_message_is_accepted(
+    cloud_media, ack_clock, monkeypatch
+):
+    # Given: a 2 second budget, and a file whose body ends after it
+    set_ack_budget(monkeypatch, 2.0)
+    cloud_media.serve_file = lambda _: httpx.Response(200, stream=ClockedStream(ack_clock, 3.0))
+    # When
+    response = await cloud_media.post()
+    # Then: the file was fetched but not stored, and the message was accepted with a note
+    assert (response.status_code, response.json()) == (200, {"ok": True})
+    assert not await cloud_media.storage.list_dir(str(AGENT_ID))
+    assert cloud_media.accept.await_args.args[0].attachments == ()
+    assert cloud_media.accept.await_args.kwargs["content"] == deadline_note("report.xlsx")
+
+
+async def test_a_whatsapp_store_that_starts_before_the_deadline_runs_to_completion_and_is_attached(
+    cloud_media, ack_clock, monkeypatch
+):
+    # Given: a 2 second budget, and a store that starts in time and finishes after the deadline
+    set_ack_budget(monkeypatch, 2.0)
+    store = store_overrunning_the_deadline(ack_clock, whatsapp_cloud_media.store_agent_upload)
+    monkeypatch.setattr(whatsapp_cloud_media, "store_agent_upload", store)
+    # When
+    response = await cloud_media.post()
+    # Then: the file was stored once and attached, with no note and no other file left in the workspace
+    assert (response.status_code, response.json()) == (200, {"ok": True})
+    (reference,) = cloud_media.accept.await_args.args[0].attachments
+    assert cloud_media.accept.await_args.kwargs["content"] == f"[file:{reference.path}]"
+    assert await cloud_media.storage.read_bytes(f"{AGENT_ID}/{reference.path}") == b"file payload"
+    assert len(await cloud_media.storage.list_dir(f"{AGENT_ID}/workspace/uploads")) == 1
 
 
 async def test_a_conflicting_media_message_keeps_its_retryable_answer_and_releases_the_claim(cloud_media, claim_store):

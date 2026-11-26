@@ -268,6 +268,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
         return Response(status_code=401)
     entries = payload.get("entry")
     failed = False
+    in_flight: HTTPException | None = None
     for entry_raw in entries if isinstance(entries, list) else []:
         entry = json_object_from(entry_raw)
         changes = entry.get("changes")
@@ -303,6 +304,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                 from app.services.channels.submissions import (
                     ChannelEvent,
                     ChannelEventConflictError,
+                    ChannelEventInFlightError,
                     accept_channel_event,
                 )
                 from app.services.quota_guard import AgentExpired, QuotaExceeded
@@ -326,14 +328,16 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                         from app.services.channels.submissions import claim_channel_event, is_channel_event_replay
                         from app.services.channels.whatsapp_cloud_media import enrich_media
 
-                        async with claim_channel_event(native) as claimed:
-                            if claimed and not await is_channel_event_replay(native):
+                        async with claim_channel_event(native):
+                            if not await is_channel_event_replay(native):
                                 enriched, content = await enrich_media(config, native, media)
                                 await accept_channel_event(enriched, content=content, saved_content=content)
                     else:
                         await accept_channel_event(native)
                 except ChannelUserResolutionError, AgentExpired, QuotaExceeded:
                     continue
+                except ChannelEventInFlightError as exc:
+                    in_flight = exc
                 except HTTPException as exc:
                     failed = failed or exc.status_code >= 500
                 except ChannelEventConflictError:
@@ -342,4 +346,8 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                     failed = True
                     logger.exception("[WhatsApp] Inbound acceptance failed for agent %s", agent_id)
 
+    if in_flight is not None:
+        # Another delivery of a message in this batch still holds its claim: answer the whole delivery with the
+        # retryable 503 + Retry-After so WhatsApp redelivers it; the messages handled above replay safely.
+        raise in_flight
     return Response(status_code=503) if failed else {"ok": True}

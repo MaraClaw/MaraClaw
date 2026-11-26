@@ -23,12 +23,15 @@ from app.services.channels.submissions import AcceptedChannelEvent, ChannelEvent
 from app.services.storage_runtime import agent_files
 from app.services.storage_runtime.local import LocalStorageBackend
 from channel_media_fixtures import (
+    ClockedStream,
     GatedStream,
     SlowStream,
     StalledStream,
     ack_clock,
+    assert_in_flight_refusal,
     claim_store,
     set_ack_budget,
+    store_overrunning_the_deadline,
 )
 
 __all__ = ["ack_clock", "claim_store"]
@@ -358,7 +361,7 @@ async def test_slow_telegram_file_host_is_abandoned_at_the_budget_and_the_messag
     assert accept.await_args.kwargs["content"] == deadline_note("report.pdf")
 
 
-async def test_a_retried_media_update_while_the_first_is_downloading_is_acknowledged_without_a_download(
+async def test_a_retried_media_update_while_the_first_is_downloading_is_refused_without_a_download(
     webhook_api, telegram_download, claim_store
 ) -> None:
     # Given: a first delivery held in its file download
@@ -375,8 +378,8 @@ async def test_a_retried_media_update_while_the_first_is_downloading_is_acknowle
         await gate.started.wait()
         # When: Telegram redelivers the update while the first request is still working
         retry = await client.post(PATH, json=MEDIA_UPDATE, headers=HEADERS)
-        # Then: the answer is the usual one, with no new download and nothing accepted yet
-        assert (retry.status_code, retry.json()) == (200, {"ok": True})
+        # Then: Telegram gets the retryable refusal, with no new download and nothing accepted yet
+        assert_in_flight_refusal(retry)
         assert len(telegram_download.calls) == 2
         assert telegram_download.replay.await_count == 1
         accept.assert_not_awaited()
@@ -385,6 +388,68 @@ async def test_a_retried_media_update_while_the_first_is_downloading_is_acknowle
     assert first[0].status_code == 200
     accept.assert_awaited_once()
     assert claim_store.claims == {}
+
+
+async def test_a_media_update_is_not_lost_when_the_delivery_that_held_its_claim_fails(
+    webhook_api, telegram_download, claim_store
+) -> None:
+    # Given: a first delivery held in its file download, whose acceptance will then fail
+    client, accept, _ = webhook_api
+    accept.side_effect = [HTTPException(503, "retry"), AcceptedChannelEvent(replayed=False)]
+    gate = GatedStream()
+    telegram_download.serve_file = lambda _: httpx.Response(200, stream=gate)
+    first: list[httpx.Response] = []
+
+    async def deliver() -> None:
+        first.append(await client.post(PATH, json=MEDIA_UPDATE, headers=HEADERS))
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(deliver)
+        await gate.started.wait()
+        # And: Telegram's retry arrives meanwhile and is refused, so Telegram keeps the update pending
+        assert_in_flight_refusal(await client.post(PATH, json=MEDIA_UPDATE, headers=HEADERS))
+        gate.release.set()
+    assert first[0].status_code == 503
+    assert claim_store.claims == {}
+    # When: Telegram repeats the update after the first delivery failed and released its claim
+    retried = await client.post(PATH, json=MEDIA_UPDATE, headers=HEADERS)
+    # Then: the repeat is processed in full, so the update is not lost
+    assert (retried.status_code, retried.json()) == (200, {"ok": True})
+    assert accept.await_count == 2
+
+
+async def test_a_telegram_file_fetched_as_the_deadline_passes_is_not_stored_and_the_message_is_accepted(
+    webhook_api, telegram_download, ack_clock, monkeypatch
+) -> None:
+    # Given: a 2 second budget, and a file whose body ends after it
+    client, accept, _ = webhook_api
+    set_ack_budget(monkeypatch, 2.0)
+    telegram_download.serve_file = lambda _: httpx.Response(200, stream=ClockedStream(ack_clock, 3.0))
+    # When
+    response = await client.post(PATH, json=MEDIA_UPDATE, headers=HEADERS)
+    # Then: the file was fetched but not stored, and the message was accepted with a note
+    assert (response.status_code, response.json()) == (200, {"ok": True})
+    assert not await telegram_download.storage.list_dir(str(AGENT_ID))
+    assert accept.await_args.args[0].attachments == ()
+    assert accept.await_args.kwargs["content"] == deadline_note("report.pdf")
+
+
+async def test_a_telegram_store_that_starts_before_the_deadline_runs_to_completion_and_is_attached(
+    webhook_api, telegram_download, ack_clock, monkeypatch
+) -> None:
+    # Given: a 2 second budget, and a store that starts in time and finishes after the deadline
+    client, accept, _ = webhook_api
+    set_ack_budget(monkeypatch, 2.0)
+    store = store_overrunning_the_deadline(ack_clock, telegram_media.store_agent_upload)
+    monkeypatch.setattr(telegram_media, "store_agent_upload", store)
+    # When
+    response = await client.post(PATH, json=MEDIA_UPDATE, headers=HEADERS)
+    # Then: the file was stored once and attached, with no note and no other file left in the workspace
+    assert (response.status_code, response.json()) == (200, {"ok": True})
+    (reference,) = accept.await_args.args[0].attachments
+    assert accept.await_args.kwargs["content"] == f"[file:{reference.path}]"
+    assert await telegram_download.storage.read_bytes(f"{AGENT_ID}/{reference.path}") == b"file bytes"
+    assert len(await telegram_download.storage.list_dir(f"{AGENT_ID}/workspace/uploads")) == 1
 
 
 @pytest.mark.parametrize(

@@ -73,6 +73,7 @@ async def enrich_media(config: ChannelConfigRecord, event: ChannelEvent, media: 
                 data = await read_capped(response, limit, budget)
             finally:
                 await response.aclose()
+        budget.check()
     except MediaTooLargeError as exc:
         return event, f"{event.text}\n{too_large_note(filename, exc.limit)}".strip()
     except MediaDeadlineError:

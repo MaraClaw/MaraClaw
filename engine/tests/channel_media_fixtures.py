@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Iterator
+import math
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import override
 
 import anyio
@@ -91,6 +92,45 @@ class StalledStream(httpx.AsyncByteStream):
         with anyio.fail_after(HANG_GUARD_SECONDS):
             await anyio.Event().wait()
         yield b""
+
+
+class ClockedStream(httpx.AsyncByteStream):
+    """A short body that moves ``clock`` by ``seconds`` after its last byte, so the deadline can pass between fetch and store."""
+
+    def __init__(self, clock: FakeClock, seconds: float) -> None:
+        self.clock = clock
+        self.seconds = seconds
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"file bytes"
+        self.clock.advance(self.seconds)
+
+
+type Store = Callable[..., Awaitable[tuple[str, str, object]]]
+
+
+def store_overrunning_the_deadline(clock: FakeClock, store: Store, seconds: float = 3.0) -> Store:
+    """Wrap a ``store_agent_upload`` so ``clock`` passes the deadline while the store is running.
+
+    Fails the test if the store runs under a cancel scope with a deadline: a store that has started must not be cancellable.
+    """
+
+    async def run(*args: object, **kwargs: object) -> tuple[str, str, object]:
+        assert anyio.current_effective_deadline() == math.inf
+        result = await store(*args, **kwargs)
+        clock.advance(seconds)
+        return result
+
+    return run
+
+
+def assert_in_flight_refusal(response: httpx.Response) -> None:
+    """A delivery refused because another still holds its event's claim: retryable 503, ``Retry-After``, stable code."""
+    lifetime = get_settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS + submissions.CLAIM_GRACE_SECONDS
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == str(math.ceil(lifetime))
+    assert response.json()["detail"]["code"] == submissions.CHANNEL_EVENT_IN_FLIGHT
 
 
 class GatedStream(httpx.AsyncByteStream):

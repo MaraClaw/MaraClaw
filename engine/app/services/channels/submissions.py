@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -223,8 +224,10 @@ async def is_channel_event_replay(event: ChannelEvent) -> bool:
     return _matching(await channel_event_receipt_dao.find(candidate), candidate)
 
 
-# How long an in-flight claim outlives the media fetch budget, to cover the stores and the acceptance after the last fetch.
+# How long an in-flight claim outlives the media budget. Every fetch and store runs inside the budget; this covers the
+# work around it that does not: the replay check before it and the acceptance transaction (`accept_channel_event`) after it.
 CLAIM_GRACE_SECONDS: Final = 10.0
+CHANNEL_EVENT_IN_FLIGHT: Final = "channel_event_in_flight"
 _CLAIM_RELEASE_SECONDS: Final = 1
 _RELEASE_IF_OWNER: Final = (
     "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
@@ -236,9 +239,29 @@ def _claim_key(event: ChannelEvent) -> str:
     return cache_key("channel-claim", hashlib.sha256(identity.encode()).hexdigest())
 
 
+def _claim_ttl_seconds() -> float:
+    return get_settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS + CLAIM_GRACE_SECONDS
+
+
+class ChannelEventInFlightError(HTTPException):
+    """Another delivery of this event holds its in-flight claim: 503, ``Retry-After`` and code ``channel_event_in_flight``.
+
+    The provider redelivers once the first delivery has settled: as a receipt replay if that one was accepted, or in
+    full if it failed and released its claim. ``Retry-After`` is the claim's lifetime, after which the first delivery has
+    ended or its claim has expired.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            503,
+            detail={"code": CHANNEL_EVENT_IN_FLIGHT, "message": "This event is still being processed. Redeliver it."},
+            headers={"Retry-After": str(math.ceil(_claim_ttl_seconds()))},
+        )
+
+
 async def _take_claim(key: str, token: str) -> bool | None:
     """True when this delivery now holds the claim, False when another does, None when the claim store is unavailable."""
-    ttl_ms = round((get_settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS + CLAIM_GRACE_SECONDS) * 1000)
+    ttl_ms = round(_claim_ttl_seconds() * 1000)
 
     async def take() -> object:
         return await (await get_cache_redis()).set(key, token, px=ttl_ms, nx=True)
@@ -262,24 +285,34 @@ async def _release_claim(key: str, token: str) -> None:
 
 
 @asynccontextmanager
-async def claim_channel_event(event: ChannelEvent) -> AsyncGenerator[bool]:
-    """Hold the in-flight claim of ``event`` while a delivery of it is being processed; yields False when another holds it.
+async def claim_channel_event(event: ChannelEvent, *, final_delivery: bool = False) -> AsyncGenerator[None]:
+    """Hold the in-flight claim of ``event`` while a delivery of it fetches and stores media and is accepted.
 
     The claim is keyed like the receipt but advisory: the receipt reservation in ``accept_channel_event`` stays the only
-    durable dedupe. It lets a provider retry that lands while the first delivery is still fetching files be acknowledged
-    without a second download. The first delivery releases it when it ends, however it ends. One left by a process that died
-    expires after the media fetch budget plus ``CLAIM_GRACE_SECONDS``, and an unavailable store (Redis down or its pool
-    busy) yields True so the delivery proceeds as it did before claims existed.
+    durable dedupe. It keeps a provider redelivery that lands while the first delivery is still working from downloading
+    the same files again. Such a delivery is refused with ``ChannelEventInFlightError`` (503 + ``Retry-After``), never
+    acknowledged: the provider takes a 2xx as the event delivered, so acknowledging it would lose the event if the first
+    delivery then failed. The redelivery arrives after the first has settled and is answered by the receipt, or
+    processed in full if the first failed and released its claim.
+
+    ``final_delivery`` is for a provider's last redelivery (Slack's ``X-Slack-Retry-Num: 3``): nothing redelivers after
+    it, so a held claim is ignored and the delivery proceeds without owning it. The receipt reservation still keeps the
+    event from being accepted twice; the cost is at most one repeated download.
+
+    The first delivery releases its claim when it ends, however it ends. One left by a process that died expires after
+    the media budget plus ``CLAIM_GRACE_SECONDS``, and an unavailable store (Redis down or its pool busy) lets the
+    delivery proceed as it did before claims existed.
     """
     key, token = _claim_key(event), uuid4().hex
     claimed = await _take_claim(key, token)
     if claimed is False:
-        yield False
-        return
+        logger.info("channel event in flight: provider={} config={}", event.provider, event.config_id)
+        if not final_delivery:
+            raise ChannelEventInFlightError
     try:
-        yield True
+        yield
     finally:
-        if claimed:
+        if claimed is True:
             await _release_claim(key, token)
 
 

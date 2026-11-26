@@ -23,7 +23,12 @@ from .media_limits import (
 from .submissions import ChannelEvent, accept_channel_event, claim_channel_event, is_channel_event_replay
 
 
-async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject) -> bool:
+async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject, *, final_retry: bool = False) -> bool:
+    """Accept a Slack event callback; False when it has no native id and the legacy fallback must handle it.
+
+    A delivery that finds the event's in-flight claim held raises ``ChannelEventInFlightError`` (503) so Slack redelivers
+    it. ``final_retry`` marks Slack's last redelivery, which proceeds despite a held claim because nothing follows it.
+    """
     event = json_object_from(body.get("event"))
     native_id = json_as_str_or(event.get("ts")) or json_as_str_or(body.get("event_id"))
     if not native_id:
@@ -45,8 +50,8 @@ async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject) -> b
         media_ids=tuple(json_as_str_or(file.get("id")) for file in files),
         is_group=bool(channel_id) and not channel_id.startswith("D"),
     )
-    async with claim_channel_event(native) as claimed:
-        if claimed and not await is_channel_event_replay(native):
+    async with claim_channel_event(native, final_delivery=final_retry):
+        if not await is_channel_event_replay(native):
             enriched, attachments = await _fetch_files(config, files, text)
             await accept_channel_event(
                 replace(native, attachments=attachments), content=enriched, saved_content=enriched
@@ -61,7 +66,11 @@ def _filename(file: JsonObject) -> str:
 async def _fetch_files(
     config: ChannelConfigRecord, files: Sequence[JsonObject], text: str
 ) -> tuple[str, tuple[ChatAttachment, ...]]:
-    """Fetch and store the files within the acknowledgement budget; returns the message text with its file notes."""
+    """Fetch and store the files within the acknowledgement budget; returns the message text with its file notes.
+
+    A file is left out, with every file after it, when the deadline passes before its fetch ends or before its store
+    starts. A store that has started runs to completion and is attached.
+    """
     enriched = text
     attachments: list[ChatAttachment] = []
     budget = MediaBudget.for_acknowledgement()
@@ -78,6 +87,7 @@ async def _fetch_files(
             ):
                 data = await read_capped(response, limit, budget)
                 content_type = str(response.headers.get("content-type") or "")
+            budget.check()
         except MediaTooLargeError as error:
             budget.spend(error.read)
             enriched = f"{enriched}\n{too_large_note(filename, error.limit)}".strip()

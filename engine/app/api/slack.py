@@ -51,6 +51,8 @@ from app.services.storage import store_agent_upload
 router = APIRouter(tags=["slack"])
 
 SLACK_MSG_LIMIT = 4000  # Slack text message char limit
+# Slack redelivers a failed or slow event up to three times (X-Slack-Retry-Num 1 to 3); the third is the last.
+SLACK_FINAL_RETRY_NUM = "3"
 
 
 class SlackChannelPayload(TypedDict, total=False):
@@ -222,7 +224,8 @@ async def slack_event_webhook(
 
     from app.services.channels.slack_submissions import accept_slack_event
 
-    if await accept_slack_event(config, body):
+    final_retry = request.headers.get("x-slack-retry-num") == SLACK_FINAL_RETRY_NUM
+    if await accept_slack_event(config, body, final_retry=final_retry):
         return {"ok": True}
 
     channel_id = json_as_str_or(event.get("channel"))
