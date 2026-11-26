@@ -1,10 +1,23 @@
-import { vietnamese, type MessageKey } from './translations.ts'
+import type { MessageKey, vietnamese } from './translations.ts'
 
 export type Locale = 'en' | 'vi'
 export const languageStorageKey = 'maraclaw-admin-language'
 export const localeTag = { en: 'en-US', vi: 'vi-VN' } as const
 /** Endonyms: each language is always named in itself, whatever the active locale. */
 export const languageName = { en: 'English', vi: 'Tiếng Việt' } as const satisfies Record<Locale, string>
+// The dictionary is type-only here: its strings are their own chunk, fetched by `loadVietnamese`.
+let dictionary: typeof vietnamese | null = null
+let loading: Promise<void> | null = null
+
+/** Fetches the Vietnamese strings once. Rejects (and lets a later call retry) when the chunk cannot load. */
+export function loadVietnamese(): Promise<void> {
+  loading ??= import('./translations.ts').then(
+    (module) => { dictionary = module.vietnamese },
+    (error: unknown) => { loading = null; throw error },
+  )
+  return loading
+}
+
 export type MessageValues = Readonly<Record<string, string | number>>
 export type LocalMessage = { readonly key: MessageKey; readonly values: MessageValues }
 export function message(key: MessageKey, values: MessageValues = {}): LocalMessage {
@@ -19,7 +32,8 @@ export function parseLocale(value: string | null): Locale {
 }
 
 export function translate(locale: Locale, key: MessageKey, values: MessageValues = {}): string {
-  const message = locale === 'vi' ? vietnamese[key] : key
+  // Until `loadVietnamese` resolves, `vi` renders the English key.
+  const message = locale === 'vi' && dictionary !== null ? dictionary[key] : key
   return message.replace(/\{([^{}]+)\}/g, (slot: string, name: string) =>
     Object.hasOwn(values, name) ? String(values[name]) : slot)
 }
@@ -39,5 +53,5 @@ export function ownedTranslator(locale: Locale): OwnedTranslator {
 }
 
 function isMessageKey(message: string): message is MessageKey {
-  return Object.hasOwn(vietnamese, message)
+  return dictionary !== null && Object.hasOwn(dictionary, message)
 }

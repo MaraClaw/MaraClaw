@@ -64,6 +64,7 @@ Scope: auth/theme/translation context lifetimes, session-fenced query adapters, 
 - Theme toggling chooses explicit light/dark opposite the resolved theme; it does not cycle back to system.
   Invalid stored values resolve to the system preference; media-listener cleanup removes the change handler.
 - Translation locale is `en` or `vi`, persisted in localStorage `maraclaw-language`; absent, invalid or unreadable storage defaults to `en`. Restricted storage still permits an in-memory switch. The provider updates `<html lang>` and formats with `en-US` / `vi-VN`; `lib/i18n/translation.ts` owns parsing, interpolation and storage, and `lib/i18n/catalog.ts` aggregates Vietnamese strings.
+- Vietnamese strings are their own chunk (`lib/i18n/catalog.ts`, imported only by `loadVietnamese()` in `lib/i18n/translation.ts`; everywhere else imports `TranslationKey`/`vietnamese` as types). Until `loadVietnamese()` resolves, `isTranslationKey` is false and `vi` lookups return the English key, so non-React callers and tests must `await loadVietnamese()` first. `TranslationProvider` renders nothing while a stored `vi` locale loads (no English flash); a failed load falls back to English for that page and keeps the stored `vi`. `setLocale('vi')` loads before re-rendering, keeps the current language on failure, and the latest switch wins. English visitors never request the chunk.
 
 ## Gotchas
 

@@ -74,6 +74,7 @@ Scope: query-option factories, context providers, session ownership and consumer
     DOM application updates root dark class, color scheme, theme dataset and theme-color meta.
     Theme and language storage go through `../lib/preference-storage.ts`: when the browser refuses storage, both providers still render and keep changes in memory.
 14. `TranslationProvider` persists `en|vi` in `maraclaw-admin-language` (invalid/missing becomes `en`) and updates document `lang`.
+    Vietnamese strings are a lazy chunk (`../lib/translations.ts`, imported only by `loadVietnamese()` in `../lib/i18n.ts`; other files use type-only imports). The provider renders nothing while a stored `vi` locale loads, falls back to English on a failed load (stored choice kept), and `setLocale('vi')` loads before switching. Non-React callers and tests `await loadVietnamese()` before relying on `vi` lookups.
     Typed messages and the client-owned translation boundary live in `../lib/i18n.ts`; API detail and user content stay outside that boundary.
 
 ## Gotchas

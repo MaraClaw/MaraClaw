@@ -5,7 +5,7 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['company-form.spec.ts', 'payment-navigation.spec.ts', 'admin-access.spec.ts'],
+  testMatch: ['company-form.spec.ts', 'payment-navigation.spec.ts', 'admin-access.spec.ts', 'locale-loading.spec.ts'],
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,

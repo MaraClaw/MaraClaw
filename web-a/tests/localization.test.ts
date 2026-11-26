@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { parseLocale, translate } from '../src/lib/i18n.ts'
+import { loadVietnamese, parseLocale, translate } from '../src/lib/i18n.ts'
 import { vietnamese } from '../src/lib/translations.ts'
+
+await loadVietnamese()
 
 test('stored locale accepts only supported codes and defaults to English', () => {
   for (const value of [null, '', 'garbage', 'vi-VN', 'fr', 'EN']) {
