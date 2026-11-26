@@ -22,7 +22,7 @@ from app.services.realtime_runtime.chat_authorization import (
     read_delivery_acl_version,
 )
 from app.services.realtime_runtime.fanout import LOCAL_FANOUT_CONCURRENCY
-from app.services.realtime_runtime.router import RealtimeRouter
+from app.services.realtime_runtime.router import PresenceLookup, RealtimeRouter
 from test_chunk_live_delivery import TRANSIENT_FAILURES, Gate
 
 ALLOWED = DeliveryVerdict.ALLOWED
@@ -268,7 +268,7 @@ async def test_revoked_viewer_stops_receiving_after_acl_bump(
     await socket.accept()
     frames.clear()
     instance = RealtimeRouter()
-    monkeypatch.setattr(instance, "_list_presence", AsyncMock(return_value=[]))
+    monkeypatch.setattr(instance, "_session_lookup", AsyncMock(return_value=PresenceLookup({})))
     manager = ConnectionManager()
     manager.active_connections[agent_id] = [(socket, session_id, str(socket.state.chat_binding.user_id))]
 

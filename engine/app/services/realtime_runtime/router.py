@@ -1,13 +1,36 @@
-"""Redis-backed websocket presence and cross-instance message routing."""
+"""Redis-backed websocket presence and cross-instance message routing.
+
+Presence API (what proposals building on it can rely on). Every registered connection has four kinds of record, all
+expiring ``PRESENCE_TTL_SECONDS`` after the last write, so a process that dies without unregistering leaves nothing
+that outlives the TTL:
+
+- ``realtime:ws:conn:{connection_id}``, a hash with the connection's agent, session, user and instance;
+- ``realtime:ws:agent:{agent_id}``, a set of the agent's connection ids (read by ``is_user_viewing_session``,
+  ``get_active_session_ids`` and agent- or user-wide sends);
+- ``realtime:ws:session:{agent_id}:{session_id}``, a sorted set of the session's connections whose members are
+  ``encode_session_member`` values and whose score is the entry's own expiry time. A reader ignores entries past
+  their expiry, so one connection that is gone cannot be kept alive by its neighbours' refreshes, and one ``ZRANGEBYSCORE``
+  answers "who watches this session, on which instance, as which user" without reading a hash per connection;
+- ``realtime:ws:user:{user_id}``, a sorted set of the user's connection ids across every agent and instance, scored
+  with each entry's own expiry like the session index. ``register_connection`` adds the entry and counts the live ones
+  in the same transaction (entries past their expiry are trimmed first), so a connection past
+  ``CHAT_SOCKETS_PER_USER`` raises ``UserSocketLimitError`` and leaves no presence behind. A socket that closes, or
+  whose process dies, stops counting when its entry expires, at most ``PRESENCE_TTL_SECONDS`` later.
+
+``register_connection``, ``refresh_connection``, ``unregister_connection`` and ``unregister_connection_id`` keep the
+four consistent; the expiry times come from the wall clock of the writing process, so instances need clocks within
+seconds of each other, a small fraction of the TTL.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from contextlib import suppress
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Protocol, assert_never, cast
 
 from fastapi import WebSocket
@@ -15,13 +38,15 @@ from redis.asyncio import Redis
 from redis.asyncio.client import Pipeline
 
 from app.config import get_settings
-from app.core.events import get_redis
-from app.core.json_types import json_loads_object, json_object_from
+from app.core import access_cache
+from app.core.events import get_pubsub_redis, get_redis
+from app.core.json_types import int_from_row, json_loads_object, json_object_from
 from app.core.logging import logger
 from app.schemas.chat_wire import ChatEventType
 from app.services.realtime_runtime.chat_authorization import (
     DeliveryVerdict,
     authorize_chat_delivery,
+    authorizes_deliveries,
     cancel_pending_decisions,
     read_delivery_acl_version,
 )
@@ -32,7 +57,9 @@ from app.services.realtime_runtime.contracts import (
     ReceivedEnvelope,
     RoutingOutcome,
     SendObserver,
+    encode_session_member,
     presence_adapter,
+    session_member_adapter,
 )
 from app.services.realtime_runtime.fanout import encode_event_text, fan_out
 from app.services.realtime_runtime.subscription import AcknowledgedPubSub
@@ -56,6 +83,8 @@ TERMINAL_AUTHORIZATION_WAIT_SECONDS = 15.0
 
 type ResubscribeHook = Callable[[], Awaitable[object]]
 
+_wall_clock: Callable[[], float] = time.time
+
 
 class _ReadPubSubMessage(Protocol):
     def __call__(self, *, ignore_subscribe_messages: bool, timeout: float) -> Awaitable[dict[str, object] | None]: ...
@@ -76,6 +105,19 @@ def resolve_authorization_wait(message: Mapping[str, object]) -> float:
     if event_type in TERMINAL_EVENT_TYPES:
         return TERMINAL_AUTHORIZATION_WAIT_SECONDS
     return DEFAULT_AUTHORIZATION_WAIT_SECONDS
+
+
+@dataclass(frozen=True, slots=True)
+class PresenceLookup:
+    """What one delivery learned from Redis: the instances (and their socket counts) other than this one that hold a
+    target socket, and, for a session-scoped delivery, the agent ACL version read in the same round trip."""
+
+    remote_instances: dict[str, int]
+    acl_version: str | None = None
+
+
+class UserSocketLimitError(Exception):
+    """The user already holds the allowed number of live chat sockets, counted from presence across every instance."""
 
 
 class RealtimeRouter:
@@ -104,6 +146,12 @@ class RealtimeRouter:
     def _agent_index_key(self, agent_id: str) -> str:
         return f"{PUBSUB_PREFIX}:agent:{agent_id}"
 
+    def _session_index_key(self, agent_id: str, session_id: str) -> str:
+        return f"{PUBSUB_PREFIX}:session:{agent_id}:{session_id}"
+
+    def _user_index_key(self, user_id: str) -> str:
+        return f"{PUBSUB_PREFIX}:user:{user_id}"
+
     def _instance_channel(self) -> str:
         return f"{PUBSUB_PREFIX}:instance:{self.instance_id}"
 
@@ -115,6 +163,9 @@ class RealtimeRouter:
         session_id: str | None,
         user_id: str | None,
     ) -> str:
+        """Register a socket's presence, or raise ``UserSocketLimitError`` and leave none when its user already holds
+        ``CHAT_SOCKETS_PER_USER`` live sockets. Two sockets racing for the last slot may both be refused, never both
+        admitted."""
         connection_id = uuid.uuid4().hex
         redis_client: Redis = await get_redis()
         payload: RealtimePresence = {
@@ -125,7 +176,10 @@ class RealtimeRouter:
         }
         async with redis_client.pipeline(transaction=True) as pipe:
             self._queue_presence(pipe, agent_id, connection_id, payload)
-            _ = await pipe.execute()
+            executed = list[object](await pipe.execute())
+        if user_id is not None and user_id != "" and int_from_row(executed[-1]) > settings.CHAT_SOCKETS_PER_USER:
+            await self.unregister_connection_id(agent_id=agent_id, connection_id=connection_id, presence=payload)
+            raise UserSocketLimitError
         websocket.state.realtime_connection_id = connection_id
         websocket.state.realtime_presence = payload
         return connection_id
@@ -137,42 +191,87 @@ class RealtimeRouter:
             _ = pipe.hset(connection_key, field, value)
         _ = pipe.expire(connection_key, PRESENCE_TTL_SECONDS)
         _ = pipe.expire(self._agent_index_key(agent_id), PRESENCE_TTL_SECONDS)
+        self._queue_session_presence(pipe, agent_id, connection_id, payload)
+        self._queue_user_presence(pipe, connection_id, payload)
+
+    def _queue_session_presence(
+        self, pipe: Pipeline, agent_id: str, connection_id: str, payload: RealtimePresence
+    ) -> None:
+        """Upsert the connection's session-index entry with a fresh expiry and drop the entries already past theirs."""
+        index_key = self._session_index_key(agent_id, payload.get("session_id", ""))
+        now = _wall_clock()
+        _ = pipe.zremrangebyscore(index_key, "-inf", now)
+        _ = pipe.zadd(index_key, {encode_session_member(connection_id, payload): now + PRESENCE_TTL_SECONDS})
+        _ = pipe.expire(index_key, PRESENCE_TTL_SECONDS)
+
+    def _queue_user_presence(self, pipe: Pipeline, connection_id: str, payload: RealtimePresence) -> None:
+        """Upsert the connection's user-index entry like the session one; its last queued command counts the user's
+        live entries, which ``register_connection`` reads. Nothing is queued for a socket without a user."""
+        user_id = payload.get("user_id", "")
+        if not user_id:
+            return
+        index_key = self._user_index_key(user_id)
+        now = _wall_clock()
+        _ = pipe.zremrangebyscore(index_key, "-inf", now)
+        _ = pipe.zadd(index_key, {connection_id: now + PRESENCE_TTL_SECONDS})
+        _ = pipe.expire(index_key, PRESENCE_TTL_SECONDS)
+        _ = pipe.zcard(index_key)
+
+    @staticmethod
+    def registered(websocket: WebSocket) -> tuple[str, RealtimePresence] | None:
+        """The connection id and presence record ``register_connection`` left on the socket, or ``None`` for a socket
+        never registered or already withdrawn. ``unregister_connection_id`` needs both."""
+        connection_id = getattr(websocket.state, "realtime_connection_id", None)
+        payload = getattr(websocket.state, "realtime_presence", None)
+        if not isinstance(connection_id, str) or not connection_id or not isinstance(payload, dict):
+            return None
+        return connection_id, cast("RealtimePresence", payload)
 
     async def refresh_connection(self, *, agent_id: str, websocket: WebSocket) -> None:
         """Re-apply the presence TTL to a registered connection; no-op when it was never registered.
 
         If either key already expired (a stalled refresh), the presence is rewritten under the
-        same connection id; ``SADD`` keeps the agent index free of duplicate members.
+        same connection id; ``SADD`` keeps the agent index free of duplicate members. The session-index entry is
+        upserted on every refresh, so it is rewritten without waiting for the other keys to expire.
         """
-        connection_id = getattr(websocket.state, "realtime_connection_id", None)
-        if not isinstance(connection_id, str) or not connection_id:
+        registered = self.registered(websocket)
+        if registered is None:
             return
+        connection_id, payload = registered
         redis_client: Redis = await get_redis()
         async with redis_client.pipeline(transaction=True) as pipe:
             _ = pipe.expire(self._connection_key(connection_id), PRESENCE_TTL_SECONDS)
             _ = pipe.expire(self._agent_index_key(agent_id), PRESENCE_TTL_SECONDS)
-            refreshed = list[object](await pipe.execute())
+            self._queue_session_presence(pipe, agent_id, connection_id, payload)
+            self._queue_user_presence(pipe, connection_id, payload)
+            refreshed = list[object](await pipe.execute())[:2]
         if all(refreshed):
             return
-        payload = getattr(websocket.state, "realtime_presence", None)
-        if not isinstance(payload, dict):
-            return
         async with redis_client.pipeline(transaction=True) as pipe:
-            self._queue_presence(pipe, agent_id, connection_id, cast("RealtimePresence", payload))
+            self._queue_presence(pipe, agent_id, connection_id, payload)
             _ = await pipe.execute()
 
     async def unregister_connection(self, *, agent_id: str, websocket: WebSocket) -> None:
-        connection_id_raw = getattr(websocket.state, "realtime_connection_id", None)
-        if not isinstance(connection_id_raw, str) or not connection_id_raw:
+        registered = self.registered(websocket)
+        if registered is None:
             return
-        await self.unregister_connection_id(agent_id=agent_id, connection_id=connection_id_raw)
+        connection_id, payload = registered
+        await self.unregister_connection_id(agent_id=agent_id, connection_id=connection_id, presence=payload)
 
-    async def unregister_connection_id(self, *, agent_id: str, connection_id: str) -> None:
-        """Remove one presence record by id, for a socket whose state no longer carries it (an evicted socket)."""
+    async def unregister_connection_id(self, *, agent_id: str, connection_id: str, presence: RealtimePresence) -> None:
+        """Remove one connection's presence by id, for a socket whose state no longer carries it (an evicted socket).
+
+        ``presence`` is the record ``registered`` returned: it names the session- and user-index entries to remove."""
         redis = await get_redis()
         async with redis.pipeline(transaction=True) as pipe:
             _ = pipe.srem(self._agent_index_key(agent_id), connection_id)
             _ = pipe.delete(self._connection_key(connection_id))
+            _ = pipe.zrem(
+                self._session_index_key(agent_id, presence.get("session_id", "")),
+                encode_session_member(connection_id, presence),
+            )
+            if user_id := presence.get("user_id", ""):
+                _ = pipe.zrem(self._user_index_key(user_id), connection_id)
             _ = await pipe.execute()
 
     async def is_user_viewing_session(
@@ -207,7 +306,8 @@ class RealtimeRouter:
 
         Local sockets are served concurrently under ``LOCAL_FANOUT_CONCURRENCY``; the event is serialized once and,
         when a target socket is bound to a canonical session, the ACL version is read once before any socket
-        authorizes. ``send_timeout`` bounds only ``ws.send_text``, the one wait a client controls; without one,
+        authorizes. A session-scoped delivery asks Redis one question, whose answer is both the remote instances
+        watching that session and the ACL version; an agent- or user-wide one lists the agent's presence. ``send_timeout`` bounds only ``ws.send_text``, the one wait a client controls; without one,
         ``resolve_send_timeout`` picks the default or terminal bound. A canonical-session socket waits for its
         authorization decision only until ``resolve_authorization_wait`` after that decision started, and is skipped
         for this event (``skipped``) when the decision is late or fails transiently; the decision itself is never
@@ -222,12 +322,15 @@ class RealtimeRouter:
             for ws, local_session_id, local_user_id in list(local_connections)
             if (session_id is None or local_session_id == session_id) and (user_id is None or local_user_id == user_id)
         ]
-        presence = asyncio.create_task(self._remote_targets(agent_id, session_id, user_id), name="realtime-presence")
+        presence = asyncio.create_task(
+            self._lookup(agent_id, session_id, user_id, authorizes_deliveries(agent_id, targets)),
+            name="realtime-presence",
+        )
         try:
             bound = resolve_send_timeout(message) if send_timeout is None else send_timeout
             wait = resolve_authorization_wait(message)
-            local = await self._deliver_local(agent_id, message, targets, bound, wait, observer)
-            remote_targets = await presence
+            local = await self._deliver_local(agent_id, message, targets, bound, wait, observer, presence)
+            remote_targets = (await presence).remote_instances
         finally:
             if not presence.done():
                 _ = presence.cancel()
@@ -265,11 +368,20 @@ class RealtimeRouter:
         send_timeout: float,
         authorization_wait: float,
         observer: SendObserver | None,
+        presence: asyncio.Task[PresenceLookup],
     ) -> RoutingOutcome:
         if not targets:
             return RoutingOutcome()
         text = encode_event_text(message)
-        acl_version = await read_delivery_acl_version(agent_id, targets)
+
+        async def lookup_acl_version() -> str | None:
+            # A failed lookup is reported by the caller; the ACL version is then read on its own, failing open as before.
+            try:
+                return (await presence).acl_version
+            except Exception:
+                return None
+
+        acl_version = await read_delivery_acl_version(agent_id, targets, prefetched=lookup_acl_version)
         failed = evicted = skipped = 0
 
         async def deliver(target: tuple[WebSocket, str | None]) -> bool:
@@ -315,12 +427,17 @@ class RealtimeRouter:
             local_targets=len(targets), delivered=delivered, failed=failed, evicted=evicted, skipped=skipped
         )
 
-    async def _remote_targets(self, agent_id: str, session_id: str | None, user_id: str | None) -> dict[str, int]:
+    async def _lookup(
+        self, agent_id: str, session_id: str | None, user_id: str | None, with_acl_version: bool
+    ) -> PresenceLookup:
+        if session_id is None:
+            return PresenceLookup(await self._agent_remote_targets(agent_id, user_id))
+        return await self._session_lookup(agent_id, session_id, user_id, with_acl_version)
+
+    async def _agent_remote_targets(self, agent_id: str, user_id: str | None) -> dict[str, int]:
         remote_targets: dict[str, int] = {}
         for record in await self._list_presence(agent_id):
             if record.get("instance_id") == self.instance_id:
-                continue
-            if session_id is not None and record.get("session_id") != session_id:
                 continue
             if user_id is not None and record.get("user_id") != user_id:
                 continue
@@ -328,6 +445,29 @@ class RealtimeRouter:
             if target_instance not in (None, ""):
                 remote_targets[target_instance] = remote_targets.get(target_instance, 0) + 1
         return remote_targets
+
+    async def _session_lookup(
+        self, agent_id: str, session_id: str, user_id: str | None, with_acl_version: bool
+    ) -> PresenceLookup:
+        """One round trip: the live entries of the session index, and, when a local target authorizes against it and
+        the access cache is on, the agent ACL version."""
+        redis_client: Redis = await get_redis()
+        version_key = access_cache.acl_version_key(agent_id) if with_acl_version else None
+        async with redis_client.pipeline(transaction=False) as pipe:
+            zrangebyscore = cast("Callable[[str, str, str], object]", pipe.zrangebyscore)
+            _ = zrangebyscore(self._session_index_key(agent_id, session_id), f"({_wall_clock()}", "+inf")
+            if version_key is not None:
+                _ = pipe.get(version_key)
+            replies = list[object](await pipe.execute())
+        remote_targets: dict[str, int] = {}
+        for raw_member in cast("list[str | bytes]", replies[0]):
+            _, instance_id, member_user_id = session_member_adapter.validate_json(raw_member, strict=True)
+            if instance_id in ("", self.instance_id) or (user_id is not None and member_user_id != user_id):
+                continue
+            remote_targets[instance_id] = remote_targets.get(instance_id, 0) + 1
+        return PresenceLookup(
+            remote_targets, None if version_key is None else access_cache.acl_version_token(replies[1])
+        )
 
     async def start(self, deliver_local: LocalDeliverer, on_resubscribe: ResubscribeHook | None = None) -> None:
         """Start the subscriber; ``on_resubscribe`` runs after every subscribe acknowledgment except the first.
@@ -365,7 +505,7 @@ class RealtimeRouter:
         self._started = False
 
     async def _subscriber_loop(self, deliver_local: LocalDeliverer, on_resubscribe: ResubscribeHook | None) -> None:
-        redis = await get_redis()
+        redis = await get_pubsub_redis()
         while True:
             pubsub = AcknowledgedPubSub(redis.connection_pool)
             self._subscription = pubsub

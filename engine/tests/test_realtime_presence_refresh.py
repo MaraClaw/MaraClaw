@@ -56,6 +56,7 @@ class FakePipeline:
         return self
 
     def hgetall(self, key: str) -> Self:
+        self.store.hgetall_queued += 1
         self.queued.append(lambda: self.store.read_hash(key))
         return self
 
@@ -65,6 +66,30 @@ class FakePipeline:
 
     def delete(self, key: str) -> Self:
         self.queued.append(lambda: self.store.delete_now(key))
+        return self
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> Self:
+        self.queued.append(lambda: self.store.zadd_now(key, mapping))
+        return self
+
+    def zrem(self, key: str, *members: str) -> Self:
+        self.queued.append(lambda: self.store.zrem_now(key, *members))
+        return self
+
+    def zremrangebyscore(self, key: str, minimum: str, maximum: float) -> Self:
+        self.queued.append(lambda: self.store.zremrangebyscore_now(key, minimum, maximum))
+        return self
+
+    def zrangebyscore(self, key: str, minimum: str, maximum: str) -> Self:
+        self.queued.append(lambda: self.store.zrangebyscore_now(key, minimum, maximum))
+        return self
+
+    def zcard(self, key: str) -> Self:
+        self.queued.append(lambda: self.store.zcard_now(key))
+        return self
+
+    def get(self, key: str) -> Self:
+        self.queued.append(lambda: self.store.values.get(key))
         return self
 
     async def execute(self) -> list[object]:
@@ -78,10 +103,13 @@ class FakeRedis:
         self.clock = clock
         self.sets: dict[str, set[str]] = {}
         self.hashes: dict[str, dict[str, str]] = {}
+        self.zsets: dict[str, dict[str, float]] = {}
+        self.values: dict[str, str] = {}
         self.deadlines: dict[str, float] = {}
         self.channels: dict[str, Callable[[str], Awaitable[object]]] = {}
         self.pipelines = 0
         self.direct_hgetall = 0
+        self.hgetall_queued = 0
 
     def _expire_due(self) -> None:
         for key, deadline in list(self.deadlines.items()):
@@ -89,6 +117,7 @@ class FakeRedis:
                 del self.deadlines[key]
                 _ = self.sets.pop(key, None)
                 _ = self.hashes.pop(key, None)
+                _ = self.zsets.pop(key, None)
 
     def sadd(self, key: str, member: str) -> int:
         self._expire_due()
@@ -104,10 +133,50 @@ class FakeRedis:
 
     def expire(self, key: str, seconds: int) -> bool:
         self._expire_due()
-        if key not in self.sets and key not in self.hashes:
+        if key not in self.sets and key not in self.hashes and key not in self.zsets:
             return False
         self.deadlines[key] = self.clock.now + seconds
         return True
+
+    def zadd_now(self, key: str, mapping: dict[str, float]) -> int:
+        self._expire_due()
+        scores = self.zsets.setdefault(key, {})
+        added = len(mapping.keys() - scores.keys())
+        scores.update(mapping)
+        return added
+
+    def zrem_now(self, key: str, *members: str) -> int:
+        self._expire_due()
+        scores = self.zsets.get(key, {})
+        removed = len(scores.keys() & set(members))
+        for member in members:
+            _ = scores.pop(member, None)
+        return removed
+
+    @staticmethod
+    def _within(score: float, minimum: str, maximum: str) -> bool:
+        lower = float("-inf") if minimum == "-inf" else float(minimum.removeprefix("("))
+        upper = float("inf") if maximum == "+inf" else float(maximum.removeprefix("("))
+        return (score > lower if minimum.startswith("(") else score >= lower) and (
+            score < upper if maximum.startswith("(") else score <= upper
+        )
+
+    def zremrangebyscore_now(self, key: str, minimum: str, maximum: float) -> int:
+        self._expire_due()
+        scores = self.zsets.get(key, {})
+        due = [member for member, score in scores.items() if self._within(score, minimum, str(maximum))]
+        for member in due:
+            del scores[member]
+        return len(due)
+
+    def zcard_now(self, key: str) -> int:
+        self._expire_due()
+        return len(self.zsets.get(key, {}))
+
+    def zrangebyscore_now(self, key: str, minimum: str, maximum: str) -> list[str]:
+        self._expire_due()
+        scores = self.zsets.get(key, {})
+        return sorted((m for m, s in scores.items() if self._within(s, minimum, maximum)), key=scores.__getitem__)
 
     def read_hash(self, key: str) -> dict[str, str]:
         self._expire_due()
@@ -156,6 +225,7 @@ def clock() -> Clock:
 def redis(monkeypatch: pytest.MonkeyPatch, clock: Clock) -> FakeRedis:
     fake = FakeRedis(clock)
     monkeypatch.setattr(router, "get_redis", AsyncMock(return_value=fake))
+    monkeypatch.setattr(router, "_wall_clock", lambda: clock.now)
     return fake
 
 
@@ -222,6 +292,7 @@ async def test_refresh_restores_expired_presence_without_duplicate_index_members
     assert redis.sets[f"realtime:ws:agent:{agent_id}"] == {connection_id}
     records = await instance._list_presence(agent_id)
     assert [(record.get("session_id"), record.get("user_id")) for record in records] == [("session", "user")]
+    assert len(redis.zsets[f"realtime:ws:session:{agent_id}:session"]) == 1
 
 
 async def test_refresh_without_registration_does_not_touch_redis(redis: FakeRedis) -> None:
@@ -248,6 +319,133 @@ async def test_presence_listing_reads_every_connection_in_one_pipeline(redis: Fa
     assert redis.pipelines == 1
     assert redis.direct_hgetall == 0
     assert sockets[0].state.realtime_connection_id not in redis.sets[f"realtime:ws:agent:{agent_id}"]
+
+
+async def watch(
+    instance: router.RealtimeRouter, agent_id: str, session_id: str, user_id: str, *, instance_id: str
+) -> WebSocket:
+    """Register one socket of ``user_id`` on ``session_id``, as it would be on the replica ``instance_id``."""
+    socket = open_socket([])
+    instance.instance_id = instance_id
+    _ = await instance.register_connection(agent_id=agent_id, websocket=socket, session_id=session_id, user_id=user_id)
+    return socket
+
+
+async def remote_instances(agent_id: str, session_id: str, user_id: str | None = None) -> dict[str, int]:
+    """What a replica that holds no socket of its own learns about a session."""
+    reader = router.RealtimeRouter()
+    reader.instance_id = "reader"
+    return (await reader._session_lookup(agent_id, session_id, user_id, False)).remote_instances
+
+
+async def test_session_lookup_reads_one_pipeline_and_no_connection_hash(redis: FakeRedis) -> None:
+    # Given many sockets of the agent on other sessions, and two on the session of interest.
+    agent_id, session_id = str(uuid4()), str(uuid4())
+    instance = router.RealtimeRouter()
+    for index in range(20):
+        _ = await watch(instance, agent_id, f"other-{index}", "user", instance_id=f"replica-{index}")
+    _ = await watch(instance, agent_id, session_id, "owner", instance_id="replica-a")
+    _ = await watch(instance, agent_id, session_id, "viewer", instance_id="replica-b")
+    redis.pipelines = redis.hgetall_queued = 0
+
+    # When another replica asks who watches the session.
+    found = await remote_instances(agent_id, session_id)
+
+    # Then the answer comes from one pipeline that reads no connection hash, and a user filter narrows it.
+    assert found == {"replica-a": 1, "replica-b": 1}
+    assert (redis.pipelines, redis.hgetall_queued, redis.direct_hgetall) == (1, 0, 0)
+    assert await remote_instances(agent_id, session_id, "owner") == {"replica-a": 1}
+    assert await remote_instances(agent_id, "nobody-watches-this") == {}
+
+
+async def test_session_lookup_skips_this_replica_and_returns_the_acl_version_in_the_same_round_trip(
+    redis: FakeRedis,
+) -> None:
+    agent_id, session_id = str(uuid4()), str(uuid4())
+    instance = router.RealtimeRouter()
+    _ = await watch(instance, agent_id, session_id, "owner", instance_id="reader")
+    _ = await watch(instance, agent_id, session_id, "owner", instance_id="replica-a")
+    redis.values[f"aclver:{agent_id}"] = "v7"
+    redis.pipelines = 0
+    reader = router.RealtimeRouter()
+    reader.instance_id = "reader"
+
+    lookup = await reader._session_lookup(agent_id, session_id, None, True)
+
+    assert (lookup.remote_instances, lookup.acl_version, redis.pipelines) == ({"replica-a": 1}, "v7", 1)
+    redis.pipelines = 0
+    assert (await reader._session_lookup(agent_id, session_id, None, False)).acl_version is None
+    assert redis.pipelines == 1
+
+
+async def test_session_entries_expire_with_their_own_ttl_even_while_neighbours_keep_the_index_alive(
+    redis: FakeRedis, clock: Clock
+) -> None:
+    # Given two replicas watching a session; only one keeps refreshing, the other died without unregistering.
+    agent_id, session_id = str(uuid4()), str(uuid4())
+    instance = router.RealtimeRouter()
+    _ = await watch(instance, agent_id, session_id, "user", instance_id="dead")
+    survivor = await watch(instance, agent_id, session_id, "user", instance_id="alive")
+    for _ in range(4):
+        clock.advance(PRESENCE_REFRESH_SECONDS)
+        await instance.refresh_connection(agent_id=agent_id, websocket=survivor)
+
+    # When the dead replica's TTL has passed, the survivor's refreshes keep the shared index key alive.
+    assert 4 * PRESENCE_REFRESH_SECONDS > PRESENCE_TTL_SECONDS
+    found = await remote_instances(agent_id, session_id)
+
+    # Then the dead replica's entry is no longer served.
+    assert found == {"alive": 1}
+    # And once nobody refreshes, the whole index is gone within one TTL.
+    clock.advance(PRESENCE_TTL_SECONDS + 1)
+    assert await remote_instances(agent_id, session_id) == {}
+    assert not redis.zsets
+
+
+@pytest.mark.parametrize("path", ["disconnect", "eviction"])
+async def test_unregistering_removes_every_record_of_the_connection(redis: FakeRedis, path: str) -> None:
+    agent_id, session_id = str(uuid4()), str(uuid4())
+    instance = router.RealtimeRouter()
+    kept = await watch(instance, agent_id, session_id, "user", instance_id="kept")
+    gone = await watch(instance, agent_id, session_id, "user", instance_id="gone")
+    registered = router.RealtimeRouter.registered(gone)
+    assert registered is not None
+
+    if path == "disconnect":
+        await instance.unregister_connection(agent_id=agent_id, websocket=gone)
+    else:
+        # An evicted socket no longer carries its state; the withdraw path hands the presence over.
+        await instance.unregister_connection_id(agent_id=agent_id, connection_id=registered[0], presence=registered[1])
+
+    assert await remote_instances(agent_id, session_id) == {"kept": 1}
+    assert router.RealtimeRouter.registered(kept) is not None
+    assert len(redis.hashes) == 1
+    assert len(redis.sets[f"realtime:ws:agent:{agent_id}"]) == 1
+    assert len(redis.zsets[f"realtime:ws:session:{agent_id}:{session_id}"]) == 1
+
+
+async def test_viewing_and_active_session_answers_follow_registration_unregistration_and_expiry(
+    redis: FakeRedis, clock: Clock
+) -> None:
+    agent_id, session_id = str(uuid4()), str(uuid4())
+    instance = router.RealtimeRouter()
+
+    async def answers() -> tuple[bool, bool, list[str]]:
+        return (
+            await instance.is_user_viewing_session(agent_id=agent_id, session_id=session_id, user_id="user"),
+            await instance.is_user_viewing_session(agent_id=agent_id, session_id=session_id, user_id="someone"),
+            await instance.get_active_session_ids(agent_id),
+        )
+
+    assert await answers() == (False, False, [])
+    socket = await watch(instance, agent_id, session_id, "user", instance_id="replica")
+    assert await answers() == (True, False, [session_id])
+    await instance.unregister_connection(agent_id=agent_id, websocket=socket)
+    assert await answers() == (False, False, [])
+    _ = await watch(instance, agent_id, session_id, "user", instance_id="replica")
+    clock.advance(PRESENCE_TTL_SECONDS + 1)
+    assert await answers() == (False, False, [])
+    assert redis.direct_hgetall == 0
 
 
 class RefreshTicker:
@@ -455,3 +653,33 @@ async def test_resubscribe_close_ends_the_handler_with_a_reconnectable_code_and_
     assert closes[0] not in (4001, 4003)
     assert handler_env.events == ["refresh", "refresh-cancelled", "unregister"]
     assert websocket.manager.active_connections[str(binding.agent_id)] == []
+
+
+async def test_user_socket_cap_counts_every_instance_and_frees_slots_on_close_or_expiry(
+    redis: FakeRedis, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a cap of two, with the user's sockets registered through two different processes.
+    monkeypatch.setattr(router.settings, "CHAT_SOCKETS_PER_USER", 2)
+    agent_id, session_id, user_id = str(uuid4()), str(uuid4()), str(uuid4())
+    router_a, router_b = router.RealtimeRouter(), router.RealtimeRouter()
+    router_a.instance_id, router_b.instance_id = "a", "b"
+    first = await watch(router_a, agent_id, session_id, user_id, instance_id="a")
+    _ = await watch(router_b, agent_id, session_id, user_id, instance_id="b")
+
+    # When a third socket arrives on either process, and another user's socket arrives.
+    for instance in (router_a, router_b):
+        with pytest.raises(router.UserSocketLimitError):
+            _ = await watch(instance, agent_id, session_id, user_id, instance_id=instance.instance_id)
+    _ = await watch(router_a, agent_id, session_id, str(uuid4()), instance_id="a")
+
+    # Then it is refused and leaves no presence; the other user is unaffected.
+    assert len(redis.zsets[f"realtime:ws:user:{user_id}"]) == 2
+    assert len(redis.sets[f"realtime:ws:agent:{agent_id}"]) == 3
+    # And closing a socket frees its slot at once.
+    await router_a.unregister_connection(agent_id=agent_id, websocket=first)
+    _ = await watch(router_b, agent_id, session_id, user_id, instance_id="b")
+    with pytest.raises(router.UserSocketLimitError):
+        _ = await watch(router_b, agent_id, session_id, user_id, instance_id="b")
+    # And sockets of a dead process stop counting once their presence expires, without any unregistration.
+    clock.advance(PRESENCE_TTL_SECONDS + 1)
+    _ = await watch(router_a, agent_id, session_id, user_id, instance_id="a")

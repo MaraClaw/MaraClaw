@@ -2,6 +2,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.config import get_settings
 from test_websocket_turn_transaction import drive_turn, turn
 
 __all__ = ["turn"]
@@ -151,3 +152,33 @@ async def test_deleted_parent_is_rechecked_under_lock_before_receipt_or_model(mo
     assert not state.messages
     assert state.frames[0]["type"] == "error"
     assert raw.rollbacks == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [("content", "message_too_long"), ("display_content", "message_too_long"), ("file_name", "file_name_too_long")],
+)
+@pytest.mark.parametrize("offset", [-1, 0, 1], ids=["under", "at", "over"])
+async def test_text_limit_boundary_leaves_no_message_receipt_or_turn(monkeypatch, turn, field, reason, offset):
+    state, raw = turn
+    settings = get_settings()
+    limit = 20
+    for name in ("CHAT_CONTENT_MAX_CHARS", "CHAT_DISPLAY_CONTENT_MAX_CHARS", "CHAT_FILE_NAME_MAX_CHARS"):
+        monkeypatch.setattr(settings, name, limit)
+    payload = {"content": "hello", "client_submission_id": state.submission_id, field: "é" * (limit + offset)}
+
+    await drive_turn(monkeypatch, state, payload=payload)
+
+    if offset <= 0:
+        assert state.frames[0]["type"] == "turn_accepted"
+        assert len(state.messages) == 1
+        return
+    assert state.frames[0]["reason"] == reason
+    assert state.frames[0]["client_submission_id"] == state.submission_id
+    assert str(limit) in str(state.frames[0]["content"])
+    assert not state.messages
+    assert not state.committed
+    assert not state.gateway_contents
+    assert not state.prepared_history
+    assert state.lookup_count == 0
+    assert raw.commits == raw.rollbacks == 0

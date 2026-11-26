@@ -10,8 +10,10 @@ import {
 import { getAgent, startNewContainer } from '../src/lib/agents-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { vietnamese } from '../src/lib/i18n/catalog.ts'
-import { isTranslationKey } from '../src/lib/i18n/translation.ts'
+import { isTranslationKey, loadVietnamese } from '../src/lib/i18n/translation.ts'
 import { lifecycle } from './agent-lifecycle-fixture.ts'
+
+await loadVietnamese()
 
 const id = '11111111-1111-4111-8111-111111111111'
 const agent = {

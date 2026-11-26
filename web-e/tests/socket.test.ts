@@ -120,6 +120,86 @@ for (const [random, delay] of [[0, 300], [0.5, 450], [1, 600]] as const) {
   })
 }
 
+for (const code of [1012, 1013, 4029]) {
+  for (const [random, delay] of [[0, 1000], [0.5, 3000], [1, 5000]] as const) {
+    test(`close ${code} reconnects after ${delay}ms when the random source returns ${random}`, async () => {
+      // Given
+      const f = fixture()
+      const conn = f.timed({ random: () => random })
+      await drain()
+      // When
+      f.socket().end(code)
+      f.clock.advance(delay - 1)
+      await drain()
+      // Then: the wait is the floor plus the random share of the window, not the 300-600 ms of an ordinary drop.
+      assert.equal(f.sockets.length, 1)
+      f.clock.advance(1)
+      await drain()
+      assert.equal(f.sockets.length, 2)
+      conn.close()
+    })
+  }
+}
+
+test('clients closed together by server pressure spread over the whole window and never return before the floor', async () => {
+  // Given forty clients that were all closed with 1013 at the same moment, each with its own random draw.
+  const waits: number[] = []
+  for (let client = 0; client < 40; client++) {
+    const f = fixture()
+    const conn = f.timed({ random: () => client / 39 })
+    await drain()
+    // When
+    f.socket().end(1013)
+    // Then each one's timer is the only pending one, due after its own wait.
+    assert.equal(f.clock.pending, 1)
+    waits.push(f.clock.nextDue() ?? Number.NaN)
+    conn.close()
+  }
+  assert.equal(Math.min(...waits), 1000)
+  assert.equal(Math.max(...waits), 5000)
+  assert.equal(new Set(waits).size, waits.length)
+  assert.deepEqual([...waits].sort((a, b) => a - b), waits)
+  // An ordinary drop of the same clients stays inside the 300-600 ms window.
+  const ordinary: number[] = []
+  for (let client = 0; client < 40; client++) {
+    const f = fixture()
+    const conn = f.timed({ random: () => client / 39 })
+    await drain()
+    f.socket().end(1006)
+    ordinary.push(f.clock.nextDue() ?? Number.NaN)
+    conn.close()
+  }
+  assert.ok(Math.min(...ordinary) >= 300 && Math.max(...ordinary) <= 600)
+})
+
+test('repeated server pressure widens the window up to its cap and a CONNECTED frame resets it', async () => {
+  // Given a client that keeps drawing the top of its window and is closed with 1013 before it ever connects.
+  const f = fixture()
+  const conn = f.timed({ random: () => 1 })
+  await drain()
+  const reconnectAfter = async (delay: number, code: number) => {
+    const before = f.sockets.length
+    f.socket().end(code)
+    f.clock.advance(delay - 1)
+    await drain()
+    assert.equal(f.sockets.length, before)
+    f.clock.advance(1)
+    await drain()
+    assert.equal(f.sockets.length, before + 1)
+  }
+  // When / Then
+  await reconnectAfter(5000, 1013)
+  await reconnectAfter(10_000, 1013)
+  await reconnectAfter(20_000, 1012)
+  await reconnectAfter(30_000, 1013)
+  await reconnectAfter(30_000, 1013)
+  // And once connected, the next ordinary drop is back to the sub-second backoff.
+  f.socket().open()
+  f.socket().frame(JSON.stringify({ type: ChatEventType.CONNECTED, session_id: canonicalSession }))
+  await reconnectAfter(600, 1006)
+  conn.close()
+})
+
 test('backoff keeps growing across opens that never reach CONNECTED and resets on CONNECTED', async (t) => {
   // Given
   t.mock.timers.enable({ apis: ['setTimeout'] })

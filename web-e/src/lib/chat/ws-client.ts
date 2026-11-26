@@ -43,6 +43,14 @@ const CONNECT_DEADLINE_MS = 15_000
 // A deadline timer this late woke a throttled or sleeping tab; frames queued meanwhile may not be dispatched yet.
 const LIVENESS_GRACE_MS = 1000
 const RETRY_WINDOW_MS = 120_000
+// 1012 (the server resubscribed and dropped everyone) and 1013 (the server asked to try again later) mean server-side
+// pressure: every client was closed at once, and the sub-second retry would send them all back in the same burst.
+// 4029 (the user holds too many chat sockets) is not pressure, but a retry that hits the cap again costs a ticket and a
+// handshake: it waits as long, and the tab joins as soon as another one closes.
+const PRESSURE_CLOSE_CODES: ReadonlySet<number> = new Set([1012, 1013, 4029])
+const PRESSURE_FLOOR_MS = 1000
+const PRESSURE_BASE_MS = 5000
+const PRESSURE_CAP_MS = 30_000
 
 export type ChatSignal = {
   readonly current: () => boolean
@@ -77,6 +85,13 @@ const browserVisible: ChatSignal = {
 // Half to all of the capped exponential delay, so clients dropped together do not reconnect in lockstep.
 function backoffDelay(attempt: number, random: () => number): number {
   return Math.round(Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt) * (0.5 + 0.5 * random()))
+}
+
+// Full jitter above a floor: uniform between the floor and a capped exponential ceiling, so a crowd closed together
+// spreads over the whole window and no client returns sooner than the floor.
+function pressureDelay(attempt: number, random: () => number): number {
+  const ceiling = Math.min(PRESSURE_CAP_MS, PRESSURE_BASE_MS * 2 ** attempt)
+  return Math.round(PRESSURE_FLOOR_MS + random() * (ceiling - PRESSURE_FLOOR_MS))
 }
 
 export type ChatConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'suspended'
@@ -185,17 +200,17 @@ export function connectAgentChat(
     }
     halt()
     handlers.onClose?.(code)
-    retryLater()
+    retryLater(PRESSURE_CLOSE_CODES.has(code))
   }
 
-  function retryLater() {
+  function retryLater(pressure = false) {
     if (!current()) return
     if (!online.current()) { goOffline(); return }
     if (state === 'connected') healthyAt = now()
     const remaining = RETRY_WINDOW_MS - (now() - healthyAt)
     if (remaining <= 0) { setState('suspended'); return }
     setState('reconnecting')
-    const delay = Math.min(backoffDelay(attempt, handlers.random ?? Math.random), remaining)
+    const delay = Math.min((pressure ? pressureDelay : backoffDelay)(attempt, handlers.random ?? Math.random), remaining)
     attempt += 1
     timer = schedule(() => { void open() }, delay)
   }

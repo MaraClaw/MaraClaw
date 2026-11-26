@@ -2,18 +2,20 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import ClassVar, Literal, final
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.config import get_settings
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.chat_attachment import ChatAttachment
 from app.records.user import UserRecord
+from app.schemas.chat_wire import ChatRejectionReason
 from app.services.agent_message_quota import charge_agent_daily_message
 from app.services.agent_workspace_quota import ensure_workspace_within_quota
 from app.services.chat_session_access import can_access_chat_session
@@ -48,6 +50,16 @@ class ChatSubmission(BaseModel):
         version = "v2:" if self.attachments else "v1:"
         return version + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    def require_within_limits(self) -> None:
+        """Raise ``SubmissionTooLongError`` when a text field exceeds its limit, before any lock, write or dispatch."""
+        settings = get_settings()
+        if len(self.content) > settings.CHAT_CONTENT_MAX_CHARS:
+            raise SubmissionTooLongError(ChatRejectionReason.MESSAGE_TOO_LONG, settings.CHAT_CONTENT_MAX_CHARS)
+        if len(self.display_content) > settings.CHAT_DISPLAY_CONTENT_MAX_CHARS:
+            raise SubmissionTooLongError(ChatRejectionReason.MESSAGE_TOO_LONG, settings.CHAT_DISPLAY_CONTENT_MAX_CHARS)
+        if len(self.file_name) > settings.CHAT_FILE_NAME_MAX_CHARS:
+            raise SubmissionTooLongError(ChatRejectionReason.FILE_NAME_TOO_LONG, settings.CHAT_FILE_NAME_MAX_CHARS)
+
     def saved_content(self) -> str:
         text = self.content if "[image_data:" in self.content else self.display_content or self.content
         return f"[file:{self.file_name}]\n{text}" if self.file_name else text
@@ -55,6 +67,18 @@ class ChatSubmission(BaseModel):
 
 class SubmissionConflictError(Exception):
     pass
+
+
+@final
+class SubmissionTooLongError(Exception):
+    """A text field is over its configured limit; the submission is refused whole and never truncated."""
+
+    def __init__(
+        self, reason: Literal[ChatRejectionReason.MESSAGE_TOO_LONG, ChatRejectionReason.FILE_NAME_TOO_LONG], limit: int
+    ):
+        super().__init__(reason)
+        self.reason = reason
+        self.limit = limit
 
 
 class InvalidChatAttachmentsError(Exception):
@@ -83,6 +107,7 @@ async def accept_submission(
     session_id: UUID,
     history: list[OpenAIMessage],
 ) -> AcceptedSubmission:
+    submission.require_within_limits()
     candidate = ChatMessageRecord(
         id=uuid4(),
         user_id=user.id,

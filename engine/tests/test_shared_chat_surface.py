@@ -17,6 +17,7 @@ from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.chat_submissions import ChatSubmission
+from app.services.realtime_runtime.router import PresenceLookup
 
 pytest_plugins = ("test_chat_submission_postgres",)
 
@@ -107,7 +108,7 @@ async def test_two_humans_each_get_a_private_conversation_over_rest_and_socket(r
     monkeypatch.setattr(websocket, "manager", websocket.ConnectionManager())
     monkeypatch.setattr(websocket.realtime_router, "register_connection", AsyncMock())
     monkeypatch.setattr(websocket.realtime_router, "unregister_connection", AsyncMock())
-    monkeypatch.setattr(websocket.realtime_router, "_list_presence", AsyncMock(return_value=[]))
+    monkeypatch.setattr(websocket.realtime_router, "_session_lookup", AsyncMock(return_value=PresenceLookup({})))
     app = _chat_app(db.conninfo, lambda: caller["user"])
     sessions_path = f"/api/agents/{db.agent.id}/sessions"
 

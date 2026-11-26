@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { connectAgentChat } from '../src/lib/chat/ws-client.ts'
 import type { ChatTicket } from '../src/lib/auth-api.ts'
 import { ApiError } from '../src/lib/http.ts'
-import { canonicalSession, fixture, submission } from './socket-fixture.ts'
+import { canonicalSession, drain, fixture, submission } from './socket-fixture.ts'
 
 test('resolved canonical session is used to mint fresh tickets across effect recreation', async (t) => {
   const f = fixture()
@@ -34,6 +34,26 @@ for (const code of [4002, 1011, 1006]) {
     t.mock.timers.tick(600)
     await Promise.resolve()
     assert.equal(f.urls.length, 2)
+    assert.deepEqual(f.urls.map((url) => [...new URL(url).searchParams]), [
+      [['ticket', 'opaque-1'], ['session_id', canonicalSession], ['lang', 'en'], ['heartbeat', '1']],
+      [['ticket', 'opaque-2'], ['session_id', canonicalSession], ['lang', 'en'], ['heartbeat', '1']],
+    ])
+    conn.close()
+  })
+}
+
+for (const code of [1012, 1013]) {
+  test(`close ${code} waits out the floor, then issues a fresh opaque ticket for the canonical session`, async () => {
+    const f = fixture()
+    const conn = f.timed({ random: () => 0 })
+    await drain()
+    f.socket().end(code)
+    f.clock.advance(999)
+    await drain()
+    assert.equal(f.tickets(), 1)
+    f.clock.advance(1)
+    await drain()
+    assert.equal(f.tickets(), 2)
     assert.deepEqual(f.urls.map((url) => [...new URL(url).searchParams]), [
       [['ticket', 'opaque-1'], ['session_id', canonicalSession], ['lang', 'en'], ['heartbeat', '1']],
       [['ticket', 'opaque-2'], ['session_id', canonicalSession], ['lang', 'en'], ['heartbeat', '1']],

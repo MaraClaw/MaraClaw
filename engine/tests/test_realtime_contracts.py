@@ -1,6 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from typing import override
 from unittest.mock import AsyncMock, MagicMock, Mock, call
 
 import pytest
@@ -11,7 +12,8 @@ from app.api import websocket
 from app.core.json_types import json_loads_object, object_attr
 from app.services.realtime_runtime import router
 from app.services.realtime_runtime.chat_authorization import DeliveryVerdict
-from app.services.realtime_runtime.contracts import LocalDeliverer, RoutingOutcome
+from app.services.realtime_runtime.contracts import LocalDeliverer, RoutingOutcome, encode_session_member
+from app.services.realtime_runtime.fanout import LOCAL_FANOUT_CONCURRENCY
 
 
 @pytest.mark.parametrize("encoding", ["mapping", "text", "bytes", "bytearray"])
@@ -169,9 +171,12 @@ async def test_registration_writes_string_presence_with_existing_ttl(
     pipe.expire = expire
     pipe.__aenter__ = AsyncMock(return_value=pipe)
     pipe.__aexit__ = AsyncMock(return_value=False)
-    pipe.execute = AsyncMock()
+    pipe.execute = AsyncMock(return_value=[1])  # the last result counts the user's live sockets: this one
+    add_member = Mock()
+    pipe.zadd = add_member
     store = SimpleNamespace(pipeline=Mock(return_value=pipe))
     monkeypatch.setattr(router, "get_redis", AsyncMock(return_value=store))
+    monkeypatch.setattr(router, "_wall_clock", lambda: 1000.0)
     instance = router.RealtimeRouter()
     instance.instance_id = "replica"
 
@@ -189,7 +194,21 @@ async def test_registration_writes_string_presence_with_existing_ttl(
         ]
     )
     assert write_hash.call_count == 4
-    expire.assert_has_calls([call(connection_key, 180), call("realtime:ws:agent:agent", 180)])
+    session_key = f"realtime:ws:session:agent:{session_id or ''}"
+    expire.assert_has_calls([call(connection_key, 180), call("realtime:ws:agent:agent", 180), call(session_key, 180)])
+    # The session index holds the connection until the same TTL after this write, as its own score.
+    member = encode_session_member(
+        connection_id,
+        {"agent_id": "agent", "session_id": session_id or "", "user_id": user_id or "", "instance_id": "replica"},
+    )
+    session_entry = call(session_key, {member: 1180.0})
+    if user_id is not None and user_id != "":
+        # The user index holds the connection under its own expiry too, so a dead process stops counting.
+        user_key = f"realtime:ws:user:{user_id}"
+        assert add_member.call_args_list == [session_entry, call(user_key, {connection_id: 1180.0})]
+        expire.assert_has_calls([call(user_key, 180)])
+    else:
+        assert add_member.call_args_list == [session_entry]
     assert object_attr(socket.state, "realtime_connection_id") == connection_id
 
 
@@ -219,18 +238,9 @@ async def test_routing_is_local_first_and_publishes_once_per_matching_remote(mon
         events.append("authorize")
         return DeliveryVerdict.ALLOWED
 
-    async def presence(_agent: str) -> list[dict[str, str]]:
+    async def presence(_agent: str, _session: str, _user: str | None, _with_acl_version: bool) -> router.PresenceLookup:
         events.append("presence")
-        return [
-            {"instance_id": identity, "session_id": session, "user_id": "user"}
-            for identity, session in [
-                ("local", "session"),
-                ("remote", "session"),
-                ("remote", "session"),
-                ("archive", "other"),
-                ("", "session"),
-            ]
-        ]
+        return router.PresenceLookup({"remote": 2})
 
     async def publish(channel: str, payload: str) -> int:
         events.append("publish")
@@ -238,7 +248,7 @@ async def test_routing_is_local_first_and_publishes_once_per_matching_remote(mon
         return 1
 
     monkeypatch.setattr(router, "authorize_chat_delivery", authorize)
-    monkeypatch.setattr(instance, "_list_presence", presence)
+    monkeypatch.setattr(instance, "_session_lookup", presence)
     monkeypatch.setattr(router, "get_redis", AsyncMock(return_value=SimpleNamespace(publish=publish)))
     message: dict[str, object] = {"type": "custom", "data": [None, {"nested": True}]}
 
@@ -347,8 +357,8 @@ async def test_routing_returns_its_outcome_counts_remote_publish_errors_and_keep
     ) -> DeliveryVerdict:
         return DeliveryVerdict.FORBIDDEN if socket is revoked else DeliveryVerdict.ALLOWED
 
-    async def presence(_agent: str) -> list[dict[str, str]]:
-        return [{"instance_id": identity, "session_id": "session", "user_id": "user"} for identity in ("up", "down")]
+    async def presence(_agent: str, _session: str, _user: str | None, _with_acl_version: bool) -> router.PresenceLookup:
+        return router.PresenceLookup({"up": 1, "down": 1})
 
     async def publish(channel: str, _payload: str) -> int:
         published.append(channel)
@@ -357,7 +367,7 @@ async def test_routing_returns_its_outcome_counts_remote_publish_errors_and_keep
         return 1
 
     monkeypatch.setattr(router, "authorize_chat_delivery", authorize)
-    monkeypatch.setattr(instance, "_list_presence", presence)
+    monkeypatch.setattr(instance, "_session_lookup", presence)
     monkeypatch.setattr(router, "get_redis", AsyncMock(return_value=SimpleNamespace(publish=publish)))
     monkeypatch.setattr(router, "logger", SimpleNamespace(debug=lambda _message: None, warning=warnings.append))
     observer = Observer()
@@ -409,11 +419,11 @@ async def test_a_skipped_socket_counts_as_dropped_and_a_revoked_one_goes_back_to
         waits.append(wait_seconds)
         return verdicts[socket]
 
-    async def presence(_agent: str) -> list[dict[str, str]]:
-        return []
+    async def presence(_agent: str, _session: str, _user: str | None, _with_acl_version: bool) -> router.PresenceLookup:
+        return router.PresenceLookup({})
 
     monkeypatch.setattr(router, "authorize_chat_delivery", authorize)
-    monkeypatch.setattr(instance, "_list_presence", presence)
+    monkeypatch.setattr(instance, "_session_lookup", presence)
     observer = Observer()
 
     outcome = await instance.route_message(
@@ -446,11 +456,11 @@ async def test_an_event_nobody_may_receive_is_not_dropped(monkeypatch: pytest.Mo
     ) -> DeliveryVerdict:
         return DeliveryVerdict.FORBIDDEN
 
-    async def presence(_agent: str) -> list[dict[str, str]]:
-        return []
+    async def presence(_agent: str, _session: str, _user: str | None, _with_acl_version: bool) -> router.PresenceLookup:
+        return router.PresenceLookup({})
 
     monkeypatch.setattr(router, "authorize_chat_delivery", refuse)
-    monkeypatch.setattr(instance, "_list_presence", presence)
+    monkeypatch.setattr(instance, "_session_lookup", presence)
 
     outcome = await instance.route_message(
         agent_id="agent",
@@ -506,3 +516,45 @@ async def test_resubscribe_still_closes_every_listed_socket_with_1012_and_not_th
 
     assert live.closes == [websocket.RESUBSCRIBE_CLOSE_CODE] == [1012]
     assert evicted.closes == [websocket.EVICTION_CLOSE_CODE]
+
+
+async def test_a_subscriber_gap_tells_every_local_socket_in_bounded_batches() -> None:
+    # Given more sockets than one batch holds, spread over two agents, whose closes are held open.
+    bound = LOCAL_FANOUT_CONCURRENCY
+    gate, saturated = asyncio.Event(), asyncio.Event()
+    in_flight = peak = 0
+
+    class Holding(Peer):
+        @override
+        async def _send(self, frame: Message) -> None:
+            nonlocal in_flight, peak
+            if frame["type"] != "websocket.close":
+                await super()._send(frame)
+                return
+            in_flight += 1
+            peak = max(peak, in_flight)
+            if in_flight >= bound:
+                saturated.set()
+            try:
+                await gate.wait()
+            finally:
+                in_flight -= 1
+            await super()._send(frame)
+
+    manager = websocket.ConnectionManager()
+    peers = [Holding() for _ in range(2 * (bound + 3))]
+    for index, peer in enumerate(peers):
+        manager.active_connections.setdefault(f"agent-{index % 2}", []).append(
+            (await peer.accepted(), "session", "user")
+        )
+
+    # When the subscription is re-established.
+    closing = asyncio.create_task(manager.close_local_connections())
+    await asyncio.wait_for(saturated.wait(), 5)
+
+    # Then only one batch is closing at a time, and once released every socket has been told with 1012.
+    assert in_flight == bound
+    gate.set()
+    await asyncio.wait_for(closing, 5)
+    assert peak == bound
+    assert [peer.closes for peer in peers] == [[websocket.RESUBSCRIBE_CLOSE_CODE]] * len(peers)

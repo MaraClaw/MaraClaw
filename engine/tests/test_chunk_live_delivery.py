@@ -127,9 +127,9 @@ class Link:
 
 class SlowPresence(MemoryPresence):
     @override
-    async def smembers(self, key: str) -> set[str]:
+    async def zrangebyscore(self, key: str, minimum: str, maximum: str) -> list[str]:
         await asyncio.sleep(SLOW)
-        return await super().smembers(key)
+        return await super().zrangebyscore(key, minimum, maximum)
 
 
 class GatedPresence(MemoryPresence):
@@ -142,12 +142,12 @@ class GatedPresence(MemoryPresence):
         self.reads = 0
 
     @override
-    async def smembers(self, key: str) -> set[str]:
+    async def zrangebyscore(self, key: str, minimum: str, maximum: str) -> list[str]:
         self.reads += 1
         if self.reads == 1:
             self.entered.set()
             await self.release.wait()
-        return await super().smembers(key)
+        return await super().zrangebyscore(key, minimum, maximum)
 
 
 class HeldDecisionTime:
@@ -208,6 +208,7 @@ class Pipeline:
         monkeypatch.setattr(chat_authorization, "connection_ctx", self._checkout)
 
     async def _redis(self) -> MemoryPresence:
+        self.store.acl_version = self.version  # the presence round trip carries the version the test has set
         return self.store
 
     @asynccontextmanager
@@ -300,6 +301,38 @@ async def test_slow_presence_read_still_routes_the_chunk_to_the_remote_instance(
     assert [channel for channel, _ in pipe.store.published] == ["realtime:ws:instance:remote"]
     assert link.seqs() == [0]
     assert remote_link.frames == link.frames
+
+
+@pytest.mark.parametrize("canonical", [False, True])
+async def test_a_chunk_costs_one_redis_round_trip_whatever_the_agent_has_open_on_other_sessions(
+    monkeypatch: pytest.MonkeyPatch, canonical: bool
+) -> None:
+    # Given one agent with a hundred sockets on other sessions across replicas, and one remote socket on this session.
+    pipe = Pipeline(monkeypatch, canonical=canonical)
+    link = await pipe.connect()
+    records = {
+        f"other-{index}": {"instance_id": f"replica-{index % 7}", "session_id": str(uuid4()), "user_id": str(uuid4())}
+        for index in range(100)
+    }
+    records["watching"] = {
+        "instance_id": "remote",
+        "session_id": str(pipe.session_id),
+        "user_id": str(pipe.user_id),
+    }
+    pipe.store = MemoryPresence(str(pipe.agent_id), records)
+
+    # When a stream publishes three chunks.
+    await asyncio.wait_for(pipe.publish(0, 1, 2), 5)
+
+    # Then each chunk made one pipelined round trip that read the session index (and the ACL version only when a
+    # socket authorizes against it), read no connection hash, and reached only the replica watching the session.
+    expected = "pipeline ZRANGEBYSCORE GET" if canonical else "pipeline ZRANGEBYSCORE"
+    assert pipe.store.calls == [expected] * 3
+    assert pipe.store.acl_reads == (3 if canonical else 0)
+    pipe.read_version.assert_not_awaited()
+    assert [channel for channel, _ in pipe.store.published] == ["realtime:ws:instance:remote"] * 3
+    assert link.seqs() == [0, 1, 2]
+    assert all(not outcome.dropped for outcome in pipe.outcomes)
 
 
 async def test_stalled_socket_is_bounded_and_does_not_block_other_recipients(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -406,7 +439,8 @@ async def test_cold_canonical_authorization_is_bounded_and_reads_the_acl_version
 
     assert pipe.auth_gate.peak == bound
     assert [link.seqs() for link in links] == [[0]] * (bound + 4)
-    pipe.read_version.assert_awaited_once()
+    assert pipe.store.acl_reads == 1
+    pipe.read_version.assert_not_awaited()
 
 
 async def test_ordinary_session_delivery_reads_no_acl_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -416,6 +450,7 @@ async def test_ordinary_session_delivery_reads_no_acl_version(monkeypatch: pytes
     await asyncio.wait_for(pipe.publish(0, 1), 5)
 
     assert [link.seqs() for link in links] == [[0, 1]] * 3
+    assert pipe.store.acl_reads == 0
     pipe.read_version.assert_not_awaited()
     pipe.authorize.assert_not_awaited()
 
@@ -432,7 +467,8 @@ async def test_only_flagged_sockets_authorize_on_one_acl_read_per_delivery(monke
 
     # Both get every chunk; the version is read once per delivery and only the flagged socket is decided, once.
     assert [flagged.seqs(), unflagged.seqs()] == [[0, 1], [0, 1]]
-    assert pipe.read_version.await_count == 2
+    assert pipe.store.acl_reads == 2
+    pipe.read_version.assert_not_awaited()
     pipe.authorize.assert_awaited_once_with(flagged.socket.state.chat_binding)
 
 

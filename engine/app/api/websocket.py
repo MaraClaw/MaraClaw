@@ -11,9 +11,10 @@ from datetime import UTC, datetime
 import anyio
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from redis.exceptions import RedisError
 
+from app.config import get_settings
 from app.core.incident_reporting import report_exception
 from app.core.json_types import is_str_dict, json_as_str, json_loads_value
 from app.core.logging import logger, set_trace_id
@@ -22,13 +23,15 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
-from app.schemas.chat_wire import ChatEventType, serialize_chat_server_event
+from app.schemas.chat_wire import ChatEventType, ChatRejectionReason, serialize_chat_server_event
 from app.services import chat_tickets
 from app.services.chat_persist import persist_chat_message
+from app.services.chat_submission_window import SubmissionWindow
 from app.services.chat_submissions import (
     ChatSubmission,
     InvalidChatAttachmentsError,
     SubmissionConflictError,
+    SubmissionTooLongError,
     accept_submission,
 )
 from app.services.llm.types import OpenAIMessage
@@ -54,11 +57,12 @@ from app.services.realtime_runtime.chat_authorization import (
     authorize_chat_delivery,
     read_delivery_acl_version,
 )
-from app.services.realtime_runtime.contracts import RoutingOutcome
+from app.services.realtime_runtime.contracts import RealtimePresence, RoutingOutcome
 from app.services.realtime_runtime.fanout import encode_event_text, fan_out
 from app.services.realtime_runtime.router import (
     DEFAULT_SEND_TIMEOUT_SECONDS,
     PRESENCE_REFRESH_SECONDS,
+    UserSocketLimitError,
     resolve_authorization_wait,
     resolve_send_timeout,
 )
@@ -89,6 +93,17 @@ EVICTION_CLOSE_CODE = 1013
 # Bounds each step of an eviction (presence removal, then the close): closing a peer that is not reading can block
 # just like the send did.
 EVICTION_CLOSE_TIMEOUT_SECONDS = DEFAULT_SEND_TIMEOUT_SECONDS
+# The user already holds CHAT_SOCKETS_PER_USER live sockets, counted across engine processes. Sent after accept, like
+# 4001/4003 (HTTP 429 in the 4xxx range). Not 1012/1013: web-e treats 4029 as its own case, backing off like them (full
+# jitter, 1-30 s) so a tab over the cap does not hammer ticket issuance, and showing a message that names the cause.
+USER_SOCKET_LIMIT_CLOSE_CODE = 4029
+# The clock of each socket's submission window (monotonic seconds); tests replace it before the handler is built.
+_submission_clock = time.monotonic
+_SUBMISSION_ID = TypeAdapter(uuid.UUID)
+
+
+class PresenceUnavailableError(Exception):
+    """Redis could not register an accepted socket's presence; close it with ``EVICTION_CLOSE_CODE`` (try again later)."""
 
 
 def _json_object_payload(value: object) -> dict[str, object]:
@@ -99,6 +114,29 @@ def _json_object_payload(value: object) -> dict[str, object]:
 
 def _payload_str(value: object, default: str = "") -> str:
     return value if isinstance(value, str) else default
+
+
+def _invalid_submission_id_rejection() -> RealtimeMessage:
+    return {
+        "type": ChatEventType.TURN_REJECTED,
+        "reason": "invalid_submission_id",
+        "content": "Submission UUID required.",
+    }
+
+
+def _rate_limited_rejection(data: dict[str, object]) -> RealtimeMessage:
+    """Refuse a submission over the socket's rate; an unusable submission id cannot be correlated, so it stays uncorrelated."""
+    submission_id = _payload_str(data.get("client_submission_id"))
+    try:
+        _ = _SUBMISSION_ID.validate_python(submission_id)
+    except ValidationError:
+        return _invalid_submission_id_rejection()
+    return {
+        "type": ChatEventType.TURN_REJECTED,
+        "reason": "rate_limited",
+        "client_submission_id": submission_id,
+        "content": "Too many messages sent too quickly. Wait a moment, then send it again.",
+    }
 
 
 async def _send_chat_event(websocket: WebSocket, message: RealtimeMessage) -> None:
@@ -126,12 +164,24 @@ class ConnectionManager:
     async def connect(
         self, agent_id: str, websocket: WebSocket, session_id: str | None = None, user_id: str | None = None
     ):
-        _ = await realtime_router.register_connection(
-            agent_id=agent_id,
-            websocket=websocket,
-            session_id=session_id,
-            user_id=user_id,
-        )
+        """List an accepted socket and register its presence, or raise ``PresenceUnavailableError``.
+
+        A socket is listed only after its presence is registered, so a Redis failure leaves no socket without presence:
+        the caller closes it with ``EVICTION_CLOSE_CODE`` and the client reconnects. A user already at
+        ``CHAT_SOCKETS_PER_USER`` live sockets raises ``UserSocketLimitError`` and the caller closes the socket with
+        ``USER_SOCKET_LIMIT_CLOSE_CODE``; nothing is listed or left in Redis for it.
+        """
+        try:
+            _ = await realtime_router.register_connection(
+                agent_id=agent_id,
+                websocket=websocket,
+                session_id=session_id,
+                user_id=user_id,
+            )
+        except RedisError as error:
+            report_exception(error, source="websocket", operation="connect")
+            logger.warning("[WS] Failed to register presence for agent {}: {}", agent_id, type(error).__name__)
+            raise PresenceUnavailableError from error
         if agent_id not in self.active_connections:
             self.active_connections[agent_id] = []
         self.active_connections[agent_id].append((websocket, session_id, user_id))
@@ -202,25 +252,31 @@ class ConnectionManager:
         self._withdrawn.add(websocket)
         _ = self._send_timeouts.pop(websocket, None)
         self._remove_local(agent_id, websocket)
-        connection_id_raw = getattr(websocket.state, "realtime_connection_id", None)
-        connection_id = connection_id_raw if isinstance(connection_id_raw, str) and connection_id_raw else None
+        registered = realtime_router.registered(websocket)
         # The handler's presence refresh rewrites expired presence under this id; cleared, it has nothing to rewrite.
         websocket.state.realtime_connection_id = None
         websocket.state.realtime_presence = None
-        if connection_id is not None:
-            self._withdrawn_presence.add(connection_id)
-        task = asyncio.create_task(self._close_withdrawn(agent_id, websocket, connection_id, close_code), name=name)
+        if registered is not None:
+            self._withdrawn_presence.add(registered[0])
+        task = asyncio.create_task(self._close_withdrawn(agent_id, websocket, registered, close_code), name=name)
         self._eviction_tasks.add(task)
         task.add_done_callback(self._eviction_tasks.discard)
 
     async def _close_withdrawn(
-        self, agent_id: str, websocket: WebSocket, connection_id: str | None, close_code: int
+        self,
+        agent_id: str,
+        websocket: WebSocket,
+        registered: tuple[str, RealtimePresence] | None,
+        close_code: int,
     ) -> None:
         """Remove the withdrawn socket's Redis presence, then close it with ``close_code``; each step is bounded."""
-        if connection_id is not None:
+        if registered is not None:
+            connection_id, presence = registered
             try:
                 async with asyncio.timeout(EVICTION_CLOSE_TIMEOUT_SECONDS):
-                    await realtime_router.unregister_connection_id(agent_id=agent_id, connection_id=connection_id)
+                    await realtime_router.unregister_connection_id(
+                        agent_id=agent_id, connection_id=connection_id, presence=presence
+                    )
             except Exception as error:
                 report_exception(error, source="websocket", operation="eviction-presence")
                 logger.warning(
@@ -467,6 +523,10 @@ class WebSocketChatHandler:
         self.heartbeat: bool = heartbeat
         self._presence_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        settings = get_settings()
+        self._submission_window: SubmissionWindow = SubmissionWindow(
+            settings.CHAT_SUBMISSIONS_PER_WINDOW, settings.CHAT_SUBMISSION_WINDOW_SECONDS, _submission_clock
+        )
 
         # State fields initialized during setup
         self.agent_name: str = ""
@@ -502,6 +562,11 @@ class WebSocketChatHandler:
                     await self.message_loop()
             except TimeoutError:
                 await self._close(4001)
+            except PresenceUnavailableError:
+                await self._close(EVICTION_CLOSE_CODE)
+            except UserSocketLimitError:
+                logger.info("[WS] Refused chat socket for agent {}: the user holds too many sockets", self.agent_id)
+                await self._close(USER_SOCKET_LIMIT_CLOSE_CODE)
             except HTTPException as exc:
                 code = {401: 4001, 403: 4003, 404: 4003, 503: 1011}.get(exc.status_code, 4002)
                 await self._send_error({"type": ChatEventType.ERROR, "content": exc.detail})
@@ -649,6 +714,10 @@ class WebSocketChatHandler:
             is_onboarding_trigger = data.get("kind") == "onboarding_trigger"
             logger.info(f"[WS] Received: {content[:50]}" + (" [onboarding]" if is_onboarding_trigger else ""))
 
+            if not is_onboarding_trigger and not self._submission_window.admit():
+                await _send_chat_event(self.websocket, _rate_limited_rejection(data))
+                continue
+
             try:
                 self.user, self.agent, self.access_level = await chat_tickets.authorize(self.binding)
                 _ = await chat_tickets.authorized_session(self.binding, self.user, self.agent)
@@ -671,11 +740,7 @@ class WebSocketChatHandler:
                 except ValidationError as exc:
                     rejection: RealtimeMessage
                     if any(error["loc"][0] == "client_submission_id" for error in exc.errors()):
-                        rejection = {
-                            "type": ChatEventType.TURN_REJECTED,
-                            "reason": "invalid_submission_id",
-                            "content": "Submission UUID required.",
-                        }
+                        rejection = _invalid_submission_id_rejection()
                     else:
                         rejection = {
                             "type": ChatEventType.TURN_REJECTED,
@@ -792,6 +857,11 @@ class WebSocketChatHandler:
             )
         except SubmissionConflictError:
             rejection.update(reason="submission_conflict", content="Submission UUID already used for another message.")
+        except SubmissionTooLongError as exc:
+            subject = "This message" if exc.reason is ChatRejectionReason.MESSAGE_TOO_LONG else "The file name"
+            rejection.update(
+                reason=exc.reason.value, content=f"{subject} is too long. The limit is {exc.limit} characters."
+            )
         except InvalidChatAttachmentsError:
             rejection.update(reason="invalid_attachments", content="An attachment file is unavailable.")
         except NoCompanyModelError as exc:

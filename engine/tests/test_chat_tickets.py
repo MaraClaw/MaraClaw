@@ -9,11 +9,16 @@ import anyio
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from jose import jwt
 from redis.exceptions import RedisError
 from tests.membership_generation_fixtures import pin_membership_generation
+from tests.rate_limit_fakes import install_limiter_redis
 
-from app.api import chat_sessions, websocket
+from app.api import auth as auth_api, chat_sessions, websocket
+from app.config import get_settings
+from app.core import security
 from app.core.domain.agents import AgentType
+from app.core.rate_limit import TOO_MANY_REQUESTS_DETAIL
 from app.records.chat import ChatSessionRecord
 from app.services import chat_tickets as tickets
 
@@ -533,3 +538,87 @@ async def test_failed_setup_does_not_restore_ticket(context, monkeypatch):
     with pytest.raises(HTTPException) as error:
         await tickets.redeem(issued.ticket)
     assert error.value.status_code == 400
+
+
+def _bearer(user_id: uuid.UUID) -> dict[str, str]:
+    claims = {"sub": str(user_id), "role": "member", "exp": int(time.time()) + 3600, "gen": 7}
+    token = jwt.encode(claims, security.settings.JWT_SECRET_KEY, algorithm=security.settings.JWT_ALGORITHM)
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _ticket_route(monkeypatch):
+    """The real chat-ticket route with its user load and ticket issue counted."""
+    loads = AsyncMock(side_effect=lambda token, **_: SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4()))
+    issue = AsyncMock(return_value=tickets.ChatTicketResponse(ticket="opaque", session_id=uuid.uuid4()))
+    monkeypatch.setattr(auth_api, "load_user_from_access_token", loads)
+    monkeypatch.setattr(tickets, "create", issue)
+    monkeypatch.setattr(get_settings(), "TRUSTED_PROXIES", [])
+    app = FastAPI()
+    app.include_router(auth_api.router, prefix="/api")
+    return app, loads, issue
+
+
+def _post_ticket(client, user_id):
+    return client.post("/api/auth/chat-ticket", json={"agent_id": str(uuid.uuid4())}, headers=_bearer(user_id))
+
+
+def test_chat_ticket_throttle_refuses_a_spent_user_before_the_user_is_loaded(monkeypatch):
+    # Given a budget of two tickets per user and the real route.
+    install_limiter_redis(monkeypatch)
+    monkeypatch.setattr(get_settings(), "TICKET_RATE_LIMIT_USER_ATTEMPTS", 2)
+    app, loads, issue = _ticket_route(monkeypatch)
+    spender, other = uuid.uuid4(), uuid.uuid4()
+
+    with TestClient(app, client=("203.0.113.5", 1)) as client:
+        # When one user spends it, then the next request is refused with 429 before any user load or ticket work.
+        assert [_post_ticket(client, spender).status_code for _ in range(2)] == [200, 200]
+        refused = _post_ticket(client, spender)
+        assert refused.status_code == 429
+        assert refused.json() == {"detail": TOO_MANY_REQUESTS_DETAIL}
+        assert int(refused.headers["retry-after"]) > 0
+        assert (loads.await_count, issue.await_count) == (2, 2)
+
+        # And another user of the same address still gets a ticket, with the refusal identical for both users.
+        assert _post_ticket(client, other).status_code == 200
+        _ = [_post_ticket(client, other) for _ in range(2)]
+        also_refused = _post_ticket(client, other)
+        assert (also_refused.status_code, also_refused.json()) == (refused.status_code, refused.json())
+        assert also_refused.headers["retry-after"] == refused.headers["retry-after"]
+
+
+def test_chat_ticket_throttle_budgets_the_address_across_users(monkeypatch):
+    install_limiter_redis(monkeypatch)
+    monkeypatch.setattr(get_settings(), "AUTH_RATE_LIMIT_ADDRESS_ATTEMPTS", 2)
+    app, _, issue = _ticket_route(monkeypatch)
+
+    with TestClient(app, client=("203.0.113.5", 1)) as shared:
+        assert [_post_ticket(shared, uuid.uuid4()).status_code for _ in range(3)] == [200, 200, 429]
+    with TestClient(app, client=("203.0.113.6", 1)) as elsewhere:
+        assert _post_ticket(elsewhere, uuid.uuid4()).status_code == 200
+    assert issue.await_count == 3
+
+
+def test_chat_ticket_throttle_rejects_a_forged_bearer_without_counting_a_user(monkeypatch):
+    redis = install_limiter_redis(monkeypatch)
+    app, loads, _ = _ticket_route(monkeypatch)
+
+    with TestClient(app, client=("203.0.113.5", 1)) as client:
+        response = client.post(
+            "/api/auth/chat-ticket", json={"agent_id": str(uuid.uuid4())}, headers={"Authorization": "Bearer forged"}
+        )
+
+    assert response.status_code == 401
+    assert [key.split(":")[2] for key in redis.counts] == ["address"]
+    loads.assert_not_awaited()
+
+
+def test_chat_ticket_throttle_fails_open_when_redis_is_down(monkeypatch):
+    redis = install_limiter_redis(monkeypatch)
+    redis.broken_on_execute = True
+    monkeypatch.setattr(get_settings(), "TICKET_RATE_LIMIT_USER_ATTEMPTS", 1)
+    app, _, issue = _ticket_route(monkeypatch)
+    user = uuid.uuid4()
+
+    with TestClient(app, client=("203.0.113.5", 1)) as client:
+        assert [_post_ticket(client, user).status_code for _ in range(4)] == [200] * 4
+    assert issue.await_count == 4

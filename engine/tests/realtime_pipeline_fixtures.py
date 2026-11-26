@@ -1,15 +1,29 @@
-"""Redis pipeline stand-in for realtime presence fakes that only implement ``HGETALL``."""
+"""Redis pipeline stand-in for realtime presence fakes that implement only the lookups routing reads."""
 
 from collections.abc import Awaitable, Callable
-from typing import Self
+from typing import Protocol, Self
 
 
-class HashPipeline:
-    """Queue ``HGETALL`` commands the way a Redis pipeline does and answer them from ``read``."""
+class PresenceReads(Protocol):
+    """What a presence fake answers: a connection hash, a session index and a plain value (the ACL version)."""
 
-    def __init__(self, read: Callable[[str], Awaitable[dict[str, str]]]) -> None:
-        self._read: Callable[[str], Awaitable[dict[str, str]]] = read
-        self._keys: list[str] = []
+    def hgetall(self, key: str, /) -> Awaitable[dict[str, str]]: ...
+
+    def zrangebyscore(self, key: str, minimum: str, maximum: str, /) -> Awaitable[list[str]]: ...
+
+    def get(self, key: str, /) -> Awaitable[str | None]: ...
+
+
+class PresencePipeline:
+    """Queue ``HGETALL``, ``ZRANGEBYSCORE`` and ``GET`` the way a Redis pipeline does and answer them from ``reads``.
+
+    ``executed`` is told the command names of every executed pipeline, one call per round trip.
+    """
+
+    def __init__(self, reads: PresenceReads, executed: Callable[[list[str]], None] = lambda _commands: None) -> None:
+        self._reads = reads
+        self._executed = executed
+        self._queued: list[tuple[str, Callable[[], Awaitable[object]]]] = []
 
     async def __aenter__(self) -> Self:
         return self
@@ -18,8 +32,17 @@ class HashPipeline:
         return False
 
     def hgetall(self, key: str) -> Self:
-        self._keys.append(key)
+        self._queued.append(("HGETALL", lambda: self._reads.hgetall(key)))
         return self
 
-    async def execute(self) -> list[dict[str, str]]:
-        return [await self._read(key) for key in self._keys]
+    def zrangebyscore(self, key: str, minimum: str, maximum: str) -> Self:
+        self._queued.append(("ZRANGEBYSCORE", lambda: self._reads.zrangebyscore(key, minimum, maximum)))
+        return self
+
+    def get(self, key: str) -> Self:
+        self._queued.append(("GET", lambda: self._reads.get(key)))
+        return self
+
+    async def execute(self) -> list[object]:
+        self._executed([name for name, _ in self._queued])
+        return [await read() for _, read in self._queued]

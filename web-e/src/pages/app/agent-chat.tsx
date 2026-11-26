@@ -478,6 +478,7 @@ export function AgentChatPage() {
         if (!current()) return
         if (code === 4001) toast.error(translate("Session expired. Sign in again."))
         if (code === 4003) toast.error(translate("This agent is expired or you cannot use it."))
+        if (code === 4029) toast.error(translate("Too many chat tabs are open for your account. Close one and this tab will reconnect."), { id: 'chat-socket-limit' })
         if (code === 4001 || code === 4003) {
           if (sendRef.current === conn.send) sendRef.current = null
           setSocketStopped(true)

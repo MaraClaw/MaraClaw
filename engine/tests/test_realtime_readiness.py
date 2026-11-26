@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 from typing import override
+from unittest.mock import AsyncMock
 
 import pytest
 from redis.asyncio import ConnectionPool, Redis
@@ -9,9 +10,11 @@ from redis.asyncio.connection import Connection
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
-from tests.realtime_pipeline_fixtures import HashPipeline
+from tests.realtime_pipeline_fixtures import PresencePipeline
 
+from app.core import events
 from app.services.realtime_runtime import router
+from app.services.realtime_runtime.contracts import encode_session_member
 
 
 class MemoryConnection(Connection):
@@ -110,7 +113,7 @@ async def test_subscription_cleanup_failure_still_retries_and_delivers(monkeypat
     async def deliver(**_kwargs: object) -> None:
         delivered.set()
 
-    monkeypatch.setattr(router, "get_redis", existing)
+    monkeypatch.setattr(router, "get_pubsub_redis", existing)
     monkeypatch.setattr(router.AcknowledgedPubSub, "aclose", failing_close)
     monkeypatch.setattr(router.asyncio, "sleep", sleep)
     try:
@@ -147,7 +150,7 @@ async def test_ack_loss_transparent_retry_reack_and_repeated_start(monkeypatch: 
     async def existing() -> Redis:
         return redis
 
-    monkeypatch.setattr(router, "get_redis", existing)
+    monkeypatch.setattr(router, "get_pubsub_redis", existing)
     instance = router.RealtimeRouter()
     delivered = asyncio.Event()
 
@@ -205,9 +208,18 @@ async def test_distinct_replicas_route_presence_to_remote_channel_only(monkeypat
             identity = "replica-a" if key.endswith(":a") else "replica-b"
             return {"instance_id": identity, "session_id": "session", "user_id": "user"}
 
-        def pipeline(self, transaction: bool = True) -> HashPipeline:
+        async def zrangebyscore(self, _key: str, _minimum: str, _maximum: str) -> list[str]:
+            return [
+                encode_session_member(identity, {"instance_id": identity, "user_id": "user"})
+                for identity in ("replica-a", "replica-b")
+            ]
+
+        async def get(self, _key: str) -> str | None:
+            return None
+
+        def pipeline(self, transaction: bool = True) -> PresencePipeline:
             _ = transaction
-            return HashPipeline(self.hgetall)
+            return PresencePipeline(self)
 
         async def publish(self, channel: str, payload: str) -> int:
             remote.append((channel, payload))
@@ -222,6 +234,7 @@ async def test_distinct_replicas_route_presence_to_remote_channel_only(monkeypat
         delivered.append(kwargs)
         received.set()
 
+    monkeypatch.setattr(router, "get_pubsub_redis", existing)
     monkeypatch.setattr(router, "get_redis", existing)
     assert first._instance_channel() != second._instance_channel()
     assert {record.get("instance_id") for record in await first._list_presence("agent")} == {"replica-a", "replica-b"}
@@ -267,7 +280,7 @@ async def test_resubscribe_hook_skips_the_first_acknowledgment_and_runs_serially
     async def existing() -> Redis:
         return redis
 
-    monkeypatch.setattr(router, "get_redis", existing)
+    monkeypatch.setattr(router, "get_pubsub_redis", existing)
     instance = router.RealtimeRouter()
     order: list[str] = []
     delivered = asyncio.Event()
@@ -315,7 +328,7 @@ async def test_failing_resubscribe_hook_does_not_drop_the_subscription(monkeypat
     async def existing() -> Redis:
         return redis
 
-    monkeypatch.setattr(router, "get_redis", existing)
+    monkeypatch.setattr(router, "get_pubsub_redis", existing)
     instance = router.RealtimeRouter()
     delivered = asyncio.Event()
     hooked = asyncio.Event()
@@ -341,3 +354,47 @@ async def test_failing_resubscribe_hook_does_not_drop_the_subscription(monkeypat
         await instance.stop()
         await redis.aclose()
         await pool.aclose()
+
+
+async def test_an_exhausted_command_pool_keeps_the_subscriber_ready_and_the_redis_probe_reachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a subscriber on its own pool and a command pool whose every connection is in use.
+    subscriber_pool = ConnectionPool()
+    connection = MemoryConnection()
+    monkeypatch.setattr(subscriber_pool, "make_connection", lambda: connection)
+    subscriber = Redis(connection_pool=subscriber_pool)
+    monkeypatch.setattr(events._CommandPool, "ensure_connection", AsyncMock())
+    command_pool = events._CommandPool(max_connections=1, timeout=0.0)
+    held = await command_pool.get_connection()
+    command = Redis(connection_pool=command_pool)
+    delivered = asyncio.Event()
+
+    async def existing() -> Redis:
+        return subscriber
+
+    async def deliver(**_kwargs: object) -> None:
+        delivered.set()
+
+    monkeypatch.setattr(router, "get_pubsub_redis", existing)
+    monkeypatch.setattr(events, "_redis_client", command)
+    instance = router.RealtimeRouter()
+    try:
+        await instance.start(deliver)
+        assert (await next_command(connection))[0] == "SUBSCRIBE"
+        await settled_ack(connection, instance._instance_channel())
+        await asyncio.wait_for(delivered.wait(), 1)
+
+        # When a command waits for a connection that never frees up.
+        with pytest.raises(events.RedisPoolOverloadError):
+            _ = await command.ping()
+
+        # Then the busy pool is not mistaken for an outage: the subscription is still ready and the probe passes.
+        assert instance.ready
+        assert await events.ping_redis()
+    finally:
+        await instance.stop()
+        await command_pool.release(held)
+        await command_pool.disconnect()
+        await subscriber.aclose()
+        await subscriber_pool.aclose()

@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.api import background_tasks, websocket as ws_api
+from app.config import get_settings
 from app.core.domain.users import UserRole
 from app.dao.user_dao import user_dao
 from app.db import session
@@ -32,6 +33,7 @@ from app.services import (
     shared_chat,
 )
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
+from app.services.chat_submission_window import SubmissionWindow
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
 from app.services.quota_guard import AgentExpired, QuotaExceeded
@@ -251,6 +253,7 @@ async def drive_turn(
     onboarding: bool = False,
     role: str = "member",
     payload: dict[str, object] | None = None,
+    payloads: list[dict[str, object]] | None = None,
     denied: bool = False,
 ):
     user, agent = state.user, state.agent
@@ -263,7 +266,9 @@ async def drive_turn(
         received += 1
         if received == 1:
             return {"type": "websocket.connect"}
-        if received == 2:
+        if payloads is not None and received - 2 < len(payloads):
+            return {"type": "websocket.receive", "text": json.dumps(payloads[received - 2])}
+        if payloads is None and received == 2:
             data = payload if payload is not None else {"content": "hello", "client_submission_id": state.submission_id}
             text = '{"kind":"onboarding_trigger"}' if onboarding else json.dumps(data)
             return {"type": "websocket.receive", "text": text}
@@ -592,3 +597,49 @@ async def test_exemption_uses_reauthorized_principal_not_previous_handler_user(m
 
     assert state.committed == ["chat", "gateway"]
     assert [frame["type"] for frame in state.frames] == ["turn_accepted", "status"]
+
+
+async def test_socket_over_its_submission_rate_is_rejected_without_closing_or_persisting(monkeypatch, turn):
+    state, raw = turn
+    monkeypatch.setattr(get_settings(), "CHAT_SUBMISSIONS_PER_WINDOW", 1)
+    monkeypatch.setattr(ws_api, "_submission_clock", lambda: 100.0)
+    second, third = str(uuid4()), "not-a-uuid"
+    frames: list[dict[str, object]] = [
+        {"content": "first", "client_submission_id": state.submission_id},
+        {"content": "second", "client_submission_id": second},
+        {"content": "third", "client_submission_id": third},
+    ]
+
+    await drive_turn(monkeypatch, state, payloads=frames)
+
+    assert [frame["type"] for frame in state.frames] == ["turn_accepted", "status", "turn_rejected", "turn_rejected"]
+    assert state.frames[2] == {
+        "type": "turn_rejected",
+        "reason": "rate_limited",
+        "client_submission_id": second,
+        "content": state.frames[2]["content"],
+    }
+    assert state.frames[3]["reason"] == "invalid_submission_id"
+    assert state.committed == ["chat", "charge", "gateway"]
+    assert len(state.messages) == 1
+    assert raw.commits == 1
+    assert "websocket.close" not in [frame.get("type") for frame in state.frames]
+
+
+@pytest.mark.parametrize("count", [2, 3, 4], ids=["under", "at", "over"])
+def test_submission_window_admits_up_to_its_limit(count):
+    window = SubmissionWindow(3, 10.0, lambda: 0.0)
+
+    assert [window.admit() for _ in range(count)] == [True] * min(count, 3) + [False] * max(count - 3, 0)
+
+
+def test_submission_window_recovers_when_the_oldest_admitted_submission_leaves_it():
+    now = [0.0]
+    window = SubmissionWindow(3, 10.0, lambda: now[0])
+    assert [window.admit() for _ in range(4)] == [True, True, True, False]
+    now[0] = 9.9
+
+    assert window.admit() is False
+
+    now[0] = 10.0
+    assert window.admit() is True

@@ -10,9 +10,17 @@ const recoverySteps = {
   invalid_submission_id: 'Start a new message.',
   submission_conflict: 'Start a new message instead of retrying this submission.',
   invalid_attachments: 'Upload the attachment again, then send a new message.',
+  message_too_long: 'Shorten the message, or send the text as a file, then send it again.',
+  file_name_too_long: 'Rename the file with a shorter name, upload it again, then send a new message.',
+  rate_limited: 'Wait a few seconds, then retry this message.',
   openclaw_update_required: "Open this agent's Settings and choose Upgrade, then retry once the upgrade finishes.",
   openclaw_update_in_progress: "Open this agent's Settings to check Upgrade progress, then retry once the upgrade finishes.",
 } satisfies Record<ChatTurnRejection['reason'], string>
+
+// The frozen envelope is replayed unchanged by a retry, so a refusal of its contents would repeat.
+const NON_RETRYABLE: ReadonlySet<ChatTurnRejection['reason']> = new Set([
+  'submission_conflict', 'invalid_attachments', 'message_too_long', 'file_name_too_long',
+])
 
 export function recoverRejectedTurn(lines: readonly ChatLine[], rejection: ChatTurnRejection): {
   readonly lines: ChatLine[]
@@ -33,8 +41,7 @@ export function recoverRejectedTurn(lines: readonly ChatLine[], rejection: ChatT
   const notice = `Message not sent. ${rejection.content} ${recoverySteps[rejection.reason]}${attachmentStep}`
   return {
     lines: lines.map((line, position) => position === index ? { ...line, pending: false, delivery: 'rejected',
-      rejectionNotice: notice, retryable: rejection.reason !== 'submission_conflict'
-        && rejection.reason !== 'invalid_attachments' } : line),
+      rejectionNotice: notice, retryable: !NON_RETRYABLE.has(rejection.reason) } : line),
     restoredText: rejected?.composerText ?? rejected?.content ?? '',
     notice,
     matched: index >= 0,

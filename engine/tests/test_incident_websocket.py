@@ -31,7 +31,7 @@ async def test_unexpected_socket_failures_are_captured_without_changing_cleanup(
         case "connect":
             execute.side_effect = failure
         case "disconnect":
-            execute.side_effect = [[], failure]
+            execute.side_effect = [[1], failure]
         case "history":
             monkeypatch.setattr(websocket.chat_message_dao, "list_recent", AsyncMock(side_effect=failure))
     frames: list[Message] = []
@@ -40,12 +40,12 @@ async def test_unexpected_socket_failures_are_captured_without_changing_cleanup(
     await handler.run()
     # Then error visibility is additive; normal connection cleanup still completes.
     assert [report.operation for report in reports] == [
-        {"connect": "chat-lifecycle", "disconnect": "disconnect", "history": "load-history"}[site]
+        {"connect": "connect", "disconnect": "disconnect", "history": "load-history"}[site]
     ]
     assert "private" not in reports[0].body
     assert manager.active_connections.get(str(binding.agent_id), []) == []
     if site == "connect":
-        assert frames[-1]["code"] == 1011
+        assert frames[-1]["code"] == websocket.EVICTION_CLOSE_CODE
 
 
 @pytest.mark.parametrize("error", [HTTPException(503, "expected"), TimeoutError("auth deadline")])

@@ -21,6 +21,7 @@ from starlette.types import Message, Scope
 
 from app.api import websocket
 from app.core import access_cache
+from app.core.events import RedisPoolOverloadError
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.user import UserRecord
@@ -48,7 +49,8 @@ async def lifecycle(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Lifecycle]
     user = UserRecord(id=binding.user_id, tenant_id=binding.tenant_id, display_name="Member")
     agent = AgentRecord(id=binding.agent_id, creator_id=user.id, name="Agent")
     manager = websocket.ConnectionManager()
-    execute = AsyncMock(return_value=[])
+    # The last result of a registration pipeline is the user's live socket count, one: this socket.
+    execute = AsyncMock(return_value=[1])
     monkeypatch.setattr(websocket, "manager", manager)
     monkeypatch.setattr(websocket, "realtime_router", realtime.RealtimeRouter())
     monkeypatch.setattr(chat_tickets, "redeem", AsyncMock(return_value=binding))
@@ -104,7 +106,7 @@ async def test_peer_disconnect_during_error_reporting_is_contained(
         case "redis-timeout":
             execute.side_effect = RedisTimeoutError("presence registration timeout")
             expected_frame = "websocket.close"
-            expected_code = 1011
+            expected_code = websocket.EVICTION_CLOSE_CODE
         case unreachable:
             assert_never(unreachable)
     handler = websocket.WebSocketChatHandler(ws, binding.agent_id, "opaque", str(binding.session_id))
@@ -183,7 +185,7 @@ async def test_malformed_frame_reports_error_and_next_submission_is_processed(
 async def test_redis_unregister_failure_is_contained_after_peer_disconnect(lifecycle: Lifecycle) -> None:
     # Given successful presence registration followed by a Redis failure during cleanup.
     binding, manager, execute = lifecycle
-    execute.side_effect = [[], RedisTimeoutError("presence unregister timeout")]
+    execute.side_effect = [[1], RedisTimeoutError("presence unregister timeout")]
     sent: list[Message] = []
     ws = peer_socket(sent)
     handler = websocket.WebSocketChatHandler(ws, binding.agent_id, "opaque", str(binding.session_id))
@@ -205,12 +207,39 @@ async def test_failed_redis_registration_never_publishes_local_socket(lifecycle:
     sent: list[Message] = []
     ws = peer_socket(sent)
 
-    # When registration fails, the caller still receives the original Redis failure.
-    with pytest.raises(RedisTimeoutError, match="presence registration timeout"):
+    # When registration fails, the caller hears of it as an unavailable presence that names the Redis failure.
+    with pytest.raises(websocket.PresenceUnavailableError) as raised:
         await manager.connect(str(binding.agent_id), ws, str(binding.session_id), str(binding.user_id))
 
     # Then an unregistered socket cannot be discovered by local delivery.
+    assert isinstance(raised.value.__cause__, RedisTimeoutError)
     assert manager.active_connections.get(str(binding.agent_id), []) == []
+
+
+@pytest.mark.parametrize(
+    "failure", [RedisTimeoutError("presence registration timeout"), RedisPoolOverloadError("busy")]
+)
+async def test_redis_failure_in_connect_after_accept_closes_1013_and_leaves_no_socket_without_presence(
+    lifecycle: Lifecycle, failure: Exception
+) -> None:
+    # Given an accepted socket whose presence registration fails, from a timeout or from an exhausted pool.
+    binding, manager, execute = lifecycle
+    execute.side_effect = failure
+    sent: list[Message] = []
+    ws = peer_socket(sent)
+    handler = websocket.WebSocketChatHandler(ws, binding.agent_id, "opaque", str(binding.session_id))
+
+    # When the handler runs.
+    await handler.run()
+
+    # Then the client is told to retry later, was never told it was connected, and nothing lists or registers it.
+    assert [frame["type"] for frame in sent] == ["websocket.accept", "websocket.close"]
+    assert sent[-1]["code"] == websocket.EVICTION_CLOSE_CODE == 1013
+    assert manager.active_connections.get(str(binding.agent_id), []) == []
+    assert realtime.RealtimeRouter.registered(ws) is None
+    assert (
+        execute.await_count == 1
+    )  # the failed registration; no presence was written, so disconnect has none to remove
 
 
 async def test_healthy_registration_and_peer_disconnect_release_local_socket(lifecycle: Lifecycle) -> None:
@@ -364,7 +393,7 @@ async def open_session(
 
     async def run_pipeline(*_args: object, **_kwargs: object) -> list[object]:
         redis_runs_after_sender_cancel.append(cadence.cancelled.is_set())
-        return []
+        return [1]
 
     execute.side_effect = run_pipeline
     user = UserRecord(id=binding.user_id, tenant_id=binding.tenant_id, display_name="Member")
@@ -966,3 +995,30 @@ async def test_receiver_waits_from_the_decision_start_and_a_late_allow_still_fil
     assert viewer.seqs() == [2]
     viewer.decide.assert_awaited_once()
     assert viewer.listed()
+
+
+@pytest.mark.parametrize("held", [2, 3, 4], ids=["under", "at", "over"])
+async def test_socket_over_the_per_user_cap_closes_4029_after_accept_and_leaves_no_presence(
+    lifecycle: Lifecycle, monkeypatch: pytest.MonkeyPatch, held: int
+) -> None:
+    # Given a cap of three, and a registration whose transaction counts this user's live sockets, this one included.
+    binding, manager, execute = lifecycle
+    monkeypatch.setattr(realtime.settings, "CHAT_SOCKETS_PER_USER", 3)
+    execute.return_value = [held]
+    sent: list[Message] = []
+    ws = peer_socket(sent)
+    handler = websocket.WebSocketChatHandler(ws, binding.agent_id, "opaque", str(binding.session_id))
+
+    # When the handler runs.
+    await handler.run()
+
+    # Then only the socket over the cap is refused, after accept, and nothing of it stays listed or in Redis.
+    if held <= 3:
+        assert [json.loads(str(f["text"]))["type"] for f in sent if f["type"] == "websocket.send"] == ["connected"]
+        assert all(f["type"] != "websocket.close" or f["code"] != 4029 for f in sent)
+        return
+    assert [frame["type"] for frame in sent] == ["websocket.accept", "websocket.close"]
+    assert sent[-1]["code"] == websocket.USER_SOCKET_LIMIT_CLOSE_CODE == 4029
+    assert manager.active_connections.get(str(binding.agent_id), []) == []
+    assert realtime.RealtimeRouter.registered(ws) is None
+    assert execute.await_count == 2  # registration, then the withdrawal of the entry it just wrote

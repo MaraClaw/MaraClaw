@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
 from app.api import chat_sessions, websocket
+from app.config import get_settings
 from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_loads_object
 from app.core.security import get_current_user
@@ -18,8 +19,9 @@ from app.db.session import transaction
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
+from app.schemas.chat_wire import ChatRejectionReason
 from app.services import chat_submissions, chat_tickets, shared_chat
-from app.services.chat_submissions import ChatSubmission
+from app.services.chat_submissions import ChatSubmission, SubmissionTooLongError
 from app.services.shared_chat import read_only_detail
 from app.services.storage_runtime import LocalStorageBackend
 
@@ -327,3 +329,44 @@ async def test_failed_session_delete_retains_receipt_and_parent(receipt_db, monk
         "id": accepted.message.id,
         "client_submission_id": accepted.message.client_submission_id,
     }
+
+
+@pytest.mark.parametrize("field", ["content", "display_content", "file_name"])
+@pytest.mark.parametrize("offset", [-1, 0, 1], ids=["under", "at", "over"])
+async def test_text_limit_boundary_refuses_before_any_lock_or_write(canonical_receipt_db, monkeypatch, field, offset):
+    db = canonical_receipt_db
+    settings = get_settings()
+    limit = {"content": 12, "display_content": 12, "file_name": 8}[field]
+    for name in ("CHAT_CONTENT_MAX_CHARS", "CHAT_DISPLAY_CONTENT_MAX_CHARS", "CHAT_FILE_NAME_MAX_CHARS"):
+        monkeypatch.setattr(settings, name, limit)
+    text = {"content": "x", "display_content": "x", "file_name": "x"}
+    text[field] = "é" * (limit + offset)  # characters, not bytes
+    submission = ChatSubmission(
+        client_submission_id=uuid4(),
+        content=text["content"],
+        display_content=text["display_content"],
+        file_name=text["file_name"],
+    )
+    lock = AsyncMock(side_effect=AssertionError("An over-limit submission must not take the session lock"))
+    if offset > 0:
+        monkeypatch.setattr(chat_submissions.chat_session_dao, "lock_for_agent", lock)
+        with pytest.raises(SubmissionTooLongError) as refused:
+            await chat_submissions.accept_submission(
+                submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
+            )
+        assert refused.value.limit == limit
+        assert refused.value.reason == (
+            ChatRejectionReason.FILE_NAME_TOO_LONG if field == "file_name" else ChatRejectionReason.MESSAGE_TOO_LONG
+        )
+        lock.assert_not_awaited()
+    else:
+        async with transaction(db.first):
+            accepted = await chat_submissions.accept_submission(
+                submission, user=db.user, agent=db.agent, session_id=db.session_id, history=[]
+            )
+        assert accepted.message.content == submission.saved_content()  # stored whole, never truncated
+    async with transaction(db.second):
+        stored = await db.second.fetchone(
+            "SELECT (SELECT count(*) FROM chat_messages) AS messages, (SELECT count(*) FROM gateway_messages) AS enqueued"
+        )
+    assert stored == {"messages": int(offset <= 0), "enqueued": int(offset <= 0)}
