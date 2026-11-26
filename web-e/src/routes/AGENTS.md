@@ -14,7 +14,8 @@ Parent: [package guide](../../AGENTS.md). Page behavior belongs to the [public/f
 ## ROUTE COMPOSITION
 
 - `AppRouter` uses BrowserRouter with Routes/Route, not a data router. There is no catch-all 404 or sibling `src/routes.tsx`.
-- Pages and layouts are lazy named exports adapted to default imports; one outer Suspense supplies the translated loading status.
+- Pages and layouts load through `retryingLazy` (`../lib/retrying-import.ts`) from lazy named exports; one outer Suspense supplies the translated loading status. A failed import rejects with `ChunkLoadError`, whose `retry` swaps in a fresh `import()` (React.lazy would replay the rejection).
+- `RouteErrorBoundary` (`../components/route-error-boundary.tsx`) is a pathless layout route directly inside AppShell and directly inside AgentLayout (it forwards AgentLayout's outlet context), so a page that throws or fails to download leaves the shell, its navigation and the agent sections mounted. It resets on every location change, separates download failures from page errors in its copy, and its Try again re-renders in a transition; a caught `ChunkLoadError` is retried there, never by reloading. Public routes stay outside it and fall to the root boundary.
 - Landing hashes stay on `/`. Public auth and the self-gated `/join` and `/transfer` routes stay outside `/app`; their page guide owns funnel behavior.
 - `/app` nests ProtectedRoute, then AppShell. Its normal workspace branch adds OnboardingGate before the page or AgentLayout.
 - Settings, legacy Account, admissions details and Inbox are direct AppShell children outside that normal onboarding branch.

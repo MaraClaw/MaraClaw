@@ -31,7 +31,7 @@ Public landing (`/`), member auth/org funnel, and workspace (`/app/*`). React 19
 
 ## RUNTIME CONTRACTS
 
-- `main.tsx`: ThemeProvider wraps TranslationProvider, which wraps App. `App.tsx`: RootErrorBoundary wraps AuthProvider, AppRouter, and Toaster. Never add QueryClient here or in main; AppShell is the only QueryClientProvider.
+- `main.tsx`: ThemeProvider wraps TranslationProvider, which wraps App. `App.tsx`: RootErrorBoundary (reloads on Try again) wraps AuthProvider, AppRouter, and Toaster; route-level failures stop earlier at `RouteErrorBoundary` (routes guide). `main.tsx` reloads once per URL on `vite:preloadError` for stale deploys. Never add QueryClient here or in main; AppShell is the only QueryClientProvider.
 - Route composition and password, organization, admission and onboarding gate ordering live in the routes guide. Keep route changes paired with the corresponding gates and workspace navigation.
 - Organization creation is a public, paid flow with no session: the landing pricing form requests a server price quote (`POST /api/organization-admissions/quote`, stores nothing), keeps it in sessionStorage `maraclaw-organization-quote` (parsed with the generated schema; malformed or expired quotes are dropped) and navigates to the public `/organization-payment` route, which shows the transfer amount and bank details and sends the quote token with the receipt file (`POST /api/organization-admissions`). A platform admin approves later. The route stays outside `/app` and never uses AppShell.
 - Member auth uses server-enforced member-audience routes and DTOs. `auth-storage.ts` owns localStorage `maraclaw-enduser-token`, never the admin token; logout is local, not an API call. SSO state uses sessionStorage.

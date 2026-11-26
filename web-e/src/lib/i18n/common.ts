@@ -62,4 +62,8 @@ export const common = {
   'Loading workspace': 'Đang tải không gian làm việc',
   'Loading your organization’s workspace…': 'Đang tải không gian làm việc của tổ chức…',
   ', {count} unread': ', {count} chưa đọc',
+  'This page couldn’t be downloaded': 'Không thể tải trang này',
+  'Check your connection and try again.': 'Hãy kiểm tra kết nối của bạn và thử lại.',
+  'This page stopped working': 'Trang này đã gặp lỗi',
+  'Try again, or open another page.': 'Hãy thử lại hoặc mở một trang khác.',
 } as const
