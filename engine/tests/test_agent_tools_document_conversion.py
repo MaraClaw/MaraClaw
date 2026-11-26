@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import pickle
 import sys
+import threading
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
-from types import SimpleNamespace
+from threading import Event, Lock
+from types import ModuleType, SimpleNamespace
 
+import anyio
 import pytest
 
+from app.core.thread_lanes import ThreadLane
 from app.services import agent_tools, document_conversion
 from app.services.agent_tool_exec import (
     _agent_tool_exec_conversion as conversion,
@@ -21,7 +26,8 @@ from app.services.agent_tool_exec import (
 )
 from app.services.agent_tool_exec.registry import ToolArguments
 from app.services.agent_tools import ToolParameters
-from app.services.document_conversion import csv as csv_conversion
+from app.services.document_conversion import conversion_lane, csv as csv_conversion
+from thread_lane_fixtures import forbid_shared_threads
 
 
 def test_document_handlers_when_extracted_then_import_direct_modules() -> None:
@@ -437,3 +443,252 @@ def test_document_reader_when_file_exceeds_size_limit_then_rejects_before_parsin
         "Document is too large to read safely (51.0 MB). "
         "Please split or convert it to a smaller text/Markdown excerpt first."
     )
+
+
+class Probe:
+    """Blocking conversion work that records how many calls run at once and in what order they start and end."""
+
+    def __init__(self) -> None:
+        self.entered: asyncio.Queue[str] = asyncio.Queue()
+        self.gate: Event = Event()
+        self.log: list[str] = []
+        self.threads: set[str] = set()
+        self.running: int = 0
+        self.peak: int = 0
+        self._loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+        self._lock: Lock = Lock()
+
+    def work(self, _src_file: Path, _tgt_file: Path, target_path: str) -> str:
+        with self._lock:
+            self.log.append(f"start {target_path}")
+            self.threads.add(threading.current_thread().name)
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        self._loop.call_soon_threadsafe(self.entered.put_nowait, target_path)
+        assert self.gate.wait(10)
+        with self._lock:
+            self.running -= 1
+            self.log.append(f"end {target_path}")
+        return f"converted {target_path}"
+
+    async def wait_entered(self, count: int) -> None:
+        for _ in range(count):
+            _ = await asyncio.wait_for(self.entered.get(), 10)
+
+
+class ManualDeadline:
+    """The conversion deadline's timers, fired by the test on cue instead of by the clock."""
+
+    def __init__(self) -> None:
+        self.timers: list[asyncio.Timeout] = []
+
+    def fire(self, index: int = 0) -> None:
+        self.timers[index].reschedule(asyncio.get_running_loop().time())
+
+
+@pytest.fixture
+def deadline(monkeypatch: pytest.MonkeyPatch) -> ManualDeadline:
+    manual = ManualDeadline()
+    make_timer = asyncio.timeout
+
+    def timeout(_delay: float | None) -> asyncio.Timeout:
+        timer = make_timer(None)
+        manual.timers.append(timer)
+        return timer
+
+    monkeypatch.setattr(asyncio, "timeout", timeout)
+    return manual
+
+
+@pytest.fixture
+def convert_csv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[str], Coroutine[object, object, str]]:
+    source = tmp_path / "source.csv"
+    _ = source.write_text("a,b\n", encoding="utf-8")
+    monkeypatch.setattr(agent_tools, "_resolve_tool_source_path", lambda *_args, **_kwargs: source)
+    monkeypatch.setattr(agent_tools, "_resolve_tool_target_path", lambda *_args, **_kwargs: tmp_path / "out.xlsx")
+
+    def convert(target_path: str) -> Coroutine[object, object, str]:
+        return document_convert._convert_csv_to_xlsx(
+            uuid.uuid4(), tmp_path, {"source_path": "source.csv", "target_path": target_path}
+        )
+
+    return convert
+
+
+async def test_slow_conversion_runs_on_the_conversion_lane_and_leaves_the_event_loop_free(
+    convert_csv: Callable[[str], Coroutine[object, object, str]], monkeypatch: pytest.MonkeyPatch
+):
+    # Given: a conversion that stays inside its worker thread until released
+    probe = Probe()
+    monkeypatch.setattr(document_convert, "_csv_to_xlsx", probe.work)
+    with forbid_shared_threads(monkeypatch):
+        conversion_task = asyncio.create_task(convert_csv("slow.xlsx"))
+        await probe.wait_entered(1)
+
+        # When: the event loop is used meanwhile
+        ticks = 0
+        for _ in range(100):
+            await asyncio.sleep(0)
+            ticks += 1
+
+        # Then: it kept its schedule, the conversion was still running, and it ran on the conversion lane
+        assert ticks == 100
+        assert not conversion_task.done()
+        probe.gate.set()
+        assert await asyncio.wait_for(conversion_task, 10) == "converted slow.xlsx"
+    assert {name.rsplit("_", 1)[0] for name in probe.threads} == {"conversion-lane"}
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "owner_name", "core_name"),
+    [
+        ("_convert_csv_to_xlsx", "document_convert", "_csv_to_xlsx"),
+        ("_convert_markdown_to_docx", "markdown_conversion", "_convert_markdown_to_docx"),
+        ("_convert_markdown_to_pdf", "markdown_conversion", "_convert_markdown_to_pdf"),
+    ],
+)
+async def test_blocking_conversion_cores_never_run_on_the_event_loop_thread_or_shared_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, handler_name: str, owner_name: str, core_name: str
+):
+    # Given: a source file and a core that reports the thread it ran on
+    source = tmp_path / "source.md"
+    _ = source.write_text("# Title", encoding="utf-8")
+    monkeypatch.setattr(agent_tools, "_resolve_tool_source_path", lambda *_args, **_kwargs: source)
+    monkeypatch.setattr(agent_tools, "_resolve_tool_target_path", lambda *_args, **_kwargs: tmp_path / "out")
+    owners: dict[str, ModuleType] = {
+        "document_convert": document_convert,
+        "markdown_conversion": document_convert.markdown_conversion,
+    }
+    ran_on: list[str] = []
+
+    def core(*_args: object) -> str:
+        ran_on.append(threading.current_thread().name)
+        return "converted"
+
+    monkeypatch.setattr(owners[owner_name], core_name, core)
+
+    # When: the handler runs without access to the default executor
+    with forbid_shared_threads(monkeypatch):
+        result = await getattr(document_convert, handler_name)(
+            uuid.uuid4(), tmp_path, {"source_path": "source.md", "target_path": "out"}
+        )
+
+    # Then: the core ran on a conversion lane thread
+    assert result == "converted"
+    assert [name.rsplit("_", 1)[0] for name in ran_on] == ["conversion-lane"]
+
+
+async def test_conversion_lane_runs_at_most_its_configured_size_and_queues_the_rest(
+    convert_csv: Callable[[str], Coroutine[object, object, str]], monkeypatch: pytest.MonkeyPatch
+):
+    # Given: a lane of two threads and five conversions that all block
+    probe = Probe()
+    monkeypatch.setattr(document_convert, "_csv_to_xlsx", probe.work)
+    monkeypatch.setattr(conversion_lane, "CONVERSION_LANE", ThreadLane(2, name="test-conversion-lane"))
+    calls = [asyncio.create_task(convert_csv(f"{index}.xlsx")) for index in range(5)]
+    try:
+        # When: two have started
+        await probe.wait_entered(2)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        # Then: the other three wait for a slot
+        assert probe.running == 2
+        assert len(probe.log) == 2
+    finally:
+        probe.gate.set()
+
+    # And: every conversion finishes without the lane ever running more than two
+    results = await asyncio.wait_for(asyncio.gather(*calls), 10)
+    assert results == [f"converted {index}.xlsx" for index in range(5)]
+    assert probe.peak == 2
+
+
+async def test_timed_out_conversion_returns_an_error_and_keeps_its_slot_until_the_thread_ends(
+    convert_csv: Callable[[str], Coroutine[object, object, str]],
+    deadline: ManualDeadline,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Given: a one-slot lane whose only thread is inside a conversion that outlives its deadline
+    probe = Probe()
+    monkeypatch.setattr(document_convert, "_csv_to_xlsx", probe.work)
+    monkeypatch.setattr(conversion_lane, "CONVERSION_LANE", ThreadLane(1, name="test-conversion-lane"))
+    slow = asyncio.create_task(convert_csv("slow.xlsx"))
+    await probe.wait_entered(1)
+
+    # When: the deadline passes
+    deadline.fire()
+    result = await asyncio.wait_for(slow, 10)
+
+    # Then: the tool gets an error while the abandoned thread still runs
+    assert result.startswith("❌ Conversion failed:")
+    assert probe.running == 1
+    # And: the next conversion cannot start on the occupied slot, so the lane never runs two
+    follower = asyncio.create_task(convert_csv("next.xlsx"))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert probe.log == ["start slow.xlsx"]
+    # And: it starts only after the abandoned thread has ended
+    probe.gate.set()
+    assert await asyncio.wait_for(follower, 10) == "converted next.xlsx"
+    assert probe.log == ["start slow.xlsx", "end slow.xlsx", "start next.xlsx", "end next.xlsx"]
+    assert probe.peak == 1
+
+
+async def test_html_conversion_past_its_deadline_is_cancelled_and_reports_an_error(
+    tmp_path: Path, deadline: ManualDeadline, monkeypatch: pytest.MonkeyPatch
+):
+    # Given: an HTML render that never finishes
+    source = tmp_path / "source.html"
+    _ = source.write_text("<p>slow</p>", encoding="utf-8")
+    monkeypatch.setattr(agent_tools, "_resolve_tool_source_path", lambda *_args, **_kwargs: source)
+    monkeypatch.setattr(agent_tools, "_resolve_tool_target_path", lambda *_args, **_kwargs: tmp_path / "out.pdf")
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def render(*_args: object) -> str:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return "never"
+
+    monkeypatch.setattr(document_conversion, "convert_html_to_pdf", render)
+    conversion_task = asyncio.create_task(
+        document_convert._convert_html_to_pdf(
+            uuid.uuid4(), tmp_path, {"source_path": "source.html", "target_path": "out.pdf"}
+        )
+    )
+    _ = await asyncio.wait_for(started.wait(), 10)
+
+    # When: the deadline passes
+    deadline.fire()
+    result = await asyncio.wait_for(conversion_task, 10)
+
+    # Then: the render was cancelled and the tool got an error instead of waiting
+    assert cancelled.is_set()
+    assert result.startswith("❌ Conversion failed:")
+
+
+async def test_a_cancel_scope_does_not_keep_the_caller_waiting_for_a_running_conversion(tmp_path: Path):
+    # Given: a conversion running inside a cancel scope, the kind a request or chat stream is cancelled through
+    probe = Probe()
+    scopes: list[anyio.CancelScope] = []
+
+    async def convert() -> bool:
+        with anyio.CancelScope() as scope:
+            scopes.append(scope)
+            _ = await conversion_lane.run_conversion(probe.work, tmp_path, tmp_path, "scoped.xlsx")
+        return scope.cancelled_caught
+
+    caller = asyncio.create_task(convert())
+    await probe.wait_entered(1)
+
+    # When: the scope is cancelled while the conversion's thread is still blocked
+    scopes[0].cancel()
+
+    # Then: the caller leaves at once and the thread keeps running
+    assert await asyncio.wait_for(caller, 10)
+    assert probe.running == 1
+    probe.gate.set()

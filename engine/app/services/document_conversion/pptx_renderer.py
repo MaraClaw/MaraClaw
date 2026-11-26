@@ -1,6 +1,5 @@
 """Editable PPTX rendering implementation for HTML inputs."""
 
-import asyncio
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -10,6 +9,7 @@ from app.core.json_types import is_any_list
 from app.core.logging import logger
 from app.services.document_conversion.chrome_renderer import collect_browser_layout
 from app.services.document_conversion.chrome_runtime import cleanup_temporary_paths
+from app.services.document_conversion.conversion_lane import run_conversion
 from app.services.document_conversion.resource_policy import ResourcePolicy
 
 
@@ -71,9 +71,9 @@ async def render_html_to_pptx(
         from pptx.slide import Slide
         from pptx.util import Inches, Pt
 
-        policy = await asyncio.to_thread(ResourcePolicy.for_workspace, ws)
-        html_content = await asyncio.to_thread(src_file.read_text, encoding="utf-8")
-        soup = BeautifulSoup(html_content, "html.parser")
+        policy = await run_conversion(ResourcePolicy.for_workspace, ws)
+        html_content = await run_conversion(src_file.read_text, encoding="utf-8")
+        soup = await run_conversion(BeautifulSoup, html_content, "html.parser")
 
         design_w_px = _as_int(arguments.get("design_width"), 1280)
         design_h_px = _as_int(arguments.get("design_height"), 720)
@@ -614,58 +614,62 @@ async def render_html_to_pptx(
 
         raw_layout = await collect_browser_layout(src_file, policy, design_w_px, design_h_px, render_mode, render_scale)
         browser_layout = _object_mapping(raw_layout) if raw_layout is not None else None
-        if (
-            browser_layout is not None
-            and browser_layout
-            and render_mode in ("visual", "screenshot", "image", "hybrid")
-            and render_browser_screenshots(browser_layout)
-        ):
-            await asyncio.to_thread(tgt_file.parent.mkdir, parents=True, exist_ok=True)
-            await asyncio.to_thread(prs.save, str(tgt_file))
+
+        def build_deck() -> str:
+            if (
+                browser_layout is not None
+                and browser_layout
+                and render_mode in ("visual", "screenshot", "image", "hybrid")
+                and render_browser_screenshots(browser_layout)
+            ):
+                tgt_file.parent.mkdir(parents=True, exist_ok=True)
+                prs.save(str(tgt_file))
+                return (
+                    f"✅ Successfully converted HTML to high-fidelity PPTX screenshots: {target_path}\n"
+                    "Note: visual style is preserved by rendering each slide from Chrome. Text and layout are not directly editable; "
+                    "use render_mode='editable' when editable PPT elements are more important than visual fidelity."
+                )
+
+            if browser_layout is not None and browser_layout and render_browser_layout(browser_layout):
+                tgt_file.parent.mkdir(parents=True, exist_ok=True)
+                prs.save(str(tgt_file))
+                return (
+                    f"✅ Successfully converted HTML to editable PPTX with browser layout: {target_path}\n"
+                    "Note: positions, sizes, colors, typography, cards, lists, and local images are sampled from a real browser. "
+                    "Effects such as shadows, filters, gradients, and complex text wrapping may still differ from HTML."
+                )
+
+            body = soup.body or soup
+            slide_nodes = soup.select(".slide")
+            if not slide_nodes:
+                slide_nodes = list(body.find_all(["section", "article"], recursive=False))
+            if not slide_nodes:
+                slide_nodes = [body]
+
+            for slide_node in slide_nodes:
+                slide = prs.slides.add_slide(blank_layout)
+                add_background(slide, element_style(slide_node) or element_style(body))
+                current_y = 0.65
+                children = visible_children(slide_node)
+                if not children and slide_node is not body:
+                    text = slide_node.get_text(" ", strip=True)
+                    if text:
+                        add_textbox(slide, text, 0.85, current_y, 11.6, 5.8, element_style(slide_node), 24)
+                    continue
+                for child in children:
+                    current_y = render_flow_element(slide, child, current_y)
+                    if current_y > 7.0:
+                        break
+
+            tgt_file.parent.mkdir(parents=True, exist_ok=True)
+            prs.save(str(tgt_file))
             return (
-                f"✅ Successfully converted HTML to high-fidelity PPTX screenshots: {target_path}\n"
-                "Note: visual style is preserved by rendering each slide from Chrome. Text and layout are not directly editable; "
-                "use render_mode='editable' when editable PPT elements are more important than visual fidelity."
+                f"✅ Successfully converted HTML to editable PPTX: {target_path}\n"
+                "Note: common typography, colors, cards, lists, images, and simple absolute positioning are preserved; "
+                "complex CSS such as flex/grid effects, shadows, filters, and animations may still need manual adjustment."
             )
 
-        if browser_layout is not None and browser_layout and render_browser_layout(browser_layout):
-            await asyncio.to_thread(tgt_file.parent.mkdir, parents=True, exist_ok=True)
-            await asyncio.to_thread(prs.save, str(tgt_file))
-            return (
-                f"✅ Successfully converted HTML to editable PPTX with browser layout: {target_path}\n"
-                "Note: positions, sizes, colors, typography, cards, lists, and local images are sampled from a real browser. "
-                "Effects such as shadows, filters, gradients, and complex text wrapping may still differ from HTML."
-            )
-
-        body = soup.body or soup
-        slide_nodes = soup.select(".slide")
-        if not slide_nodes:
-            slide_nodes = list(body.find_all(["section", "article"], recursive=False))
-        if not slide_nodes:
-            slide_nodes = [body]
-
-        for slide_node in slide_nodes:
-            slide = prs.slides.add_slide(blank_layout)
-            add_background(slide, element_style(slide_node) or element_style(body))
-            current_y = 0.65
-            children = visible_children(slide_node)
-            if not children and slide_node is not body:
-                text = slide_node.get_text(" ", strip=True)
-                if text:
-                    add_textbox(slide, text, 0.85, current_y, 11.6, 5.8, element_style(slide_node), 24)
-                continue
-            for child in children:
-                current_y = render_flow_element(slide, child, current_y)
-                if current_y > 7.0:
-                    break
-
-        await asyncio.to_thread(tgt_file.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(prs.save, str(tgt_file))
-        return (
-            f"✅ Successfully converted HTML to editable PPTX: {target_path}\n"
-            "Note: common typography, colors, cards, lists, images, and simple absolute positioning are preserved; "
-            "complex CSS such as flex/grid effects, shadows, filters, and animations may still need manual adjustment."
-        )
+        return await run_conversion(build_deck)
     except Exception as e:
         logger.exception(f"Convert HTML to PPTX failed: {e}")
         return f"❌ Conversion failed: {e}"

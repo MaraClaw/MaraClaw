@@ -8,7 +8,9 @@ from pathlib import Path
 from app.core.json_types import JsonObject, JsonValue, is_any_list, json_as_str, json_object_from
 from app.core.logging import logger
 from app.services.document_conversion.chrome_runtime import (
+    ChromeBusyError,
     PolicedCdpSession,
+    chrome_slot,
     create_cdp_target,
     launch_chrome,
     local_ephemeral_port,
@@ -18,6 +20,7 @@ from app.services.document_conversion.chrome_runtime import (
     wait_for_cdp,
     write_temporary_bytes,
 )
+from app.services.document_conversion.conversion_lane import run_conversion
 from app.services.document_conversion.resource_policy import ResourcePolicy
 
 
@@ -86,6 +89,23 @@ async def collect_browser_layout(
     render_mode: str,
     render_scale: float = 2.0,
 ) -> JsonObject | None:
+    """Sample the slide layout in Chrome; `None` sends the caller to the DOM conversion, also when no slot is free."""
+    try:
+        async with chrome_slot():
+            return await _collect_browser_layout(src_file, policy, design_w_px, design_h_px, render_mode, render_scale)
+    except ChromeBusyError as busy:
+        logger.warning(f"Browser layout extraction skipped, falling back to DOM flow conversion: {busy}")
+        return None
+
+
+async def _collect_browser_layout(
+    src_file: Path,
+    policy: ResourcePolicy,
+    design_w_px: int,
+    design_h_px: int,
+    render_mode: str,
+    render_scale: float,
+) -> JsonObject | None:
     import tempfile
 
     import websockets
@@ -103,7 +123,7 @@ async def collect_browser_layout(
         if not await wait_for_cdp(port):
             return None
 
-        file_url = (await asyncio.to_thread(src_file.resolve)).as_uri()
+        file_url = (await run_conversion(src_file.resolve)).as_uri()
         ws_url = await create_cdp_target(port)
         ws_url = validate_debugger_websocket_url(ws_url, port) if ws_url not in (None, "") else None
         if ws_url in (None, ""):
@@ -481,4 +501,4 @@ roots = [body];
         return None
     finally:
         await terminate_process(proc)
-        await asyncio.to_thread(profile_dir.cleanup)
+        await run_conversion(profile_dir.cleanup)

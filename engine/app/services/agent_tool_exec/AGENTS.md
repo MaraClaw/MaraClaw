@@ -48,6 +48,12 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 - Web search/fetch for OpenClaw agents are guest image-bundled Tavily skills; engine configuration keys are in `app/services/tavily_runtime.py`.
 - Tests: `tests/test_search_web_tools.py`, `tests/test_x_search.py`, `tests/test_tavily_search_skill.py`. Update dispatch-name freeze if tool names change.
 
+## Document Conversion
+
+- `document_convert.py` holds the five `convert_*` handlers (registered in `_agent_tool_exec_conversion.py`). Blocking cores (`csv.py`, `markdown.py`) run through `document_conversion.conversion_lane.run_conversion`, never inline and never `asyncio.to_thread`; the HTML renderers are awaited directly and use the lane inside.
+- Every handler awaits its conversion through `_within_deadline` (`DOCUMENT_CONVERSION_TIMEOUT_SECONDS`), which turns an expired deadline into the `❌ Conversion failed: ...` result and cancels the work. A lane thread that outlives it keeps its slot until it returns. Lane, Chrome cap and process-group rules: `../document_conversion/AGENTS.md`.
+- Tests: `tests/test_agent_tools_document_conversion.py` (patch the module attribute of the core, `document_convert._csv_to_xlsx` or `markdown_conversion._convert_markdown_to_*`, because handlers look it up at call time).
+
 ## Code Execution
 
 - `code_exec.py` resolves sandbox settings via `get_sandbox_config()` then optional per-agent tool config through `SandboxConfig.from_dict`.

@@ -12,6 +12,7 @@ from app.core.logging import logger
 from app.services.document_conversion.chrome_renderer import chrome_executable
 from app.services.document_conversion.chrome_runtime import (
     PolicedCdpSession,
+    chrome_slot,
     create_cdp_target,
     launch_chrome,
     local_ephemeral_port,
@@ -19,6 +20,7 @@ from app.services.document_conversion.chrome_runtime import (
     validate_debugger_websocket_url,
     wait_for_cdp,
 )
+from app.services.document_conversion.conversion_lane import run_conversion
 from app.services.document_conversion.resource_policy import ResourcePolicy, weasyprint_url_fetcher
 
 
@@ -52,8 +54,8 @@ async def convert_html_to_pdf(
     src_file: Path, tgt_file: Path, target_path: str, ws: Path, arguments: Mapping[str, object]
 ) -> str:
     try:
-        await asyncio.to_thread(tgt_file.parent.mkdir, parents=True, exist_ok=True)
-        policy = await asyncio.to_thread(ResourcePolicy.for_workspace, ws)
+        await run_conversion(tgt_file.parent.mkdir, parents=True, exist_ok=True)
+        policy = await run_conversion(ResourcePolicy.for_workspace, ws)
         chrome_pdf_error: Exception | None = None
 
         async def try_chrome_pdf() -> bool:
@@ -71,7 +73,7 @@ async def convert_html_to_pdf(
                 if not await wait_for_cdp(port):
                     return False
 
-                file_url = (await asyncio.to_thread(src_file.resolve)).as_uri()
+                file_url = (await run_conversion(src_file.resolve)).as_uri()
                 ws_url = await create_cdp_target(port)
                 ws_url = validate_debugger_websocket_url(ws_url, port) if ws_url not in (None, "") else None
                 if ws_url in (None, ""):
@@ -144,14 +146,15 @@ async def convert_html_to_pdf(
                     data = json_as_str(_cdp_nested(pdf_result, "result", "data"))
                     if data in (None, ""):
                         return False
-                    _ = await asyncio.to_thread(tgt_file.write_bytes, base64.b64decode(data))
+                    _ = await run_conversion(tgt_file.write_bytes, base64.b64decode(data))
                     return True
             finally:
                 await terminate_process(proc)
-                await asyncio.to_thread(profile_dir.cleanup)
+                await run_conversion(profile_dir.cleanup)
 
         try:
-            chrome_success = await try_chrome_pdf()
+            async with chrome_slot():
+                chrome_success = await try_chrome_pdf()
             if chrome_success:
                 return f"✅ Successfully converted HTML to PDF with Chrome: {target_path}"
             chrome_pdf_error = Exception("Chrome process timed out or failed to connect to debugging port")
@@ -160,10 +163,15 @@ async def convert_html_to_pdf(
             chrome_pdf_error = exc
             logger.warning(f"Chrome HTML to PDF failed, falling back to WeasyPrint: {exc}")
 
-        from weasyprint import HTML
+        def render_with_weasyprint() -> None:
+            from weasyprint import HTML
 
-        document = cast("_WeasyPrintDocument", HTML(filename=str(src_file), url_fetcher=weasyprint_url_fetcher(policy)))
-        _ = await asyncio.to_thread(document.write_pdf, str(tgt_file))
+            document = cast(
+                "_WeasyPrintDocument", HTML(filename=str(src_file), url_fetcher=weasyprint_url_fetcher(policy))
+            )
+            _ = document.write_pdf(str(tgt_file))
+
+        await run_conversion(render_with_weasyprint)
         note = f" Chrome fallback reason: {chrome_pdf_error}" if chrome_pdf_error else ""
         return f"✅ Successfully converted HTML to PDF with WeasyPrint: {target_path}.{note}"
     except Exception as e:

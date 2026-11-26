@@ -282,6 +282,9 @@ class Settings(BaseSettings):
     CHANNEL_DEDUP_TTL_SECONDS: int = 86400
     # Most attachments the engine fetches from one native channel message; later ones are skipped with one notice.
     CHANNEL_MEDIA_MAX_ATTACHMENTS: int = Field(default=10, ge=1, le=10)
+    # Seconds a Slack, Telegram or WhatsApp Cloud webhook may spend fetching attachments before it answers; later files
+    # are skipped with a note. Slack gives up after 3 s. The in-flight claim of an event outlives this by a margin.
+    CHANNEL_MEDIA_ACK_BUDGET_SECONDS: float = Field(default=2.0, gt=0, le=30)
     # Gateway report relay: a failing delivery ends as failed once it has been attempted this many times or is this
     # many hours old, and one tenant takes at most this many rows into a single claim batch.
     GATEWAY_REPORT_MAX_ATTEMPTS: int = Field(default=30, ge=1)
