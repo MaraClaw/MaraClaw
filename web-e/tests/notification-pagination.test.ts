@@ -3,8 +3,10 @@ import { test } from 'node:test'
 import { InfiniteQueryObserver, MutationObserver, QueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { notificationKeys, notificationListOptions, notificationReadOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions } from '../src/hooks/notification-options.ts'
+import { notificationKeys, notificationListOptions, notificationReadOptions, notificationsArchiveSelectedOptions, notificationsRestoreSelectedOptions, notificationUnreadOptions } from '../src/hooks/notification-options.ts'
+import { ApiError } from '../src/lib/http.ts'
 import { listNotifications, type NotificationRow } from '../src/lib/notifications-api.ts'
+import { assertBackedOff, focusRefetch, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
 
 const first: NotificationRow = { id: 'first', title: 'First', type: 'broadcast', created_at: '2030-01-01T00:00:00Z', archived_at: null }
 const second: NotificationRow = { ...first, id: 'second', title: 'Second' }
@@ -94,3 +96,52 @@ for (const options of [notificationsArchiveSelectedOptions, notificationsRestore
     }
   })
 }
+
+test('the unread count polls every 30 s only in the foreground and refetches on focus to resume', (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const page = pageVisibility(t, 'hidden')
+  const options = notificationUnreadOptions('all')
+  // When / Then
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 30_000)
+  assert.equal(focusRefetch(client, options), 'always')
+  assert.equal('refetchIntervalInBackground' in options, false)
+})
+
+test('an outage backs the unread count poll off to the ceiling and the first success restores 30 s', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  let healthy = false
+  t.mock.method(globalThis, 'fetch', async () => healthy ? Response.json({ count: 3 }) : throttled(503))
+  const options = notificationUnreadOptions('social')
+  assert.equal(pollInterval(client, options), 30_000)
+  // When / Then
+  for (let failure = 0; failure < 3; failure++) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), 60_000)
+  }
+  healthy = true
+  await client.fetchQuery(options)
+  assert.equal(pollInterval(client, options), 30_000)
+})
+
+test('a Retry-After on the failed unread count read holds the poll back at least that long, never past the ceiling', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const retryAfter = ['50', '3600']
+  t.mock.method(globalThis, 'fetch', async () => throttled(429, retryAfter.shift()))
+  const options = notificationUnreadOptions('all')
+  assert.equal(pollInterval(client, options), 30_000)
+  // When
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 50_000)
+  const delay = pollInterval(client, options)
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 3_600_000)
+  // Then
+  assert.ok(typeof delay === 'number' && delay >= 50_000 && delay <= 60_000, String(delay))
+  assert.equal(pollInterval(client, options), 60_000)
+})

@@ -4,6 +4,7 @@ import {
   archiveNotification, archiveSelectedNotifications, listNotifications, markAllNotificationsRead, markNotificationRead, markSelectedNotificationsRead, markSelectedNotificationsUnread, restoreNotification, restoreSelectedNotifications, unreadNotificationCount,
   type NotificationCategory, type NotificationPage, type NotificationView,
 } from '../lib/notifications-api.ts'
+import { queryPollInterval } from '../lib/poll-policy.ts'
 
 export const notificationKeys = {
   all: ['notifications'] as const,
@@ -27,7 +28,9 @@ export function notificationUnreadOptions(category: NotificationCategory) {
   return {
     queryKey: notificationKeys.unread(category),
     queryFn: ({ signal }: { signal: AbortSignal }) => unreadNotificationCount(category, signal),
-    refetchInterval: 30_000,
+    refetchInterval: queryPollInterval(() => 30_000),
+    // The workspace stale time keeps a polled count fresh, so returning to the page must refetch to restart the poll.
+    refetchOnWindowFocus: 'always' as const,
   }
 }
 

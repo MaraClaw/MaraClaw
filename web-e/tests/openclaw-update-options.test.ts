@@ -2,12 +2,13 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { MutationObserver } from '@tanstack/react-query'
 
-import { agentUpdateKey, agentUpdateOptions, upgradeOpenClawOptions } from '../src/hooks/openclaw-update-options.ts'
+import { agentUpdateKey, agentUpdateOptions, updateDetailKey, updateDetailOptions, upgradeOpenClawOptions } from '../src/hooks/openclaw-update-options.ts'
 import { fenceMutationOptions, RetiredWorkspaceError } from '../src/hooks/session-query-scope.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { updateWorkGate } from '../src/lib/openclaw-update-policy.ts'
+import type { OpenClawRun } from '../src/lib/openclaw-updates-api.ts'
 import { agentId, fixture, notice, run, update } from './openclaw-update-fixture.ts'
-import { assertBackedOff, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
+import { assertBackedOff, focusRefetch, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
 
 test('explicit Upgrade immediately caches an active run and blocks even optional work', async (t) => {
   // Given
@@ -183,4 +184,68 @@ test('a Retry-After on the failed update read holds the poll back for that long,
   await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 90_000)
   // Then
   assert.equal(pollInterval(client, options), 60_000)
+})
+
+const detail = (state: OpenClawRun['state'] | null) => ({
+  notice, agents: [{ agent_id: agentId, name: 'Assistant', status: 'running', update: { ...update, run: state && { ...run, state } } }],
+})
+
+for (const [name, state, cadence] of [['no run', null, 30_000], ['an active run', 'cutover', 1500], ['a finished run', 'failed', 30_000]] as const) {
+  test(`the update notice polls every ${cadence} ms for an agent with ${name} and refetches on focus to resume`, (t) => {
+    // Given
+    const { client, scope } = fixture()
+    t.after(() => client.clear())
+    const options = updateDetailOptions(scope, notice.id)
+    client.setQueryData(updateDetailKey(notice.id), detail(state))
+    // When / Then
+    assert.equal(pollInterval(client, options), cadence)
+    assert.equal(focusRefetch(client, options), 'always')
+    assert.equal('refetchIntervalInBackground' in options, false)
+  })
+}
+
+test('a hidden page stops the update notice poll and a visible one restores its cadence', (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  const page = pageVisibility(t, 'hidden')
+  const options = updateDetailOptions(scope, notice.id)
+  client.setQueryData(updateDetailKey(notice.id), detail('pending'))
+  // When / Then
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 1500)
+})
+
+test('an outage backs the update notice poll off with every failed read and the first success restores its cadence', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  let healthy = false
+  t.mock.method(globalThis, 'fetch', async () => healthy ? Response.json(detail('pending')) : throttled(503))
+  const options = updateDetailOptions(scope, notice.id)
+  client.setQueryData(updateDetailKey(notice.id), detail('pending'))
+  assert.equal(pollInterval(client, options), 1500)
+  // When / Then
+  for (const ceiling of [3000, 6000, 12_000, 24_000, 48_000, 60_000, 60_000]) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), ceiling)
+  }
+  healthy = true
+  await client.fetchQuery(options)
+  assert.equal(pollInterval(client, options), 1500)
+})
+
+test('a Retry-After on the failed update notice read holds the poll back for that long', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  t.mock.method(globalThis, 'fetch', async () => throttled(503, '25'))
+  const options = updateDetailOptions(scope, notice.id)
+  client.setQueryData(updateDetailKey(notice.id), detail('pending'))
+  assert.equal(pollInterval(client, options), 1500)
+  // When
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 25_000)
+  // Then
+  assert.equal(pollInterval(client, options), 25_000)
 })

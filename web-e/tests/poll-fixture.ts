@@ -28,6 +28,18 @@ export function pollInterval<TData, TKey extends QueryKey>(client: QueryClient, 
     : refetchInterval
 }
 
+type FocusedOptions<TData, TKey extends QueryKey> = PolledOptions<TData, TKey> & {
+  readonly refetchOnWindowFocus?: boolean | 'always' | ((query: Query<TData, Error, TData, TKey>) => boolean | 'always') | undefined
+}
+
+// How the query behind these options answers the page becoming visible again; 'always' restarts a poll stopped while hidden.
+export function focusRefetch<TData, TKey extends QueryKey>(client: QueryClient, options: FocusedOptions<TData, TKey>) {
+  const { refetchOnWindowFocus } = options
+  return typeof refetchOnWindowFocus === 'function'
+    ? refetchOnWindowFocus(client.getQueryCache().build<TData, Error, TData, TKey>(client, options))
+    : refetchOnWindowFocus
+}
+
 export const throttled = (status: 429 | 503, retryAfter?: string) => Response.json({ detail: 'Busy' }, {
   status, headers: retryAfter === undefined ? {} : { 'Retry-After': retryAfter },
 })

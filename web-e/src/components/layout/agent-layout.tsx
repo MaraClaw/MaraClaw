@@ -9,10 +9,10 @@ import { SectionRail, type SectionRailItem } from '@/components/layout/section-r
 import { BackLink } from '@/components/ui/back-button'
 import { useOpenClawUpdate } from '@/hooks/use-openclaw-update'
 import { hiddenSectionRedirect, visibleAgentTabs } from '@/lib/agent-section-visibility'
+import { agentOptions } from '@/lib/agents-query'
 import { fetchMyTenant } from '@/lib/auth-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
 import { canMountAgentOutlet } from '@/lib/openclaw-update-policy'
-import { getAgent } from '@/lib/workspace-api'
 import { cn } from '@/lib/utils'
 
 const tabs = [
@@ -45,15 +45,7 @@ export function AgentLayout() {
   )
   const railClass = 'md:col-start-1 md:row-start-1 md:row-span-2'
   const update = useOpenClawUpdate(agentId)
-  const query = useQuery({
-    queryKey: ['agent', agentId],
-    queryFn: () => getAgent(agentId),
-    enabled: Boolean(agentId),
-    retry: (failureCount, error) => error instanceof ApiError && error.status === 404 && failureCount < 8,
-    retryDelay: (attempt) => Math.min(250 * 2 ** attempt, 2000),
-    // A lost container is recorded while members are in chat; poll there, and while a loss shows so it clears on its own.
-    refetchInterval: (current) => (chat || current.state.data?.runtime_loss ? 30_000 : false),
-  })
+  const query = useQuery(agentOptions(agentId, chat))
   // Same key as AppShell, so this hits its cache. Loading or failed tenant data hides nothing (visibility only).
   const tenantQuery = useQuery({ queryKey: ['tenant', 'me'], queryFn: fetchMyTenant })
   const hiddenSections = tenantQuery.data?.hidden_agent_sections ?? []

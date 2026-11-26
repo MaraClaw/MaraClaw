@@ -1,12 +1,15 @@
 import { queryOptions, type QueryFunctionContext } from '@tanstack/react-query'
 
-import { getAgentOpenClawUpdate, upgradeAgentOpenClaw, type AgentUpdate, type OpenClawRun } from '../lib/openclaw-updates-api.ts'
+import { getAgentOpenClawUpdate, getOpenClawUpdate, upgradeAgentOpenClaw, type AgentUpdate, type OpenClawRun } from '../lib/openclaw-updates-api.ts'
 import { isActiveUpdate } from '../lib/openclaw-update-policy.ts'
 import { queryPollInterval } from '../lib/poll-policy.ts'
 import type { SessionQueryScope } from './session-query-scope.ts'
 
 export function agentUpdateKey(agentId: string) { return ['openclaw-update', agentId] as const }
 export function upgradeMutationKey(agentId: string) { return ['openclaw-upgrade', agentId] as const }
+export function updateDetailKey(noticeId: string) { return ['openclaw-update-detail', noticeId] as const }
+
+type UpdateDetail = Awaited<ReturnType<typeof getOpenClawUpdate>>
 
 function refreshAgent(scope: SessionQueryScope, agentId: string) {
   scope.assertCurrent()
@@ -33,6 +36,20 @@ export function agentUpdateOptions(scope: SessionQueryScope, agentId: string) {
     refetchOnMount: 'always',
     refetchOnWindowFocus: true,
     refetchInterval: queryPollInterval((update: AgentUpdate | undefined) => isActiveUpdate(update?.run) ? 1500 : 30_000),
+  }), queryFn }
+}
+
+export function updateDetailOptions(scope: SessionQueryScope, noticeId: string) {
+  const queryFn = ({ signal }: QueryFunctionContext<ReturnType<typeof updateDetailKey>>) =>
+    scope.run(() => getOpenClawUpdate(noticeId, { owner: scope.owner, signal }))
+  return { ...queryOptions({
+    queryKey: updateDetailKey(noticeId),
+    queryFn,
+    enabled: Boolean(noticeId),
+    // The workspace stale time keeps a notice polled every 1.5 s fresh, so returning to the page must refetch to restart it.
+    refetchOnWindowFocus: 'always',
+    refetchInterval: queryPollInterval((detail: UpdateDetail | undefined) =>
+      detail?.agents.some((agent) => isActiveUpdate(agent.update.run)) ? 1500 : 30_000),
   }), queryFn }
 }
 

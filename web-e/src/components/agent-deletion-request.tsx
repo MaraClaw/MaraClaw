@@ -9,10 +9,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { IconTooltip } from '@/components/ui/tooltip'
 import { useMutation, useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
-import {
-  deletionReasonSchema, getAgentDeletionRequest, listPendingAgentDeletions,
-  pendingDeletionRequestId, requestAgentDeletion,
-} from '@/lib/agent-deletion-api'
+import { deletionReasonSchema, pendingDeletionRequestId, requestAgentDeletion } from '@/lib/agent-deletion-api'
+import { agentDeletionRequestsKey, agentDeletionRequestsOptions } from '@/lib/agent-deletion-query'
 import { userFacingRequestError } from '@/lib/http'
 
 export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
@@ -30,25 +28,13 @@ export function AgentDeletionRequest({ agentId, agentName, upgrading }: {
   const [error, setError] = useState<string | null>(null)
   const [reasonError, setReasonError] = useState<string | null>(null)
   const [requestId, setRequestId] = useState<string | null>(null)
-  const queryKey = ['agent-deletion-requests', agentId, requestId ?? 'pending']
-  const requests = useQuery({
-    queryKey,
-    queryFn: async ({ signal }) => {
-      const context = { owner: scope.owner, signal }
-      if (!requestId) return listPendingAgentDeletions(agentId, context)
-      const detail = await getAgentDeletionRequest(requestId, context)
-      return { items: detail.status === 'pending' ? [detail] : [], next_cursor: null }
-    },
-    staleTime: 0,
-    retry: false,
-    refetchInterval: 30_000,
-  })
+  const requests = useQuery(agentDeletionRequestsOptions(scope.owner, agentId, requestId))
   const pending = requests.data?.items.find((item) => item.status === 'pending')
   const knownPending = Boolean(pending || (requestId && !requests.data))
   const submit = useMutation({
     mutationFn: (value: string) => requestAgentDeletion({ agent_id: agentId, reason: value }, { owner: scope.owner }),
     onSuccess(detail) {
-      scope.client.setQueryData(['agent-deletion-requests', agentId, detail.id], {
+      scope.client.setQueryData(agentDeletionRequestsKey(agentId, detail.id), {
         items: detail.status === 'pending' ? [detail] : [], next_cursor: null,
       })
       setRequestId(detail.id)

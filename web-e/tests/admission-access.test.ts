@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { QueryClient } from '@tanstack/react-query'
 
-import { hasPendingAdmission, isAdmissionAccessPath, isPendingAdmissionApplicant } from '../src/lib/admission-access.ts'
+import { admissionAccessOptions, hasPendingAdmission, isAdmissionAccessPath, isPendingAdmissionApplicant } from '../src/lib/admission-access.ts'
 import { authSession } from '../src/lib/auth-session.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import type { AdmissionSummary } from '../src/lib/types/company-admissions.ts'
+import { assertBackedOff, focusRefetch, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
 
 const pending: AdmissionSummary = {
   id: 'pending-request', status: 'pending', source_tenant_id: 'source',
@@ -108,4 +110,68 @@ test('pending access discards completion after its captured owner retires', asyn
   const result = hasPendingAdmission('source', { owner, signal: new AbortController().signal })
   // Then
   await assert.rejects(result, StaleSessionError)
+})
+
+for (const [answer, cadence, focus] of [[true, 30_000, 'always'], [false, false, false], [undefined, false, false]] as const) {
+  test(`workspace access ${answer === undefined ? 'still loading' : answer ? 'held by a pending admission' : 'granted'} polls ${String(cadence)} and refetches on focus ${String(focus)}`, (t) => {
+    // Given
+    const client = new QueryClient()
+    t.after(() => client.clear())
+    const options = admissionAccessOptions(authSession.capture(), 'source')
+    if (answer !== undefined) client.setQueryData(options.queryKey, answer)
+    // When / Then
+    assert.equal(pollInterval(client, options), cadence)
+    assert.equal(focusRefetch(client, options), focus)
+    assert.equal(options.retry, false)
+  })
+}
+
+test('a pending admission is not rechecked while the page is hidden', (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const page = pageVisibility(t, 'hidden')
+  const options = admissionAccessOptions(authSession.capture(), 'source')
+  client.setQueryData(options.queryKey, true)
+  // When / Then
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 30_000)
+})
+
+test('an outage backs the pending admission recheck off to the ceiling and the first answer restores 30 s', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  let healthy = false
+  t.mock.method(globalThis, 'fetch', async () => healthy ? Response.json({ items: [pending], next_cursor: null }) : throttled(503))
+  const options = admissionAccessOptions(authSession.capture(), 'source')
+  client.setQueryData(options.queryKey, true)
+  assert.equal(pollInterval(client, options), 30_000)
+  // When / Then
+  for (let failure = 0; failure < 3; failure++) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), 60_000)
+  }
+  healthy = true
+  assert.equal(await client.fetchQuery(options), true)
+  assert.equal(pollInterval(client, options), 30_000)
+})
+
+test('a Retry-After on the failed admission recheck holds the poll back at least that long, never past the ceiling', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const retryAfter = ['50', '3600']
+  t.mock.method(globalThis, 'fetch', async () => throttled(503, retryAfter.shift()))
+  const options = admissionAccessOptions(authSession.capture(), 'source')
+  client.setQueryData(options.queryKey, true)
+  assert.equal(pollInterval(client, options), 30_000)
+  // When
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 50_000)
+  const delay = pollInterval(client, options)
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 3_600_000)
+  // Then
+  assert.ok(typeof delay === 'number' && delay >= 50_000 && delay <= 60_000, String(delay))
+  assert.equal(pollInterval(client, options), 60_000)
 })

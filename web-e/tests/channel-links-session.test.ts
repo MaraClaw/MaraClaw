@@ -3,6 +3,7 @@ import { test, type TestContext } from 'node:test'
 
 import type { ChannelLinkCode, ChannelLinkStatus } from '../src/lib/channel-links-api.ts'
 import { createChannelLinkSession } from '../src/lib/channel-links-session.ts'
+import { signal } from './socket-fixture.ts'
 
 const initial: ChannelLinkStatus = { channel: 'zalo', available: true, linked: false, linked_at: null, external_hint: null }
 const code: ChannelLinkCode = { channel: 'zalo', code: 'ABCDE-12345', expires_at: '2030-01-01T00:10:00Z', deep_link: null, account_hint: 'Synthetic agent' }
@@ -13,17 +14,21 @@ function harness(t: TestContext) {
   const issues: { readonly result: ReturnType<typeof Promise.withResolvers<ChannelLinkCode>>; readonly signal: AbortSignal }[] = []
   const unlinks: ReturnType<typeof Promise.withResolvers<void>>[] = []
   let current = true
+  const visibility = signal(true)
   const session = createChannelLinkSession({
     current: () => current,
     read: (signal) => { const result = Promise.withResolvers<ChannelLinkStatus>(); reads.push({ result, signal }); return result.promise },
     issue: (signal) => { const result = Promise.withResolvers<ChannelLinkCode>(); issues.push({ result, signal }); return result.promise },
     unlink: () => { const result = Promise.withResolvers<void>(); unlinks.push(result); return result.promise },
+  }, {
+    hidden: () => !visibility.current(), random: () => 1, onVisible: visibility.subscribe,
+    schedule: (callback, delay) => { const timer = setTimeout(callback, delay); return () => clearTimeout(timer) },
   })
   t.after(session.stop)
   const settle = async () => { await Promise.resolve(); await Promise.resolve() }
   const ready = async () => { session.start(); reads[0]?.result.resolve(initial); await settle() }
   const issue = async (value = code) => { const pending = session.issue(); issues.at(-1)?.result.resolve(value); await pending }
-  return { session, reads, issues, unlinks, settle, ready, issue, retire: () => { current = false } }
+  return { session, reads, issues, unlinks, settle, ready, issue, visibility, retire: () => { current = false } }
 }
 
 test('a local link code disappears when polling observes the linked account', async (t) => {
@@ -94,4 +99,26 @@ test('errors clear all sensitive state and unavailable channels cannot issue cod
   h.session.refresh(); h.reads[2]?.result.resolve({ ...initial, available: false }); await h.settle()
   await h.session.issue()
   assert.equal(h.issues.length, 1)
+})
+
+test('a shown code is not polled while the page is hidden and is read at once when it is visible again', async (t) => {
+  const h = harness(t); await h.ready(); await h.issue()
+  h.visibility.set(false)
+  t.mock.timers.tick(2000)
+  t.mock.timers.tick(60_000)
+  assert.equal(h.reads.length, 1)
+  h.visibility.set(true)
+  assert.equal(h.reads.length, 2)
+  h.reads[1]?.result.resolve(initial); await h.settle()
+  t.mock.timers.tick(2000)
+  assert.equal(h.reads.length, 3)
+  assert.equal(h.session.getSnapshot().code?.code, code.code)
+})
+
+test('an account link observed by the poll stops it', async (t) => {
+  const h = harness(t); await h.ready(); await h.issue()
+  t.mock.timers.tick(2000)
+  h.reads[1]?.result.resolve({ ...initial, linked: true }); await h.settle()
+  t.mock.timers.tick(60_000)
+  assert.equal(h.reads.length, 2)
 })

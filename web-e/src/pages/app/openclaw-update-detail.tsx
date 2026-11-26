@@ -7,22 +7,16 @@ import { Badge } from '@/components/ui/badge'
 import { BackLink } from '@/components/ui/back-button'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { updateDetailOptions } from '@/hooks/openclaw-update-options'
 import { useQuery, useWorkspaceSession } from '@/hooks/session-workspace'
 import { userFacingRequestError } from '@/lib/http'
 import { agentSettingsPath, isActiveUpdate } from '@/lib/openclaw-update-policy'
-import { getOpenClawUpdate } from '@/lib/openclaw-updates-api'
 
 export function OpenClawUpdateDetailPage() {
   const { t: translate, owned, formatDate } = useTranslation()
   const { noticeId = '' } = useParams()
   const scope = useWorkspaceSession()
-  const query = useQuery({
-    queryKey: ['openclaw-update-detail', noticeId],
-    queryFn: ({ signal }) => getOpenClawUpdate(noticeId, { owner: scope.owner, signal }),
-    enabled: Boolean(noticeId),
-    refetchInterval: (result) => result.state.data?.agents.some((agent) => isActiveUpdate(agent.update.run)) ? 1500 : 30_000,
-    refetchOnWindowFocus: true,
-  })
+  const query = useQuery(updateDetailOptions(scope, noticeId))
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-6 [overflow-wrap:anywhere]">

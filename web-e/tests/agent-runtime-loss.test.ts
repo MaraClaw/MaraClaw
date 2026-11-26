@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { QueryClient } from '@tanstack/react-query'
 import { ZodError } from 'zod'
 
 import { getAgentLifecycle } from '../src/lib/agent-lifecycle-api.ts'
@@ -7,11 +8,13 @@ import {
   canManageAgent, classifyStartNewContainerError, runtimeLossRecovery, runtimeLossSummary, startNewContainerErrorMessage,
   startNewContainerFailureMessage, type StartNewContainerFailure,
 } from '../src/lib/agent-runtime-loss.ts'
-import { getAgent, startNewContainer } from '../src/lib/agents-api.ts'
+import { getAgent, startNewContainer, type AgentOut } from '../src/lib/agents-api.ts'
+import { agentOptions } from '../src/lib/agents-query.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { vietnamese } from '../src/lib/i18n/catalog.ts'
 import { isTranslationKey, loadVietnamese } from '../src/lib/i18n/translation.ts'
 import { lifecycle } from './agent-lifecycle-fixture.ts'
+import { assertBackedOff, focusRefetch, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
 
 await loadVietnamese()
 
@@ -234,4 +237,73 @@ test('Given a loss in the lifecycle projection, When it is read, Then runtime.lo
   assert.deepEqual(result.runtime.loss, loss)
   t.mock.method(globalThis, 'fetch', async () => Response.json({ ...lifecycle, runtime: { ...lifecycle.runtime, loss: { ...loss, reason: 'unknown-contract-value' } } }))
   await assert.rejects(getAgentLifecycle(id), ZodError)
+})
+
+const running: AgentOut = { ...agent, status: 'running' }
+const lost: AgentOut = { ...running, runtime_loss: { reason: 'container_stopped', detected_at: detectedAt } }
+
+for (const [label, inChat, record, cadence] of [
+  ['chat before the agent loads', true, undefined, 30_000],
+  ['chat with a running agent', true, running, 30_000],
+  ['another tab with a running agent', false, running, false],
+  ['another tab while a loss shows', false, lost, 30_000],
+] as const) {
+  test(`Given ${label}, When the agent query schedules, Then it polls ${String(cadence)} and refetches on focus only while polling`, (t) => {
+    // Given
+    const client = new QueryClient()
+    t.after(() => client.clear())
+    const options = agentOptions(id, inChat)
+    if (record) client.setQueryData(options.queryKey, record)
+    // When / Then
+    assert.equal(pollInterval(client, options), cadence)
+    assert.equal(focusRefetch(client, options), cadence === false ? false : 'always')
+  })
+}
+
+test('Given a hidden page, When the chat agent query schedules, Then it waits until the page is visible', (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const page = pageVisibility(t, 'hidden')
+  const options = agentOptions(id, true)
+  // When / Then
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 30_000)
+})
+
+test('Given an outage, When agent reads keep failing, Then the poll backs off to the ceiling and the first success restores 30 s', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  let healthy = false
+  t.mock.method(globalThis, 'fetch', async () => healthy ? Response.json(lost) : throttled(503))
+  const options = agentOptions(id, true)
+  assert.equal(pollInterval(client, options), 30_000)
+  // When / Then
+  for (let failure = 0; failure < 3; failure++) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), 60_000)
+  }
+  healthy = true
+  await client.fetchQuery(options)
+  assert.equal(pollInterval(client, options), 30_000)
+})
+
+test('Given a Retry-After on a failed agent read, When the poll schedules, Then it waits at least that long and never past the ceiling', async (t) => {
+  // Given
+  const client = new QueryClient()
+  t.after(() => client.clear())
+  const retryAfter = ['50', '3600']
+  t.mock.method(globalThis, 'fetch', async () => throttled(429, retryAfter.shift()))
+  const options = agentOptions(id, false)
+  client.setQueryData(options.queryKey, lost)
+  assert.equal(pollInterval(client, options), 30_000)
+  // When
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 50_000)
+  const delay = pollInterval(client, options)
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 3_600_000)
+  // Then
+  assert.ok(typeof delay === 'number' && delay >= 50_000 && delay <= 60_000, String(delay))
+  assert.equal(pollInterval(client, options), 60_000)
 })

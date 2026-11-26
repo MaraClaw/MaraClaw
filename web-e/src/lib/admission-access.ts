@@ -1,5 +1,8 @@
+import { queryOptions, type QueryFunctionContext } from '@tanstack/react-query'
+
 import type { SessionOwner } from './auth-session.ts'
 import { listMyAdmissionsPage } from './company-admissions-api.ts'
+import { queryPollInterval } from './poll-policy.ts'
 import type { AdmissionSummary } from './types/company-admissions.ts'
 
 export function isPendingAdmissionApplicant(request: AdmissionSummary, tenantId: string | null): boolean {
@@ -24,4 +27,20 @@ export async function hasPendingAdmission(
     cursor = page.next_cursor ?? undefined
   } while (cursor !== undefined)
   return false
+}
+
+// Only a pending admission can change on its own, so a settled answer is neither polled nor refetched on focus.
+function admissionAccessCadence(pending: boolean | undefined) {
+  return pending === true ? 30_000 : false
+}
+
+export function admissionAccessOptions(owner: SessionOwner, tenantId: string | null) {
+  const queryKey = ['company-admissions', 'workspace-access', tenantId] as const
+  const queryFn = ({ signal }: QueryFunctionContext<typeof queryKey>) => hasPendingAdmission(tenantId, { owner, signal })
+  return { ...queryOptions({
+    queryKey, queryFn,
+    retry: false,
+    refetchInterval: queryPollInterval(admissionAccessCadence),
+    refetchOnWindowFocus: (query) => admissionAccessCadence(query.state.data) === false ? false : 'always',
+  }), queryFn }
 }
