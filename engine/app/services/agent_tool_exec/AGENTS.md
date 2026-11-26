@@ -51,7 +51,7 @@ Tool execution dispatch helpers live here. This package is the split-out registr
 ## Document Conversion
 
 - `document_convert.py` holds the five `convert_*` handlers (registered in `_agent_tool_exec_conversion.py`). Blocking cores (`csv.py`, `markdown.py`) run through `document_conversion.conversion_lane.run_conversion`, never inline and never `asyncio.to_thread`; the HTML renderers are awaited directly and use the lane inside.
-- Every handler awaits its conversion through `_within_deadline` (`DOCUMENT_CONVERSION_TIMEOUT_SECONDS`), which turns an expired deadline into the `❌ Conversion failed: ...` result and cancels the work. A lane thread that outlives it keeps its slot until it returns. Lane, Chrome cap and process-group rules: `../document_conversion/AGENTS.md`.
+- Every handler runs its conversion through `_converted_into(tgt_file, convert)`: the converter gets a staged file next to the target as its `tgt_file`, runs under `_within_deadline` (`DOCUMENT_CONVERSION_TIMEOUT_SECONDS`, which turns an expired deadline into the `❌ Conversion failed: ...` result and cancels the work), and a `✅` result is published over the target with one atomic rename; any other outcome leaves the target untouched. A lane thread that outlives the deadline keeps its slot until it returns and deletes its own staged file then. Lane, Chrome cap and process-group rules: `../document_conversion/AGENTS.md`.
 - Tests: `tests/test_agent_tools_document_conversion.py` (patch the module attribute of the core, `document_convert._csv_to_xlsx` or `markdown_conversion._convert_markdown_to_*`, because handlers look it up at call time).
 
 ## Code Execution

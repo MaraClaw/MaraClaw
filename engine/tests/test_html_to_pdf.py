@@ -1,7 +1,9 @@
 import asyncio
 import base64
 import sys
-from collections.abc import Iterator
+import threading
+import uuid
+from collections.abc import Coroutine, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar, override
@@ -10,8 +12,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.core.json_types import json_as_str, json_loads_object
+from app.core.thread_lanes import ThreadLane
 from app.core.thread_slots import ThreadSlots
-from app.services.document_conversion import chrome_runtime
+from app.services.agent_tool_exec import document_convert
+from app.services.document_conversion import chrome_runtime, conversion_lane
 from app.services.document_conversion.chrome_renderer import collect_browser_layout
 from app.services.document_conversion.chrome_runtime import chrome_arguments, chrome_slot
 from app.services.document_conversion.html_to_pdf import convert_html_to_pdf
@@ -330,3 +334,106 @@ async def test_cancelled_chrome_render_terminates_chrome_and_frees_its_slot(
     assert len(chrome.terminated) == 1
     async with chrome_slot():
         pass
+
+
+def _names(directory: Path) -> list[str]:
+    return sorted(path.name for path in directory.iterdir())
+
+
+def _convert_pdf(case: ContainmentWorkspace) -> Coroutine[object, object, str]:
+    """The tool handler's conversion of the containment page to out.pdf in the case's workspace."""
+    return document_convert._convert_html_to_pdf(
+        uuid.uuid4(), case.workspace, {"source_path": "sub/page.html", "target_path": "out.pdf"}
+    )
+
+
+async def test_chrome_pdf_replaces_the_target_only_once_the_render_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Given: an existing PDF and a Chrome render held inside its page
+    case = build_containment_workspace(tmp_path)
+    target = case.workspace / "out.pdf"
+    _ = target.write_bytes(b"old")
+    before = _names(case.workspace)
+    page = HeldPage()
+    _ = install_fake_chrome(monkeypatch, HTML_TO_PDF, page)
+    render = asyncio.create_task(_convert_pdf(case))
+    _ = await asyncio.wait_for(page.held.wait(), 10)
+
+    # Then: the target still holds the old PDF while Chrome renders
+    assert target.read_bytes() == b"old"
+
+    # When: Chrome finishes
+    page.release.set()
+    result = await asyncio.wait_for(render, 10)
+
+    # Then: the new PDF replaced it and nothing else was left in the workspace
+    assert result == "✅ Successfully converted HTML to PDF with Chrome: out.pdf"
+    assert target.read_bytes() == b"%PDF-held"
+    assert _names(case.workspace) == before
+
+
+async def test_cancelled_chrome_pdf_leaves_the_target_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # Given: an existing PDF and a Chrome render stuck inside its page
+    case = build_containment_workspace(tmp_path)
+    target = case.workspace / "out.pdf"
+    _ = target.write_bytes(b"old")
+    before = _names(case.workspace)
+    page = HeldPage()
+    chrome = install_fake_chrome(monkeypatch, HTML_TO_PDF, page)
+    render = asyncio.create_task(_convert_pdf(case))
+    _ = await asyncio.wait_for(page.held.wait(), 10)
+
+    # When: the render is cancelled, as when its deadline passes
+    _ = render.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await render
+
+    # Then: Chrome was terminated, the old PDF is intact and no file was left behind
+    assert len(chrome.terminated) == 1
+    assert target.read_bytes() == b"old"
+    assert _names(case.workspace) == before
+
+
+@pytest.mark.usefixtures("weasyprint")
+async def test_cancelled_weasyprint_fallback_leaves_the_target_alone_and_removes_what_its_thread_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Given: no Chrome, an existing PDF, and a WeasyPrint render whose thread writes part of the PDF, then blocks
+    case = build_containment_workspace(tmp_path)
+    target = case.workspace / "out.pdf"
+    _ = target.write_bytes(b"old")
+    before = _names(case.workspace)
+    monkeypatch.setattr(f"{HTML_TO_PDF}.chrome_executable", lambda: None)
+    monkeypatch.setattr(conversion_lane, "CONVERSION_LANE", ThreadLane(1, name="test-conversion-lane"))
+    entered: asyncio.Queue[Path] = asyncio.Queue()
+    gate = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    class BlockedWeasyHtml(RecordingWeasyHtml):
+        @override
+        def write_pdf(self, target: str) -> None:
+            staged = Path(target)
+            _ = staged.write_bytes(b"early")
+            loop.call_soon_threadsafe(entered.put_nowait, staged)
+            assert gate.wait(10)
+            _ = staged.write_bytes(b"late")
+
+    monkeypatch.setattr(sys.modules["weasyprint"], "HTML", BlockedWeasyHtml, raising=False)
+    render = asyncio.create_task(_convert_pdf(case))
+    staged = await asyncio.wait_for(entered.get(), 10)
+    assert (staged.parent, staged.suffix) == (case.workspace, ".pdf")
+
+    # When: the render is cancelled while WeasyPrint's thread is still writing
+    _ = render.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await render
+
+    # Then: the old PDF is intact and the partial staged file is already gone
+    assert target.read_bytes() == b"old"
+    assert not staged.exists()
+    # And: what the thread writes once released is removed as it returns
+    gate.set()
+    assert await asyncio.wait_for(conversion_lane.run_conversion(lambda: "idle"), 10) == "idle"
+    assert target.read_bytes() == b"old"
+    assert _names(case.workspace) == before

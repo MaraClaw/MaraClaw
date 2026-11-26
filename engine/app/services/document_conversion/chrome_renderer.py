@@ -11,6 +11,7 @@ from app.services.document_conversion.chrome_runtime import (
     ChromeBusyError,
     PolicedCdpSession,
     chrome_slot,
+    cleanup_temporary_paths,
     create_cdp_target,
     launch_chrome,
     local_ephemeral_port,
@@ -117,6 +118,7 @@ async def _collect_browser_layout(
     port = local_ephemeral_port()
 
     profile_dir = tempfile.TemporaryDirectory(prefix="maraclaw-html-pptx-")
+    written: list[Path] = []
 
     proc = await launch_chrome(Path(chrome), port, profile_dir.name)
     try:
@@ -367,6 +369,7 @@ roots = [body];
                         screenshots.append(None)
                         continue
                     image_file = await write_temporary_bytes(base64.b64decode(data), f"-slide-{idx + 1}.png")
+                    written.append(image_file)
                     screenshots.append(str(image_file))
                 layout["screenshots"] = screenshots
             if layout and render_mode in ("editable", "hybrid_editable"):
@@ -425,6 +428,7 @@ roots = [body];
                         background_screenshots.append(None)
                         continue
                     image_file = await write_temporary_bytes(base64.b64decode(data), f"-slide-bg-{idx + 1}.png")
+                    written.append(image_file)
                     background_screenshots.append(str(image_file))
                     # Root background capture temporarily hides direct
                     # children; after it is restored, item-level captures
@@ -492,13 +496,18 @@ roots = [body];
                         if data in (None, ""):
                             continue
                         image_file = await write_temporary_bytes(base64.b64decode(data), f"-item-bg-{item_id}.png")
+                        written.append(image_file)
                         shape_screenshots[item_id] = str(image_file)
                 layout["backgroundScreenshots"] = background_screenshots
                 layout["shapeScreenshots"] = shape_screenshots
             return layout or None
     except Exception as layout_exc:
         logger.warning(f"Browser layout extraction failed, falling back to DOM flow conversion: {layout_exc}")
+        await cleanup_temporary_paths(written)
         return None
+    except asyncio.CancelledError:
+        await cleanup_temporary_paths(written)
+        raise
     finally:
         await terminate_process(proc)
         await run_conversion(profile_dir.cleanup)

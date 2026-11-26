@@ -6,6 +6,7 @@ import pickle
 import sys
 import threading
 import uuid
+import zipfile
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from threading import Event, Lock
@@ -200,6 +201,15 @@ def test_csv_core_when_delimited_rows_then_detects_delimiter_and_strips_blank_ce
     assert saved == [str(target)]
 
 
+def _staged_beside(staged: Path, target: Path) -> Path:
+    """Assert `staged` is the private file next to `target` that a conversion writes instead of it; return it."""
+    assert staged != target
+    assert staged.parent == target.parent
+    assert staged.suffix == target.suffix
+    assert not target.exists()
+    return staged
+
+
 async def test_html_adapter_when_called_then_delegates_to_legacy_html_public_function(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -223,7 +233,13 @@ async def test_html_adapter_when_called_then_delegates_to_legacy_html_public_fun
 
     assert result == "html result"
     assert calls == [
-        (source, target, "output.pdf", tmp_path, {"source_path": "source.html", "target_path": "output.pdf"})
+        (
+            source,
+            _staged_beside(calls[0][1], target),
+            "output.pdf",
+            tmp_path,
+            {"source_path": "source.html", "target_path": "output.pdf"},
+        )
     ]
 
 
@@ -375,7 +391,7 @@ async def test_html_pptx_adapter_when_called_then_preserves_legacy_argument_orde
     monkeypatch.setattr(document_conversion, "convert_html_to_pptx", convert_html)
 
     assert await document_convert._convert_html_to_pptx(uuid.uuid4(), tmp_path, arguments) == "pptx result"
-    assert calls == [(source, target, "output.pptx", tmp_path, arguments)]
+    assert calls == [(source, _staged_beside(calls[0][1], target), "output.pptx", tmp_path, arguments)]
 
 
 async def test_markdown_pdf_adapter_when_core_succeeds_or_fails_then_preserves_legacy_response(
@@ -409,7 +425,7 @@ async def test_markdown_pdf_adapter_when_core_succeeds_or_fails_then_preserves_l
     monkeypatch.setattr(document_convert.markdown_conversion, "_convert_markdown_to_pdf", succeed)
 
     assert await document_convert._convert_markdown_to_pdf(uuid.uuid4(), tmp_path, arguments) == "markdown pdf result"
-    assert calls == [(source, target, "output.pdf", tmp_path)]
+    assert calls == [(source, _staged_beside(calls[0][1], target), "output.pdf", tmp_path)]
 
     monkeypatch.setattr(document_convert.markdown_conversion, "_convert_markdown_to_pdf", fail)
     assert await document_convert._convert_markdown_to_pdf(uuid.uuid4(), tmp_path, arguments) == (
@@ -692,3 +708,218 @@ async def test_a_cancel_scope_does_not_keep_the_caller_waiting_for_a_running_con
     assert await asyncio.wait_for(caller, 10)
     assert probe.running == 1
     probe.gate.set()
+
+
+class WritingCore:
+    """A core that stages its output in two writes, with its thread held at a gate in between."""
+
+    def __init__(self, result: str = "✅ converted") -> None:
+        self.entered: asyncio.Queue[Path] = asyncio.Queue()
+        self.gate: Event = Event()
+        self.result: str = result
+        self.final: bytes | None = None
+        self._loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+
+    def work(self, _src_file: Path, tgt_file: Path, _target_path: str) -> str:
+        _ = tgt_file.write_bytes(b"early")
+        self._loop.call_soon_threadsafe(self.entered.put_nowait, tgt_file)
+        assert self.gate.wait(10)
+        _ = tgt_file.write_bytes(b"late")
+        self.final = tgt_file.read_bytes()
+        return self.result
+
+
+@pytest.fixture
+def one_slot_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(conversion_lane, "CONVERSION_LANE", ThreadLane(1, name="test-conversion-lane"))
+
+
+async def _abandoned_threads_returned() -> None:
+    """Wait until the one lane thread is free: this call can only start once an abandoned conversion's thread ended."""
+    assert await asyncio.wait_for(conversion_lane.run_conversion(lambda: "idle"), 10) == "idle"
+
+
+def _files(directory: Path) -> list[str]:
+    return sorted(path.name for path in directory.iterdir())
+
+
+async def test_timed_out_conversion_leaves_its_target_alone_and_removes_what_its_thread_stages(
+    tmp_path: Path,
+    convert_csv: Callable[[str], Coroutine[object, object, str]],
+    deadline: ManualDeadline,
+    one_slot_lane: None,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Given: an existing target and a conversion whose thread stages a partial file, then outlives its deadline
+    target = tmp_path / "out.xlsx"
+    _ = target.write_bytes(b"old")
+    core = WritingCore()
+    monkeypatch.setattr(document_convert, "_csv_to_xlsx", core.work)
+    slow = asyncio.create_task(convert_csv("out.xlsx"))
+    staged = await asyncio.wait_for(core.entered.get(), 10)
+    assert (staged.parent, staged.suffix, staged.read_bytes()) == (tmp_path, ".xlsx", b"early")
+
+    # When: the deadline passes while the thread is still inside the conversion
+    deadline.fire()
+    result = await asyncio.wait_for(slow, 10)
+
+    # Then: the tool got an error, the target is untouched and the partial staged file is already gone
+    assert result.startswith("❌ Conversion failed:")
+    assert target.read_bytes() == b"old"
+    assert not staged.exists()
+    # And: what the thread stages when it resumes is removed as it returns
+    core.gate.set()
+    await _abandoned_threads_returned()
+    assert core.final == b"late"
+    assert target.read_bytes() == b"old"
+    assert _files(tmp_path) == ["out.xlsx", "source.csv"]
+
+
+async def test_cancelled_conversion_leaves_its_target_alone_and_removes_what_its_thread_stages(
+    tmp_path: Path,
+    convert_csv: Callable[[str], Coroutine[object, object, str]],
+    one_slot_lane: None,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Given: an existing target and a conversion whose thread stages a partial file
+    target = tmp_path / "out.xlsx"
+    _ = target.write_bytes(b"old")
+    core = WritingCore()
+    monkeypatch.setattr(document_convert, "_csv_to_xlsx", core.work)
+    conversion = asyncio.create_task(convert_csv("out.xlsx"))
+    staged = await asyncio.wait_for(core.entered.get(), 10)
+
+    # When: its caller is cancelled while the thread is still inside the conversion
+    _ = conversion.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await conversion
+
+    # Then: the target is untouched and the partial staged file is already gone
+    assert target.read_bytes() == b"old"
+    assert not staged.exists()
+    # And: what the thread stages when it resumes is removed as it returns
+    core.gate.set()
+    await _abandoned_threads_returned()
+    assert core.final == b"late"
+    assert target.read_bytes() == b"old"
+    assert _files(tmp_path) == ["out.xlsx", "source.csv"]
+
+
+@pytest.mark.parametrize("existing", [b"old", None])
+async def test_successful_conversion_replaces_the_target_with_the_staged_file_in_one_step(
+    tmp_path: Path,
+    convert_csv: Callable[[str], Coroutine[object, object, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    existing: bytes | None,
+):
+    # Given: a conversion that has staged part of its output, over a target that exists or not
+    target = tmp_path / "out.xlsx"
+    if existing is not None:
+        _ = target.write_bytes(existing)
+    core = WritingCore()
+    monkeypatch.setattr(document_convert, "_csv_to_xlsx", core.work)
+    conversion = asyncio.create_task(convert_csv("out.xlsx"))
+    staged = await asyncio.wait_for(core.entered.get(), 10)
+
+    # Then: until it finishes, the target holds what it did and the output sits in the staged file
+    assert (target.read_bytes() if target.exists() else None) == existing
+    assert staged.read_bytes() == b"early"
+
+    # When: the conversion finishes in time
+    core.gate.set()
+
+    # Then: the target now holds the finished output and no staged file is left
+    assert await asyncio.wait_for(conversion, 10) == "✅ converted"
+    assert target.read_bytes() == b"late"
+    assert _files(tmp_path) == ["out.xlsx", "source.csv"]
+
+
+@pytest.mark.parametrize("failure", ["returns", "raises"])
+async def test_failed_conversion_leaves_its_target_alone_and_removes_its_staged_file(
+    tmp_path: Path,
+    convert_csv: Callable[[str], Coroutine[object, object, str]],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+):
+    # Given: an existing target and a conversion that stages a partial file, then fails
+    target = tmp_path / "out.xlsx"
+    _ = target.write_bytes(b"old")
+
+    def core(_src_file: Path, tgt_file: Path, _target_path: str) -> str:
+        _ = tgt_file.write_bytes(b"partial")
+        if failure == "raises":
+            raise RuntimeError("boom")
+        return "❌ Conversion failed: boom"
+
+    monkeypatch.setattr(document_convert, "_csv_to_xlsx", core)
+
+    # When: it runs
+    result = await convert_csv("out.xlsx")
+
+    # Then: the failure is reported as before, the target is untouched and nothing is left behind
+    assert result == "❌ Conversion failed: boom"
+    assert target.read_bytes() == b"old"
+    assert _files(tmp_path) == ["out.xlsx", "source.csv"]
+
+
+async def test_conversion_that_cannot_replace_its_target_reports_it_and_leaves_no_staged_file(
+    tmp_path: Path, convert_csv: Callable[[str], Coroutine[object, object, str]], monkeypatch: pytest.MonkeyPatch
+):
+    # Given: a target path that is a directory and a conversion that succeeds
+    (tmp_path / "out.xlsx").mkdir()
+
+    def core(_src_file: Path, tgt_file: Path, _target_path: str) -> str:
+        _ = tgt_file.write_bytes(b"new")
+        return "✅ converted"
+
+    monkeypatch.setattr(document_convert, "_csv_to_xlsx", core)
+
+    # When: it runs
+    result = await convert_csv("out.xlsx")
+
+    # Then: the tool reports the failed publish, the directory is intact and the staged file is gone
+    assert result.startswith("❌ Conversion failed:")
+    assert _files(tmp_path) == ["out.xlsx", "source.csv"]
+    assert (tmp_path / "out.xlsx").is_dir()
+
+
+def test_a_thread_that_returns_after_its_stage_was_discarded_removes_what_it_staged(tmp_path: Path):
+    # Given: a stage that already ended
+    staged = conversion_lane.StagedOutput(tmp_path / "out.pdf")
+    staged.discard()
+
+    def late_write() -> str:
+        _ = staged.path.write_bytes(b"late")
+        return "written"
+
+    # When: a guarded thread writes into it afterwards
+    result = staged.guard(late_write)()
+
+    # Then: its result is untouched and the staged file was removed as it returned
+    assert result == "written"
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_real_cores_publish_their_documents_through_the_handlers(
+    tmp_path: Path, convert_csv: Callable[[str], Coroutine[object, object, str]], monkeypatch: pytest.MonkeyPatch
+):
+    # Given: a CSV and a Markdown source whose targets are the real converters' outputs
+    markdown = tmp_path / "notes.md"
+    _ = markdown.write_text("# Title\n\nBody", encoding="utf-8")
+
+    # When: both are converted through their handlers
+    csv_result = await convert_csv("out.xlsx")
+    monkeypatch.setattr(agent_tools, "_resolve_tool_source_path", lambda *_args, **_kwargs: markdown)
+    monkeypatch.setattr(agent_tools, "_resolve_tool_target_path", lambda *_args, **_kwargs: tmp_path / "notes.docx")
+    docx_result = await document_convert._convert_markdown_to_docx(
+        uuid.uuid4(), tmp_path, {"source_path": "notes.md", "target_path": "notes.docx"}
+    )
+
+    # Then: each target is a real document, and no staged file is left
+    assert csv_result == "✅ Successfully converted CSV to Excel: out.xlsx"
+    assert docx_result == "✅ Successfully converted Markdown to Word: notes.docx"
+    with zipfile.ZipFile(tmp_path / "out.xlsx") as workbook:
+        assert "xl/workbook.xml" in workbook.namelist()
+    with zipfile.ZipFile(tmp_path / "notes.docx") as document:
+        assert "word/document.xml" in document.namelist()
+    assert _files(tmp_path) == ["notes.docx", "notes.md", "out.xlsx", "source.csv"]
