@@ -10,6 +10,7 @@ from app.services.storage_runtime.base import StorageConditionalRaceError
 from app.services.storage_runtime.quota_errors import StorageFileTooLargeError, StorageKeyPendingError
 from managed_storage_fixtures import StorageWorld, quota_world
 from s3_wire_server import Gate, _Handler
+from thread_lane_fixtures import forbid_shared_threads
 
 __all__ = ["deletion_scenario", "quota_world"]
 
@@ -47,6 +48,23 @@ async def test_file_create_reserves_open_file_size_and_hash_before_provider_sett
         False,
         len(data),
     )
+
+
+async def test_managed_mutations_never_reach_shared_threads(
+    quota_world: StorageWorld, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    world = quota_world
+    world.scale(1000, 400)
+    agent = await world.agent()
+    path = tmp_path / "source"
+    path.write_bytes(b"from a file")
+    with forbid_shared_threads(monkeypatch):
+        await world.backend.write_bytes(world.key(agent, "a"), b"alpha")
+        assert (await world.backend.create_bytes_if_absent(world.key(agent, "b"), b"beta")).ok
+        assert (await world.backend.create_file_if_absent(world.key(agent, "c"), path)).ok
+        await world.backend.delete(world.key(agent, "a"))
+        await world.backend.delete_tree(f"{agent}")
+    assert world.s3.state.objects == {}
 
 
 async def test_file_create_refuses_oversize_before_provider(quota_world: StorageWorld, tmp_path: Path):

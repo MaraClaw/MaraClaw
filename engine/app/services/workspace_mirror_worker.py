@@ -1,9 +1,10 @@
 """Periodic two-way mirror of every OpenClaw guest's state directory with durable agent storage (``workspace_mirror``)."""
 
+from collections.abc import Callable, Sequence
 from typing import Final
 from uuid import UUID
 
-from anyio import Path as AsyncPath, sleep
+from anyio import Condition, Path as AsyncPath, create_task_group, sleep
 from psycopg import Error as PsycopgError
 
 from app.config import get_settings
@@ -17,24 +18,28 @@ from app.services.workspace_mirror import PASS_BUDGET_SECONDS, agent_state_dir, 
 PAGE_SIZE: Final = 50
 DB_RETRY_BASE_SECONDS: Final = 1.0
 DB_RETRY_CAP_SECONDS: Final = 30.0
-# The loop beats after every page, so the longest silence is the interval sleep followed by one page read and a page
-# of agents each mirrored at its bound. One statement waits at most the pool checkout plus the statement timeout, 60
+# The loop beats whenever an agent finishes and after every page. While agents wait, one of them is always running (the
+# one holding its tenant), so the longest silence is the interval sleep, one page read and the first agent to finish,
+# however many agents mirror at once. One statement waits at most the pool checkout plus the statement timeout, 60
 # seconds at the defaults.
 PAGE_READ_SECONDS: Final = 60.0
-# A pass stops scheduling operations once its budget has passed. The share on top is room for the operation in flight
-# at that moment, one object transfer, and for the lock and gate statements around the pass.
+# An agent's pass starts its budget when its slot is granted and stops scheduling operations once it has passed. The
+# share on top is room for the operation in flight at that moment, one object transfer, and for the lock and gate
+# statements around the pass.
 AGENT_OVERRUN_SECONDS: Final = 120.0
 AGENT_SECONDS: Final = PASS_BUDGET_SECONDS + AGENT_OVERRUN_SECONDS
 
 
 def progress_budget_seconds() -> float:
-    return get_settings().WORKSPACE_MIRROR_INTERVAL_SECONDS + PAGE_READ_SECONDS + PAGE_SIZE * AGENT_SECONDS
+    return get_settings().WORKSPACE_MIRROR_INTERVAL_SECONDS + PAGE_READ_SECONDS + AGENT_SECONDS
 
 
 async def start_workspace_mirror_worker() -> None:
-    """Mirror every agent in id order, then sleep the interval; beat after every completed page.
+    """Mirror every agent page by page, then sleep the interval; beat as each agent finishes and after every page.
 
-    One agent's failure is logged and the pass continues, and its page still beats. A database error reading a page
+    Up to `WORKSPACE_MIRROR_CONCURRENCY` agents of a page mirror at once, never two of the same tenant, each taking
+    the next agent in id order whose tenant is free. One agent's failure is logged and the pass continues, and it
+    still beats. A database error reading a page
     is retried in place with capped backoff, resumes from the same cursor and never beats. When there is no durable
     store to mirror into (local storage, or the mirror disabled) the loop keeps beating and sleeping without paging.
     """
@@ -55,8 +60,7 @@ async def start_workspace_mirror_worker() -> None:
             failures += 1
             continue
         failures = 0
-        for agent in page:
-            await _mirror(agent)
+        await _mirror_page(page, progress.beat)
         progress.beat()
         if len(page) == PAGE_SIZE:
             cursor = page[-1].id
@@ -64,6 +68,48 @@ async def start_workspace_mirror_worker() -> None:
         cursor = None
         await sleep(get_settings().WORKSPACE_MIRROR_INTERVAL_SECONDS)
         new_trace_id()
+
+
+def _claim(waiting: list[AgentRecord], busy: set[UUID | None]) -> AgentRecord | None:
+    """Take the first waiting agent whose tenant has none in flight, marking that tenant busy."""
+    for agent in waiting:
+        if agent.tenant_id not in busy:
+            waiting.remove(agent)
+            busy.add(agent.tenant_id)
+            return agent
+    return None
+
+
+async def _mirror_page(page: Sequence[AgentRecord], beat: Callable[[], None]) -> None:
+    """Mirror `page` with a fixed number of lanes, each one agent at a time and no tenant in two lanes at once.
+
+    Tenants never overlap so one company's pushes do not queue behind each other on the quota ledger's lock timeout,
+    and the number of lanes bounds how many transfer buffers exist at once.
+    """
+    waiting = list(page)
+    busy: set[UUID | None] = set()
+    freed = Condition()
+
+    async def lane() -> None:
+        while True:
+            async with freed:
+                agent = _claim(waiting, busy)
+                while agent is None and waiting:
+                    await freed.wait()
+                    agent = _claim(waiting, busy)
+                if agent is None:
+                    return
+            try:
+                await _mirror(agent)
+            finally:
+                async with freed:
+                    busy.discard(agent.tenant_id)
+                    freed.notify_all()
+            beat()
+
+    async with create_task_group() as group:
+        for _ in range(min(get_settings().WORKSPACE_MIRROR_CONCURRENCY, len(page))):
+            group.start_soon(lane)
 
 
 async def _mirror(agent: AgentRecord) -> None:

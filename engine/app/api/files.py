@@ -52,6 +52,7 @@ from app.schemas.content_response_files import (
 from app.schemas.file_pages import FileInfo, FileInfoPage, FileListingCursor
 from app.services import file_download_tickets, workspace_collaboration as workspace
 from app.services.agent_workspace_quota import refresh_workspace_usage_after_delete
+from app.services.auth_throttle import throttle_ticket_address, throttle_ticket_user
 from app.services.document_parser import (
     MAX_INPUT_BYTES,
     PREVIEW_MAX_CHARS,
@@ -229,17 +230,13 @@ async def _delete_workspace_file(
         if storage_exists and await storage.is_file(storage_key)
         else None
     )
+    failure: workspace.WorkspaceWriteResult | None = None
     async with workspace.workspace_locks(agent.id, [normalized]):
         if storage_is_dir:
-            entries = await workspace._collect_storage_tree_versions(storage, storage_key)
-            for entry_key, version_token in reversed(entries):
-                deleted = await storage.delete_if_match(
-                    entry_key, condition=WriteCondition(version_token=version_token)
-                )
-                if not deleted.ok:
-                    return workspace.WorkspaceWriteResult(
-                        False, normalized, f"Conflict detected while deleting {normalized}"
-                    )
+            tree = await workspace.delete_storage_tree(storage, storage_key)
+            failure = workspace.tree_failure(agent.id, "deleting", normalized, tree)
+            if failure is not None and not tree.done:
+                return failure
         else:
             deleted = await storage.delete_if_match(
                 storage_key, condition=WriteCondition(version_token=token) if token is not None else None
@@ -256,6 +253,8 @@ async def _delete_workspace_file(
         before_content=before,
         after_content=None,
     )
+    if failure is not None:
+        return failure
     return workspace.WorkspaceWriteResult(
         True, normalized, f"Deleted {normalized}", revision_id=str(revision.id) if revision else None
     )
@@ -895,7 +894,11 @@ async def _download_response(key: str, path: str, inline: bool, request_headers:
     return Response(content=data, media_type=media_type, headers=headers)
 
 
-@router.post("/download-ticket", response_model=file_download_tickets.DownloadTicketResponse)
+@router.post(
+    "/download-ticket",
+    response_model=file_download_tickets.DownloadTicketResponse,
+    dependencies=[Depends(throttle_ticket_address)],
+)
 async def create_download_ticket(
     agent_id: uuid.UUID,
     body: file_download_tickets.DownloadTicketRequest,
@@ -904,6 +907,7 @@ async def create_download_ticket(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> file_download_tickets.DownloadTicketResponse:
     """Mint a single-use ticket so browsers can download without a session JWT in the URL."""
+    await throttle_ticket_user(current_user.id)
     _ = await check_agent_access(current_user, agent_id, fresh=True)
     _ = await _downloadable_storage_key(agent_id, body.path, current_user.tenant_id)
     payload = decode_access_token(credentials.credentials)
@@ -1102,7 +1106,7 @@ async def delete_file(
         expected_version_token,
     )
     if not result.ok:
-        if "not found" in result.message.lower():
+        if result.message.startswith("File not found"):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=result.message)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result.message)
     await refresh_workspace_usage_after_delete(agent)

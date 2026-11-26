@@ -28,6 +28,7 @@ from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.services.agent_manager import agent_manager
 from app.services.agent_resource_pressure import record_workspace_disk_pressure
+from app.services.docker_capacity import DockerBusyError, DockerPriority, run_docker
 from app.services.notification_service import send_notification
 from app.services.organization_plans import plan_for, tier_for_tenant
 from app.services.quota_guard import QuotaExceededError
@@ -201,7 +202,7 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
 
     Agents with no allowance (system agents and agents with no organization) lose any stored row. A layer size Docker
     cannot report keeps the previously stored one (zero without one), so a failed read never flaps the block.
-    ``layers`` is the worker pass's shared state: once Docker is unavailable, later agents of the same pass skip the
+    ``layers`` is the worker pass's shared state: once Docker is unavailable (or its lane is busy), later agents of the same pass skip the
     read and keep their stored size. Each stored measurement also feeds the resource-pressure episodes, which can never
     fail this pass.
 
@@ -235,10 +236,15 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
         measured: int | None = None
         if client is not None and not layers.unavailable:
             try:
-                measured = await to_thread.run_sync(
-                    measure_layer_bytes, client, container_id, LAYER_INSPECT_TIMEOUT_SECONDS, abandon_on_cancel=True
+                measured = await run_docker(
+                    measure_layer_bytes,
+                    client,
+                    container_id,
+                    LAYER_INSPECT_TIMEOUT_SECONDS,
+                    priority=DockerPriority.BACKGROUND,
+                    abandon_on_cancel=True,
                 )
-            except LayerReadUnavailableError as exc:
+            except (LayerReadUnavailableError, DockerBusyError) as exc:
                 layers.unavailable = True
                 logger.warning(
                     "[WorkspaceQuota] Docker layer sizes unavailable ({}); stored sizes are kept for the rest of this "

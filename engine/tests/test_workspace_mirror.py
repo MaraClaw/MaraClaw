@@ -3,7 +3,8 @@
 import hashlib
 import os
 import stat
-from collections.abc import Iterator
+import tempfile
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,7 +15,13 @@ import pytest
 
 from app.records.workspace_mirror_entry import WorkspaceMirrorEntryRecord
 from app.services.storage_runtime.agent_files import agent_storage_key
-from app.services.storage_runtime.base import StorageBackend, StorageSnapshot, StorageVersion, content_hash_bytes
+from app.services.storage_runtime.base import (
+    MaterializedFile,
+    StorageBackend,
+    StorageSnapshot,
+    StorageVersion,
+    content_hash_bytes,
+)
 from app.services.workspace_mirror import MirrorBusyError, mirror_lock
 from app.services.workspace_mirror_local import MARKER, complete_generation, read_or_create_generation
 from app.services.workspace_mirror_ops import Done, Outcome, PathWork, run
@@ -25,6 +32,7 @@ from app.services.workspace_mirror_plan import (
     conflict_path,
     decide,
     freeze_reason,
+    local_matches,
     mass_delete,
     scope_directories,
 )
@@ -222,6 +230,17 @@ class _VersionedStore(StorageBackend):
         return StorageSnapshot(data, await self.get_version(key), content_hash_bytes(data))
 
     @override
+    async def get_version_bounded(self, key: str, max_bytes: int) -> StorageVersion:
+        return await self.get_version(key)
+
+    @override
+    async def materialize(self, key: str) -> MaterializedFile:
+        handle, name = tempfile.mkstemp()
+        with os.fdopen(handle, "wb") as stream:
+            _ = stream.write(self.objects[key][0])
+        return MaterializedFile(Path(name), owned=True)
+
+    @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
         self.writes += 1
         self.objects[key] = (data, f"v{self.writes}")
@@ -229,6 +248,20 @@ class _VersionedStore(StorageBackend):
     @override
     async def delete(self, key: str) -> None:
         del self.objects[key]
+
+
+class _RewritingStore(_VersionedStore):
+    """Runs `rewrite` right after the upload landed, the way a guest saves the file while it is being sent."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rewrite: Callable[[], object] | None = None
+
+    @override
+    async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:
+        await super().write_bytes(key, data, content_type)
+        if self.rewrite is not None:
+            _ = self.rewrite()
 
 
 STORED_ETAG = hashlib.md5(b"stored", usedforsecurity=False).hexdigest()
@@ -297,6 +330,26 @@ async def test_a_same_bytes_rewrite_under_a_new_version_is_retried_once_but_a_re
     done = await run(action, work, NOW)
 
     assert (done.outcome, store.held(key)) == (outcome, stored)
+
+
+async def test_a_file_rewritten_during_its_upload_is_not_recorded_as_the_bytes_that_were_sent(tmp_path: Path):
+    store = _RewritingStore()
+    key = agent_storage_key(BASE.agent_id, REL)
+    await store.write_bytes(key, b"abc")
+    recorded = await store.get_version(key)
+    path = _guest_file(tmp_path, b"guest edit", 0o644)
+    entry = replace(BASE, remote_etag=recorded.etag, remote_size=recorded.size, remote_token=recorded.token)
+    local = _local_file(path)
+    store.rewrite = lambda: path.write_bytes(b"rewritten while it was uploading")
+    work = PathWork(
+        BASE.agent_id, tmp_path, store, BASE.generation, REL, entry, local, Remote(recorded.etag, 3, ""), entry
+    )
+
+    done = await run(Action.PUSH_UPDATE, work, NOW)
+
+    assert done.entry is not None
+    assert (done.outcome, store.held(key), done.entry.content_sha256) == (Outcome.RACED, b"guest edit", None)
+    assert not local_matches(done.entry, _local_file(path))
 
 
 async def _pull_into(root: Path, prior: WorkspaceMirrorEntryRecord | None) -> Done:

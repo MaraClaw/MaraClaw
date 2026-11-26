@@ -8,7 +8,7 @@ Code: `app/services/workspace_mirror.py` (the pass, the locks, the worker and sh
 
 ## When it runs
 
-- **Worker loop.** The `workspace_mirror` loop (worker role) runs every `WORKSPACE_MIRROR_INTERVAL_SECONDS`. It pages the OpenClaw agents, system agents included, in status `running`, `idle`, `stopped` and `error` (50 per page, in id order) and runs one full pass for each whose state directory exists. A full pass both pushes and pulls. An agent is skipped for this round, and tried again in the next, when an OpenClaw upgrade is active, company-transfer cleanup is pending, the per-agent setup lock stays exclusively held for more than one second, or another mirror pass holds the mirror lock. One agent's failure is logged and the loop goes on. Beat and progress-budget details: [runtime/AGENTS.md](../app/runtime/AGENTS.md).
+- **Worker loop.** The `workspace_mirror` loop (worker role) runs every `WORKSPACE_MIRROR_INTERVAL_SECONDS`. It pages the OpenClaw agents, system agents included, in status `running`, `idle`, `stopped` and `error` (50 per page, in id order) and runs one full pass for each whose state directory exists, up to `WORKSPACE_MIRROR_CONCURRENCY` agents at once and never two of one organization (the next agent whose organization is free takes a free slot). Each pass's budget starts when its agent's slot is granted. A full pass both pushes and pulls. An agent is skipped for this round, and tried again in the next, when an OpenClaw upgrade is active, company-transfer cleanup is pending, the per-agent setup lock stays exclusively held for more than one second, or another mirror pass holds the mirror lock. One agent's failure is logged and the loop goes on. Beat and progress-budget details: [runtime/AGENTS.md](../app/runtime/AGENTS.md).
 - **Start and rehydrate.** When a start rehydrates (`rehydrate=True`), `AgentManager._apply_guest_state` calls `agent_materialize.pull_durable_state` under the exclusive setup lock it already holds. That is a pull-only pass: storage's side moves to the guest, nothing is written to storage and no quota is charged. Afterwards `materialize_agent_files` writes the keys the mirror does not own (anything outside the scope below, except the marker and `.openclaw/`). The pull has its own budget, `START_PULL_BUDGET_SECONDS` (120 seconds). If the directory has no finished generation (see [Marker and generation](#marker-and-generation)) and the pull fails or runs out of budget, the start fails with `WorkspaceRestoreError`. The files pulled so far keep their rows, so the next attempt goes on from there. With a finished generation the failure is logged and the start goes on. OpenClaw upgrades start with `rehydrate=False` and skip all of this.
 - **Share link.** `POST /api/gateway/file-links` settles the one requested path before it issues a link (see [Share links](#share-links)).
 
@@ -99,7 +99,10 @@ Pushes go through the managed S3 backend, so every mirrored file is charged agai
 - **413 `storage_file_too_large`**, or a guest file above 100 MiB (never sent): the row is recorded with `skip_reason` `too_large` and counts as `too_large` in the report. The file is offered again once it changes or an hour has passed.
 - **507 `storage_quota_exceeded`**: the rest of the pass's uploads are skipped and a warning is logged. Nothing is recorded, so every later pass tries again. Pulls and deletes continue.
 - An unresolved accounting claim on the key freezes that path.
-- Any other error, such as 503 `storage_accounting_unavailable`, a provider error or a database error, stops the pass. Paths already finished keep their rows. The worker logs it and retries the agent next round.
+- **503 `storage_accounting_unavailable`** (the quota ledger's lock or database did not answer): never a refusal. The pass skips the rest of its uploads and deletes of stored objects, records nothing for them and tries them again next pass; pulls continue.
+- Any other error, such as a provider error or a database error, stops the pass. Paths already finished keep their rows. The worker logs it and retries the agent next round.
+
+Transfers stream. A push hashes the guest file in chunks and then sends it from the same open descriptor; if the file changed while it was sent, the row keeps the stamp that was read and no content hash, so the next pass pushes the file again rather than calling the two sides a conflict. A pull and a conflict write land in a temporary file renamed into place. Neither direction holds a whole file in memory.
 
 Mirroring never blocks the guest from writing to its own disk. The quota limits what reaches storage. The measured workspace disk allowance is a separate soft quota ([guest-containers.md](guest-containers.md#workspace-disk-quota)).
 
@@ -119,6 +122,7 @@ A pass stops scheduling work after `PASS_BUDGET_SECONDS` (20 seconds, of which t
 | --- | --- | --- |
 | `WORKSPACE_MIRROR_ENABLED` | `true` | Turns the mirror, the start-path pull and S3-served share links on. Only S3 storage has anything to mirror. |
 | `WORKSPACE_MIRROR_INTERVAL_SECONDS` | `60` | Seconds between worker passes, 10 to 3600. |
+| `WORKSPACE_MIRROR_CONCURRENCY` | `4` | Agents the worker loop mirrors at once, 1 to 32, never two of the same organization. Each in-flight agent moves one file at a time in chunks, so this also bounds the mirror's memory. |
 | `FILE_SHARE_LINK_TTL_SECONDS` | `900` | Lifetime of a share link, 60 to 86400. |
 | `PUBLIC_BASE_URL` | empty | Required to mint share links. |
 

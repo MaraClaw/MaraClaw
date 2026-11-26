@@ -6,12 +6,14 @@ if TYPE_CHECKING:
 
 from app.services.storage_runtime.base import StorageBackend
 from app.services.storage_runtime.s3_types import new_s3_client
+from app.services.storage_runtime.thread_lanes import ThreadLane
 from app.services.storage_runtime.upload_source import SizedBody
 from app.services.storage_runtime.utils import normalize_storage_key
 
 
 class S3ObjectIdentity(TypedDict):
     Key: str
+    ETag: NotRequired[str]
 
 
 class S3ObjectArguments(TypedDict):
@@ -37,6 +39,16 @@ class S3PutArguments(S3ObjectArguments):
     ContentType: str
     ContentLength: NotRequired[int]
     IfNoneMatch: NotRequired[str]
+
+
+class S3CopySource(TypedDict):
+    Bucket: str
+    Key: str
+
+
+class S3CopyArguments(S3ObjectArguments):
+    CopySource: S3CopySource
+    CopySourceIfMatch: str
 
 
 class S3PresignArguments(TypedDict):
@@ -65,6 +77,8 @@ class S3Client(Protocol):
 
     def delete_objects(self, **kwargs: Unpack[S3DeleteArguments]) -> Mapping[str, object]: ...
 
+    def copy_object(self, **kwargs: Unpack[S3CopyArguments]) -> Mapping[str, object]: ...
+
 
 def _is_s3_client(value: object) -> TypeIs[S3Client]:
     return value is not None
@@ -88,9 +102,8 @@ class S3Connection(StorageBackend):
         secret_access_key: str = "",
         presign_ttl_seconds: int = 3600,
         max_pool_connections: int = 50,
-        write_workers: int = 32,
+        thread_lane_size: int = 32,
     ):
-        del write_workers
         self.bucket: str = bucket
         self.prefix: str = normalize_storage_key(prefix)
         self.region: str = region
@@ -99,6 +112,7 @@ class S3Connection(StorageBackend):
         self.secret_access_key: str | None = secret_access_key or None
         self.presign_ttl_seconds: int = presign_ttl_seconds
         self.max_pool_connections: int = max_pool_connections
+        self.lane: ThreadLane = ThreadLane(min(thread_lane_size, max_pool_connections), name="s3-lane")
         self._client: S3Client | None = None
 
     def _object_key(self, key: str) -> str:

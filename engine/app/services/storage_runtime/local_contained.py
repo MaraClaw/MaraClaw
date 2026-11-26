@@ -132,8 +132,18 @@ def open_regular_file(root: Path, relative: str) -> Generator[FileIO]:
         yield stream
 
 
+def local_version_stamp(info: os.stat_result) -> str:
+    """What a listing can tell without reading the file: its modification time and size."""
+    return f"{info.st_mtime_ns}:{info.st_size}"
+
+
 def local_version_token(info: os.stat_result, file_hash: str | None) -> str:
-    return f"{info.st_mtime_ns}:{info.st_size}:{file_hash or ''}"
+    return f"{local_version_stamp(info)}:{file_hash or ''}"
+
+
+def token_stamp(token: str) -> str:
+    """The stamp inside a version token, so a listing's token (no hash) and ``read_version``'s (hashed) compare equal."""
+    return token.rpartition(":")[0]
 
 
 def _read_regular(fd: int, info: os.stat_result, relative: str, max_bytes: int | None) -> bytes:

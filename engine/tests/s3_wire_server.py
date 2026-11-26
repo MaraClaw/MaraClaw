@@ -149,6 +149,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._put_bucket_config(config)
             return
         data, state = self._read_body(), self._state()
+        source = self.headers.get("x-amz-copy-source")
+        if source is not None:
+            self._copy_object(key, unquote(source).lstrip("/").partition("/")[2])
+            return
         with state.lock:
             state.calls.append(("PUT", key))
             fault, gate = state.put_faults.get(key), state.gates.get(key)
@@ -177,6 +181,26 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
         else:
             self._reply(200, headers={"ETag": f'"{_etag(data)}"'})
+
+    def _copy_object(self, key: str, source: str) -> None:
+        """CopyObject: the bytes move inside the provider; ``x-amz-copy-source-if-match`` must equal the source's ETag."""
+        state = self._state()
+        wanted = self.headers.get("x-amz-copy-source-if-match", "").strip('"')
+        with state.lock:
+            state.calls.append(("COPY", key))
+            fault, data = state.put_faults.get(key), state.objects.get(source)
+            if data is not None and (not wanted or wanted == _etag(data)) and fault != "reject_500":
+                state.objects[key] = data
+                state.content_types[key] = state.content_types.get(source, "")
+        if data is None:
+            self._error(404, "NoSuchKey")
+        elif wanted and wanted != _etag(data):
+            self._error(412, "PreconditionFailed")
+        elif fault is not None:
+            self._error(500, "InternalError")
+        else:
+            xml = f"<CopyObjectResult><ETag>&quot;{_etag(data)}&quot;</ETag></CopyObjectResult>"
+            self._reply(200, xml.encode(), {"Content-Type": "application/xml"})
 
     def do_HEAD(self) -> None:
         key, _ = self._target()
@@ -252,12 +276,21 @@ class _Handler(BaseHTTPRequestHandler):
             return
         deleted, errors = [], []
         with state.lock:
-            for key in (unescape(match) for match in re.findall(r"<Key>(.*?)</Key>", body)):
+            objects = re.findall(r"<Object>(.*?)</Object>", body, re.DOTALL)
+            state.calls.append(("DELETEOBJECTS", str(len(objects))))
+            for entry in objects:
+                key = unescape(next(iter(re.findall(r"<Key>(.*?)</Key>", entry)), ""))
+                etag = re.search(r"<ETag>(.*?)</ETag>", entry)
                 state.calls.append(("MULTIDELETE", key))
+                code = ""
                 if key in state.refused_deletes:
-                    errors.append(
-                        f"<Error><Key>{escape(key)}</Key><Code>AccessDenied</Code><Message>no</Message></Error>"
-                    )
+                    code = "AccessDenied"
+                elif etag is not None and key not in state.objects:
+                    code = "NoSuchKey"
+                elif etag is not None and unescape(etag.group(1)).strip('"') != _etag(state.objects[key]):
+                    code = "PreconditionFailed"
+                if code:
+                    errors.append(f"<Error><Key>{escape(key)}</Key><Code>{code}</Code><Message>no</Message></Error>")
                 else:
                     _ = state.objects.pop(key, None)
                     deleted.append(f"<Deleted><Key>{escape(key)}</Key></Deleted>")

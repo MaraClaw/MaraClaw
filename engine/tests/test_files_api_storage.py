@@ -1,7 +1,8 @@
 import asyncio
 import base64
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import override
 
@@ -58,11 +59,15 @@ class PrefixOnlyStorage(StorageBackend):
                 continue
             rest = existing.removeprefix(prefix)
             name, _, tail = rest.partition("/")
+            token = "" if tail else f"v:{len(data)}"
             entries_by_name[name] = StorageEntry(
                 name=name,
                 key=f"{prefix}{name}",
                 is_dir=bool(tail),
                 size=0 if tail else len(data),
+                version_id=token,
+                etag=token,
+                content_hash=token,
             )
         return sorted(entries_by_name.values(), key=lambda entry: (not entry.is_dir, entry.name))
 
@@ -599,3 +604,33 @@ async def test_s3_binary_preview_reports_the_metadata_size_without_a_full_read(
     assert result["size"] == size
     assert result["base64_sample"] == (base64.b64encode(b"xxx").decode() if size == 3 else "")
     assert source.get_calls == (1 if size == 3 else 0)
+
+
+async def test_a_folder_delete_names_the_file_edited_after_the_listing_and_deletes_the_rest(monkeypatch):
+    user = make_user()
+    agent = make_agent(uuid.uuid4(), user.id)
+    folder = f"{agent.id}/workspace/dir"
+
+    class EditsBeforeDelete(PrefixOnlyStorage):
+        @override
+        async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+            self.objects[f"{folder}/b.txt"] = b"edited after the listing"
+            return await super().delete_batch_if_match(versions)
+
+    storage = EditsBeforeDelete({f"{folder}/a.txt": b"a", f"{folder}/b.txt": b"b", f"{folder}/sub/c.txt": b"c"})
+
+    @asynccontextmanager
+    async def no_locks(*_args: object, **_kwargs: object) -> AsyncGenerator[None]:
+        yield
+
+    async def no_revision(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.workspace_collaboration.get_storage_backend", lambda: storage)
+    monkeypatch.setattr("app.services.workspace_collaboration.workspace_locks", no_locks)
+    monkeypatch.setattr(files, "_persist_workspace_revision", no_revision)
+
+    result = await files._delete_workspace_file(user, agent, "workspace/dir", None)
+
+    assert (result.ok, result.rejected_paths) == (False, ["workspace/dir/b.txt"])
+    assert set(storage.objects) == {f"{folder}/b.txt"}

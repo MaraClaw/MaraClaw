@@ -8,10 +8,13 @@ import multiprocessing as mp
 import tempfile
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
-from threading import BoundedSemaphore, Event
+from threading import Event
 from typing import Final, cast
 
+from app.core.thread_slots import ThreadSlots
 from app.services.document_parser.child_workers import (
     TIMEOUT_SECONDS,
     convert_worker,
@@ -29,7 +32,9 @@ from app.services.document_parser.worker_cleanup import ProcessLike, kill_proces
 
 SLOT_WAIT_SECONDS: Final = 5.0
 MAX_CONCURRENCY: Final = 2
-_CONVERT_PERMITS = BoundedSemaphore(MAX_CONCURRENCY)
+_CONVERT_PERMITS = ThreadSlots(MAX_CONCURRENCY)
+# A job holds a slot for as long as its thread runs, so these threads never queue and never touch the default executor.
+_PARSER_THREADS = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY, thread_name_prefix="document-parser")
 _QUARANTINED_JOBS: list[tuple[ProcessLike, tempfile.TemporaryDirectory[str]]] = []
 
 
@@ -120,19 +125,21 @@ async def _run_owned_async(
     timeout_seconds: float,
     slot_wait_seconds: float,
 ) -> str:
+    _check_input_size(data)
+    try:
+        async with asyncio.timeout(slot_wait_seconds):
+            await _CONVERT_PERMITS.acquire_async()
+    except TimeoutError as exc:
+        raise _slot_timeout(slot_wait_seconds) from exc
     stopped = Event()
-    owner = asyncio.create_task(
-        asyncio.to_thread(
-            _run_isolated,
-            data,
-            filename,
-            worker,
-            extra,
-            timeout_seconds=timeout_seconds,
-            slot_wait_seconds=slot_wait_seconds,
-            stopped=stopped,
+    try:
+        owner = asyncio.get_running_loop().run_in_executor(
+            _PARSER_THREADS,
+            partial(_run_in_slot, data, filename, worker, extra, timeout_seconds=timeout_seconds, stopped=stopped),
         )
-    )
+    except BaseException:
+        _CONVERT_PERMITS.release()
+        raise
     try:
         return await asyncio.shield(owner)
     except asyncio.CancelledError:
@@ -145,7 +152,7 @@ async def _run_owned_async(
             except DocumentParseError:
                 break
         with contextlib.suppress(DocumentParseError):
-            owner.result()
+            _ = owner.result()
         raise
 
 
@@ -157,26 +164,37 @@ def _run_isolated(
     *,
     timeout_seconds: float,
     slot_wait_seconds: float,
-    stopped: Event | None = None,
 ) -> str:
+    _check_input_size(data)
+    if not _CONVERT_PERMITS.acquire(timeout=slot_wait_seconds):
+        raise _slot_timeout(slot_wait_seconds)
+    return _run_in_slot(data, filename, worker, extra, timeout_seconds=timeout_seconds, stopped=Event())
+
+
+def _check_input_size(data: bytes) -> None:
     if len(data) > MAX_INPUT_BYTES:
         raise DocumentTooLargeError(
             f"Document is too large to read safely ({len(data) / 1024 / 1024:.1f} MB).",
             size_bytes=len(data),
         )
-    stop = stopped if stopped is not None else Event()
-    deadline = time.monotonic() + slot_wait_seconds
-    while not stop.is_set():
-        if _CONVERT_PERMITS.acquire(blocking=False):
-            break
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise DocumentParseTimeoutError(
-                f"Document parse timed out after {slot_wait_seconds:.0f}s waiting for a parser slot."
-            )
-        _ = stop.wait(min(0.01, remaining))
-    else:
-        return ""
+
+
+def _slot_timeout(slot_wait_seconds: float) -> DocumentParseTimeoutError:
+    return DocumentParseTimeoutError(
+        f"Document parse timed out after {slot_wait_seconds:.0f}s waiting for a parser slot."
+    )
+
+
+def _run_in_slot(
+    data: bytes,
+    filename: str,
+    worker: Callable[[str, str, str, str, int | None], None],
+    extra: int | None,
+    *,
+    timeout_seconds: float,
+    stopped: Event,
+) -> str:
+    """Run one job in the slot the caller holds; the slot returns only once the child is confirmed reaped."""
     reaped = True
     try:
         return _spawn_job(
@@ -185,7 +203,7 @@ def _run_isolated(
             worker,
             extra,
             timeout_seconds=timeout_seconds,
-            stopped=stop,
+            stopped=stopped,
         )
     except DocumentParseTimeoutError as exc:
         reaped = exc.child_reaped

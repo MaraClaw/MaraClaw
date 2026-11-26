@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
 import anyio
 from fastapi import HTTPException, status
+
+from app.services.storage_runtime.upload_source import UploadSource
 
 
 @dataclass
@@ -23,6 +25,19 @@ class StorageEntry:
     etag: str = ""
     version_id: str = ""
     content_hash: str = ""
+
+    def version(self) -> StorageVersion:
+        """The version this listing row names, so a caller can hold it without a second request per key."""
+        return StorageVersion(
+            key=self.key,
+            exists=True,
+            is_dir=self.is_dir,
+            size=self.size,
+            modified_at=self.modified_at,
+            etag=self.etag,
+            version_id=self.version_id,
+            content_hash=self.content_hash,
+        )
 
 
 @dataclass
@@ -69,6 +84,30 @@ class ConditionalWriteResult:
     ok: bool
     conflict: bool = False
     current_version: StorageVersion | None = None
+
+
+def deleted_result(key: str) -> ConditionalWriteResult:
+    """A batch delete's answer for a key that is now gone."""
+    return ConditionalWriteResult(ok=True, current_version=StorageVersion(key=key, exists=False, is_dir=False))
+
+
+def kept_result(key: str, *, exists: bool) -> ConditionalWriteResult:
+    """A batch answer for a key left as it was: its version changed (``exists``), or nothing was there to change."""
+    return ConditionalWriteResult(
+        ok=False, conflict=True, current_version=StorageVersion(key=key, exists=exists, is_dir=False)
+    )
+
+
+BATCH_KEY_LIMIT = 1000
+"""The most keys one batch call takes: the ``DeleteObjects`` limit, which sizes every caller's chunks too."""
+
+
+@dataclass(frozen=True, slots=True)
+class CopyRequest:
+    """Copy ``source`` to ``destination_key`` while the source still holds the version it was listed with."""
+
+    source: StorageVersion
+    destination_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +296,24 @@ class StorageBackend:
         data = await anyio.to_thread.run_sync(path.read_bytes)
         return await self.create_bytes_if_absent(key, data, content_type)
 
+    async def write_source_if_match(
+        self,
+        key: str,
+        source: UploadSource,
+        *,
+        condition: WriteCondition | None = None,
+        content_type: str | None = None,
+    ) -> ConditionalWriteResult:
+        """Stream an open local file's first ``source.size`` bytes with ``write_bytes_if_match`` outcomes.
+
+        ``require_absent`` creates the key and reports an occupied one as a conflict; a ``version_token`` overwrites
+        only while the key still holds that version; no condition overwrites. The body is seekable with a known length,
+        so a retry rewinds it. The caller opened ``source`` and closes it, and may send it again after a conflict.
+        This default reads the whole file into memory; backends that can stream it override this.
+        """
+        data = await anyio.to_thread.run_sync(source.body().read)
+        return await self.write_bytes_if_match(key, data, condition=condition, content_type=content_type)
+
     async def write_text(self, key: str, content: str, encoding: str = "utf-8") -> None:
         await self.write_bytes(key, content.encode(encoding), content_type="text/plain; charset=utf-8")
 
@@ -278,16 +335,7 @@ class StorageBackend:
             entry = await self.stat(key)
         except FileNotFoundError:
             return StorageVersion(key=key, exists=False, is_dir=False)
-        return StorageVersion(
-            key=entry.key,
-            exists=True,
-            is_dir=entry.is_dir,
-            size=entry.size,
-            modified_at=entry.modified_at,
-            etag=entry.etag,
-            version_id=entry.version_id,
-            content_hash=entry.content_hash,
-        )
+        return entry.version()
 
     async def get_version_bounded(self, key: str, max_bytes: int) -> StorageVersion:
         """Resolve the normal version identity without unbounded hashing/promotion.
@@ -334,6 +382,39 @@ class StorageBackend:
         if current.exists:
             await self.delete(key)
         return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
+
+    async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+        """Delete each key only while it still holds its listed version; one result per key, keyed by storage key.
+
+        ``ok`` means the key is gone. ``conflict`` means it was left in place because its version changed, because it
+        was already gone (``current_version.exists`` tells which), or because an unresolved write holds it. A result is
+        never raised: only a provider failure that leaves a key's fate unknown raises. The versions are the ones a
+        listing (``StorageEntry.version()``) or ``get_version`` returned. This default checks and deletes key by key;
+        backends with a native batch override it.
+        """
+        return {
+            version.key: await self.delete_if_match(version.key, condition=WriteCondition(version_token=version.token))
+            for version in versions
+        }
+
+    async def copy_batch_if_match(self, copies: Sequence[CopyRequest]) -> dict[str, ConditionalWriteResult]:
+        """Copy each source to its destination while the source holds its listed version; results keyed by source key.
+
+        ``ok`` means the destination now holds the bytes (an existing destination is replaced). ``conflict`` means the
+        source changed or is gone, and nothing was written. Backends with a server-side copy never move a body through
+        the engine. This default reads and writes each body, so only a backend that cannot copy natively inherits it.
+        """
+        results: dict[str, ConditionalWriteResult] = {}
+        for copy in copies:
+            current = await self.get_version(copy.source.key)
+            if current.token != copy.source.token:
+                results[copy.source.key] = ConditionalWriteResult(ok=False, conflict=True, current_version=current)
+                continue
+            await self.write_bytes(copy.destination_key, await self.read_bytes(copy.source.key))
+            results[copy.source.key] = ConditionalWriteResult(
+                ok=True, current_version=await self.get_version(copy.destination_key)
+            )
+        return results
 
     async def open_local_file(self, key: str) -> tuple[BinaryIO, os.stat_result] | None:
         """The key's regular file as an open read stream with the `fstat` of the same descriptor, or None.

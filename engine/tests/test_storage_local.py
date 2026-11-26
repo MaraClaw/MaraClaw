@@ -18,6 +18,7 @@ from app.services.storage_runtime import local_contained
 from app.services.storage_runtime.base import (
     AtomicCreateUnsupportedError,
     ConditionalWriteResult,
+    CopyRequest,
     StorageBackend,
     StoragePage,
     StorageReadLimitExceededError,
@@ -863,3 +864,58 @@ async def test_local_remove_empty_directory_removes_only_an_empty_directory(tmp_
     # Then
     assert sorted(path.name for path in (tmp_path / "A").iterdir()) == ["file.md", "full"]
     assert (tmp_path / "A" / "full" / "keep.md").read_bytes() == b"keep"
+
+
+async def test_local_batch_delete_leaves_a_file_edited_since_the_listing(tmp_path: Path):
+    backend = LocalStorageBackend(str(tmp_path))
+    for name in ("a", "b", "sub/c"):
+        await backend.write_bytes(f"d/{name}", b"old")
+    listed = [
+        entry.version()
+        for entry in [*await backend.list_dir("d"), *await backend.list_dir("d/sub")]
+        if not entry.is_dir
+    ]
+    await backend.write_bytes("d/b", b"edited later")
+
+    results = await backend.delete_batch_if_match(listed)
+
+    assert {key: (result.ok, result.conflict) for key, result in results.items()} == {
+        "d/a": (True, False),
+        "d/b": (False, True),
+        "d/sub/c": (True, False),
+    }
+    assert [entry.name for entry in await backend.list_dir("d/sub")] == []
+    assert await backend.read_bytes("d/b") == b"edited later"
+    assert not await backend.exists("d/a")
+
+
+async def test_local_batch_delete_reports_a_vanished_file_as_absent(tmp_path: Path):
+    backend = LocalStorageBackend(str(tmp_path))
+    await backend.write_bytes("d/a", b"old")
+    version = (await backend.list_dir("d"))[0].version()
+    await backend.delete("d/a")
+
+    result = (await backend.delete_batch_if_match([version]))["d/a"]
+
+    assert (result.ok, result.conflict, result.current_version is not None and result.current_version.exists) == (
+        False,
+        True,
+        False,
+    )
+
+
+async def test_local_batch_copy_streams_unchanged_files_and_refuses_edited_ones(tmp_path: Path):
+    backend = LocalStorageBackend(str(tmp_path))
+    await backend.write_bytes("s/a", b"alpha")
+    await backend.write_bytes("s/b", b"bravo")
+    listed = {entry.name: entry.version() for entry in await backend.list_dir("s")}
+    await backend.write_bytes("s/b", b"bravo, edited")
+
+    results = await backend.copy_batch_if_match(
+        [CopyRequest(listed["a"], "t/deep/a"), CopyRequest(listed["b"], "t/deep/b")]
+    )
+
+    assert (results["s/a"].ok, results["s/b"].conflict) == (True, True)
+    assert await backend.read_bytes("t/deep/a") == b"alpha"
+    assert not await backend.exists("t/deep/b")
+    assert await backend.read_bytes("s/a") == b"alpha"

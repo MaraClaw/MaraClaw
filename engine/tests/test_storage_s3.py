@@ -1,7 +1,10 @@
 import asyncio
-from collections.abc import Mapping
+import hashlib
+import os
+from collections.abc import Iterator, Mapping
 from contextlib import aclosing
 from io import BytesIO
+from pathlib import Path
 from threading import Event, Lock, get_ident
 from typing import TypedDict, Unpack, override
 from urllib.parse import parse_qs, urlparse
@@ -16,13 +19,17 @@ from app.services.storage_runtime.base import (
     MAX_DIR_PAGE_LIMIT,
     AtomicCreateUnsupportedError,
     ConditionalWriteResult,
+    CopyRequest,
     StorageConditionalRaceError,
     StorageDeleteFailedError,
     StorageReadLimitExceededError,
+    StorageVersion,
     WriteCondition,
 )
 from app.services.storage_runtime.s3 import S3StorageBackend
+from app.services.storage_runtime.upload_source import open_upload_source
 from materialize_fixtures import GatedObject, temp_files, temp_root
+from s3_wire_server import S3Server
 from storage_walk_fixtures import EXPECTED_WALK, FILE_SIZE, TREE_KEYS, PagedS3Client, s3_backend, shape, tree_client
 
 __all__ = ["temp_root"]
@@ -529,11 +536,11 @@ async def test_s3_cancel_after_the_worker_delivered_removes_the_copy_the_awaiter
     source = GatedObject("agent/report.xlsx", b"data")
     backend = source.backend(monkeypatch)
 
-    async def finish_then_cancel(function, *arguments, **_options):
-        function(*arguments)
+    async def finish_then_cancel(work, **_options):
+        work()
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(anyio.to_thread, "run_sync", finish_then_cancel)
+    monkeypatch.setattr(backend.lane, "run", finish_then_cancel)
     # When / Then
     with pytest.raises(asyncio.CancelledError):
         await backend.materialize("agent/report.xlsx")
@@ -949,3 +956,157 @@ async def test_s3_flat_listing_follows_every_page(monkeypatch):
     assert len(entries) == 2501
     assert entries[-1].key == "big/sub/.hidden"
     assert len(client.list_calls) == 3
+
+
+@pytest.fixture
+def wire() -> Iterator[S3Server]:
+    server = S3Server()
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+def wire_backend(server: S3Server) -> S3StorageBackend:
+    return S3StorageBackend(
+        bucket="bucket", endpoint_url=server.endpoint, access_key_id="key", secret_access_key="secret"
+    )
+
+
+async def test_s3_streamed_create_sends_the_file_and_reports_an_occupied_key(wire: S3Server, tmp_path: Path):
+    backend = wire_backend(wire)
+    data = os.urandom(3 * 1024 * 1024 + 5)
+    path = tmp_path / "big.bin"
+    _ = path.write_bytes(data)
+
+    with open_upload_source(path, with_md5=False) as source:
+        first = await backend.write_source_if_match("a/big.bin", source, condition=WriteCondition(require_absent=True))
+        second = await backend.write_source_if_match("a/big.bin", source, condition=WriteCondition(require_absent=True))
+
+    assert (first.ok, second.ok, second.conflict) == (True, False, True)
+    assert first.current_version is not None
+    assert (wire.state.objects["a/big.bin"], first.current_version.size) == (data, len(data))
+
+
+async def test_s3_streamed_overwrite_needs_the_version_it_was_conditioned_on(wire: S3Server, tmp_path: Path):
+    backend = wire_backend(wire)
+    await backend.write_bytes("a/f.txt", b"old")
+    current = await backend.get_version("a/f.txt")
+    path = tmp_path / "f.txt"
+    _ = path.write_bytes(b"new bytes")
+
+    with open_upload_source(path, with_md5=False) as source:
+        stale = await backend.write_source_if_match("a/f.txt", source, condition=WriteCondition(version_token="stale"))
+        kept = wire.state.objects["a/f.txt"]
+        fresh = await backend.write_source_if_match(
+            "a/f.txt", source, condition=WriteCondition(version_token=current.token)
+        )
+
+    assert (stale.conflict, kept, fresh.ok, wire.state.objects["a/f.txt"]) == (True, b"old", True, b"new bytes")
+
+
+async def test_s3_streamed_create_rewinds_the_sized_body_for_a_conflict_retry(monkeypatch, tmp_path: Path):
+    backend = S3StorageBackend(bucket="bucket")
+    sent: list[tuple[bytes, int]] = []
+
+    class RacingClient:
+        def put_object(self, **kwargs):
+            sent.append((kwargs["Body"].read(), kwargs["ContentLength"]))
+            if len(sent) == 1:
+                raise ClientError(
+                    {"Error": {"Code": "ConditionalRequestConflict"}, "ResponseMetadata": {"HTTPStatusCode": 409}},
+                    "PutObject",
+                )
+            return {"ETag": '"etag"'}
+
+    monkeypatch.setattr(backend, "_client_or_raise", RacingClient)
+    path = tmp_path / "f.bin"
+    _ = path.write_bytes(b"streamed bytes")
+
+    with open_upload_source(path, with_md5=False) as source:
+        result = await backend.create_from_source("f.bin", source, None)
+
+    assert result.ok
+    assert sent == [(b"streamed bytes", 14)] * 2
+
+
+def listed(key: str, data: bytes) -> StorageVersion:
+    """The version a directory listing reports for an object holding `data`: its size and ETag, no HEAD."""
+    etag = hashlib.md5(data, usedforsecurity=False).hexdigest()
+    return StorageVersion(key=key, exists=True, is_dir=False, size=len(data), etag=etag)
+
+
+async def test_s3_batch_delete_sends_a_call_per_thousand_keys_and_leaves_a_changed_key(wire: S3Server):
+    # Given
+    backend = wire_backend(wire)
+    wire.state.objects.update({f"d/f{index:04d}": b"x" for index in range(2500)})
+    versions = [listed(key, b"x") for key in sorted(wire.state.objects)]
+    wire.state.objects["d/f0007"] = b"edited after the listing"
+    # When
+    results = await backend.delete_batch_if_match(versions)
+    # Then
+    assert [call for call in wire.state.calls if call[0] == "DELETEOBJECTS"] == [
+        ("DELETEOBJECTS", "1000"),
+        ("DELETEOBJECTS", "1000"),
+        ("DELETEOBJECTS", "500"),
+    ]
+    assert wire.state.count("HEAD") == 0
+    assert set(wire.state.objects) == {"d/f0007"}
+    changed = results["d/f0007"]
+    assert (changed.ok, changed.conflict, changed.current_version is not None and changed.current_version.exists) == (
+        False,
+        True,
+        True,
+    )
+    assert sum(result.ok for result in results.values()) == 2499
+
+
+async def test_s3_batch_delete_reports_a_key_that_is_already_gone_as_absent(wire: S3Server):
+    backend = wire_backend(wire)
+    wire.state.objects["d/a"] = b"x"
+
+    results = await backend.delete_batch_if_match([listed("d/a", b"x"), listed("d/gone", b"x")])
+
+    gone = results["d/gone"]
+    assert (results["d/a"].ok, gone.conflict, gone.current_version is not None and gone.current_version.exists) == (
+        True,
+        True,
+        False,
+    )
+
+
+async def test_s3_batch_delete_raises_when_the_provider_does_not_answer_for_a_key(wire: S3Server):
+    backend = wire_backend(wire)
+    wire.state.objects["d/a"] = b"x"
+    wire.state.refused_deletes.add("d/a")
+
+    with pytest.raises(StorageDeleteFailedError):
+        _ = await backend.delete_batch_if_match([listed("d/a", b"x")])
+
+    assert "d/a" in wire.state.objects
+
+
+async def test_s3_batch_copy_is_server_side_and_refuses_a_source_that_changed(wire: S3Server):
+    backend = wire_backend(wire)
+    wire.state.objects.update({"a/one": b"first", "a/two": b"second"})
+    stale = listed("a/two", b"second")
+    wire.state.objects["a/two"] = b"changed"
+
+    results = await backend.copy_batch_if_match(
+        [
+            CopyRequest(listed("a/one", b"first"), "b/one"),
+            CopyRequest(stale, "b/two"),
+            CopyRequest(listed("a/x", b"x"), "b/x"),
+        ]
+    )
+
+    assert (results["a/one"].ok, results["a/two"].conflict, results["a/x"].conflict) == (True, True, True)
+    assert results["a/two"].current_version is not None
+    assert results["a/two"].current_version.exists
+    assert results["a/x"].current_version is not None
+    assert not results["a/x"].current_version.exists
+    assert {key: wire.state.objects[key] for key in ("a/one", "b/one")} == {"a/one": b"first", "b/one": b"first"}
+    assert "b/two" not in wire.state.objects
+    assert "b/x" not in wire.state.objects
+    assert (wire.state.count("GET"), wire.state.count("COPY")) == (0, 3)

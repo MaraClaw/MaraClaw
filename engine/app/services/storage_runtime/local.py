@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import BinaryIO, override
@@ -20,16 +20,19 @@ import anyio
 
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
+    CopyRequest,
     MaterializedFile,
     StorageBackend,
     StorageEntry,
     StoragePage,
     StorageSnapshot,
     StorageVersion,
+    WriteCondition,
     checked_page_limit,
     content_hash_bytes,
 )
 from app.services.storage_runtime.bounded import read_bounded
+from app.services.storage_runtime.local_batch import copy_batch, delete_batch
 from app.services.storage_runtime.local_contained import (
     local_version_token,
     lstat_entry,
@@ -48,6 +51,7 @@ from app.services.storage_runtime.local_create import (
 )
 from app.services.storage_runtime.local_snapshot import read_file_snapshot
 from app.services.storage_runtime.owned_copy import materialize_copy
+from app.services.storage_runtime.upload_source import UploadSource
 from app.services.storage_runtime.utils import normalize_storage_key
 
 
@@ -162,6 +166,38 @@ class LocalStorageBackend(StorageBackend):
         )
 
     @override
+    async def write_source_if_match(
+        self,
+        key: str,
+        source: UploadSource,
+        *,
+        condition: WriteCondition | None = None,
+        content_type: str | None = None,
+    ) -> ConditionalWriteResult:
+        if condition is not None and condition.require_absent:
+            info = await self._in_thread(
+                lambda root, relative: publish_complete_file(root, relative, source), key, abandon=False
+            )
+            if info is None:
+                return ConditionalWriteResult(ok=False, conflict=True)
+            return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
+        current = await self.get_version(key)
+        if condition is not None and condition.version_token is not None and current.token != condition.version_token:
+            return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
+        await self._in_thread(lambda root, relative: write_contained_file(root, relative, source), key, abandon=False)
+        return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
+
+    @override
+    async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+        root = self.root
+        return await anyio.to_thread.run_sync(lambda: delete_batch(root.resolve(), versions))
+
+    @override
+    async def copy_batch_if_match(self, copies: Sequence[CopyRequest]) -> dict[str, ConditionalWriteResult]:
+        root = self.root
+        return await anyio.to_thread.run_sync(lambda: copy_batch(root.resolve(), copies))
+
+    @override
     async def open_local_file(self, key: str) -> tuple[BinaryIO, os.stat_result] | None:
         """A duplicate of the contained descriptor of a regular file with its `fstat`; the caller closes it.
 
@@ -174,7 +210,11 @@ class LocalStorageBackend(StorageBackend):
     async def materialize(self, key: str) -> MaterializedFile:
         """An owned temp copy read from a contained descriptor, so no caller reopens the guest path by name."""
         root, relative = self.root, normalize_storage_key(key)
-        return await materialize_copy(lambda: open_regular_file(root.resolve(), relative), Path(relative).suffix)
+        return await materialize_copy(
+            lambda: open_regular_file(root.resolve(), relative),
+            Path(relative).suffix,
+            lambda copy: anyio.to_thread.run_sync(copy, abandon_on_cancel=True),
+        )
 
 
 def _read_file(root: Path, relative: str) -> bytes:

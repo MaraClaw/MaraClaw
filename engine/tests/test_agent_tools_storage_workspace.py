@@ -1,8 +1,9 @@
 import asyncio
 import re
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import override
@@ -11,6 +12,7 @@ import pytest
 from pydantic import BaseModel
 
 from app.core.domain.focus import FocusKind, FocusStatus
+from app.core.events import RedisPoolOverloadError
 from app.services import agent_tools, workspace_collaboration, workspace_locking
 from app.services.agent_tool_exec import _agent_tool_exec_storage as storage, workspace, workspace_read
 from app.services.agent_tool_exec._agent_tool_exec_storage import list_files as storage_list_files
@@ -24,6 +26,7 @@ from app.services.agent_tool_exec.registry import (
 from app.services.focus_service import SerializedFocusItem
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
+    CopyRequest,
     StorageBackend,
     StorageEntry,
     StoragePage,
@@ -35,6 +38,11 @@ from app.services.storage_runtime.base import (
 )
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
+from app.services.workspace_locking import (
+    WorkspaceLockLostError,
+    check_workspace_lock,
+    workspace_locks as real_workspace_locks,
+)
 
 
 @pytest.mark.parametrize("source", ["local", "storage", "enterprise"])
@@ -122,11 +130,15 @@ class MemoryStorageBackend(StorageBackend):
                 continue
             rest = existing.removeprefix(prefix)
             name, _, tail = rest.partition("/")
+            version = "" if tail else str(self.versions.get(existing, 0))
             entries[name] = StorageEntry(
                 name=name,
                 key=f"{prefix}{name}",
                 is_dir=bool(tail),
                 size=0 if tail else len(data),
+                version_id=version,
+                etag=version,
+                content_hash=version,
             )
         return sorted(entries.values(), key=lambda entry: (not entry.is_dir, entry.name))
 
@@ -2029,3 +2041,250 @@ async def test_registered_search_spill_or_cursor_loss_fails_explicitly(
 
     assert result.startswith("Invalid search_files cursor:")
     assert "Search page:" not in result
+
+
+class LockRedis:
+    """Just the commands the workspace lock sends, with an expiry that never runs out by itself."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.expiry: dict[str, int] = {}
+        self.renewals = 0
+        self.renewed = asyncio.Event()
+        self.overloaded = False
+
+    async def set(self, key: str, value: str, *, ex: int, nx: bool) -> bool | None:
+        if nx and key in self.values:
+            return None
+        self.values[key], self.expiry[key] = value, ex
+        return True
+
+    async def eval(self, script: str, _count: int, key: str, token: str, *args: int) -> int:
+        mine = self.values.get(key) == token
+        if "'expire'" in script:
+            self.renewals += 1
+            self.renewed.set()
+            if self.overloaded:
+                raise RedisPoolOverloadError("busy")
+            if mine:
+                self.expiry[key] = args[0]
+            self.renewed.set()
+            return int(mine)
+        if mine:
+            del self.values[key]
+        return int(mine)
+
+    async def renewal_done(self) -> None:
+        await asyncio.wait_for(self.renewed.wait(), 10)
+        self.renewed.clear()
+
+
+class TickClock:
+    """A lock clock that only moves when the test says so: each sleep waits for a tick and advances by it."""
+
+    def __init__(self) -> None:
+        self.ticks: asyncio.Queue[float] = asyncio.Queue()
+        self.time = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.time
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.time += await self.ticks.get()
+
+
+@pytest.fixture
+def lock_redis(monkeypatch: pytest.MonkeyPatch) -> LockRedis:
+    redis = LockRedis()
+
+    async def get_redis() -> LockRedis:
+        return redis
+
+    monkeypatch.setattr(workspace_locking, "get_redis", get_redis)
+    return redis
+
+
+def lock_key(agent_id: uuid.UUID, path: str) -> str:
+    return f"workspace-lock:{agent_id}:{path}"
+
+
+async def test_a_workspace_lock_renews_while_its_body_runs_and_stops_when_it_ends(lock_redis: LockRedis):
+    agent_id, clock = uuid.uuid4(), TickClock()
+    key = lock_key(agent_id, "workspace/dir")
+
+    async with real_workspace_locks(agent_id, ["workspace/dir"], ttl_seconds=60, clock=clock):
+        for _ in range(2):
+            lock_redis.expiry[key] = 5
+            await clock.ticks.put(20)
+            await lock_redis.renewal_done()
+            assert lock_redis.expiry[key] == 60
+        check_workspace_lock()
+    await clock.ticks.put(20)
+    await asyncio.sleep(0)
+
+    assert (lock_redis.renewals, clock.sleeps[:2], key in lock_redis.values) == (2, [20.0, 20.0], False)
+
+
+async def test_a_renewal_that_finds_another_owner_marks_the_lock_lost_and_keeps_the_new_owners_lock(
+    lock_redis: LockRedis,
+):
+    agent_id, clock = uuid.uuid4(), TickClock()
+    key = lock_key(agent_id, "workspace/dir")
+
+    async with real_workspace_locks(agent_id, ["workspace/dir"], clock=clock):
+        check_workspace_lock()
+        lock_redis.values[key] = "someone else"
+        await clock.ticks.put(20)
+        await lock_redis.renewal_done()
+        with pytest.raises(WorkspaceLockLostError):
+            check_workspace_lock()
+
+    assert lock_redis.values[key] == "someone else"
+    check_workspace_lock()
+
+
+async def test_a_busy_redis_pool_is_survived_until_a_whole_ttl_passes_without_a_renewal(lock_redis: LockRedis):
+    agent_id, clock = uuid.uuid4(), TickClock()
+
+    async with real_workspace_locks(agent_id, ["workspace/dir"], ttl_seconds=60, clock=clock):
+        lock_redis.overloaded = True
+        await clock.ticks.put(20)
+        await lock_redis.renewal_done()
+        check_workspace_lock()
+        lock_redis.overloaded = False
+        await clock.ticks.put(20)
+        await lock_redis.renewal_done()
+        check_workspace_lock()
+        lock_redis.overloaded = True
+        for _ in range(2):
+            await clock.ticks.put(30)
+            await lock_redis.renewal_done()
+        with pytest.raises(WorkspaceLockLostError):
+            check_workspace_lock()
+
+
+async def test_a_held_workspace_path_is_still_reported_as_busy(lock_redis: LockRedis):
+    agent_id = uuid.uuid4()
+    lock_redis.values[lock_key(agent_id, "workspace/dir")] = "someone else"
+
+    with pytest.raises(RuntimeError, match="Workspace lock busy: workspace/dir"):
+        async with real_workspace_locks(agent_id, ["workspace/dir"]):
+            pytest.fail("the body must not run without the lock")
+
+
+class EditingStorage(MemoryStorageBackend):
+    """Edits one file after the folder was listed, just before the chosen batch call is sent."""
+
+    def __init__(self, files: dict[str, bytes], edited: str, before: str):
+        super().__init__(files)
+        self.edited, self.before, self.calls = edited, before, 0
+
+    async def _edit(self, call: str) -> None:
+        if call == self.before and not self.calls:
+            await self.write_bytes(self.edited, b"edited by someone else")
+        self.calls += call == self.before
+
+    @override
+    async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+        await self._edit("delete")
+        return await super().delete_batch_if_match(versions)
+
+    @override
+    async def copy_batch_if_match(self, copies: Sequence[CopyRequest]) -> dict[str, ConditionalWriteResult]:
+        await self._edit("copy")
+        return await super().copy_batch_if_match(copies)
+
+
+@pytest.fixture
+def revisions(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    written: list[tuple[str, str]] = []
+
+    async def record(*, path: str, operation: str, **_rest: object) -> None:
+        written.append((path, operation))
+
+    monkeypatch.setattr(workspace_collaboration, "record_revision", record)
+    return written
+
+
+async def test_a_folder_delete_leaves_a_file_edited_after_the_listing_and_names_it(
+    monkeypatch, unused_db_session, revisions
+):
+    agent_id = uuid.uuid4()
+    folder = f"{agent_id}/workspace/dir"
+    storage = EditingStorage(
+        {f"{folder}/a.txt": b"a", f"{folder}/b.txt": b"b", f"{folder}/sub/c.txt": b"c"}, f"{folder}/b.txt", "delete"
+    )
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.delete_workspace_file(
+        agent_id=agent_id, path="workspace/dir", actor_type="user", actor_id=agent_id, enforce_human_lock=False
+    )
+
+    assert (result.ok, result.rejected_paths) == (False, ["workspace/dir/b.txt"])
+    assert "workspace/dir/b.txt" in result.message
+    assert storage.files == {f"{folder}/b.txt": b"edited by someone else"}
+    assert sorted(revisions) == [("workspace/dir/a.txt", "delete"), ("workspace/dir/sub/c.txt", "delete")]
+
+
+@pytest.mark.parametrize("before", ["copy", "delete"])
+async def test_a_folder_move_keeps_a_file_edited_after_the_listing_at_its_source(
+    monkeypatch, unused_db_session, revisions, before
+):
+    agent_id = uuid.uuid4()
+    source = f"{agent_id}/workspace/src"
+    storage = EditingStorage(
+        {f"{source}/a.txt": b"a", f"{source}/b.txt": b"b", f"{source}/sub/c.txt": b"c"}, f"{source}/b.txt", before
+    )
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.move_workspace_path(
+        agent_id=agent_id,
+        source_path="workspace/src",
+        destination_path="workspace/dst",
+        actor_type="user",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert (result.ok, result.rejected_paths) == (False, ["workspace/src/b.txt"])
+    assert storage.files[f"{source}/b.txt"] == b"edited by someone else"
+    assert {key for key in storage.files if key.startswith(source)} == {f"{source}/b.txt"}
+    moved = {key.removeprefix(f"{agent_id}/") for key in storage.files if "/dst/" in key} - {"workspace/dst/b.txt"}
+    assert moved == {"workspace/dst/a.txt", "workspace/dst/sub/c.txt"}
+    assert sorted(revisions) == [
+        ("workspace/dst/a.txt", "move_destination"),
+        ("workspace/dst/sub/c.txt", "move_destination"),
+        ("workspace/src/a.txt", "move_source"),
+        ("workspace/src/sub/c.txt", "move_source"),
+    ]
+
+
+async def test_a_folder_delete_stops_when_a_renewal_finds_the_lock_taken(
+    monkeypatch, unused_db_session, revisions, lock_redis: LockRedis
+):
+    agent_id, clock = uuid.uuid4(), TickClock()
+    folder = f"{agent_id}/workspace/dir"
+
+    class StealsTheLock(MemoryStorageBackend):
+        @override
+        async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+            results = await super().delete_batch_if_match(versions)
+            lock_redis.values[lock_key(agent_id, "workspace/dir")] = "someone else"
+            await clock.ticks.put(20)
+            await lock_redis.renewal_done()
+            return results
+
+    storage = StealsTheLock({f"{folder}/f{index:04d}.txt": b"x" for index in range(1500)})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+    monkeypatch.setattr(workspace_collaboration, "workspace_locks", partial(real_workspace_locks, clock=clock))
+
+    result = await workspace_collaboration.delete_workspace_file(
+        agent_id=agent_id, path="workspace/dir", actor_type="user", actor_id=agent_id, enforce_human_lock=False
+    )
+
+    assert result.ok is False
+    assert "lock lost" in result.message
+    assert len(storage.files) == 500
+    assert len(revisions) == 1000

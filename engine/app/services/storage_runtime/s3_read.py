@@ -3,6 +3,7 @@
 import re
 from collections.abc import Callable, Mapping
 from contextlib import closing
+from functools import partial
 from typing import Protocol, TypeIs
 
 from botocore.exceptions import ClientError
@@ -19,6 +20,7 @@ from app.services.storage_runtime.bounded import read_bounded
 from app.services.storage_runtime.owned_copy import materialize_copy
 from app.services.storage_runtime.s3_connection import response_version_id
 from app.services.storage_runtime.s3_types import client_error_response
+from app.services.storage_runtime.thread_lanes import ThreadLane
 
 
 class _ResponseBody(Protocol):
@@ -112,6 +114,10 @@ def read_object_snapshot(get_object: Callable[[], Mapping[str, object]], key: st
         )
 
 
-async def materialize_object(get_object: Callable[[], Mapping[str, object]], suffix: str) -> MaterializedFile:
-    """Stream the object into a temp file made by the worker; the returned handle owns it."""
-    return await materialize_copy(lambda: closing(_open_body(get_object)), suffix)
+async def materialize_object(
+    lane: ThreadLane, get_object: Callable[[], Mapping[str, object]], suffix: str
+) -> MaterializedFile:
+    """Stream the object into a temp file made by a `lane` worker; the returned handle owns it."""
+    return await materialize_copy(
+        lambda: closing(_open_body(get_object)), suffix, partial(lane.run, abandon_on_cancel=True)
+    )

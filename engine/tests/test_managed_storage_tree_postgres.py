@@ -1,11 +1,16 @@
 """Tree deletion and read-through promotion under the managed quota (opt-in ``MARACLAW_TEST_POSTGRES_DSN``)."""
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 
 from agent_deletion_fixtures import deletion_scenario
+from app.db.connection import DbConnection
+from app.services.storage_runtime import quota_ledger
+from app.services.storage_runtime.base import CopyRequest, StorageVersion
 from app.services.storage_runtime.quota_errors import (
     ManagedKeyError,
     StorageDeleteIncompleteError,
@@ -171,3 +176,132 @@ async def test_a_tree_delete_reports_a_pending_key_not_yet_visible_in_s3(quota_w
     with pytest.raises(StorageDeleteIncompleteError):
         await world.backend.delete_tree(f"{agent}/tree")
     assert await world.usage(agent) == 300
+
+
+async def listed(world: StorageWorld, agent: UUID, folder: str = "tree") -> list[StorageVersion]:
+    """The versions a flat listing reports, as a folder delete or move takes them: no HEAD per file."""
+    return [entry.version() async for entry in world.backend.list_files_flat(f"{agent}/{folder}")]
+
+
+def count_ledger_transactions(world: StorageWorld) -> list[int]:
+    count = [0]
+    real = quota_ledger.durable_transaction
+
+    @asynccontextmanager
+    async def counted() -> AsyncGenerator[DbConnection]:
+        count[0] += 1
+        async with real() as db:
+            yield db
+
+    world.monkeypatch.setattr(quota_ledger, "durable_transaction", counted)
+    return count
+
+
+async def test_a_batch_delete_uses_two_ledger_transactions_per_thousand_files_and_spares_an_edited_one(
+    quota_world: StorageWorld,
+):
+    world = quota_world
+    agent = await world.agent()
+    await seed_tree(world, agent, 2300)
+    versions = await listed(world, agent)
+    world.s3.state.objects[f"{agent}/tree/00007"] = b"edited after the listing"
+    transactions = count_ledger_transactions(world)
+
+    results = await world.backend.delete_batch_if_match(versions)
+
+    assert transactions == [6]
+    assert sum(result.ok for result in results.values()) == 2299
+    edited = results[f"{agent}/tree/00007"]
+    assert (edited.ok, edited.conflict, edited.current_version is not None and edited.current_version.exists) == (
+        False,
+        True,
+        True,
+    )
+    assert set(world.s3.state.objects) == {f"{agent}/tree/00007"}
+    assert world.s3.state.count("HEAD") == 0
+    assert await world.usage(agent) == 10
+    rows = await world.scenario.rows("SELECT object_key, operation_id FROM agent_storage_objects")
+    assert [(row["object_key"], row["operation_id"]) for row in rows] == [("tree/00007", None)]
+
+
+async def test_a_batch_delete_skips_a_key_held_by_an_unresolved_write(quota_world: StorageWorld):
+    world = quota_world
+    world.scale(LIMIT, CEILING)
+    agent = await world.agent()
+    await seed_tree(world, agent, 3)
+    versions = await listed(world, agent)
+    held = await reserve_write(ManagedKey(agent, "tree/00001"), 300, "0" * 32)
+    assert isinstance(held, Reservation)
+
+    results = await world.backend.delete_batch_if_match(versions)
+
+    assert {key.removeprefix(f"{agent}/tree/"): result.ok for key, result in results.items()} == {
+        "00000": True,
+        "00001": False,
+        "00002": True,
+    }
+    assert set(world.s3.state.objects) == {f"{agent}/tree/00001"}
+    assert await world.usage(agent) == 300
+
+
+async def test_an_unanswered_batch_delete_keeps_every_charge_and_blocks_the_keys(quota_world: StorageWorld):
+    world = quota_world
+    agent = await world.agent()
+    await seed_tree(world, agent, 3)
+    versions = await listed(world, agent)
+    world.s3.state.multi_delete_status = 500
+
+    with pytest.raises(StorageKeyPendingError):
+        _ = await world.backend.delete_batch_if_match(versions)
+
+    assert (await world.usage(agent), len(world.s3.state.objects)) == (30, 3)
+
+
+async def test_a_batch_copy_charges_every_destination_in_one_reservation_and_copies_server_side(
+    quota_world: StorageWorld,
+):
+    world = quota_world
+    world.scale(LIMIT, CEILING)
+    agent = await world.agent()
+    await seed_tree(world, agent, 5)
+    versions = await listed(world, agent)
+    world.s3.state.objects[f"{agent}/tree/00002"] = b"edited after the listing"
+    transactions = count_ledger_transactions(world)
+
+    results = await world.backend.copy_batch_if_match(
+        [CopyRequest(version, version.key.replace("/tree/", "/moved/")) for version in versions]
+    )
+
+    assert transactions == [2]
+    assert {key.removeprefix(f"{agent}/tree/"): result.ok for key, result in results.items()} == {
+        "00000": True,
+        "00001": True,
+        "00002": False,
+        "00003": True,
+        "00004": True,
+    }
+    assert sorted(key.removeprefix(f"{agent}/moved/") for key in world.s3.state.objects if "/moved/" in key) == [
+        "00000",
+        "00001",
+        "00003",
+        "00004",
+    ]
+    assert (world.s3.state.count("GET"), world.s3.state.count("COPY")) == (0, 5)
+    assert await world.usage(agent) == 90
+    rows = await world.scenario.rows("SELECT operation_id FROM agent_storage_objects WHERE operation_id IS NOT NULL")
+    assert rows == []
+
+
+async def test_a_batch_copy_that_does_not_fit_is_refused_before_any_provider_call(quota_world: StorageWorld):
+    world = quota_world
+    world.scale(70, CEILING)
+    agent = await world.agent()
+    await seed_tree(world, agent, 5)
+    versions = await listed(world, agent)
+
+    with pytest.raises(StorageQuotaExceededError):
+        _ = await world.backend.copy_batch_if_match(
+            [CopyRequest(version, version.key.replace("/tree/", "/moved/")) for version in versions]
+        )
+
+    assert (world.s3.state.count("COPY"), await world.usage(agent)) == (0, 50)
