@@ -236,6 +236,17 @@ class WeComStreamManager:
                     self._connected[agent_id] = False
                     await _persist_connected(source.config_id, False)
 
+            async def refuse_missing_sender(frame: _WeComFrame, body: JsonObject, kind: str) -> None:
+                logger.warning(
+                    f"[WeCom Stream] Missing sender id in {kind} payload for agent {agent_id}: "
+                    f"body_keys={list(body.keys())}"
+                )
+                await reply_stream(
+                    frame,
+                    generate_req_id("stream"),
+                    "Unable to identify the sender for this WeCom message.",
+                )
+
             # ── Message handler: text ──
             async def on_text(frame: _WeComFrame) -> None:
                 try:
@@ -252,16 +263,7 @@ class WeComStreamManager:
 
                     sender_id = _extract_wecom_sender_id(body)
                     if not sender_id:
-                        logger.warning(
-                            f"[WeCom Stream] Missing sender id in text payload for agent {agent_id}: "
-                            f"body_keys={list(body.keys())}"
-                        )
-                        stream_id = generate_req_id("stream")
-                        await reply_stream(
-                            frame,
-                            stream_id,
-                            "Unable to identify the sender for this WeCom message.",
-                        )
+                        await refuse_missing_sender(frame, body, "text")
                         return
 
                     chat_type = _extract_wecom_chat_type(body)
@@ -308,9 +310,13 @@ class WeComStreamManager:
 
             async def on_media(frame: _WeComFrame) -> None:
                 body = _json_object(getattr(frame, "body", None))
+                sender_id = _extract_wecom_sender_id(body)
+                if not sender_id:
+                    await refuse_missing_sender(frame, body, "media")
+                    return
                 reply_text = await _process_wecom_stream_message(
                     agent_id=agent_id,
-                    sender_id=_extract_wecom_sender_id(body),
+                    sender_id=sender_id,
                     user_text="",
                     chat_id=_extract_wecom_chat_id(body),
                     chat_type=_extract_wecom_chat_type(body),

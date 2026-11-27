@@ -134,7 +134,9 @@ message that cannot be accepted must not hold back the rest: a message without `
 without `media_id`, is logged as a warning and skipped, and the page goes on (cursor handling is unchanged). A message
 from a sender who is not a linked member is acknowledged with `success` and ignored on the callback, inside a KF page
 and over the AI Bot WebSocket, with no reply and nothing written; over the WebSocket the stream is finished with an
-empty reply, as for an accepted message, and a message without an ID is logged and finished the same way. Every other
+empty reply, as for an accepted message, and a message without an ID is logged and finished the same way. A WebSocket
+text, image, file, mixed or video frame that names no sender is logged as a warning with the frame's keys and answered
+with a fixed "unable to identify the sender" reply before any download, storage or acceptance. Every other
 failure (access token, `sync_msg`, storage, database, a 403 from authorization, a conflicting event) still answers
 `503`, so WeCom redelivers and the receipts dedupe what was already accepted.
 
@@ -499,6 +501,8 @@ using separate API/connector roles must run the `bootstrap` role first.
 - Requires prior inbound traffic so a session holds `google_chat_spaces/...`.
 - Resolves DM sessions for the member first, then agent-scoped sessions including
   **group** rooms (creator-owned group sessions are included).
+- A member whose organization record is not linked to a MaraClaw account has no session, so the send is
+  refused with "requires them to message the bot first"; nothing creates an account for them.
 
 ## Provider access tokens
 
