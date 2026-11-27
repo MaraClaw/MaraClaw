@@ -6,9 +6,10 @@ uncapped, so ``is_system`` is read before the tier. Existing members and agents 
 is refused.
 
 An account is an active membership (``users.is_active``) of the company whose role is not ``platform_admin``: members,
-agent admins and organization admins alike, as the plan quote counts the administrator. IM channel and Feishu
-auto-created users are not a separate case: ``channel_user_service`` refuses to create them in any non-system,
-non-default organization, which every capped organization is, and ``FeishuService.login_or_register`` has no caller.
+agent admins and organization admins alike, as the plan quote counts the administrator. IM channel and Feishu users
+are not a separate case: an inbound channel message never creates a user, ``get_platform_user_by_org_member`` refuses to
+create one in any non-system, non-default organization, which every capped organization is, and
+``FeishuService.login_or_register`` has no caller.
 An agent is counted exactly as the per-account cap counts it (``agent_dao.count_ordinary_for_creator``), company-wide:
 non-expired, non-system, any lifecycle status.
 

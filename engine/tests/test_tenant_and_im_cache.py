@@ -1,4 +1,4 @@
-"""Tenant row cache, IM token cache, and shared channel dedup."""
+"""Tenant row cache and IM token cache."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from app.core.row_memo import clear_row_memo
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services import im_token_cache
-from app.services.channels import dedup as channel_dedup, google_chat
+from app.services.channels import google_chat
 from im_token_cache_fakes import GoogleWire, TeamsWire, private_key_pem, service_account
 
 
@@ -32,11 +32,9 @@ def fake_cache(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(redis_cache, "_client", get_cache_redis)
     monkeypatch.setattr(tenant_cache, "_ttl", lambda: 60)
     monkeypatch.setattr(im_token_cache, "_ttl_enabled", lambda: True)
-    monkeypatch.setattr(channel_dedup, "_redis_ttl", lambda: 86400)
     yield client
     redis_cache.reset_circuit()
     clear_row_memo()
-    channel_dedup._stores.clear()
 
 
 def _tenant() -> TenantRecord:
@@ -263,24 +261,6 @@ async def test_tenant_cache_set_skips_after_bump(fake_cache: FakeRedis) -> None:
     await tenant_cache.bump_tenant_cache(tenant.id)
     await tenant_cache.set_cached_tenant(tenant, observed_ver=observed)
     assert await tenant_cache.get_cached_tenant(tenant.id) is None
-
-
-@pytest.mark.asyncio
-async def test_channel_dedup_shared_uses_redis(fake_cache: FakeRedis) -> None:
-    ns, key = "feishu", "evt-1"
-    assert await channel_dedup.already_processed_shared(ns, key) is False
-    await channel_dedup.mark_processed_shared(ns, key)
-    channel_dedup._stores.clear()
-    assert await channel_dedup.already_processed_shared(ns, key) is True
-
-
-@pytest.mark.asyncio
-async def test_channel_dedup_redis_down_falls_to_local(fake_cache: FakeRedis) -> None:
-    fake_cache.fail = True
-    ns, key = "slack", "evt-down"
-    assert await channel_dedup.already_processed_shared(ns, key) is False
-    await channel_dedup.mark_processed_shared(ns, key)
-    assert channel_dedup.already_processed(ns, key) is True
 
 
 SCOPE = google_chat.CHAT_BOT_SCOPE

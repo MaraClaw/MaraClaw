@@ -5,13 +5,16 @@ import pytest
 
 from app.config import get_settings
 from app.core.domain.users import UserRole
+from app.records.agent import AgentRecord
 from app.records.identity import IdentityProviderRecord, IdentityRecord
+from app.records.org import OrgMemberRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
 from app.services import onboarding, platform_admin_seeder as seeder
 from app.services.auth_provider import BaseAuthProvider, ExternalUserInfo, FeishuAuthProvider
-from app.services.channel_user_service import ChannelUserService
+from app.services.channel_user_service import ChannelUserResolutionError
+from app.services.channels import binding
 from app.services.channels.types import outbound_provider_key
 
 
@@ -45,43 +48,43 @@ async def test_canonical_onboarding_phase_is_persisted(phase: str) -> None:
 
 @pytest.mark.parametrize("raw", ["google_chat", "googlechat", "google-chat", "gchat"])
 async def test_google_chat_input_alias_does_not_reuse_obsolete_provider_rows(raw: str) -> None:
-    # Given
+    # Given a sender whose provider rows hold an obsolete alias row next to no canonical row
     tenant_id = uuid4()
+    agent = AgentRecord(id=uuid4(), creator_id=uuid4(), tenant_id=tenant_id, name="Bot")
     obsolete = IdentityProviderRecord(id=uuid4(), provider_type="gchat", name="Obsolete", tenant_id=tenant_id)
-    canonical = IdentityProviderRecord(id=uuid4(), provider_type="google_chat", name="Chat", tenant_id=tenant_id)
     lookup = AsyncMock(side_effect=[None, obsolete])
-    create = AsyncMock(return_value=canonical)
     with (
-        patch("app.services.channel_user_service.identity_provider_dao.get_by_type_and_tenant", lookup),
-        patch("app.services.channel_user_service.identity_provider_dao.create", create),
+        patch("app.services.channels.binding.identity_provider_dao.get_by_type_and_tenant", lookup),
+        pytest.raises(ChannelUserResolutionError),
     ):
         # When
-        result = await ChannelUserService()._ensure_provider(raw, tenant_id)
-    # Then
-    assert result is canonical
+        await binding.resolve_bound_sender(agent=agent, channel_type=raw, external_user_id="user", extra_info={})
+    # Then only the canonical provider row is read
     lookup.assert_awaited_once_with("google_chat", tenant_id)
-    assert create.await_args is not None
-    assert create.await_args.kwargs["obj_in"]["provider_type"] == "google_chat"
 
 
 @pytest.mark.parametrize("raw", ["teams", "microsoft_teams", "ms_teams", "msteams"])
 @pytest.mark.parametrize("persisted", ["teams", "microsoft_teams"])
 async def test_teams_current_provider_writers_remain_resolvable(raw: str, persisted: str) -> None:
-    # Given
+    # Given a linked member under a provider row stored with either historical Teams name
     tenant_id = uuid4()
+    agent = AgentRecord(id=uuid4(), creator_id=uuid4(), tenant_id=tenant_id, name="Bot")
     provider = IdentityProviderRecord(id=uuid4(), provider_type=persisted, name="Teams", tenant_id=tenant_id)
+    user = UserRecord(id=uuid4(), tenant_id=tenant_id)
+    member = OrgMemberRecord(id=uuid4(), provider_id=provider.id, user_id=user.id, name="Human")
     lookup = AsyncMock(side_effect=[provider] if persisted == "teams" else [None, provider])
-    create = AsyncMock()
     with (
-        patch("app.services.channel_user_service.identity_provider_dao.get_by_type_and_tenant", lookup),
-        patch("app.services.channel_user_service.identity_provider_dao.create", create),
+        patch("app.services.channels.binding.identity_provider_dao.get_by_type_and_tenant", lookup),
+        patch.object(binding.channel_user_service, "_find_org_member", AsyncMock(return_value=member)),
+        patch("app.services.channels.binding.user_dao.get_with_identity", AsyncMock(return_value=user)),
     ):
         # When
-        result = await ChannelUserService()._ensure_provider(raw, tenant_id)
-    # Then
-    assert result is provider
+        result = await binding.resolve_bound_sender(
+            agent=agent, channel_type=raw, external_user_id="29:abc", extra_info={}
+        )
+    # Then the sender resolves whichever name the row was written with
+    assert result is user
     assert outbound_provider_key(raw) == "teams"
-    create.assert_not_awaited()
 
 
 async def test_earliest_platform_admin_cannot_supply_unpersisted_genesis_authority() -> None:

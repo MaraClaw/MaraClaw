@@ -8,6 +8,7 @@ import pytest
 from app.dao.company_admission_dao import company_admission_dao
 from app.records.agent import AgentRecord
 from app.records.identity import IdentityRecord
+from app.records.org import OrgMemberRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -30,9 +31,12 @@ async def test_channel_provisioning_uses_real_contact_without_manufactured_handl
     tenant_id = uuid4()
     identity = IdentityRecord(id=uuid4(), email=expected_email)
     user = UserRecord(id=uuid4(), identity_id=identity.id, tenant_id=tenant_id, identity=identity)
+    member = OrgMemberRecord(id=uuid4(), name=profile.get("name", ""), email=profile.get("email"), tenant_id=tenant_id)
     lookup = AsyncMock(return_value=None)
     create_identity = AsyncMock(return_value=identity)
     create_user = AsyncMock(return_value=user)
+    monkeypatch.setattr(channel_users.sso_service, "match_user_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(channel_users.org_member_dao, "update", AsyncMock())
     monkeypatch.setattr(channel_users.identity_dao, "get_by_email", lookup)
     monkeypatch.setattr(channel_users.identity_dao, "create_identity", create_identity)
     monkeypatch.setattr(channel_users.user_dao, "create", create_user)
@@ -47,7 +51,7 @@ async def test_channel_provisioning_uses_real_contact_without_manufactured_handl
         ),
     )
 
-    result = await channel_users.ChannelUserService()._create_channel_user("feishu", "external-123", profile, tenant_id)
+    result = await channel_users.get_platform_user_by_org_member(member, tenant_id)
 
     assert result is user
     create_identity.assert_awaited_once_with(
