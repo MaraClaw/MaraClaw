@@ -126,6 +126,10 @@ class Runtime:
                 PROGRESS_BUDGET_SECONDS as AGENT_START_BUDGET_SECONDS,
                 agent_start_reconciler_loop,
             )
+            from app.services.agent_state_snapshot_worker import (
+                progress_budget_seconds as agent_state_snapshot_budget_seconds,
+                start_agent_state_snapshot_worker,
+            )
             from app.services.agent_workspace_quota_worker import (
                 progress_budget_seconds as agent_workspace_quota_budget_seconds,
                 start_agent_workspace_quota_worker,
@@ -268,6 +272,12 @@ class Runtime:
                 start_workspace_mirror_worker(),
                 requirement="loop",
                 progress_budget_seconds=workspace_mirror_budget_seconds(),
+            )
+            self.tasks.start(
+                "agent_state_snapshot",
+                start_agent_state_snapshot_worker(),
+                requirement="loop",
+                progress_budget_seconds=agent_state_snapshot_budget_seconds(),
             )
             self.tasks.start(
                 "agent_resource_pressure",

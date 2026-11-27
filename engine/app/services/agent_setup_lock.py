@@ -55,6 +55,25 @@ async def setup_workspace_lock(
             release()
 
 
+@asynccontextmanager
+async def agent_flock(agent_dir: Path, name: str, *, wait_seconds: float, busy: Exception) -> AsyncGenerator[None]:
+    """Exclusive per-agent flock `_setup_locks/<agent dir name>.<name>.lock` beside the setup lock; `busy` when it stays taken."""
+    lock_dir = agent_dir.parent / "_setup_locks"
+    await anyio.Path(lock_dir).mkdir(parents=True, exist_ok=True)
+    lock = (lock_dir / f"{agent_dir.name}.{name}.lock").open("a+b")
+    try:
+        try:
+            await wait_for_flock(lock, fcntl.LOCK_EX, wait_seconds)
+        except WorkspaceLockTimeoutError as exc:
+            raise busy from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+    finally:
+        lock.close()
+
+
 async def wait_for_flock(lock: IO[bytes], mode: int, timeout_seconds: float | None) -> None:
     """Take `mode` on an open lock file without blocking the loop; a timeout of 0 tries exactly once."""
     deadline = None if timeout_seconds is None else anyio.current_time() + timeout_seconds

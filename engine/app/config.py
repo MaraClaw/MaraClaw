@@ -442,6 +442,13 @@ class Settings(BaseSettings):
     # How many agents the workspace mirror worker mirrors at once, never two of the same organization. Each in-flight
     # agent holds one transfer buffer, so this also bounds the mirror's memory.
     WORKSPACE_MIRROR_CONCURRENCY: int = Field(default=4, ge=1, le=32)
+    # With the workspace mirror active, a worker keeps one recovery snapshot per agent in S3 of the OpenClaw state the
+    # mirror does not cover (sessions, Knowledge, auth profiles, gateway token); a start on an empty host restores it.
+    AGENT_STATE_SNAPSHOT_ENABLED: bool = True
+    # Seconds between snapshot passes; an agent is snapshotted at most once per pass, and only when its state changed.
+    AGENT_STATE_SNAPSHOT_INTERVAL_SECONDS: float = Field(default=600.0, ge=60, le=86400, allow_inf_nan=False)
+    # Largest snapshot archive kept or restored; a bigger one is discarded and the previous snapshot stays current.
+    AGENT_STATE_SNAPSHOT_MAX_BYTES: int = Field(default=1024**3, ge=1024**2, le=16 * 1024**3)
     # Lifetime of a guest-minted share link for one workspace file (POST /api/gateway/file-links).
     FILE_SHARE_LINK_TTL_SECONDS: int = Field(default=900, ge=60, le=86400)
     # Seconds between passes of the worker that samples each tier-governed agent's guest memory, CPU and managed

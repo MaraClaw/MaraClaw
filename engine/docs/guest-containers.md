@@ -478,6 +478,12 @@ Mirrored files count against the managed S3 quota
 allowance above, which measures the host directory and the writable layer. Scope,
 conflict rule, freezes, quota behaviour and limits: [workspace-mirror.md](workspace-mirror.md).
 
+The rest of the OpenClaw state in the agent directory (sessions, Knowledge, auth
+profiles, the gateway token) is covered by state snapshots: the worker loop
+`agent_state_snapshot` keeps one current archive per agent in S3, and a rehydrating
+start on a directory without OpenClaw state restores it before the mirror pull
+([agent-state-snapshots.md](agent-state-snapshots.md)).
+
 ## Resource Pressure Episodes
 
 Platform admins need evidence of which organizations outgrow their tier. The engine
@@ -930,7 +936,10 @@ using staging and rename, with frozen `task_history.json` and a deletion identit
 marker. Retry resumes across copy, publication, source-removal or completion
 interruption without creating a second archive. An existing conflicting archive
 fails rather than being overwritten. Source workspace removal follows archive
-publication; the outbox completes only after cleanup succeeds.
+publication; the outbox completes only after cleanup succeeds. With an S3 primary,
+cleanup then deletes the agent's state snapshots; a busy snapshot flock or a storage
+error keeps the job pending
+([agent-state-snapshots.md](agent-state-snapshots.md#deletion-and-company-transfer)).
 
 ## Reconciliation And Safe Observations
 

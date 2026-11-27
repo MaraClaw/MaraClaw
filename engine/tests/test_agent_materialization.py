@@ -210,6 +210,22 @@ async def test_mirror_materialization_writes_only_what_the_mirror_does_not_own(
     assert (agent_dir / ".openclaw" / "workspace").is_symlink()
 
 
+async def test_mirror_materialization_leaves_files_a_state_snapshot_restored(mirror_tree: MirrorTree) -> None:
+    # Given legacy keys in the durable store for files a state snapshot restore just placed, and one it did not.
+    manager, objects, agent_id = mirror_tree
+    restored = frozenset({DATABASE, ".openclaw-gateway-token"})
+    objects.update({f"{agent_id}/{rel}": b"legacy" for rel in [*restored, "openclaw.json"]})
+    agent_dir = manager._agent_dir(agent_id)
+    for rel in restored:
+        (agent_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        _ = (agent_dir / rel).write_bytes(b"restored")
+    # When the agent directory is rehydrated.
+    _ = await manager._materialize_agent_dir(agent_id, restored=restored)
+    # Then the restored files keep their content and the rest still hydrates.
+    assert {rel: (agent_dir / rel).read_bytes() for rel in restored} == dict.fromkeys(restored, b"restored")
+    assert (agent_dir / "openclaw.json").read_bytes() == b"legacy"
+
+
 @pytest.mark.parametrize("planted", ["parent", "destination"])
 async def test_mirror_materialization_never_writes_through_a_guest_symlink(
     mirror_tree: MirrorTree, tmp_path: Path, planted: str

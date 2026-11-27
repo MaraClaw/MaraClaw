@@ -39,7 +39,7 @@ async def test_repeated_start_adopts_ready_guest_without_disk_writes(env, monkey
     # Given an owned running guest and a workspace that must not be rewritten.
     manager, docker, agent = env
 
-    async def forbidden(_id):
+    async def forbidden(_id, *, restored=frozenset()):
         pytest.fail("adoption rewrote the workspace")
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", forbidden)
@@ -70,7 +70,7 @@ async def test_legacy_state_mount_requires_explicit_replacement_without_mutation
     docker.guests["old"].state.status = status
     docker.guests["old"].mounts[0].destination = "/home/node/.openclaw"
 
-    async def forbidden(_id):
+    async def forbidden(_id, *, restored=frozenset()):
         pytest.fail("legacy mount refusal rewrote the workspace")
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", forbidden)
@@ -119,7 +119,7 @@ async def test_multiple_owned_candidates_fail_before_workspace_writes(env, monke
     docker.guests["old"].name = "parked"
     docker.add(replace(agent, container_id="second"))
 
-    async def forbidden(_id):
+    async def forbidden(_id, *, restored=frozenset()):
         pytest.fail("conflict rewrote the workspace")
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", forbidden)
@@ -137,7 +137,7 @@ async def test_foreign_canonical_candidate_fails_before_writes(env, monkeypatch)
     agent.container_id = None
     docker.guests["old"].config.labels[AGENT_LABEL] = str(uuid4())
 
-    async def forbidden(_id):
+    async def forbidden(_id, *, restored=frozenset()):
         pytest.fail("foreign ownership rewrote the workspace")
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", forbidden)

@@ -67,7 +67,7 @@ class _Env:
         monkeypatch.setattr(guest_readiness, "probe_guest", lambda _client, _reference, _timeout, _child: True)
         monkeypatch.setattr(guest_readiness, "READY_INTERVAL_SECONDS", 0)
 
-        async def materialize(agent_id: uuid.UUID):
+        async def materialize(agent_id: uuid.UUID, *, restored: frozenset[str] = frozenset()):
             self.materialized.append(agent_id)
             return self.agent_dir
 

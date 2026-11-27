@@ -1,20 +1,26 @@
 import errno
+import fcntl
 import json
 import sys
 from collections.abc import Sequence
 from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pywhales import DockerClient
 from pywhales.components.container import cli_wrapper as container_cli
 
+from app.config import get_settings
+from app.records.agent import AgentRecord
 from app.records.agent_deletion_cleanup import AgentDeletionCleanupRecord
+from app.services import agent_deletion_cleanup as cleanup_module, workspace_mirror
 from app.services.agent_deletion_archive import publish_deletion_archive
 from app.services.agent_deletion_cleanup import _remove_remaining_writers
+from app.services.agent_state_snapshot import agent_prefix
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError
+from state_snapshot_fakes import MemoryStore
 
 
 def make_job(root: Path) -> AgentDeletionCleanupRecord:
@@ -135,3 +141,78 @@ def test_label_discovery_does_not_remove_a_foreign_inspected_guest(monkeypatch):
         _remove_remaining_writers(client, agent_id)
     # Then neither stop nor remove reaches a foreign guest.
     assert calls == []
+
+
+class CleanupQueue:
+    """One job's deletion cleanup row; `progressed` records each (completed, error) the cleanup reports."""
+
+    def __init__(self, job: AgentDeletionCleanupRecord) -> None:
+        self.job = job
+        self.progressed: list[tuple[bool, str | None]] = []
+
+    async def get_pending(self, _agent_id: UUID) -> AgentDeletionCleanupRecord | None:
+        return self.job
+
+    async def begin_attempt(self, _agent_id: UUID) -> None:
+        return None
+
+    async def progress(self, _agent_id: UUID, *, completed: bool = False, error: str | None = None) -> None:
+        self.progressed.append((completed, error))
+
+
+type SnapshotDeletion = tuple[AgentDeletionCleanupRecord, CleanupQueue, MemoryStore]
+
+
+@pytest.fixture
+def snapshot_deletion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SnapshotDeletion:
+    """A deletion whose guest is gone, an S3 primary holding the agent's snapshots, and both switches off."""
+    job = make_job(tmp_path)
+    queue = CleanupQueue(job)
+    store = MemoryStore({f"{agent_prefix(job.agent_id)}snapshot": b"archive", f"{agent_prefix(uuid4())}other": b"kept"})
+
+    async def removed(_agent: AgentRecord) -> bool:
+        return True
+
+    async def no_writers(*_args: object, **_options: object) -> None:
+        return None
+
+    monkeypatch.setattr(cleanup_module, "cleanup", queue)
+    monkeypatch.setattr(cleanup_module, "run_docker", no_writers)
+    monkeypatch.setattr(cleanup_module.agent_manager, "docker_client", SimpleNamespace())
+    monkeypatch.setattr(cleanup_module.agent_manager, "remove_container", removed)
+    monkeypatch.setattr(workspace_mirror, "get_storage_backend", lambda: store)
+    monkeypatch.setattr(get_settings(), "WORKSPACE_MIRROR_ENABLED", False)
+    monkeypatch.setattr(get_settings(), "AGENT_STATE_SNAPSHOT_ENABLED", False)
+    return job, queue, store
+
+
+async def test_deletion_deletes_the_agents_snapshots_with_snapshots_off_before_it_completes(
+    snapshot_deletion: SnapshotDeletion,
+) -> None:
+    # Given a pending deletion with snapshots and the mirror both switched off.
+    job, queue, store = snapshot_deletion
+    # When the cleanup runs.
+    await cleanup_module._complete_cleanup(job.agent_id)
+    # Then the archive is published, the agent's snapshot prefix is gone, other agents keep theirs, and it completed.
+    assert (job.archive_path / "SOUL.md").read_text() == "Workspace"
+    assert not any(key.startswith(agent_prefix(job.agent_id)) for key in store.objects)
+    assert len(store.objects) == 1
+    assert queue.progressed == [(False, None), (True, None)]
+
+
+async def test_deletion_stays_pending_while_a_snapshot_of_the_agent_runs(snapshot_deletion: SnapshotDeletion) -> None:
+    # Given a snapshot or restore of the agent holding its snapshot flock.
+    job, queue, store = snapshot_deletion
+    before = dict(store.objects)
+    lock = job.workspace_path.parent / "_setup_locks" / f"{job.agent_id}.snapshot.lock"
+    lock.parent.mkdir(exist_ok=True)
+    with lock.open("a+b") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # When the cleanup runs.
+        await cleanup_module._complete_cleanup(job.agent_id)
+    # Then nothing is deleted and the job records the busy flock instead of completing.
+    assert store.objects == before
+    [first, (completed, error)] = queue.progressed
+    assert (first, completed) == ((False, None), False)
+    assert error is not None
+    assert error.startswith("SnapshotBusyError")

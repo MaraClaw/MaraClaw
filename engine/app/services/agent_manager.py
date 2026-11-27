@@ -263,13 +263,15 @@ class AgentManager:
     def _template_dir(self) -> Path:
         return Path(settings.AGENT_TEMPLATE_DIR)
 
-    async def _materialize_agent_dir(self, agent_id: uuid.UUID) -> Path:
-        """Create a local working tree from shared storage for container mounting."""
+    async def _materialize_agent_dir(self, agent_id: uuid.UUID, *, restored: frozenset[str] = frozenset()) -> Path:
+        """Create a local working tree from shared storage for container mounting, leaving ``restored`` paths alone."""
         from app.services.agent_materialize import materialize_agent_files
 
         agent_dir = self._agent_dir(agent_id)
         agent_dir.mkdir(parents=True, exist_ok=True)
-        if await materialize_agent_files(get_storage_backend(), self._agent_storage_prefix(agent_id), agent_dir):
+        if await materialize_agent_files(
+            get_storage_backend(), self._agent_storage_prefix(agent_id), agent_dir, restored=restored
+        ):
             self._ensure_openclaw_workspace_layout(agent_dir)
         return agent_dir
 
@@ -681,7 +683,7 @@ class AgentManager:
                 agent.container_id = None
                 try:
                     agent_dir, container_envs, gogcli_volumes = await self._apply_guest_state(
-                        agent, models, rehydrate=rehydrate
+                        agent, models, rehydrate=rehydrate, client=client, guest_image=guest_image
                     )
                     guest_state_volume = (str(agent_dir), "/home/node/custom-state", "rw")
                     # A stop seen before Docker creates a container creates nothing.
@@ -797,14 +799,20 @@ class AgentManager:
             _ = prepare_native_gateway_files(stage)
 
     async def _apply_guest_state(
-        self, agent: AgentRecord, models: _GuestModels, *, rehydrate: bool
+        self, agent: AgentRecord, models: _GuestModels, *, rehydrate: bool, client: DockerClient, guest_image: str
     ) -> tuple[Path, dict[str, str], list[tuple[str, str, str]]]:
-        """Write the guest's mounted state; every old owned writer must already be stopped."""
+        """Write the guest's mounted state; every old owned writer must already be stopped.
+
+        Rehydrating restores the agent's state snapshot first when the host has no OpenClaw state, with
+        ``guest_image``, the image the guest will run.
+        """
         if rehydrate:
             from app.services.agent_materialize import pull_durable_state
+            from app.services.agent_state_snapshot_restore import restore_agent_state
 
+            restored = await restore_agent_state(client, agent, self._agent_dir(agent.id), guest_image)
             await pull_durable_state(agent.id, self._agent_dir(agent.id))
-            agent_dir = await self._materialize_agent_dir(agent.id)
+            agent_dir = await self._materialize_agent_dir(agent.id, restored=restored)
             if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
                 _ = await restore_gogcli_state(agent.id, agent_dir)
         else:

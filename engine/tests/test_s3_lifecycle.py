@@ -7,13 +7,21 @@ import boto3
 import pytest
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from scripts.s3_lifecycle import RULE_ID, LifecycleRule, covers, main, merge
+from scripts.s3_lifecycle import RULE_ID, STATE_SNAPSHOT_RULE_ID, LifecycleRule, covers, main, merge
 
 from app.config import get_settings
 from s3_wire_server import S3Server
 from scripts import s3_lifecycle
 
 PREFIX = "agents/"
+SNAPSHOT_PREFIX = "agents/state-snapshots/"
+SNAPSHOT_RULE: LifecycleRule = {
+    "ID": STATE_SNAPSHOT_RULE_ID,
+    "Status": "Enabled",
+    "Filter": {"Prefix": SNAPSHOT_PREFIX},
+    "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
+    "Expiration": {"ExpiredObjectDeleteMarker": True},
+}
 
 COVERING: dict[str, LifecycleRule] = {
     "filter-prefix": {
@@ -142,6 +150,22 @@ def test_covers_needs_only_one_covering_rule():
     assert covers([NOT_COVERING["other-prefix"], NOT_COVERING["disabled"], COVERING["filter-prefix"]], PREFIX) is None
 
 
+def test_covers_within_days_needs_a_short_expiration_without_newer_versions_kept():
+    keeping: LifecycleRule = {
+        "ID": "a",
+        "Status": "Enabled",
+        "Filter": {"Prefix": ""},
+        "NoncurrentVersionExpiration": {"NoncurrentDays": 1, "NewerNoncurrentVersions": 3},
+    }
+
+    assert covers([COVERING["filter-prefix"]], SNAPSHOT_PREFIX) is None
+    assert covers([COVERING["filter-prefix"]], SNAPSHOT_PREFIX, within_days=1) is not None
+    assert covers([keeping], SNAPSHOT_PREFIX, within_days=1) is not None
+    assert covers([COVERING["empty-filter"]], SNAPSHOT_PREFIX, within_days=1) is None
+    assert covers([SNAPSHOT_RULE], SNAPSHOT_PREFIX, within_days=1) is None
+    assert covers([SNAPSHOT_RULE], PREFIX) is not None
+
+
 def test_covers_with_an_empty_prefix_needs_a_whole_bucket_rule():
     assert covers([COVERING["filter-prefix"]], "") is not None
     assert covers([COVERING["empty-filter"]], "") is None
@@ -152,7 +176,7 @@ def test_merge_keeps_every_other_rule_unchanged():
     merged = merge(FOREIGN, PREFIX, 30)
 
     assert merged[: len(FOREIGN)] == FOREIGN
-    assert [rule.get("ID") for rule in merged] == ["expire-tmp", "archive", RULE_ID]
+    assert [rule.get("ID") for rule in merged] == ["expire-tmp", "archive", RULE_ID, STATE_SNAPSHOT_RULE_ID]
     assert len(FOREIGN) == 2
 
 
@@ -166,7 +190,7 @@ def test_merge_replaces_the_rule_with_the_same_id_in_place():
 
     merged = merge([FOREIGN[0], own, FOREIGN[1]], PREFIX, 30)
 
-    assert [rule.get("ID") for rule in merged] == ["expire-tmp", RULE_ID, "archive"]
+    assert [rule.get("ID") for rule in merged] == ["expire-tmp", RULE_ID, "archive", STATE_SNAPSHOT_RULE_ID]
     assert merged[0] == FOREIGN[0]
     assert merged[2] == FOREIGN[1]
     assert merged[1].get("Status") == "Enabled"
@@ -174,7 +198,7 @@ def test_merge_replaces_the_rule_with_the_same_id_in_place():
 
 
 @pytest.mark.parametrize("days", [1, 30, 365])
-def test_merge_writes_the_agent_rule_with_the_requested_days(days):
+def test_merge_writes_the_agent_rule_with_the_requested_days_and_the_one_day_snapshot_rule(days):
     assert merge([], PREFIX, days) == [
         {
             "ID": RULE_ID,
@@ -183,17 +207,24 @@ def test_merge_writes_the_agent_rule_with_the_requested_days(days):
             "NoncurrentVersionExpiration": {"NoncurrentDays": days},
             "Expiration": {"ExpiredObjectDeleteMarker": True},
             "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7},
-        }
+        },
+        SNAPSHOT_RULE,
     ]
 
 
 def test_merge_with_an_empty_prefix_uses_an_empty_filter():
-    assert merge([], "", 30)[0].get("Filter") == {}
+    merged = merge([], "", 30)
+
+    assert merged[0].get("Filter") == {}
+    assert merged[1].get("Filter") == {"Prefix": "state-snapshots/"}
 
 
 @pytest.mark.parametrize("prefix", [PREFIX, ""])
-def test_a_merged_rule_covers_the_prefix_it_was_written_for(prefix):
-    assert covers(merge(FOREIGN, prefix, 30), prefix) is None
+def test_merged_rules_cover_the_prefixes_they_were_written_for(prefix):
+    merged = merge(FOREIGN, prefix, 30)
+
+    assert covers(merged, prefix) is None
+    assert covers(merged, f"{prefix}state-snapshots/", within_days=1) is None
 
 
 def point_settings(monkeypatch: pytest.MonkeyPatch, server: S3Server, **overrides: str) -> None:
@@ -259,10 +290,12 @@ def test_check_then_apply_then_check_keeps_foreign_rules(wire, provider, status)
     assert main(["--check"]) == 0
 
     rules = stored_rules(provider)
-    assert set(rules) == {"expire-tmp", RULE_ID}
+    assert set(rules) == {"expire-tmp", RULE_ID, STATE_SNAPSHOT_RULE_ID}
     assert rules["expire-tmp"]["Filter"] == {"Prefix": "tmp/"}
     assert rules["expire-tmp"]["Expiration"] == {"Days": 1}
     assert rules[RULE_ID]["NoncurrentVersionExpiration"]["NoncurrentDays"] == 30
+    assert rules[STATE_SNAPSHOT_RULE_ID]["Filter"] == {"Prefix": SNAPSHOT_PREFIX}
+    assert rules[STATE_SNAPSHOT_RULE_ID]["NoncurrentVersionExpiration"]["NoncurrentDays"] == 1
 
 
 def test_check_passes_without_versioning_and_writes_nothing(wire):
@@ -276,7 +309,7 @@ def test_check_passes_when_a_foreign_rule_already_covers_the_prefix(wire, provid
         "ID": "mine",
         "Status": "Enabled",
         "Filter": {"Prefix": ""},
-        "NoncurrentVersionExpiration": {"NoncurrentDays": 3},
+        "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
     }
     provider.put_bucket_lifecycle_configuration(Bucket="bucket", LifecycleConfiguration={"Rules": [covering]})
 
@@ -284,12 +317,30 @@ def test_check_passes_when_a_foreign_rule_already_covers_the_prefix(wire, provid
     assert wire.state.count("PUT") == 1
 
 
+def test_check_fails_when_snapshot_versions_outlive_a_day(wire, provider, capsys):
+    wire.state.versioning = "Enabled"
+    covering = {
+        "ID": "mine",
+        "Status": "Enabled",
+        "Filter": {"Prefix": ""},
+        "NoncurrentVersionExpiration": {"NoncurrentDays": 3},
+    }
+    provider.put_bucket_lifecycle_configuration(Bucket="bucket", LifecycleConfiguration={"Rules": [covering]})
+
+    assert main(["--check"]) == 1
+
+    printed = capsys.readouterr().out
+    assert STATE_SNAPSHOT_RULE_ID in printed
+    assert f"add {RULE_ID}" not in printed
+
+
 def test_apply_replaces_its_own_rule_and_honours_days(wire, provider):
     assert main(["--apply", "--days", "7"]) == 0
     assert main(["--apply", "--days", "14"]) == 0
 
     rules = stored_rules(provider)
-    assert list(rules) == [RULE_ID]
+    assert list(rules) == [RULE_ID, STATE_SNAPSHOT_RULE_ID]
+    assert rules[STATE_SNAPSHOT_RULE_ID]["NoncurrentVersionExpiration"]["NoncurrentDays"] == 1
     rule = rules[RULE_ID]
     assert rule["Status"] == "Enabled"
     assert rule["Filter"] == {"Prefix": "agents/"}

@@ -176,7 +176,7 @@ def env(tmp_path, monkeypatch):
     directory.mkdir()
     monkeypatch.setattr(manager, "_agent_dir", lambda _id: directory)
 
-    async def materialize(_id):
+    async def materialize(_id, *, restored=frozenset()):
         return directory
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize)
@@ -581,7 +581,7 @@ def mirror_active(
             raise failure
         return ReconcileReport()
 
-    async def materialize(agent_id):
+    async def materialize(agent_id, *, restored=frozenset()):
         events.append(("materialize", (agent_id,)))
         return manager._agent_dir(agent_id)
 

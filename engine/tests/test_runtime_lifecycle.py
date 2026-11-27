@@ -290,6 +290,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
         agent_resource_pressure_worker,
         agent_setup,
         agent_start_reconciler,
+        agent_state_snapshot_worker,
         agent_workspace_quota_worker,
         audit_logger,
         auth_email_worker,
@@ -427,6 +428,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     monkeypatch.setattr(chat_history_retention_worker, "start_chat_history_retention_worker", loop)
     monkeypatch.setattr(agent_workspace_quota_worker, "start_agent_workspace_quota_worker", loop)
     monkeypatch.setattr(workspace_mirror_worker, "start_workspace_mirror_worker", loop)
+    monkeypatch.setattr(agent_state_snapshot_worker, "start_agent_state_snapshot_worker", loop)
     monkeypatch.setattr(agent_resource_pressure_worker, "start_agent_resource_pressure_worker", loop)
     monkeypatch.setattr(operational_log_retention_worker, "start_operational_log_retention_worker", loop)
     monkeypatch.setattr(capacity_renewal_worker, "start_capacity_renewal_worker", loop)
@@ -537,6 +539,7 @@ async def test_runtime_role_matrix(monkeypatch: pytest.MonkeyPatch, role: str, b
     assert ("chat_history_retention" in names) == role_enabled(roles, "worker")
     assert ("agent_workspace_quota" in names) == role_enabled(roles, "worker")
     assert ("workspace_mirror" in names) == role_enabled(roles, "worker")
+    assert ("agent_state_snapshot" in names) == role_enabled(roles, "worker")
     assert ("agent_resource_pressure" in names) == role_enabled(roles, "worker")
     assert ("operational_log_retention" in names) == role_enabled(roles, "worker")
     assert ("capacity_renewal" in names) == role_enabled(roles, "worker")
@@ -895,6 +898,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         agent_resource_pressure_worker,
         agent_setup,
         agent_start_reconciler,
+        agent_state_snapshot_worker,
         agent_workspace_quota_worker,
         audit_logger,
         auth_email_worker,
@@ -953,6 +957,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         (agent_workspace_quota_worker, "start_agent_workspace_quota_worker", "agent_workspace_quota"),
         (agent_resource_pressure_worker, "start_agent_resource_pressure_worker", "agent_resource_pressure"),
         (workspace_mirror_worker, "start_workspace_mirror_worker", "workspace_mirror"),
+        (agent_state_snapshot_worker, "start_agent_state_snapshot_worker", "agent_state_snapshot"),
         (operational_log_retention_worker, "start_operational_log_retention_worker", "operational_log_retention"),
         (capacity_renewal_worker, "start_capacity_renewal_worker", "capacity_renewal"),
     ):
@@ -1008,7 +1013,16 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert runtime.tasks.progress["workspace_mirror"].budget_seconds == (
             workspace_mirror_worker.progress_budget_seconds()
         )
-        interval_loops = {"agent_workspace_quota", "agent_resource_pressure", "capacity_renewal", "workspace_mirror"}
+        assert runtime.tasks.progress["agent_state_snapshot"].budget_seconds == (
+            agent_state_snapshot_worker.progress_budget_seconds()
+        )
+        interval_loops = {
+            "agent_workspace_quota",
+            "agent_resource_pressure",
+            "capacity_renewal",
+            "workspace_mirror",
+            "agent_state_snapshot",
+        }
         slow = (WORKER_BUDGETED_LOOPS | PROCESS_BUDGETED_LOOPS) - {"broadcast_fanout", *interval_loops}
         boundary_workers = {"broadcast_fanout"} if budget_seconds == 90 else slow
         assert all(not runtime.tasks.progress[name].stale() for name in boundary_workers)
@@ -1025,6 +1039,7 @@ async def test_worker_start_registers_progress_budgets_through_the_injected_cloc
         assert runtime.tasks.progress["workspace_mirror"].stale() == (
             now > workspace_mirror_worker.progress_budget_seconds()
         )
+        assert not runtime.tasks.progress["agent_state_snapshot"].stale()
         # Then readiness is stale with an unchanged ready body contract, and the loops keep running.
         assert not await runtime.readiness.check()
         assert all(not task.done() for task, _ in runtime.tasks.required.values())
@@ -1325,6 +1340,7 @@ async def test_worker_start_supervises_only_the_mail_loops_with_the_configured_b
         agent_resource_pressure_worker,
         agent_setup,
         agent_start_reconciler,
+        agent_state_snapshot_worker,
         agent_workspace_quota_worker,
         audit_logger,
         auth_email_worker,
@@ -1386,6 +1402,7 @@ async def test_worker_start_supervises_only_the_mail_loops_with_the_configured_b
         (task_lease, "task_lease_recovery_loop"),
         (trigger_daemon, "start_trigger_daemon"),
         (workspace_mirror_worker, "start_workspace_mirror_worker"),
+        (agent_state_snapshot_worker, "start_agent_state_snapshot_worker"),
     ):
         monkeypatch.setattr(module, attribute, loop)
     monkeypatch.setattr(auth_email_worker, "start_auth_email_worker", auth_crashes)
