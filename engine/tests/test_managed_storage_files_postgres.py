@@ -5,6 +5,7 @@ import anyio
 import pytest
 
 from agent_deletion_fixtures import deletion_scenario
+from app.db.session import durable_transaction
 from app.services.storage_runtime import upload_source
 from app.services.storage_runtime.base import StorageConditionalRaceError
 from app.services.storage_runtime.quota_errors import StorageFileTooLargeError, StorageKeyPendingError
@@ -58,6 +59,10 @@ async def test_managed_mutations_never_reach_shared_threads(
     agent = await world.agent()
     path = tmp_path / "source"
     path.write_bytes(b"from a file")
+    # The ledger's durable pool opens lazily, and psycopg resolves a host name such as CI's `localhost` on the
+    # default executor. Opening its connection first keeps the guard on the storage work itself.
+    async with durable_transaction():
+        pass
     with forbid_shared_threads(monkeypatch):
         await world.backend.write_bytes(world.key(agent, "a"), b"alpha")
         assert (await world.backend.create_bytes_if_absent(world.key(agent, "b"), b"beta")).ok
