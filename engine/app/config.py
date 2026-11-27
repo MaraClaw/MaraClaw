@@ -240,6 +240,9 @@ class Settings(BaseSettings):
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 60
     EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     EMAIL_VERIFICATION_REQUIRED: bool = False  # Require email verification for login
+    # Raw bytes of attachments one send_email call may carry in total (about a third more once base64-encoded, so the
+    # default stays under the 25 MB cap common providers apply). A larger set refuses the whole message.
+    EMAIL_ATTACHMENTS_MAX_BYTES: int = Field(default=18 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
     # Public auth throttling: fixed windows in Redis, checked before any password check or email send.
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=300, ge=1)
     # Attempts per window for one account (login, forgot-password, resend-verification each count separately).

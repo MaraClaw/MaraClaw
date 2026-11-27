@@ -20,11 +20,11 @@ from email.utils import make_msgid, parseaddr
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
-import aiofiles
-
+from app.config import get_settings
 from app.core.email import force_ipv4, send_smtp_email
 from app.core.json_types import json_as_bool, json_as_str_or
 from app.core.logging import logger
+from app.services.storage_runtime.base import StorageReadLimitExceededError
 
 
 class EmailProviderPreset(TypedDict):
@@ -216,6 +216,48 @@ def _extract_body(msg: Message) -> str:
     return ""
 
 
+class AttachmentRefusedError(Exception):
+    """An attachment cannot go out, so the message does not; the text is the tool's reply."""
+
+
+async def _read_attachments(agent_prefix: str, attachments: list[str]) -> list[tuple[str, bytes]]:
+    """Read each attachment from storage as ``(filename, bytes)``, within ``EMAIL_ATTACHMENTS_MAX_BYTES`` in all.
+
+    A key is normalized as every storage key is, then must still sit under the agent's own prefix: ``..`` pops
+    segments, so without that check it would reach another agent's files or climb out of the storage root.
+    """
+    from app.services.storage import get_storage_backend, normalize_storage_key
+
+    storage = get_storage_backend()
+    limit = get_settings().EMAIL_ATTACHMENTS_MAX_BYTES
+    remaining = limit
+    files: list[tuple[str, bytes]] = []
+    for rel_path in attachments:
+        clean_rel = rel_path.replace("\\", "/").strip().lstrip("/")
+        storage_key = normalize_storage_key(f"{agent_prefix}/{clean_rel}")
+        if not storage_key.startswith(f"{agent_prefix}/"):
+            raise AttachmentRefusedError(
+                f"❌ Attachment {rel_path} is not a file inside the workspace. Nothing was sent."
+            )
+        try:
+            data = await storage.read_bytes_bounded(storage_key, remaining)
+        except StorageReadLimitExceededError:
+            raise AttachmentRefusedError(
+                f"❌ Attachment {rel_path} takes the message past the {limit}-byte limit on attachments. "
+                "Nothing was sent."
+            ) from None
+        except FileNotFoundError:
+            raise AttachmentRefusedError(f"❌ Attachment not found: {rel_path}. Nothing was sent.") from None
+        except Exception as error:
+            logger.warning(f"Could not read email attachment {storage_key}: {error}")
+            raise AttachmentRefusedError(
+                f"❌ Could not read attachment {rel_path}: {str(error)[:200]}. Nothing was sent."
+            ) from error
+        remaining -= len(data)
+        files.append((Path(storage_key).name, data))
+    return files
+
+
 async def send_email(
     config: EmailConfig,
     to: str,
@@ -234,9 +276,10 @@ async def send_email(
         subject: Email subject
         body: Email body text
         cc: CC recipients, comma-separated
-        attachments: List of workspace-relative file paths to attach
-        workspace_path: Agent workspace root for resolving attachment paths
-        agent_id: Optional UUID of the agent for retrieving files from storage
+        attachments: List of workspace-relative file paths to attach. Every file is read from storage; a missing,
+            unreadable or out-of-workspace file, or a total past ``EMAIL_ATTACHMENTS_MAX_BYTES``, refuses the send
+        workspace_path: Agent workspace directory; its name is the storage prefix when ``agent_id`` is not given
+        agent_id: Optional UUID of the agent whose storage prefix the attachments are read from
     """
     cfg = resolve_config(config)
     addr = cfg["email_address"]
@@ -256,42 +299,17 @@ async def send_email(
 
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    # Attach files
     if attachments is not None and attachments and workspace_path is not None:
-        from app.services.storage import get_storage_backend, normalize_storage_key
-
-        storage = get_storage_backend()
-
-        for rel_path in attachments:
-            clean_rel = rel_path.replace("\\", "/").strip().lstrip("/")
-            prefix = str(agent_id) if agent_id else workspace_path.name
-            storage_key = normalize_storage_key(f"{prefix}/{clean_rel}")
-            file_bytes = None
-            filename = Path(clean_rel).name
-
-            # 1. Try to read from the storage backend (e.g. S3 or local storage)
-            try:
-                if await storage.exists(storage_key) and await storage.is_file(storage_key):
-                    file_bytes = await storage.read_bytes(storage_key)
-            except Exception as storage_error:
-                logger.warning(f"Could not load email attachment from storage {clean_rel}: {storage_error}")
-
-            # 2. Fall back to local disk if not found in storage backend
-            if file_bytes is None:
-                full_path = workspace_path / rel_path
-                try:
-                    async with aiofiles.open(full_path, "rb") as attachment_file:
-                        file_bytes = await attachment_file.read()
-                    filename = full_path.name
-                except OSError as local_error:
-                    logger.warning(f"Could not load local email attachment {full_path}: {local_error}")
-
-            if file_bytes is not None:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(file_bytes)
-                encoders.encode_base64(part)
-                part.add_header("Content-Disposition", "attachment", filename=filename)
-                msg.attach(part)
+        try:
+            files = await _read_attachments(str(agent_id) if agent_id else workspace_path.name, attachments)
+        except AttachmentRefusedError as refusal:
+            return str(refusal)
+        for filename, file_bytes in files:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(file_bytes)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(part)
 
     try:
         recipients = [r.strip() for r in to.split(",")]
