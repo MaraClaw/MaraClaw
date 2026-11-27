@@ -1,12 +1,15 @@
 """Unit tests for the authentication API (app/api/auth.py)."""
 
+import asyncio
+import threading
 import uuid
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Annotated, Any
+from typing import Annotated, Any, override
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,12 +18,16 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from jose import jwt
 from starlette.requests import Request
-from tests.membership_generation_fixtures import pin_membership_generation
+from tests.membership_generation_fixtures import pin_membership_generation, recording_user_writes
 from tests.oauth_state_fakes import install_state_redis
+from tests.rate_limit_fakes import install_limiter_redis
 from tests.test_redis_cache import FakeRedis
 
 from app.api import auth as auth_api
+from app.config import get_settings
 from app.core import redis_cache, security, session_cache
+from app.core.cache_contracts import SessionCacheObservation
+from app.core.client_address import get_client_ip
 from app.core.json_types import json_object_from_response, object_mapping_from
 from app.core.row_memo import clear_row_memo
 from app.core.security import create_access_token, hash_password
@@ -29,6 +36,7 @@ from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.schemas.schemas import UserLogin
 from app.services import chat_tickets, oauth_state, password_reset_service
+from app.services.auth_throttle import throttle_sign_in
 
 DEFAULT_TEST_CREDENTIAL = "correctpassword"
 
@@ -182,10 +190,11 @@ class _Membership:
 
 
 class _MembershipDb:
-    """The two reads the real UserDAO issues for a bearer: the joined principal and the generation column."""
+    """The two reads the real UserDAO issues for a bearer: the joined principal and both generations."""
 
     def __init__(self, memberships: list[_Membership]) -> None:
         self.rows = {row.user.id: row for row in memberships}
+        self.auth_generation = 5
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[_MembershipDb]:
@@ -196,6 +205,8 @@ class _MembershipDb:
 
     async def fetchone(self, sql: str, params: dict[str, uuid.UUID]) -> dict[str, object]:
         row = self.rows[params["user_id"]]
+        if sql.startswith("SELECT i.auth_generation, u.membership_generation"):
+            return {"auth_generation": self.auth_generation, "membership_generation": row.generation}
         if sql.startswith("SELECT membership_generation"):
             return {"membership_generation": row.generation}
         identity = row.user.identity
@@ -394,20 +405,113 @@ async def test_membership_generation_is_compared_for_strict_equality(
     monkeypatch: pytest.MonkeyPatch, stored: int | None, claimed: int, accepted: bool
 ) -> None:
     # Given the stored generation of a membership, or none when the row has vanished.
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
     pin_membership_generation(monkeypatch, stored)
 
     # When a claim is compared, only an exact match passes.
     if accepted:
-        await security.check_membership_generation(uuid.uuid4(), claimed)
+        await security.check_generations(uuid.uuid4(), uuid.uuid4(), auth=7, membership=claimed)
         return
     with pytest.raises(HTTPException) as caught:
-        await security.check_membership_generation(uuid.uuid4(), claimed)
+        await security.check_generations(uuid.uuid4(), uuid.uuid4(), auth=7, membership=claimed)
     assert caught.value.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("stored", "claimed", "accepted"),
+    [(7, 7, True), (8, 7, False), (7, 8, False), (None, 7, False)],
+    ids=["current", "revoked", "future", "identity-gone"],
+)
+async def test_token_generation_is_compared_for_strict_equality(
+    monkeypatch: pytest.MonkeyPatch, stored: int | None, claimed: int, accepted: bool
+) -> None:
+    # Given the stored identity generation, or none when the identity has vanished.
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=stored))
+    pin_membership_generation(monkeypatch, 0)
+
+    # When a claim is compared, only an exact match passes.
+    if accepted:
+        await security.check_generations(uuid.uuid4(), uuid.uuid4(), auth=claimed, membership=0)
+        return
+    with pytest.raises(HTTPException) as caught:
+        await security.check_generations(uuid.uuid4(), uuid.uuid4(), auth=claimed, membership=0)
+    assert caught.value.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("auth", "membership", "accepted"),
+    [(9, 4, True), (8, 4, False), (9, 3, False), (10, 5, False)],
+    ids=["current", "identity-revoked", "membership-revoked", "both-ahead"],
+)
+async def test_both_generations_are_read_by_one_statement_and_compared_with_the_stored_values(
+    monkeypatch: pytest.MonkeyPatch, auth: int, membership: int, accepted: bool
+) -> None:
+    # Given a membership whose stored counters are 9 (identity) and 4 (membership).
+    user = UserRecord(id=uuid.uuid4(), identity_id=uuid.uuid4())
+    assert user.identity_id is not None
+    with recording_user_writes(monkeypatch, user) as raw:
+        raw.auth_generation, raw.generation = 9, 4
+
+        # When a bearer's claims are checked.
+        if accepted:
+            await security.check_generations(user.id, user.identity_id, auth=auth, membership=membership)
+        else:
+            with pytest.raises(HTTPException) as caught:
+                await security.check_generations(user.id, user.identity_id, auth=auth, membership=membership)
+            assert caught.value.status_code == 401
+
+    # Then one statement answered both, bound to the membership and its identity.
+    assert len(raw.executed) == 1
+    query, params = raw.executed[0]
+    assert "auth_generation" in query
+    assert "membership_generation" in query
+    assert params == {"user_id": user.id, "identity_id": user.identity_id}
+
+
+async def test_a_session_cache_hit_request_costs_one_redis_round_trip_and_one_sql_statement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a warm session snapshot for a membership and its bearer.
+    redis = FakeRedis()
+
+    async def get_cache_redis() -> FakeRedis:
+        return redis
+
+    redis_cache.reset_circuit()
+    clear_row_memo()
+    monkeypatch.setattr(redis_cache, "_client", get_cache_redis)
+    monkeypatch.setattr(session_cache, "_ttl", lambda: 20)
+    identity = IdentityRecord(id=uuid.uuid4(), email="member@example.com", email_verified=True)
+    user = UserRecord(id=uuid.uuid4(), identity_id=identity.id, tenant_id=uuid.uuid4(), identity=identity)
+    user_version = await session_cache.peek_user_version(user.id)
+    identity_version = await session_cache.peek_identity_version(identity.id)
+    assert user_version is not None
+    assert identity_version is not None
+    await session_cache.set_cached_user(
+        user, observed=SessionCacheObservation(identity.id, user_version, identity_version)
+    )
+    clear_row_memo()
+    redis.commands.clear()
+
+    # When the bearer authenticates a request.
+    with recording_user_writes(monkeypatch, user) as raw:
+        loaded = await security.load_user_from_access_token(_signed(sub=str(user.id), gen=0, mgen=0))
+
+    # Then the principal came from the cache in one Redis call and both generations from one SQL statement.
+    assert loaded.id == user.id
+    assert redis.commands == ["pipeline"]
+    assert redis.round_trips == 1
+    assert len(raw.executed) == 1
+    assert "auth_generation" in raw.executed[0][0]
+    redis_cache.reset_circuit()
+    clear_row_memo()
 
 
 @pytest.mark.asyncio
 async def test_chat_ticket_bearer_contract(monkeypatch):
-    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), identity_id=uuid.uuid4())
+    install_limiter_redis(monkeypatch)
+    identity = IdentityRecord(id=uuid.uuid4())
+    user = UserRecord(id=uuid.uuid4(), tenant_id=uuid.uuid4(), identity_id=identity.id, identity=identity)
     agent_id, session_id = uuid.uuid4(), uuid.uuid4()
     monkeypatch.setattr(security.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
@@ -794,3 +898,194 @@ def test_http_header_reads_present_value_and_default():
 
     assert http_header({"content-type": "application/json"}, "content-type") == "application/json"
     assert http_header({}, "content-type", "image/png") == "image/png"
+
+
+def _peer(host: str | None, forwarded: str | None = None) -> Request:
+    headers = [] if forwarded is None else [(b"x-forwarded-for", forwarded.encode())]
+    return Request(
+        {"type": "http", "headers": headers, "client": None if host is None else (host, 4321), "method": "POST"}
+    )
+
+
+@pytest.mark.parametrize(
+    ("trusted", "peer", "forwarded", "expected"),
+    [
+        ([], "203.0.113.9", "198.51.100.7", "203.0.113.9"),
+        (["10.0.0.0/8"], "203.0.113.9", "198.51.100.7", "203.0.113.9"),
+        (["10.0.0.0/8"], "10.1.2.3", "198.51.100.7", "198.51.100.7"),
+        (["10.0.0.0/8"], "10.1.2.3", "192.0.2.1, 198.51.100.7", "198.51.100.7"),
+        (["10.0.0.0/8"], "10.1.2.3", "192.0.2.1, 198.51.100.7, 10.9.9.9", "198.51.100.7"),
+        (["10.0.0.0/8"], "10.1.2.3", "10.9.9.9", "10.9.9.9"),
+        (["10.0.0.0/8"], "10.1.2.3", "198.51.100.7, garbage", "10.1.2.3"),
+        (["10.0.0.0/8"], "10.1.2.3", None, "10.1.2.3"),
+        (["10.1.2.3"], "10.1.2.3", "2001:db8::1", "2001:db8::1"),
+        (["::1"], "::1", "198.51.100.7", "198.51.100.7"),
+        (["10.0.0.0/8"], "testclient", "198.51.100.7", "testclient"),
+    ],
+    ids=[
+        "no-trusted-proxy",
+        "spoofed-header-from-untrusted-peer",
+        "trusted-proxy",
+        "client-prepended-fake-hop",
+        "chain-through-a-second-proxy",
+        "only-proxies-in-the-chain",
+        "malformed-hop-stops-the-walk",
+        "trusted-proxy-without-header",
+        "exact-address-and-ipv6-client",
+        "ipv6-proxy",
+        "peer-that-is-not-an-address",
+    ],
+)
+async def test_client_address_believes_forwarded_headers_only_from_trusted_proxies(
+    monkeypatch: pytest.MonkeyPatch, trusted: list[str], peer: str, forwarded: str | None, expected: str
+) -> None:
+    monkeypatch.setattr(get_settings(), "TRUSTED_PROXIES", trusted)
+
+    assert await get_client_ip(_peer(peer, forwarded)) == expected
+
+
+async def test_client_address_is_none_without_a_peer() -> None:
+    assert await get_client_ip(_peer(None)) is None
+
+
+@pytest.mark.parametrize("entry", ["not-an-address", "10.0.0.0/33", "10.0.0.0/8, 10.0.0.1"])
+def test_trusted_proxies_reject_entries_that_are_not_networks(entry: str) -> None:
+    with pytest.raises(ValueError, match="TRUSTED_PROXIES"):
+        type(get_settings()).model_validate({"TRUSTED_PROXIES": [entry]})
+
+
+async def test_users_behind_a_trusted_proxy_get_separate_sign_in_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a proxy at 10.1.2.3 and a budget of one sign-in per address.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "TRUSTED_PROXIES", ["10.1.2.3"])
+    monkeypatch.setattr(settings, "AUTH_RATE_LIMIT_ADDRESS_ATTEMPTS", 1)
+    redis = install_limiter_redis(monkeypatch)
+
+    # When two users and then a spoofing attacker connect through it, each user spends only their own budget.
+    await throttle_sign_in(_peer("10.1.2.3", "198.51.100.1"))
+    await throttle_sign_in(_peer("10.1.2.3", "198.51.100.2"))
+    with pytest.raises(HTTPException) as repeated:
+        await throttle_sign_in(_peer("10.1.2.3", "198.51.100.1"))
+    assert repeated.value.status_code == 429
+    assert sorted(key.split(":")[3] for key in redis.counts) == ["198.51.100.1", "198.51.100.2"]
+
+    # And a direct client that lies about its address keeps the bucket of its real one.
+    await throttle_sign_in(_peer("203.0.113.9", "198.51.100.1"))
+    with pytest.raises(HTTPException):
+        await throttle_sign_in(_peer("203.0.113.9", "198.51.100.77"))
+
+
+async def test_one_shared_address_exhausts_only_its_own_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a budget of two sign-ins per address and nobody trusted: an office NAT behind one address.
+    monkeypatch.setattr(get_settings(), "TRUSTED_PROXIES", [])
+    monkeypatch.setattr(get_settings(), "AUTH_RATE_LIMIT_ADDRESS_ATTEMPTS", 2)
+    install_limiter_redis(monkeypatch)
+
+    # When the shared address spends it, then another address still signs in.
+    await throttle_sign_in(_peer("203.0.113.9"))
+    await throttle_sign_in(_peer("203.0.113.9"))
+    with pytest.raises(HTTPException) as refused:
+        await throttle_sign_in(_peer("203.0.113.9"))
+    assert refused.value.status_code == 429
+    await throttle_sign_in(_peer("203.0.113.10"))
+
+
+@pytest.fixture
+def bcrypt_gate(monkeypatch: pytest.MonkeyPatch) -> Iterator[threading.Event]:
+    # Password work that blocks on a gate, so admitted checks stay queued or running until the test lets go.
+    gate = threading.Event()
+
+    def blocked(*_args: str) -> bool:
+        assert gate.wait(timeout=10)
+        return True
+
+    monkeypatch.setattr(security.settings, "BCRYPT_MAX_PENDING_CHECKS", 2)
+    monkeypatch.setattr(security, "verify_password", blocked)
+    monkeypatch.setattr(security, "hash_password", lambda password: blocked(password) and "hash")
+    yield gate
+    gate.set()
+
+
+@pytest.mark.parametrize("refused", ["verify", "hash"])
+async def test_a_check_beyond_the_bcrypt_queue_bound_fails_fast_with_503(
+    bcrypt_gate: threading.Event, refused: str
+) -> None:
+    # Given two admitted checks held on the executor, the configured bound.
+    admitted = [asyncio.create_task(security.verify_password_async("pw", "hash")) for _ in range(2)]
+    await asyncio.sleep(0)
+
+    # When a third check arrives, then it is refused at once, without waiting for the executor.
+    attempt = (
+        security.verify_password_async("pw", "hash") if refused == "verify" else security.hash_password_async("pw")
+    )
+    with pytest.raises(HTTPException) as caught:
+        await attempt
+    assert caught.value.status_code == 503
+    assert caught.value.headers is not None
+    assert int(caught.value.headers["Retry-After"]) > 0
+
+    # And once the admitted ones finish, the next check is admitted again.
+    bcrypt_gate.set()
+    assert await asyncio.gather(*admitted) == [True, True]
+    assert await security.verify_password_async("pw", "hash") is True
+
+
+class _RecordingExecutor(ThreadPoolExecutor):
+    """Executor that lets a test await the end of work whose caller already gave up."""
+
+    def __init__(self) -> None:
+        super().__init__(max_workers=4, thread_name_prefix="bcrypt-test")
+        self.finished: list[Callable[[], Awaitable[object]]] = []
+
+    @override
+    def submit[**P, T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+        future = super().submit(fn, *args, **kwargs)
+        self.finished.append(lambda: asyncio.wrap_future(future))
+        return future
+
+
+async def test_a_cancelled_caller_keeps_its_bcrypt_slot_until_the_check_finishes(
+    bcrypt_gate: threading.Event, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executor = _RecordingExecutor()
+    monkeypatch.setattr(security, "_bcrypt_executor", executor)
+    # Given two admitted checks whose callers give up while the work is still on the executor.
+    abandoned = [asyncio.create_task(security.verify_password_async("pw", "hash")) for _ in range(2)]
+    await asyncio.sleep(0)
+    for task in abandoned:
+        _ = task.cancel()
+    outcomes = await asyncio.gather(*abandoned, return_exceptions=True)
+    assert all(isinstance(outcome, asyncio.CancelledError) for outcome in outcomes)
+
+    # When another check arrives while that work still runs, then it is refused: the bound still counts it.
+    with pytest.raises(HTTPException) as caught:
+        await security.verify_password_async("pw", "hash")
+    assert caught.value.status_code == 503
+
+    # And once the abandoned work finishes, its slots return.
+    bcrypt_gate.set()
+    for finished in executor.finished:
+        _ = await finished()
+    assert await security.verify_password_async("pw", "hash") is True
+    executor.shutdown()
+
+
+async def test_a_failed_bcrypt_check_releases_its_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*_args: str) -> bool:
+        raise ValueError("bad salt")
+
+    monkeypatch.setattr(security.settings, "BCRYPT_MAX_PENDING_CHECKS", 1)
+    monkeypatch.setattr(security, "verify_password", broken)
+
+    for _ in range(3):
+        with pytest.raises(ValueError, match="bad salt"):
+            await security.verify_password_async("pw", "hash")
+
+
+async def test_password_hashes_and_stored_hashes_are_unchanged_by_the_queue() -> None:
+    stored = hash_password("secret-password")
+
+    assert stored.startswith("$2b$12$")
+    assert await security.verify_password_async("secret-password", stored) is True
+    assert await security.verify_password_async("other-password", stored) is False
+    assert (await security.hash_password_async("secret-password")).startswith("$2b$12$")

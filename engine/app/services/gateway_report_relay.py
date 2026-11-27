@@ -13,6 +13,7 @@ from typing import Final, assert_never, override
 import anyio
 from anyio.abc import TaskGroup
 
+from app.config import get_settings
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_session_dao
@@ -26,7 +27,12 @@ from app.records.gateway_report_delivery import GatewayReportDeliveryRecord, Ter
 from app.records.outbound_plan import OutboundProvider
 from app.runtime.tasks import loop_progress
 from app.services.agent_work_eligibility import agent_work_blocking_codes
-from app.services.channels.outbound_errors import ProviderPayloadRejectedError, retry_at
+from app.services.channels.outbound_errors import (
+    ProviderDeliveryError,
+    ProviderPayloadRejectedError,
+    ProviderPermanentError,
+    retry_at,
+)
 from app.services.channels.outbound_identity import preflight_outbound
 from app.services.channels.outbound_plan import build_plan, configured_outbound
 from app.services.channels.outbound_transport import send_chunk
@@ -68,8 +74,41 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def retry_delay(attempts: int) -> timedelta:
-    return timedelta(seconds=min(300, 1 << min(max(attempts - 1, 0), 9)))
+def _random_unit() -> float:
+    return randbelow(1_000_001) / 1_000_000
+
+
+jitter_unit: Callable[[], float] = _random_unit
+RETRY_CEILING_SECONDS: Final = 300
+
+
+def retry_delay(attempts: int, unit: float) -> timedelta:
+    """Exponential delay capped at the ceiling, cut by up to half by ``unit`` (0 is the shortest, 1 the full delay)."""
+    base = min(RETRY_CEILING_SECONDS, 1 << min(max(attempts - 1, 0), 9))
+    return timedelta(seconds=base * (0.5 + 0.5 * unit))
+
+
+def _failure_detail(error: BaseException) -> str:
+    return str(error) if isinstance(error, ProviderDeliveryError) else type(error).__name__
+
+
+def _exhausted(claim: GatewayReportDeliveryRecord, now: datetime) -> TerminalReason | None:
+    if claim.attempts >= get_settings().GATEWAY_REPORT_MAX_ATTEMPTS:
+        return "attempts_exhausted"
+    if claim.created_at is not None and now - claim.created_at >= timedelta(
+        hours=get_settings().GATEWAY_REPORT_MAX_AGE_HOURS
+    ):
+        return "age_exhausted"
+    return None
+
+
+async def _finish_failed(
+    claim: GatewayReportDeliveryRecord, reason: TerminalReason, error: Exception, clock: Callable[[], datetime]
+) -> None:
+    if claim.claim_token is not None:
+        _ = await gateway_report_delivery_dao.finish_terminal(
+            claim.id, claim.claim_token, reason, now=clock(), detail=_failure_detail(error)
+        )
 
 
 async def _source(claim: GatewayReportDeliveryRecord) -> tuple[GatewayMessageRecord, AgentRecord]:
@@ -267,25 +306,30 @@ async def deliver_claim(claim: GatewayReportDeliveryRecord, clock: Callable[[], 
     except PersonalSendPendingError:
         timing.result = "retry"
         now = clock()
-        _ = await gateway_report_delivery_dao.retry(claim, available_at=now + retry_delay(1), now=now)
+        _ = await gateway_report_delivery_dao.retry(claim, available_at=now + retry_delay(1, jitter_unit()), now=now)
     except WhatsAppReplyWindowError as error:
         timing.result = "terminal"
         if claim.claim_token is not None:
             _ = await gateway_report_delivery_dao.finish_terminal(
                 claim.id, claim.claim_token, error.reason, now=clock()
             )
-    except ProviderPayloadRejectedError:
+    except ProviderPayloadRejectedError as error:
         timing.result = "terminal"
-        if claim.claim_token is not None:
-            _ = await gateway_report_delivery_dao.finish_terminal(
-                claim.id, claim.claim_token, "payload_rejected", now=clock()
-            )
+        await _finish_failed(claim, "payload_rejected", error, clock)
+    except ProviderPermanentError as error:
+        timing.result = "terminal"
+        logger.warning("[GatewayReportRelay] permanent failure intent={}: {}", claim.id, error)
+        await _finish_failed(claim, "provider_permanent_error", error, clock)
     except Exception as exc:
-        timing.result = "retry"
         logger.warning("[GatewayReportRelay] delivery failed intent={} attempt={}: {}", claim.id, claim.attempts, exc)
         now = clock()
-        available_at = max(now + retry_delay(claim.attempts), retry_at(exc, now) or now)
-        _ = await gateway_report_delivery_dao.retry(claim, available_at=available_at, now=now)
+        if (exhausted := _exhausted(claim, now)) is not None:
+            timing.result = "terminal"
+            await _finish_failed(claim, exhausted, exc, clock)
+        else:
+            timing.result = "retry"
+            available_at = max(now + retry_delay(claim.attempts, jitter_unit()), retry_at(exc, now) or now)
+            _ = await gateway_report_delivery_dao.retry(claim, available_at=available_at, now=now)
     finally:
         timing.emit()
 
@@ -316,7 +360,12 @@ async def _claim_into(
         slots.acquire_nowait()
         free += 1
     try:
-        claims = await gateway_report_delivery_dao.claim_batch(limit=free, lease_seconds=60, now=clock())
+        claims = await gateway_report_delivery_dao.claim_batch(
+            limit=free,
+            lease_seconds=60,
+            now=clock(),
+            per_tenant_limit=get_settings().GATEWAY_REPORT_TENANT_CLAIM_LIMIT,
+        )
     except BaseException:
         for _ in range(free):
             slots.release()

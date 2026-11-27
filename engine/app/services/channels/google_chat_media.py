@@ -50,6 +50,22 @@ class GoogleChatAttachment(BaseModel):
     source: str = ""
 
 
+async def _download(token: str, resource: str, limit: int) -> tuple[int, bytes]:
+    """Download one attachment; a denied request returns its status with no body."""
+    async with (
+        public_http_client(timeout=30, origin="https://chat.googleapis.com") as client,
+        client.stream(
+            "GET",
+            f"https://chat.googleapis.com/v1/media/{resource}",
+            params={"alt": "media"},
+            headers={"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"},
+        ) as response,
+    ):
+        if response.status_code in (401, 403):
+            return response.status_code, b""
+        return response.status_code, await read_capped(response, limit)
+
+
 async def accept_google_chat_media(
     event: submissions.ChannelEvent,
     config: ChannelConfigRecord,
@@ -86,21 +102,18 @@ async def accept_google_chat_media(
                     sa_info, [google_chat.CHAT_BOT_SCOPE], pinned=True
                 )
             resource = item.attachment_data_ref.resource_name
-            async with (
-                public_http_client(timeout=30, origin="https://chat.googleapis.com") as client,
-                client.stream(
-                    "GET",
-                    f"https://chat.googleapis.com/v1/media/{resource}",
-                    params={"alt": "media"},
-                    headers={"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"},
-                ) as response,
-            ):
-                if response.status_code in (401, 403):
-                    raise HTTPException(
-                        422,
-                        "Google Chat denied media access; verify service_account_json, chat.bot scope and space access",
-                    )
-                data = await read_capped(response, limit)
+            status, data = await _download(token, resource, limit)
+            if status == 401:
+                # The cached token was rejected: renew it once, then report the denial like any other.
+                token = await google_chat.renew_rejected_service_account_token(
+                    sa_info, [google_chat.CHAT_BOT_SCOPE], token, pinned=True
+                )
+                status, data = await _download(token, resource, limit)
+            if status in (401, 403):
+                raise HTTPException(
+                    422,
+                    "Google Chat denied media access; verify service_account_json, chat.bot scope and space access",
+                )
             budget.spend(len(data))
         except MediaTooLargeError as error:
             budget.spend(error.read)

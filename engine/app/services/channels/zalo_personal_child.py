@@ -47,7 +47,10 @@ FRAME_LIMIT = 1048576
 
 async def spawn_child(command: Sequence[str]) -> Process:
     path = os.environ.get("PATH")
-    return await anyio.open_process(command, stderr=subprocess.DEVNULL, env={} if path is None else {"PATH": path})
+    heap = f"--worker-heap-mb={get_settings().ZALO_PERSONAL_WORKER_HEAP_MB}"
+    return await anyio.open_process(
+        [*command, heap], stderr=subprocess.DEVNULL, env={} if path is None else {"PATH": path}
+    )
 
 
 @final

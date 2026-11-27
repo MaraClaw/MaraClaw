@@ -1,8 +1,9 @@
-"""Channel user resolution service for messaging platforms.
+"""Channel identity lookup for messaging platforms.
 
-This service provides unified user resolution for incoming messages from
-external channels (DingTalk, WeCom, Feishu, etc.). It reuses the SSO service
-and OrgMember-based identity management.
+``ChannelUserService`` finds the OrgMember a channel identity is linked to. Inbound senders are attributed only through
+a linked, active member (``channels.binding.resolve_bound_sender``). ``linked_platform_user`` serves outbound tools and
+permission candidates by finding the user an OrgMember already belongs to. No channel or org-member path creates a user,
+an identity or a member: a member with no linked or matching user has no platform user.
 """
 
 from __future__ import annotations
@@ -11,12 +12,8 @@ import uuid
 from collections.abc import Mapping
 from typing import ClassVar
 
-from app.core.domain.users import UserRole
-from app.core.json_types import JsonObject, json_as_str, json_as_str_or, json_object_from
-from app.core.logging import logger
-from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_dao
-from app.records.agent import AgentRecord
-from app.records.identity import IdentityProviderRecord
+from app.core.json_types import JsonObject, json_as_str, json_object_from
+from app.dao import org_member_dao, user_dao
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.sso_service import sso_service
@@ -34,10 +31,10 @@ class ChannelUserResolutionError(ValueError):
     """Raised when a channel message cannot be safely attributed to a user."""
 
 
-async def _require_company_membership(user: UserRecord | None, tenant_id: uuid.UUID | None) -> None:
+async def _require_company_membership(user: UserRecord, tenant_id: uuid.UUID | None) -> None:
     from app.dao.company_admission_dao import company_admission_dao
 
-    if tenant_id is None or (user is not None and user.tenant_id == tenant_id):
+    if tenant_id is None or user.tenant_id == tenant_id:
         return
     tenant = await company_admission_dao.tenant(tenant_id)
     if tenant is not None and not tenant.is_system and not tenant.is_default_end_user_org:
@@ -45,7 +42,7 @@ async def _require_company_membership(user: UserRecord | None, tenant_id: uuid.U
 
 
 class ChannelUserService:
-    """Service for resolving channel users via OrgMember and SSO patterns."""
+    """Locates the OrgMember linked to a channel identity; never creates a user or a member."""
 
     CHANNEL_TYPE_ALIASES: ClassVar[dict[str, str]] = {
         "microsoft_teams": "teams",
@@ -97,115 +94,6 @@ class ChannelUserService:
 
         return unionid, open_id, external_id
 
-    async def resolve_channel_user(
-        self,
-        agent: AgentRecord,
-        channel_type: str,
-        external_user_id: str | None,
-        extra_info: Mapping[str, object] | None = None,
-    ) -> UserRecord:
-        """Resolve channel user identity, find or create platform User."""
-        tenant_id = agent.tenant_id
-        tenant_id_text = str(tenant_id) if tenant_id is not None else None
-        extra_info = json_object_from(extra_info)
-
-        provider = await self._ensure_provider(channel_type, tenant_id)
-        org_member = await self._find_org_member(provider.id, channel_type, external_user_id, extra_info)
-
-        user: UserRecord | None = None
-
-        if org_member and org_member.user_id:
-            user = await user_dao.get_with_identity(org_member.user_id)
-            if user:
-                await _require_company_membership(user, tenant_id)
-                logger.debug(f"[{channel_type}] Found user via linked OrgMember: {user.id}")
-                return user
-
-        email = _extra_text(extra_info, "email")
-        mobile = _extra_text(extra_info, "mobile")
-
-        if not user and email not in (None, ""):
-            user = await sso_service.match_user_by_email(email, tenant_id_text)
-            if user:
-                logger.info(f"[{channel_type}] Matched user by email: {user.id}")
-
-        if not user and mobile not in (None, ""):
-            user = await sso_service.match_user_by_mobile(mobile, tenant_id_text or "")
-            if user:
-                logger.info(f"[{channel_type}] Matched user by mobile: {user.id}")
-
-        if user:
-            await _require_company_membership(user, tenant_id)
-            if org_member and not org_member.user_id:
-                _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
-            elif not org_member:
-                existing_member = await self._find_existing_org_member_for_user(user.id, provider.id, tenant_id)
-                if existing_member:
-                    unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
-                    updates: dict[str, str] = {}
-                    if unionid not in (None, "") and existing_member.unionid in (None, ""):
-                        updates["unionid"] = unionid
-                    if open_id not in (None, "") and existing_member.open_id in (None, ""):
-                        updates["open_id"] = open_id
-                    if external_id not in (None, "") and existing_member.external_id in (None, ""):
-                        updates["external_id"] = external_id
-                    if updates:
-                        _ = await org_member_dao.update(db_obj=existing_member, obj_in=updates)
-                    logger.info(
-                        f"[{channel_type}] Reusing org-synced OrgMember {existing_member.id} "
-                        f"for user {user.id} instead of creating a duplicate shell"
-                    )
-                else:
-                    _ = await self._create_org_member_shell(
-                        provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
-                    )
-            return user
-
-        unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
-
-        if channel_type == "feishu" and not org_member and unionid in (None, "") and external_id in (None, ""):
-            raise ChannelUserResolutionError(
-                "Feishu sender could not be resolved to a stable user_id/union_id; "
-                "refusing to lazily create a duplicate user from open_id only."
-            )
-
-        user = await self._create_channel_user(channel_type, external_user_id, extra_info, tenant_id)
-
-        if org_member:
-            _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
-        else:
-            _ = await self._create_org_member_shell(
-                provider, channel_type, external_user_id, extra_info, linked_user_id=user.id
-            )
-        logger.info(f"[{channel_type}] Created new user: {user.id} for external_id: {external_user_id}")
-
-        return user
-
-    async def _ensure_provider(self, provider_type: str, tenant_id: uuid.UUID | None) -> IdentityProviderRecord:
-        """Get or create IdentityProvider record."""
-        canonical_type = self._normalize_channel_type(provider_type)
-
-        provider = await identity_provider_dao.get_by_type_and_tenant(canonical_type, tenant_id)
-        if provider:
-            return provider
-
-        for legacy_type in self._legacy_provider_types_for_channel(provider_type):
-            if legacy_type == canonical_type:
-                continue
-            legacy_provider = await identity_provider_dao.get_by_type_and_tenant(legacy_type, tenant_id)
-            if legacy_provider:
-                return legacy_provider
-
-        return await identity_provider_dao.create(
-            obj_in={
-                "provider_type": canonical_type,
-                "name": canonical_type.capitalize(),
-                "is_active": True,
-                "config": {},
-                "tenant_id": tenant_id,
-            }
-        )
-
     async def _find_org_member(
         self,
         provider_id: uuid.UUID,
@@ -213,141 +101,51 @@ class ChannelUserService:
         external_user_id: str | None,
         extra_info: Mapping[str, object] | None = None,
     ) -> OrgMemberRecord | None:
-        """Find OrgMember by external identity."""
-        try:
-            extra_info = json_object_from(extra_info)
-            unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
-            normalized_channel = self._normalize_channel_type(channel_type)
+        """Find OrgMember by external identity; a failed lookup raises, it never reads as an unlinked sender."""
+        extra_info = json_object_from(extra_info)
+        unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, extra_info)
+        normalized_channel = self._normalize_channel_type(channel_type)
 
-            if normalized_channel == "feishu":
-                return await org_member_dao.find_active_by_any_ids(
-                    provider_id=provider_id,
-                    unionid=unionid,
-                    open_id=open_id,
-                    external_id=external_id,
-                )
-            if normalized_channel == "dingtalk":
-                return await org_member_dao.find_active_by_any_ids(
-                    provider_id=provider_id,
-                    unionid=unionid,
-                    external_id=external_id,
-                )
-            if normalized_channel == "wecom":
-                if external_id in (None, ""):
-                    return None
-                return await org_member_dao.find_active_by_any_ids(
-                    provider_id=provider_id,
-                    external_id=external_id,
-                )
+        if normalized_channel == "feishu":
+            return await org_member_dao.find_active_by_any_ids(
+                provider_id=provider_id,
+                unionid=unionid,
+                open_id=open_id,
+                external_id=external_id,
+            )
+        if normalized_channel == "dingtalk":
+            return await org_member_dao.find_active_by_any_ids(
+                provider_id=provider_id,
+                unionid=unionid,
+                external_id=external_id,
+            )
+        if normalized_channel == "wecom":
             if external_id in (None, ""):
                 return None
             return await org_member_dao.find_active_by_any_ids(
                 provider_id=provider_id,
                 external_id=external_id,
             )
-        except Exception as e:
-            logger.debug(f"[{channel_type}] OrgMember lookup failed: {e}")
+        if external_id in (None, ""):
             return None
-
-    async def _create_org_member_shell(
-        self,
-        provider: IdentityProviderRecord,
-        channel_type: str,
-        external_user_id: str | None,
-        extra_info: Mapping[str, object],
-        linked_user_id: uuid.UUID | None = None,
-    ) -> OrgMemberRecord:
-        """Create a shell OrgMember record for this identity."""
-        info = json_object_from(extra_info)
-        identity_seed = external_user_id or _extra_text(info, "open_id") or uuid.uuid4().hex
-        name = _extra_text(info, "name") or f"{channel_type.capitalize()} User {identity_seed[:8]}"
-        unionid, open_id, external_id = self._get_channel_ids(channel_type, external_user_id, info)
-
-        return await org_member_dao.create(
-            obj_in={
-                "name": name,
-                "email": _extra_text(info, "email"),
-                "provider_id": provider.id,
-                "user_id": linked_user_id,
-                "tenant_id": provider.tenant_id,
-                "external_id": external_id,
-                "unionid": unionid,
-                "open_id": open_id,
-                "avatar_url": _extra_text(info, "avatar_url"),
-                "phone": _extra_text(info, "mobile"),
-                "title": json_as_str_or(info.get("title")),
-                "status": "active",
-            }
-        )
-
-    async def _find_existing_org_member_for_user(
-        self,
-        user_id: uuid.UUID,
-        provider_id: uuid.UUID,
-        tenant_id: uuid.UUID | None,
-    ) -> OrgMemberRecord | None:
-        return await org_member_dao.get_active_for_user_and_provider(
-            user_id=user_id,
+        return await org_member_dao.find_active_by_any_ids(
             provider_id=provider_id,
-            tenant_id=tenant_id,
+            external_id=external_id,
         )
-
-    async def _create_channel_user(
-        self,
-        channel_type: str,
-        external_user_id: str | None,
-        extra_info: Mapping[str, object],
-        tenant_id: uuid.UUID | None,
-    ) -> UserRecord:
-        """Create a new Identity + User for channel identity (lazy registration)."""
-        del external_user_id
-        await _require_company_membership(None, tenant_id)
-        info = json_object_from(extra_info)
-        email = _extra_text(info, "email")
-        mobile = _extra_text(info, "mobile")
-        name = _extra_text(info, "name") or email or "User"
-
-        identity = None
-        found = await identity_dao.get_by_email(email) if email not in (None, "") else None
-        if found:
-            identity = found
-        elif mobile not in (None, ""):
-            found = await identity_dao.get_by_phone(mobile)
-            if found:
-                identity = found
-
-        if not identity:
-            identity = await identity_dao.create_identity(
-                email=email,
-                phone=mobile,
-                password_hash=None,
-                is_platform_admin=False,
-                email_verified=True,
-            )
-
-        user = await user_dao.create(
-            obj_in={
-                "identity_id": identity.id,
-                "display_name": name,
-                "avatar_url": _extra_text(info, "avatar_url"),
-                "role": UserRole.MEMBER,
-                "registration_source": channel_type,
-                "tenant_id": tenant_id,
-                "is_active": True,
-            }
-        )
-        loaded = await user_dao.get_with_identity(user.id)
-        return loaded or user
 
 
 channel_user_service = ChannelUserService()
 
 
-async def get_platform_user_by_org_member(
+async def linked_platform_user(
     org_member: OrgMemberRecord,
     agent_tenant_id: uuid.UUID | None = None,
-) -> UserRecord:
-    """Get or create platform User from an existing OrgMember."""
+) -> UserRecord | None:
+    """Return the platform user an OrgMember belongs to, or None when it has none; never creates one.
+
+    A member already linked to a user in the agent's tenant resolves to it. Otherwise an existing user with the member's
+    email or phone is linked to the member. An unlinked member that matches no user stays unlinked.
+    """
     agent_tenant_id_text = str(agent_tenant_id) if agent_tenant_id is not None else None
 
     if org_member.user_id:
@@ -361,44 +159,10 @@ async def get_platform_user_by_org_member(
         user = await sso_service.match_user_by_email(org_member.email, agent_tenant_id_text)
     if not user and org_member.phone is not None and org_member.phone:
         user = await sso_service.match_user_by_mobile(org_member.phone, agent_tenant_id_text or "")
+    if not user:
+        return None
 
     await _require_company_membership(user, agent_tenant_id or org_member.tenant_id)
-    if user:
-        _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
-        loaded = await user_dao.get_with_identity(user.id)
-        return loaded or user
-
-    provider = await identity_provider_dao.get(org_member.provider_id) if org_member.provider_id else None
-    channel_type = provider.provider_type if provider else "unknown"
-
-    email = org_member.email
-    name = org_member.name or email or "User"
-
-    identity = await identity_dao.get_by_email(email) if email not in (None, "") else None
-    if not identity and org_member.phone is not None and org_member.phone:
-        identity = await identity_dao.get_by_phone(org_member.phone)
-
-    if not identity:
-        identity = await identity_dao.create_identity(
-            email=email,
-            phone=org_member.phone,
-            password_hash=None,
-            is_platform_admin=False,
-            email_verified=True,
-        )
-
-    user = await user_dao.create(
-        obj_in={
-            "identity_id": identity.id,
-            "display_name": name,
-            "avatar_url": org_member.avatar_url,
-            "role": UserRole.MEMBER,
-            "registration_source": channel_type,
-            "tenant_id": agent_tenant_id,
-            "is_active": True,
-        }
-    )
     _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
-    logger.info(f"[channel_user_service] Created User {user.id} for OrgMember {org_member.id} ({name})")
     loaded = await user_dao.get_with_identity(user.id)
     return loaded or user

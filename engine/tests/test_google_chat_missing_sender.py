@@ -1,4 +1,3 @@
-from collections.abc import Coroutine
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -9,50 +8,29 @@ from httpx import ASGITransport, AsyncClient
 from app.api import google_chat
 from app.core.domain.channels import ChannelType
 from app.core.json_types import JsonObject
-from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
+from app.services.channels import google_chat_media, submissions
 
 
-@pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize("display_name", ["", "Unverified sender"])
 @pytest.mark.parametrize("attachment_only", [False, True])
-async def test_missing_sender_is_acknowledged_without_transcript_access(
-    monkeypatch: pytest.MonkeyPatch, use_async: bool, display_name: str, attachment_only: bool
+async def test_missing_sender_is_acknowledged_without_acceptance(
+    monkeypatch: pytest.MonkeyPatch, display_name: str, attachment_only: bool
 ) -> None:
     # Given
-    agent = AgentRecord(id=uuid4(), name="Assistant", creator_id=uuid4())
+    agent_id = uuid4()
     config = ChannelConfigRecord(
         id=uuid4(),
-        agent_id=agent.id,
+        agent_id=agent_id,
         channel_type=ChannelType.GOOGLE_CHAT,
         verification_token="token",
         is_configured=True,
-        extra_config={"service_account_json": {"client_email": "bot@example.com"}} if use_async else {},
     )
     monkeypatch.setattr(google_chat.channel_config, "get_channel_config", AsyncMock(return_value=config))
-    monkeypatch.setattr(google_chat.channel_inbound, "load_agent", AsyncMock(return_value=agent))
-    monkeypatch.setattr(google_chat.channel_dedup, "already_processed_shared", AsyncMock(return_value=False))
-    monkeypatch.setattr(google_chat.channel_dedup, "mark_processed_shared", AsyncMock())
-    blocked = {
-        name: AsyncMock(side_effect=AssertionError(f"Missing sender reached {name}"))
-        for name in (
-            "resolve_sender_user",
-            "open_channel_session",
-            "bind_channel_conversation",
-            "load_history_for_session",
-            "persist_user_message",
-            "persist_assistant_message",
-            "generate_channel_reply",
-        )
-    }
-    for name, operation in blocked.items():
-        monkeypatch.setattr(google_chat.channel_inbound, name, operation)
-    pending: list[Coroutine[None, None, None]] = []
-
-    def schedule(coroutine: Coroutine[None, None, None], description: str) -> None:
-        pending.append(coroutine)
-
-    monkeypatch.setattr(google_chat, "schedule_background_task", schedule)
+    accept_event = AsyncMock()
+    accept_media = AsyncMock()
+    monkeypatch.setattr(submissions, "accept_channel_event", accept_event)
+    monkeypatch.setattr(google_chat_media, "accept_google_chat_media", accept_media)
     body: JsonObject = {
         "type": "MESSAGE",
         "token": "token",
@@ -67,16 +45,10 @@ async def test_missing_sender_is_acknowledged_without_transcript_access(
     app = FastAPI()
     app.include_router(google_chat.router, prefix="/api")
     # When
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(f"/api/channel/google-chat/{agent.id}/webhook", json=body)
-        for coroutine in pending:
-            await coroutine
-    finally:
-        for coroutine in pending:
-            coroutine.close()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/channel/google-chat/{agent_id}/webhook", json=body)
     # Then
     assert response.status_code == 200
     assert response.json() == {}
-    for operation in blocked.values():
-        operation.assert_not_awaited()
+    accept_event.assert_not_awaited()
+    accept_media.assert_not_awaited()

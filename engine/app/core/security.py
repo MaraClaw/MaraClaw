@@ -4,9 +4,10 @@ import asyncio
 import base64
 import os
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from typing import TypeGuard
+from typing import Final, TypeGuard
 
 import bcrypt
 from Crypto.Cipher import AES
@@ -28,6 +29,9 @@ security = HTTPBearer()
 
 # Thread pool for CPU-intensive bcrypt operations (avoids blocking the event loop)
 _bcrypt_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bcrypt")
+# Checks running or queued on the executor; only the event loop thread touches it.
+_bcrypt_pending = 0
+_BCRYPT_RETRY_AFTER_SECONDS: Final = 2
 
 
 def hash_password(password: str) -> str:
@@ -40,16 +44,44 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
+async def _run_bcrypt[*Args, Result](work: Callable[[*Args], Result], *args: *Args) -> Result:
+    """Run bcrypt work on the executor, refusing it at once with 503 when too many checks are already admitted.
+
+    A check keeps its slot until its thread finishes, even when the caller is cancelled first, so abandoned checks
+    never let the executor queue grow past the bound.
+    """
+    global _bcrypt_pending
+    if _bcrypt_pending >= settings.BCRYPT_MAX_PENDING_CHECKS:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is busy. Try again shortly.",
+            headers={"Retry-After": str(_BCRYPT_RETRY_AFTER_SECONDS)},
+        )
+    _bcrypt_pending += 1
+    try:
+        check = asyncio.get_running_loop().run_in_executor(_bcrypt_executor, work, *args)
+    except BaseException:
+        _bcrypt_pending -= 1
+        raise
+    check.add_done_callback(_release_bcrypt_slot)
+    return await asyncio.shield(check)
+
+
+def _release_bcrypt_slot[Result](check: asyncio.Future[Result]) -> None:
+    global _bcrypt_pending
+    _bcrypt_pending -= 1
+    if not check.cancelled():
+        _ = check.exception()  # A caller cancelled mid-check never reads the outcome; mark it retrieved.
+
+
 async def hash_password_async(password: str) -> str:
     """Hash a password using bcrypt without blocking the event loop."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_bcrypt_executor, hash_password, password)
+    return await _run_bcrypt(hash_password, password)
 
 
 async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash without blocking the event loop."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_bcrypt_executor, verify_password, plain_password, hashed_password)
+    return await _run_bcrypt(verify_password, plain_password, hashed_password)
 
 
 def encrypt_data(plaintext: str, key: str) -> str:
@@ -192,10 +224,14 @@ async def check_token_generation(identity_id: uuid.UUID, claimed: int) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked token")
 
 
-async def check_membership_generation(user_id: uuid.UUID, claimed: int) -> None:
-    """Compare a claimed membership generation with SQL on every call; the session snapshot never carries it."""
-    generation = await user_dao.get_membership_generation(user_id)
-    if generation is None or generation != claimed:
+async def check_generations(user_id: uuid.UUID, identity_id: uuid.UUID, *, auth: int, membership: int) -> None:
+    """Compare both claimed generations with one SQL statement on every call; the session snapshot carries neither."""
+    generations = await user_dao.get_generations(user_id, identity_id)
+    if (
+        generations is None
+        or generations["auth_generation"] != auth
+        or generations["membership_generation"] != membership
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked token")
 
 
@@ -242,8 +278,7 @@ async def load_user_from_access_token(
     user = await load_user_principal(uid, require_active=require_active, enforce_password_change=False, fresh=fresh)
     if user.identity_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity not found")
-    await check_token_generation(user.identity_id, payload["gen"])
-    await check_membership_generation(user.id, payload["mgen"])
+    await check_generations(user.id, user.identity_id, auth=payload["gen"], membership=payload["mgen"])
     if enforce_password_change:
         raise_if_password_change_required(user)
     return user

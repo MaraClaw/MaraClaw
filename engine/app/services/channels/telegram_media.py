@@ -10,7 +10,14 @@ from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat_attachment import ChatAttachment
 from app.schemas.telegram import TelegramMedia, TelegramMessage
-from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from app.services.channels.media_limits import (
+    MediaBudget,
+    MediaDeadlineError,
+    MediaTooLargeError,
+    deadline_note,
+    read_capped,
+    too_large_note,
+)
 from app.services.channels.submissions import ChannelEvent
 from app.services.channels.telegram_outbound import _TelegramBotURL
 from app.services.storage import store_agent_upload
@@ -34,13 +41,13 @@ async def enrich_media(
         return event, event.text
     kind, media = selected
     filename = media.file_name or ("photo.jpg" if kind == "photo" else "video.mp4" if kind == "video" else "file.bin")
-    budget = MediaBudget()
+    budget = MediaBudget.for_acknowledgement()
     token = config.app_secret or ""
     try:
         limit = min(budget.limit_for(filename), 20 * 1024 * 1024)
         if media.file_size is not None and media.file_size > limit:
             raise MediaTooLargeError(limit)
-        async with public_http_client(timeout=30, origin="https://api.telegram.org") as client:
+        async with budget.window(), public_http_client(timeout=30, origin="https://api.telegram.org") as client:
             request = client.build_request(
                 "GET", "https://api.telegram.org/bot[redacted]/getFile", params={"file_id": media.file_id}
             )
@@ -49,7 +56,7 @@ async def enrich_media(
             )
             response = await client.send(request, stream=True, follow_redirects=False)
             try:
-                body = json_loads_object(await read_capped(response, 64 * 1024))
+                body = json_loads_object(await read_capped(response, 64 * 1024, budget))
             finally:
                 await response.aclose()
             file_path = json_as_str_or(json_object_from(body.get("result")).get("file_path"))
@@ -64,11 +71,14 @@ async def enrich_media(
             request.url = _TelegramBotURL(f"https://api.telegram.org/file/bot{token}/{quote(file_path, safe='/')}")
             response = await client.send(request, stream=True, follow_redirects=False)
             try:
-                data = await read_capped(response, limit)
+                data = await read_capped(response, limit, budget)
             finally:
                 await response.aclose()
+        budget.check()
     except MediaTooLargeError as exc:
         return event, f"{event.text}\n{too_large_note(filename, exc.limit)}".strip()
+    except MediaDeadlineError:
+        return event, f"{event.text}\n{deadline_note(filename)}".strip()
     except httpx.HTTPError:
         raise HTTPException(503, "Telegram media download failed") from None
     _, path, _ = await store_agent_upload(config.agent_id, filename, data, content_type=media.mime_type)

@@ -261,5 +261,26 @@ class NotificationDAO(BaseDAO[NotificationRecord]):
             )
             return NotificationRecord.from_row(row) if row is not None else None
 
+    async def purge_older_than(self, *, older_than: datetime, limit: int) -> int:
+        """Delete up to ``limit`` notifications created before ``older_than``, oldest first, and return how many went.
+
+        Read, unread and archived rows all age out. Rows another transaction holds are skipped, never waited on. The
+        scan walks ``ix_notifications_created_at`` and the picked rows are deleted by ``ctid`` (a TID scan): the
+        statement's own row locks keep each ``ctid`` in place.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH expired AS (
+                    SELECT ctid FROM notifications
+                    WHERE created_at < %(cutoff)s
+                    ORDER BY created_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ) DELETE FROM notifications WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING id
+                """,
+                {"cutoff": older_than, "limit": limit},
+            )
+            return len(rows)
+
 
 notification_dao = NotificationDAO()

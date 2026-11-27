@@ -3,9 +3,10 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
+import type { UserOut } from '../src/lib/types/auth.ts'
 import {
-  canBuyCapacity, canManageCapacityPaymentSettings, canReviewCapacityPayments, canViewCapacityOrders, type UserOut,
-} from '../src/lib/types/auth.ts'
+  canBuyCapacity, canManageCapacityPaymentSettings, canReviewCapacityPayments, canViewCapacityOrders,
+} from '../src/lib/types/auth-guards.ts'
 import { adminUser } from './helpers.ts'
 import { capacityOrderId } from './capacity-fixtures.ts'
 

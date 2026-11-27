@@ -7,7 +7,7 @@ import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { acceptBroadcast, broadcastDraftSchema, broadcastIdSchema, fetchBroadcastJobStatus, sendBroadcast, type BroadcastSubmission } from '../src/lib/broadcast-api.ts'
 import { ApiError, apiRequest } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
-import { canSendBroadcast } from '../src/lib/types/auth.ts'
+import { canSendBroadcast } from '../src/lib/types/auth-guards.ts'
 import { adminUser, createFixture } from './helpers.ts'
 
 const counts = { ok: true, broadcast_id: '0d75651c-8c6c-4404-9046-50e1b3ff6dd2', users_notified: 7, agents_notified: 3, emails_sent: 5 }

@@ -380,9 +380,9 @@ export type ChatHistoryReset = z.infer<typeof ChatHistoryResetSchema>;
 export const ChatHistoryUnchangedSchema = z.looseObject({ ["kind"]: z.intersection(z.literal("unchanged"), z.string()), ["revision"]: z.string() });
 export type ChatHistoryUnchanged = z.infer<typeof ChatHistoryUnchangedSchema>;
 
-export const ChatRejectionReasonValues = ["quota_exceeded","agent_expired","no_company_model","enqueue_failed","guest_config_failed","invalid_submission_id","submission_conflict","invalid_attachments","openclaw_update_required","openclaw_update_in_progress"] as const;
-export const ChatRejectionReason = { QUOTA_EXCEEDED: "quota_exceeded", AGENT_EXPIRED: "agent_expired", NO_COMPANY_MODEL: "no_company_model", ENQUEUE_FAILED: "enqueue_failed", GUEST_CONFIG_FAILED: "guest_config_failed", INVALID_SUBMISSION_ID: "invalid_submission_id", SUBMISSION_CONFLICT: "submission_conflict", INVALID_ATTACHMENTS: "invalid_attachments", OPENCLAW_UPDATE_REQUIRED: "openclaw_update_required", OPENCLAW_UPDATE_IN_PROGRESS: "openclaw_update_in_progress" } as const;
-export const ChatRejectionReasonSchema = z.intersection(z.union([z.literal("quota_exceeded"), z.literal("agent_expired"), z.literal("no_company_model"), z.literal("enqueue_failed"), z.literal("guest_config_failed"), z.literal("invalid_submission_id"), z.literal("submission_conflict"), z.literal("invalid_attachments"), z.literal("openclaw_update_required"), z.literal("openclaw_update_in_progress")]), z.string());
+export const ChatRejectionReasonValues = ["quota_exceeded","agent_expired","no_company_model","enqueue_failed","guest_config_failed","invalid_submission_id","submission_conflict","invalid_attachments","openclaw_update_required","openclaw_update_in_progress","message_too_long","file_name_too_long","rate_limited"] as const;
+export const ChatRejectionReason = { QUOTA_EXCEEDED: "quota_exceeded", AGENT_EXPIRED: "agent_expired", NO_COMPANY_MODEL: "no_company_model", ENQUEUE_FAILED: "enqueue_failed", GUEST_CONFIG_FAILED: "guest_config_failed", INVALID_SUBMISSION_ID: "invalid_submission_id", SUBMISSION_CONFLICT: "submission_conflict", INVALID_ATTACHMENTS: "invalid_attachments", OPENCLAW_UPDATE_REQUIRED: "openclaw_update_required", OPENCLAW_UPDATE_IN_PROGRESS: "openclaw_update_in_progress", MESSAGE_TOO_LONG: "message_too_long", FILE_NAME_TOO_LONG: "file_name_too_long", RATE_LIMITED: "rate_limited" } as const;
+export const ChatRejectionReasonSchema = z.intersection(z.union([z.literal("quota_exceeded"), z.literal("agent_expired"), z.literal("no_company_model"), z.literal("enqueue_failed"), z.literal("guest_config_failed"), z.literal("invalid_submission_id"), z.literal("submission_conflict"), z.literal("invalid_attachments"), z.literal("openclaw_update_required"), z.literal("openclaw_update_in_progress"), z.literal("message_too_long"), z.literal("file_name_too_long"), z.literal("rate_limited")]), z.string());
 export type ChatRejectionReason = z.infer<typeof ChatRejectionReasonSchema>;
 
 export const ConnectedEventSchema = z.strictObject({ ["session_id"]: z.guid(), ["type"]: z.intersection(z.literal("connected"), z.string()) });
@@ -395,7 +395,7 @@ export const OnboardingRejectionReasonValues = ["quota_exceeded","agent_expired"
 export const OnboardingRejectionReasonSchema = z.intersection(z.union([z.literal("quota_exceeded"), z.literal("agent_expired"), z.literal("no_company_model"), z.literal("enqueue_failed"), z.literal("guest_config_failed"), z.literal("openclaw_update_required"), z.literal("openclaw_update_in_progress")]), z.string());
 export type OnboardingRejectionReason = z.infer<typeof OnboardingRejectionReasonSchema>;
 
-export const SubmissionRejectionReasonSchema = z.union([OnboardingRejectionReasonSchema, z.intersection(z.union([z.literal("submission_conflict"), z.literal("invalid_attachments")]), z.string())]);
+export const SubmissionRejectionReasonSchema = z.union([OnboardingRejectionReasonSchema, z.intersection(z.union([z.literal("submission_conflict"), z.literal("invalid_attachments"), z.literal("message_too_long"), z.literal("file_name_too_long"), z.literal("rate_limited")]), z.string())]);
 export type SubmissionRejectionReason = z.infer<typeof SubmissionRejectionReasonSchema>;
 
 export const CorrelatedTurnRejectedEventSchema = z.strictObject({ ["client_submission_id"]: z.guid(), ["content"]: z.string(), ["notice_id"]: z.union([z.guid(), z.null()]).optional(), ["reason"]: SubmissionRejectionReasonSchema, ["type"]: z.intersection(z.literal("turn_rejected"), z.string()) });
@@ -521,7 +521,7 @@ export type CompanyReportRegenerate = z.infer<typeof CompanyReportRegenerateSche
 export const CompanyRuntimeObservationOutSchema = z.looseObject({ ["container_status"]: z.union([z.string(), z.null()]).optional(), ["exit_code"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["finished_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["oom_killed_since_last_start"]: z.union([z.boolean(), z.null()]).optional(), ["restart_count_since_last_start"]: z.union([z.number().refine(Number.isInteger), z.null()]).optional(), ["running"]: z.union([z.boolean(), z.null()]).optional(), ["started_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]).optional(), ["state"]: z.intersection(z.union([z.literal("observed"), z.literal("missing"), z.literal("foreign"), z.literal("unavailable")]), z.string()) });
 export type CompanyRuntimeObservationOut = z.infer<typeof CompanyRuntimeObservationOutSchema>;
 
-export const CompanyRuntimeWorkspaceOutSchema = z.looseObject({ ["limit_bytes"]: z.number().refine(Number.isInteger), ["measured_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["over_since"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["used_bytes"]: z.number().refine(Number.isInteger) });
+export const CompanyRuntimeWorkspaceOutSchema = z.looseObject({ ["limit_bytes"]: z.number().refine(Number.isInteger), ["measured_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["over_since"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["remeasure_requested_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]), ["used_bytes"]: z.number().refine(Number.isInteger), ["walk_failed_at"]: z.union([z.iso.datetime({ offset: true, local: true }), z.null()]) });
 export type CompanyRuntimeWorkspaceOut = z.infer<typeof CompanyRuntimeWorkspaceOutSchema>;
 
 export const CompanyRuntimeAgentOutSchema = z.looseObject({ ["agent_id"]: z.guid(), ["blocking_codes"]: z.array(AgentWorkBlockCodeSchema), ["creator_id"]: z.guid(), ["name"]: z.string(), ["observation"]: CompanyRuntimeObservationOutSchema, ["recorded_container_id"]: z.union([z.string(), z.null()]), ["recorded_status"]: AgentStatusSchema, ["runtime_loss"]: z.union([AgentRuntimeLossOutSchema, z.null()]), ["start"]: z.union([AgentLifecycleStartOutSchema, z.null()]), ["upgrade_in_progress"]: z.boolean(), ["workspace"]: z.union([CompanyRuntimeWorkspaceOutSchema, z.null()]) });
@@ -679,6 +679,9 @@ export type EmailConfig = z.infer<typeof EmailConfigSchema>;
 
 export const EmailTestRequestSchema = z.looseObject({ ["config"]: EmailConfigSchema });
 export type EmailTestRequest = z.infer<typeof EmailTestRequestSchema>;
+
+export const FileContentSchema = z.looseObject({ ["binary"]: z.boolean().optional(), ["content"]: z.string(), ["path"]: z.string(), ["size"]: z.number().refine(Number.isInteger), ["version_token"]: z.union([z.string(), z.null()]).optional() });
+export type FileContent = z.infer<typeof FileContentSchema>;
 
 export const FileInfoSchema = z.looseObject({ ["is_dir"]: z.boolean(), ["modified_at"]: z.string().optional(), ["name"]: z.string(), ["path"]: z.string(), ["size"]: z.number().refine(Number.isInteger).optional(), ["url"]: z.union([z.string(), z.null()]).optional(), ["version_token"]: z.union([z.string(), z.null()]).optional() });
 export type FileInfo = z.infer<typeof FileInfoSchema>;

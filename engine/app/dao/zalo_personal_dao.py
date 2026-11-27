@@ -3,6 +3,8 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
+from app.config import get_settings
+from app.dao.personal_bridge_fleet import admit
 from app.db.session import connection_ctx
 from app.records.zalo_personal import ZaloConnection, ZaloError
 from app.services.channels.zalo_personal_access import require_running, zalo_owner
@@ -18,23 +20,23 @@ async def get_personal(agent_id: UUID, *, lock: bool = False) -> ZaloConnection 
 
 
 async def candidates() -> list[ZaloConnection]:
-    from app.dao.zalo_personal_runtime_dao import runtime_for
+    """Unclaimed desired connections past their retry gate, longest waiting first, from one joined read."""
+    from app.dao.zalo_personal_runtime_dao import startable_since
 
     async with connection_ctx() as db:
         rows = await db.fetchall(
-            "SELECT * FROM zalo_personal_connections WHERE desired AND claim_token IS NULL "
-            "AND state IN ('pending','reconnecting') ORDER BY created_at,config_id"
+            "SELECT c.*,cc.extra_config FROM zalo_personal_connections c "
+            "LEFT JOIN channel_configs cc ON cc.id=c.config_id WHERE c.desired AND c.claim_token IS NULL "
+            "AND c.state IN ('pending','reconnecting') ORDER BY c.created_at,c.config_id"
         )
-        due: list[ZaloConnection] = []
-        for row in rows:
-            candidate = ZaloConnection.from_row(row)
-            runtime = await runtime_for(candidate.config_id)
-            if runtime.retry_at is None or runtime.retry_at <= datetime.now(UTC):
-                due.append(candidate)
-        return due
+    now = datetime.now(UTC)
+    waiting = [(since, row) for row in rows if (since := startable_since(row, now)) is not None]
+    waiting.sort(key=lambda entry: entry[0])
+    return [ZaloConnection.from_row(row) for _, row in waiting]
 
 
 async def claim(config_id: UUID) -> ZaloConnection | None:
+    """Lease one connection, or ``None`` when it is declined. Raises ``FleetFullError`` at the fleet ceiling."""
     from app.dao.zalo_personal_runtime_dao import runtime_for
 
     async with connection_ctx() as db:
@@ -47,11 +49,16 @@ async def claim(config_id: UUID) -> ZaloConnection | None:
             require_running(agent)
         except HTTPException:
             return None
-        current = await get_personal(candidate.agent_id, lock=True)
+        # Lock the connection without waiting, so a row held elsewhere (or re-pointed at a new config by a start) is
+        # declined and never queues the poll loop.
+        locked = await db.fetchone(
+            "SELECT * FROM zalo_personal_connections WHERE config_id=%(id)s FOR UPDATE SKIP LOCKED", {"id": config_id}
+        )
+        if locked is None:
+            return None
+        current = ZaloConnection.from_row(locked)
         if (
-            current is None
-            or current.config_id != config_id
-            or current.owner_id != owner.id
+            current.owner_id != owner.id
             or current.tenant_id != agent.tenant_id
             or not current.desired
             or current.claim_token is not None
@@ -61,6 +68,7 @@ async def claim(config_id: UUID) -> ZaloConnection | None:
         runtime = await runtime_for(config_id, lock=True)
         if runtime.retry_at is not None and runtime.retry_at > datetime.now(UTC):
             return None
+        await admit(db, "zalo", get_settings().ZALO_PERSONAL_MAX_RUNNING_CHILDREN)
         row = await db.fetchone(
             "UPDATE zalo_personal_connections SET claim_token=%(claim)s,"
             "state=CASE WHEN account_id IS NULL THEN 'pending' ELSE 'reconnecting' END,"

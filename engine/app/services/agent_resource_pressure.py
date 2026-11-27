@@ -16,8 +16,6 @@ from datetime import UTC, datetime
 from typing import Final
 from uuid import UUID
 
-from anyio import to_thread
-
 from app.config import get_settings
 from app.core.logging import logger
 from app.dao.agent_resource_pressure_episode_dao import OpenEpisode, agent_resource_pressure_episode_dao
@@ -35,6 +33,7 @@ from app.services.agent_resource_pressure_docker import (
     guest_stats,
     inspect_guests,
 )
+from app.services.docker_capacity import DockerBusyError, DockerPriority, run_docker
 from app.services.organization_plans import plan_for
 
 GUEST_RESOURCES: Final = (PressureResource.MEMORY, PressureResource.CPU)
@@ -217,13 +216,19 @@ async def _sample_guests(
     if client is None:
         logger.warning("[ResourcePressure] Docker unavailable; guest sampling skipped")
         return
-    inspected = await to_thread.run_sync(
-        inspect_guests,
-        client,
-        [reference for _, _, reference in with_guest],
-        DOCKER_TIMEOUT_SECONDS,
-        abandon_on_cancel=True,
-    )
+    try:
+        inspected = await run_docker(
+            inspect_guests,
+            client,
+            [reference for _, _, reference in with_guest],
+            DOCKER_TIMEOUT_SECONDS,
+            priority=DockerPriority.BACKGROUND,
+            abandon_on_cancel=True,
+        )
+    except DockerBusyError:
+        reads.unavailable = True
+        logger.info("[ResourcePressure] Docker lane busy; guest sampling skipped")
+        return
     if inspected is None:
         reads.unavailable = True
         logger.warning("[ResourcePressure] Docker inspect failed; guest sampling skipped")
@@ -246,13 +251,19 @@ async def _sample_guests(
         _ = await agent_resource_pressure_episode_dao.close_open(closing, GUEST_RESOURCES, reason="guest_not_running")
     if not running:
         return
-    readings = await to_thread.run_sync(
-        guest_stats,
-        client,
-        [inspection.container_id for _, _, inspection in running],
-        DOCKER_TIMEOUT_SECONDS,
-        abandon_on_cancel=True,
-    )
+    try:
+        readings = await run_docker(
+            guest_stats,
+            client,
+            [inspection.container_id for _, _, inspection in running],
+            DOCKER_TIMEOUT_SECONDS,
+            priority=DockerPriority.BACKGROUND,
+            abandon_on_cancel=True,
+        )
+    except DockerBusyError:
+        reads.unavailable = True
+        logger.info("[ResourcePressure] Docker lane busy; guest sampling skipped")
+        return
     if readings is None:
         reads.unavailable = True
         logger.warning("[ResourcePressure] Docker stats failed; guest sampling skipped")

@@ -16,8 +16,11 @@ Inbound events are authenticated with Google-signed bearer tokens from
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import httpx
@@ -25,6 +28,7 @@ from jose import JWTError, jwt
 
 from app.core.json_types import (
     JsonObject,
+    json_as_int,
     json_as_str,
     json_loads_object,
     json_object_from,
@@ -35,6 +39,7 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
+from app.services import im_token_cache
 from app.services.channels.google_chat_payloads import (
     GoogleChatAnnotationPayload,
     GoogleChatEventPayload,
@@ -50,10 +55,13 @@ from app.services.service_contracts import GoogleChatMessage
 CHAT_CERTS_URL = "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com"
 CHAT_API_BASE = "https://chat.googleapis.com/v1"
 CHAT_ISSUER = "chat@system.gserviceaccount.com"
-ALLOWED_TOKEN_URIS = frozenset({"https://oauth2.googleapis.com/token"})
+OAUTH_ENDPOINT = "https://oauth2.googleapis.com/token"
+ALLOWED_TOKEN_URIS = frozenset({OAUTH_ENDPOINT})
 CHAT_BOT_SCOPE = "https://www.googleapis.com/auth/chat.bot"
 # Practical text budget for a single Chat message (bytes-ish; we use char chunks).
 CHAT_MSG_CHUNK = 3500
+# Google issues service-account access tokens for an hour, the same bound the assertion asks for.
+_TOKEN_LIFETIME_SECONDS = 3600
 _certs: dict[str, str] = {}
 _certs_expires_at: float = 0.0
 
@@ -154,10 +162,6 @@ def audience_for_config(config: ChannelConfigRecord) -> str:
     extra = mapping_from_row(config.extra_config)
     audience_raw: object = extra.get("audience") or config.app_id or ""
     return str(audience_raw).strip()
-
-
-def has_service_account(config: ChannelConfigRecord) -> bool:
-    return _service_account_info(config) is not None
 
 
 def parse_google_chat_event(body: GoogleChatEventPayload | JsonObject) -> GoogleChatInbound | None:
@@ -348,33 +352,45 @@ def _service_account_info(config: ChannelConfigRecord) -> dict[str, object] | No
     return None
 
 
-async def _service_account_access_token(sa_info: dict[str, object], scopes: list[str], *, pinned: bool = False) -> str:
-    """Mint a service-account access token via JWT bearer grant (no google-auth dep)."""
-    now = int(time.time())
-    client_email_raw: object = sa_info.get("client_email")
-    private_key_raw: object = sa_info.get("private_key")
-    if not client_email_raw or not private_key_raw:
+def _service_account_credentials(sa_info: dict[str, object]) -> tuple[str, str]:
+    """Client email and PEM private key of a service account whose ``token_uri`` is allowed."""
+    client_email = sa_info.get("client_email")
+    private_key = sa_info.get("private_key")
+    if not client_email or not private_key:
         raise ValueError("Service account missing client_email/private_key")
-    client_email = str(client_email_raw)
-    private_key = private_key_raw if isinstance(private_key_raw, str) else str(private_key_raw)
-
     # Fail closed: never POST assertions to attacker-controlled token URIs.
-    token_uri = next(iter(ALLOWED_TOKEN_URIS))
-    raw_uri = str(sa_info.get("token_uri") or token_uri).strip()
+    raw_uri = str(sa_info.get("token_uri") or OAUTH_ENDPOINT).strip()
     if raw_uri not in ALLOWED_TOKEN_URIS:
         raise ValueError(f"Disallowed service-account token_uri: {raw_uri}")
+    return str(client_email), str(private_key).replace("\\n", "\n")
 
-    assertion = jwt.encode(
+
+def _service_account_token_key(client_email: str, private_key: str, scopes: list[str]) -> im_token_cache.ImTokenKey:
+    """One cache entry per account, key material and scopes; a rotated key never reuses a token, and only its digest is held."""
+    key_digest = hashlib.sha256(private_key.encode()).hexdigest()
+    return im_token_cache.ImTokenKey("google_chat", client_email, f"{key_digest}\0{' '.join(scopes)}")
+
+
+def _sign_assertion(claims: dict[str, object], private_key: str) -> str:
+    return str(jwt.encode(claims, private_key, algorithm="RS256"))
+
+
+async def _mint_service_account_token(
+    client_email: str, private_key: str, scopes: list[str], *, pinned: bool
+) -> im_token_cache.MintedToken:
+    now = int(time.time())
+    # RSA signing is CPU-bound; keep it off the event loop.
+    assertion = await asyncio.to_thread(
+        _sign_assertion,
         {
             "iss": client_email,
             "sub": client_email,
-            "aud": token_uri,
+            "aud": OAUTH_ENDPOINT,
             "iat": now,
-            "exp": now + 3600,
+            "exp": now + _TOKEN_LIFETIME_SECONDS,
             "scope": " ".join(scopes),
         },
-        private_key.replace("\\n", "\n"),
-        algorithm="RS256",
+        private_key,
     )
     client_context = (
         public_http_client(timeout=15, origin="https://oauth2.googleapis.com")
@@ -383,23 +399,73 @@ async def _service_account_access_token(sa_info: dict[str, object], scopes: list
     )
     async with client_context as client:
         resp = await client.post(
-            token_uri,
-            data={
-                "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                "assertion": assertion,
-            },
+            OAUTH_ENDPOINT,
+            data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion},
         )
-        if pinned and resp.status_code != 200:
-            raise ValueError(
-                f"Google Chat media token exchange failed ({resp.status_code}); verify service account access"
-            )
-        if resp.status_code >= 400:
-            raise ValueError(f"Token exchange failed: {resp.status_code} {resp.text[:200]}")
-        data = json_object_from_response(resp)
+    if resp.status_code != 200:
+        raise im_token_cache.ImTokenRefusedError(resp)
+    data = json_object_from_response(resp)
     token = json_as_str(data.get("access_token"))
     if token in (None, ""):
-        raise ValueError("Token exchange returned no access_token")
-    return token
+        raise im_token_cache.ImTokenRefusedError(resp)
+    return im_token_cache.MintedToken(token, json_as_int(data.get("expires_in")) or _TOKEN_LIFETIME_SECONDS)
+
+
+async def _service_account_access_token(sa_info: dict[str, object], scopes: list[str], *, pinned: bool = False) -> str:
+    """Shared cached service-account access token; a miss mints one via the JWT bearer grant (no google-auth dep).
+
+    Concurrent callers across workers share one mint, and a refused exchange is never cached. ``pinned`` sends the
+    exchange through the pinned public client that media downloads use.
+    """
+    client_email, private_key = _service_account_credentials(sa_info)
+
+    async def mint() -> im_token_cache.MintedToken:
+        return await _mint_service_account_token(client_email, private_key, scopes, pinned=pinned)
+
+    try:
+        return await im_token_cache.get_or_mint_im_token(
+            _service_account_token_key(client_email, private_key, scopes), mint
+        )
+    except im_token_cache.ImTokenRefusedError as refused:
+        status = refused.response.status_code
+        if status == 200:
+            raise ValueError("Token exchange returned no access_token") from refused
+        if pinned:
+            raise ValueError(
+                f"Google Chat media token exchange failed ({status}); verify service account access"
+            ) from refused
+        raise ValueError(f"Token exchange failed: {status}") from refused
+
+
+async def renew_rejected_service_account_token(
+    sa_info: dict[str, object], scopes: list[str], rejected: str, *, pinned: bool = False
+) -> str:
+    """Drop the token Google rejected (only while it is still the cached one) and return a fresh one."""
+    client_email, private_key = _service_account_credentials(sa_info)
+    await im_token_cache.drop_rejected_im_token(_service_account_token_key(client_email, private_key, scopes), rejected)
+    return await _service_account_access_token(sa_info, scopes, pinned=pinned)
+
+
+async def post_chat_message(
+    client: httpx.AsyncClient,
+    sa_info: dict[str, object],
+    space_name: str,
+    *,
+    token: str,
+    params: dict[str, str],
+    payload: Mapping[str, object],
+) -> tuple[httpx.Response, str]:
+    """POST one Chat message; a 401 renews the token and retries once with the same ``params``.
+
+    ``requestId`` stays in ``params``, so a message Google already accepted is not duplicated. Returns the response
+    and the token that produced it.
+    """
+    url = f"{CHAT_API_BASE}/{space_name}/messages"
+    response = await client.post(url, params=params, headers={"Authorization": f"Bearer {token}"}, json=payload)
+    if response.status_code == 401:
+        token = await renew_rejected_service_account_token(sa_info, [CHAT_BOT_SCOPE], token)
+        response = await client.post(url, params=params, headers={"Authorization": f"Bearer {token}"}, json=payload)
+    return response, token
 
 
 async def send_google_chat_message(
@@ -429,12 +495,8 @@ async def send_google_chat_message(
             if thread_name not in (None, ""):
                 body["thread"] = {"name": thread_name}
                 params["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
-            url = f"{CHAT_API_BASE}/{space_name}/messages"
-            resp = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-                params=params,
-                json=body,
+            resp, access_token = await post_chat_message(
+                client, sa_info, space_name, token=access_token, params=params, payload=body
             )
             if strict:
                 _ = resp.raise_for_status()

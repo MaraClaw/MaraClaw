@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,6 +10,7 @@ from tests.test_admin_company_stats_postgres import CompanyWorld, _tenant, _user
 from app.api.admin_company_runtime import router
 from app.dao.agent_dao import agent_dao
 from app.dao.agent_runtime_loss_dao import agent_runtime_loss_dao
+from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.db.session import get_connection
 from app.schemas.admin_companies import CompanyRuntimePageOut
 from app.services import admin_company_runtime as runtime
@@ -172,3 +173,44 @@ async def test_inventory_projects_durable_concerns_and_policy_parity(world, clie
     assert not other.upgrade_in_progress
     assert other.blocking_codes == ()
     assert "private-api-hash" not in response.text
+
+
+async def test_inventory_returns_the_measurement_state_the_quota_dao_stored(world, client, inspection):
+    company, _owner, agents = await _agents(world, 4)
+    base = datetime(2026, 11, 15, 3, 0, 0, 123456, tzinfo=UTC)
+    minute = timedelta(minutes=1)
+    failed_after_measurement, never_measured, remeasure_pending, unmeasured = agents
+    for agent in (failed_after_measurement, remeasure_pending):
+        assert await agent_workspace_usage_dao.record_measurement(
+            agent.id, dir_bytes=100, layer_bytes=50, limit_bytes=1000, started=base
+        )
+    assert await agent_workspace_usage_dao.record_walk_failure(
+        failed_after_measurement.id, limit_bytes=1000, started=base + minute
+    )
+    assert await agent_workspace_usage_dao.request_remeasure(failed_after_measurement.id, requested=base + 2 * minute)
+    assert await agent_workspace_usage_dao.record_walk_failure(never_measured.id, limit_bytes=1000, started=base)
+    assert await agent_workspace_usage_dao.request_remeasure(remeasure_pending.id, requested=base + minute)
+    response = await client.get(f"/api/admin/companies/{company}/runtime", headers=world.headers)
+    assert response.status_code == 200
+    items = {
+        item.agent_id: item.workspace for item in CompanyRuntimePageOut.model_validate_json(response.content).items
+    }
+    expected = {
+        failed_after_measurement.id: (150, base, base + minute, base + 2 * minute),
+        never_measured.id: (0, None, base, None),
+        remeasure_pending.id: (150, base, None, base + minute),
+    }
+    for agent_id, state in expected.items():
+        workspace = items[agent_id]
+        assert workspace is not None
+        assert (
+            workspace.used_bytes,
+            workspace.measured_at,
+            workspace.walk_failed_at,
+            workspace.remeasure_requested_at,
+        ) == state
+        row = await agent_workspace_usage_dao.get(agent_id)
+        assert row is not None
+        assert (row.used_bytes, row.measured_at, row.walk_failed_at, row.remeasure_requested_at) == state
+        assert (workspace.limit_bytes, workspace.over_since) == (1000, None)
+    assert items[unmeasured.id] is None

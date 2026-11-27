@@ -3,15 +3,18 @@ import itertools
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
 from app.dao.trigger_dao import agent_trigger_dao
-from app.records.trigger import AgentTriggerRecord
+from app.records.trigger import AgentTriggerRecord, DueTrigger
 from app.runtime.tasks import OwnedTasks
 from app.services import trigger_daemon
-from app.services.trigger_runtime.scan import TriggerScanner
+from app.services.trigger_runtime.scan import Cursor, TriggerScanner
+
+DUE_AT = datetime(2026, 1, 1, tzinfo=UTC)
+ZONE = "Asia/Ho_Chi_Minh"
 
 _ids = itertools.count(1)
 
@@ -23,15 +26,16 @@ def make_trigger(name: str) -> AgentTriggerRecord:
 
 
 class Table:
-    """Id-ordered enabled triggers served through the DAO page method, recording every page request."""
+    """Due triggers, ordered by (due time, id), served through the DAO page method, recording every page request."""
 
     def __init__(self, triggers: list[AgentTriggerRecord]) -> None:
         self.rows: list[AgentTriggerRecord] = sorted(triggers, key=lambda trigger: trigger.id)
-        self.requests: list[tuple[uuid.UUID | None, int]] = []
+        self.requests: list[tuple[Cursor | None, int]] = []
 
-    async def page(self, *, after: uuid.UUID | None, limit: int) -> list[AgentTriggerRecord]:
+    async def page(self, *, now: datetime, after: Cursor | None, limit: int) -> list[DueTrigger]:
         self.requests.append((after, limit))
-        return [trigger for trigger in self.rows if after is None or trigger.id > after][:limit]
+        due = [DueTrigger(trigger, DUE_AT, ZONE) for trigger in self.rows]
+        return [d for d in due if after is None or (d.due_at, d.trigger.id) > after][:limit]
 
 
 @pytest.fixture(autouse=True)
@@ -53,7 +57,7 @@ async def isolated_daemon(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None
 
 def use_table(monkeypatch: pytest.MonkeyPatch, triggers: list[AgentTriggerRecord], *, limit: int = 8) -> Table:
     table = Table(triggers)
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", table.page)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_due_page", table.page)
     monkeypatch.setattr(trigger_daemon, "_scanner", TriggerScanner(limit=limit))
     return table
 
@@ -132,8 +136,8 @@ async def test_deadline_warns_and_makes_the_trigger_eligible_again(monkeypatch: 
     assert len(warnings) == 2
 
 
-async def test_deadline_never_cancels_handlers_or_enqueue_after_evaluation(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given an evaluation that returns at once, and handlers plus enqueue that outlast the deadline
+async def test_deadline_never_cancels_the_enqueue_after_evaluation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an evaluation that returns at once, and an enqueue that outlasts the deadline
     trigger = make_trigger("due")
     _ = use_table(monkeypatch, [trigger])
     monkeypatch.setattr(trigger_daemon, "EVALUATION_DEADLINE_SECONDS", 0.02)
@@ -143,29 +147,45 @@ async def test_deadline_never_cancels_handlers_or_enqueue_after_evaluation(monke
     async def evaluate(_trigger: AgentTriggerRecord) -> bool:
         return True
 
-    async def report(_trigger: AgentTriggerRecord, _now: datetime) -> bool:
-        await asyncio.sleep(0.1)
-        steps.append("report")
-        return False
-
-    async def collection(_trigger: AgentTriggerRecord, _now: datetime) -> bool:
-        await asyncio.sleep(0.1)
-        steps.append("collection")
-        return False
-
-    async def enqueue(_trigger: AgentTriggerRecord, _now: datetime) -> None:
+    async def enqueue(_trigger: AgentTriggerRecord, _now: datetime, _zone: str | None) -> None:
         await asyncio.sleep(0.1)
         steps.append("enqueue")
 
     patch_evaluate(monkeypatch, evaluate)
-    monkeypatch.setattr(trigger_daemon, "_handle_okr_report_trigger", report)
-    monkeypatch.setattr(trigger_daemon, "_handle_okr_collection_trigger", collection)
     monkeypatch.setattr(trigger_daemon, "enqueue_due_trigger", enqueue)
     # When the tick waits for it
     await trigger_daemon._tick()
     await settle_tasks()
-    # Then every post-evaluation step ran to completion
-    assert steps == ["report", "collection", "enqueue"]
+    # Then the enqueue ran to completion
+    assert steps == ["enqueue"]
+
+
+@pytest.mark.parametrize(
+    "name", ["daily_okr_collection", "daily_okr_report", "weekly_okr_report", "monthly_okr_report"]
+)
+async def test_due_okr_trigger_is_only_enqueued_with_the_resolved_zone(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    # Given a due cron OKR trigger whose agent timezone the due page read with it
+    trigger = AgentTriggerRecord(uuid.UUID(int=next(_ids)), uuid.uuid4(), name=name, type="cron", is_enabled=True)
+    _ = use_table(monkeypatch, [trigger])
+    monkeypatch.setattr(trigger_daemon, "EVALUATION_SETTLE_SECONDS", 5)
+
+    async def evaluate(_trigger: AgentTriggerRecord) -> bool:
+        return True
+
+    enqueued: list[tuple[str, str | None]] = []
+
+    async def enqueue(queued: AgentTriggerRecord, _now: datetime, zone: str | None) -> None:
+        enqueued.append((queued.name, zone))
+
+    patch_evaluate(monkeypatch, evaluate)
+    monkeypatch.setattr(trigger_daemon, "enqueue_due_trigger", enqueue)
+    # When the tick runs
+    await trigger_daemon._tick()
+    await settle_tasks()
+    # Then it goes through the shared enqueue, in the zone the schedule is evaluated in, with no inline work
+    assert enqueued == [(name, ZONE)]
 
 
 async def test_population_larger_than_one_page_is_walked_in_bounded_pages(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,7 +236,11 @@ async def test_cursor_persists_across_ticks_and_wraps_after_the_last_page(monkey
     assert seen == ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t0", "t1", "t2"][: len(seen)]
     assert seen[:7] == [f"t{i}" for i in range(7)]
     assert seen[7:] == ["t0", "t1", "t2"]
-    assert [after for after, _limit in table.requests[:3]] == [None, triggers[2].id, triggers[5].id]
+    assert [after for after, _limit in table.requests[:3]] == [
+        None,
+        (DUE_AT, triggers[2].id),
+        (DUE_AT, triggers[5].id),
+    ]
 
 
 async def test_hung_slots_never_starve_high_id_triggers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -269,7 +293,7 @@ async def test_close_cancels_and_awaits_tasks_and_resets_the_cursor(monkeypatch:
     assert trigger_daemon._scanner._cursor is None
 
 
-async def test_dao_page_is_keyset_ordered_by_id(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dao_due_page_is_keyset_ordered_by_due_time_then_id(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given a database session that records the statement
     statements: list[tuple[str, dict[str, object]]] = []
 
@@ -283,16 +307,22 @@ async def test_dao_page_is_keyset_ordered_by_id(monkeypatch: pytest.MonkeyPatch)
         yield Db()
 
     monkeypatch.setattr(agent_trigger_dao, "session", session)
-    cursor = uuid.uuid4()
+    after = (DUE_AT, uuid.uuid4())
     # When the first and a following page are read
-    assert await agent_trigger_dao.list_enabled_page(after=None, limit=5) == []
-    assert await agent_trigger_dao.list_enabled_page(after=cursor, limit=7) == []
-    # Then both are id ordered and bounded, and only the second filters past the cursor
+    assert await agent_trigger_dao.list_due_page(now=DUE_AT, after=None, limit=5) == []
+    assert await agent_trigger_dao.list_due_page(now=DUE_AT, after=after, limit=7) == []
+    # Then both read only due, enabled rows in index order and are bounded, and only the second filters past the cursor
     first, second = statements
-    assert first[0].endswith("WHERE is_enabled IS TRUE ORDER BY id LIMIT %(limit)s")
-    assert first[1] == {"limit": 5}
-    assert second[0].endswith("WHERE is_enabled IS TRUE AND id > %(after)s ORDER BY id LIMIT %(limit)s")
-    assert second[1] == {"limit": 7, "after": cursor}
+    due_filter = "t.is_enabled IS TRUE AND t.next_due_at IS NOT NULL AND t.next_due_at <= %(now)s"
+    assert due_filter in first[0]
+    assert due_filter in second[0]
+    assert first[0].endswith("ORDER BY t.next_due_at, t.id LIMIT %(limit)s")
+    assert "(t.next_due_at, t.id) > (%(after_due)s, %(after_id)s)" not in first[0]
+    assert second[0].endswith(
+        "(t.next_due_at, t.id) > (%(after_due)s, %(after_id)s) ORDER BY t.next_due_at, t.id LIMIT %(limit)s"
+    )
+    assert first[1] == {"now": DUE_AT, "limit": 5}
+    assert second[1] == {"now": DUE_AT, "limit": 7, "after_due": after[0], "after_id": after[1]}
 
 
 class FakeClock:

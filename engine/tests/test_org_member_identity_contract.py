@@ -110,21 +110,6 @@ async def test_identity_lookup_prefers_linked_then_lowest_id_with_provider_isola
     assert member.id == expected
 
 
-async def test_channel_user_lookup_keeps_tenant_and_provider_scope(store: IdentityStore):
-    # Given
-    store.insert("identity_providers", {"id": UUID(int=101)})
-    store.member(1, user_id=USER_ID, tenant_id=UUID(int=201))
-    store.member(2, user_id=USER_ID, provider_id=UUID(int=101))
-    expected = store.member(3, user_id=USER_ID)
-    # When
-    member = await org_member_dao.get_active_for_user_and_provider(
-        user_id=USER_ID, provider_id=PROVIDER_ID, tenant_id=TENANT_ID
-    )
-    # Then
-    assert member is not None
-    assert member.id == expected
-
-
 @pytest.mark.parametrize("search", ["Employee", "zhangsan", "zs"])
 async def test_contact_search_preserves_name_transliteration_and_scope(store: IdentityStore, search: str):
     # Given

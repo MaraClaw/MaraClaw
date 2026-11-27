@@ -5,8 +5,10 @@ import { MutationObserver, QueryObserver } from '@tanstack/react-query'
 import { agentLifecycleKey, agentLifecycleOptions, retryMCPOptions } from '../src/hooks/agent-lifecycle-options.ts'
 import { fenceMutationOptions } from '../src/hooks/session-query-scope.ts'
 import type { AgentLifecycle } from '../src/lib/agent-lifecycle-api.ts'
+import { ApiError } from '../src/lib/http.ts'
 import { lifecycle, mcpWarning } from './agent-lifecycle-fixture.ts'
 import { agentId, fixture } from './openclaw-update-fixture.ts'
+import { assertBackedOff, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
 
 test('use-only observers do not fetch the manage-only lifecycle projection', (t) => {
   // Given
@@ -137,3 +139,75 @@ for (const action of ['read', 'retry'] as const) {
     })
   }
 }
+
+const quiet: AgentLifecycle = { ...lifecycle, start: null, optional_mcp: [] }
+const upgrade = { id: '33333333-3333-4333-8333-333333333333', failure_code: null } as const
+const cadences: ReadonlyArray<readonly [string, AgentLifecycle, number]> = [
+  ['an agent with nothing pending', quiet, 30_000],
+  ['a pending start', lifecycle, 1500],
+  ['a pending setup', { ...quiet, setup: { ...quiet.setup, setup_pending: true } }, 1500],
+  ['a pending upgrade', { ...quiet, upgrade: { ...quiet.upgrade, run: { ...upgrade, state: 'pending' } } }, 1500],
+  ['an upgrade cutover', { ...quiet, upgrade: { ...quiet.upgrade, run: { ...upgrade, state: 'cutover' } } }, 1500],
+  ['a running optional integration', { ...quiet, optional_mcp: [{ ...mcpWarning, state: 'running' }] }, 1500],
+]
+
+for (const [pending, data, cadence] of cadences) {
+  test(`lifecycle polls every ${cadence} ms for ${pending} and never in a background tab`, (t) => {
+    // Given
+    const { client, scope } = fixture()
+    t.after(() => client.clear())
+    const options = agentLifecycleOptions(scope, agentId, true)
+    client.setQueryData(agentLifecycleKey(agentId), data)
+    // When / Then
+    assert.equal(pollInterval(client, options), cadence)
+    assert.equal('refetchIntervalInBackground' in options, false)
+  })
+}
+
+test('a hidden page stops the lifecycle poll and a visible one restores its cadence', (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  const page = pageVisibility(t, 'hidden')
+  const options = agentLifecycleOptions(scope, agentId, true)
+  client.setQueryData(agentLifecycleKey(agentId), lifecycle)
+  // When / Then
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 1500)
+  assert.equal(options.refetchOnWindowFocus, true)
+  assert.equal(options.staleTime, 0)
+})
+
+test('an outage backs the lifecycle poll off with every failed read and the first success restores its cadence', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  let healthy = false
+  t.mock.method(globalThis, 'fetch', async () => healthy ? Response.json(lifecycle) : throttled(503))
+  const options = agentLifecycleOptions(scope, agentId, true)
+  client.setQueryData(agentLifecycleKey(agentId), lifecycle)
+  assert.equal(pollInterval(client, options), 1500)
+  // When / Then
+  for (const ceiling of [3000, 6000, 12_000, 24_000, 48_000, 60_000, 60_000]) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), ceiling)
+  }
+  healthy = true
+  await client.fetchQuery(options)
+  assert.equal(pollInterval(client, options), 1500)
+})
+
+test('a Retry-After on the failed lifecycle read holds the poll back for that long', async (t) => {
+  // Given
+  const { client, scope } = fixture()
+  t.after(() => client.clear())
+  t.mock.method(globalThis, 'fetch', async () => throttled(429, '20'))
+  const options = agentLifecycleOptions(scope, agentId, true)
+  client.setQueryData(agentLifecycleKey(agentId), lifecycle)
+  assert.equal(pollInterval(client, options), 1500)
+  // When
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 20_000)
+  // Then
+  assert.equal(pollInterval(client, options), 20_000)
+})

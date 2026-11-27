@@ -1,15 +1,25 @@
 import asyncio
+import contextlib
+import os
+import select
+import signal
+from io import BufferedReader
 from pathlib import Path
 from typing import Self
 
 import pytest
 
+from app.core.thread_slots import ThreadSlots
+from app.services.document_conversion import chrome_runtime
 from app.services.document_conversion.chrome_runtime import (
+    ChromeBusyError,
     PolicedCdpSession,
     chrome_arguments,
+    chrome_slot,
     cleanup_temporary_paths,
     create_cdp_target,
     launch_chrome,
+    terminate_process,
     trusted_executable,
     validate_debugger_websocket_url,
 )
@@ -199,6 +209,7 @@ async def test_launch_chrome_passes_only_the_allowlisted_environment(monkeypatch
     async def create_subprocess_exec(*argv: str, **kwargs: object) -> object:
         captured["argv"] = list(argv)
         captured["env"] = kwargs.get("env")
+        captured["start_new_session"] = kwargs.get("start_new_session")
         return object()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
@@ -211,6 +222,8 @@ async def test_launch_chrome_passes_only_the_allowlisted_environment(monkeypatch
     env = captured["env"]
     assert isinstance(env, dict)
     assert captured["argv"] == chrome_arguments(tmp_path / "chrome", 9222, profile)
+    # And: it leads its own session and process group, so the whole tree can be signalled at once
+    assert captured["start_new_session"] is True
     assert "SECRET_KEY" not in env
     assert "DATABASE_URL" not in env
     assert env["LANG"] == "C.UTF-8"
@@ -231,3 +244,193 @@ async def test_launch_chrome_passes_only_the_allowlisted_environment(monkeypatch
         "XDG_CACHE_HOME",
         "XDG_DATA_HOME",
     }
+
+
+PROCESS_TREE = 'exec 3>"$HOME/alive"\nsleep 60 &\necho started >&3\nwait\n'
+ORPHAN_IGNORING_SIGTERM = 'exec 3>"$HOME/alive"\n(trap "" TERM; exec sleep 60) &\necho started >&3\nwait\n'
+EVERYONE_IGNORING_SIGTERM = 'trap "" TERM\nexec 3>"$HOME/alive"\nsleep 60 &\necho started >&3\nwait\n'
+
+
+def open_fifo(path: Path) -> BufferedReader:
+    return path.open("rb")
+
+
+class FakeChromeTree:
+    """A real shell script standing in for Chrome, whose processes all hold one FIFO open.
+
+    The FIFO reaches end-of-file only when every process of the tree has exited, so waiting on it observes the whole
+    tree without polling or sleeping.
+    """
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.profile: Path = tmp_path / "profile"
+        self.profile.mkdir()
+        os.mkfifo(self.profile / "alive")
+        self.executable: Path = tmp_path / "chrome"
+        self._reader: BufferedReader | None = None
+
+    async def launch(self, script: str) -> asyncio.subprocess.Process:
+        _ = self.executable.write_text("#!/bin/sh\n" + script, encoding="utf-8")
+        self.executable.chmod(0o755)
+        return await launch_chrome(self.executable, 9222, str(self.profile))
+
+    async def running(self) -> None:
+        """Wait until the script has started its child."""
+        reader = await asyncio.wait_for(asyncio.to_thread(open_fifo, self.profile / "alive"), 10)
+        self._reader = reader
+        assert await asyncio.wait_for(asyncio.to_thread(reader.readline), 10) == b"started\n"
+
+    async def gone(self) -> bool:
+        """True once every process of the tree has exited; False when one still holds the FIFO after 10 s."""
+        reader = self._reader
+        assert reader is not None
+
+        def read_to_end() -> bool:
+            ready, _, _ = select.select([reader], [], [], 10)
+            return bool(ready) and reader.read() == b""
+
+        return await asyncio.to_thread(read_to_end)
+
+    async def close(self, process: asyncio.subprocess.Process) -> None:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGKILL)
+        _ = await asyncio.wait_for(process.wait(), 10)
+        if self._reader is not None:
+            self._reader.close()
+
+
+async def test_terminate_process_kills_every_process_of_the_chrome_group(tmp_path: Path):
+    # Given: a Chrome that started a renderer child, each leading nothing but the group of the launch
+    tree = FakeChromeTree(tmp_path)
+    process = await tree.launch(PROCESS_TREE)
+    try:
+        await tree.running()
+        assert os.getpgid(process.pid) == process.pid
+
+        # When: terminate_process runs for the launch
+        await terminate_process(process)
+
+        # Then: the leader is reaped and the child did not outlive it
+        assert process.returncode == -signal.SIGTERM
+        assert await tree.gone()
+    finally:
+        await tree.close(process)
+
+
+async def test_terminate_process_kills_a_child_that_ignores_sigterm_after_the_leader_exits(tmp_path: Path):
+    # Given: a renderer that survives SIGTERM while the leader exits on it
+    tree = FakeChromeTree(tmp_path)
+    process = await tree.launch(ORPHAN_IGNORING_SIGTERM)
+    try:
+        await tree.running()
+
+        # When: terminate_process runs for the launch
+        await terminate_process(process)
+
+        # Then: the leftover is killed with the group instead of surviving as an orphan
+        assert process.returncode == -signal.SIGTERM
+        assert await tree.gone()
+    finally:
+        await tree.close(process)
+
+
+async def test_terminate_process_escalates_to_sigkill_when_nothing_exits_on_sigterm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Given: a Chrome tree that ignores SIGTERM, and a grace period that has already run out
+    monkeypatch.setattr(chrome_runtime, "TERMINATE_GRACE_SECONDS", 0)
+    tree = FakeChromeTree(tmp_path)
+    process = await tree.launch(EVERYONE_IGNORING_SIGTERM)
+    try:
+        await tree.running()
+
+        # When: terminate_process runs for the launch
+        await terminate_process(process)
+
+        # Then: SIGKILL reached the leader and its child
+        assert process.returncode == -signal.SIGKILL
+        assert await tree.gone()
+    finally:
+        await tree.close(process)
+
+
+async def test_cancelled_terminate_process_still_kills_the_group(tmp_path: Path):
+    # Given: a tree that ignores SIGTERM, so terminate_process is waiting out its grace period
+    tree = FakeChromeTree(tmp_path)
+    process = await tree.launch(EVERYONE_IGNORING_SIGTERM)
+    try:
+        await tree.running()
+        terminating = asyncio.create_task(terminate_process(process))
+        await asyncio.sleep(0)
+
+        # When: the caller is cancelled during that wait
+        _ = terminating.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await terminating
+
+        # Then: no process of the launch remains
+        assert await tree.gone()
+    finally:
+        await tree.close(process)
+
+
+async def test_terminate_process_returns_for_a_chrome_that_already_exited(tmp_path: Path):
+    # Given: a Chrome that has exited and been reaped
+    tree = FakeChromeTree(tmp_path)
+    process = await tree.launch("exit 0\n")
+    _ = await asyncio.wait_for(process.wait(), 10)
+
+    # When / Then: terminating it has nothing left to signal
+    await terminate_process(process)
+    assert process.returncode == 0
+
+
+async def test_chrome_slots_cap_concurrent_chrome_processes(monkeypatch: pytest.MonkeyPatch):
+    # Given: two Chrome slots and three renders that each keep theirs until released
+    monkeypatch.setattr(chrome_runtime, "CHROME_SLOTS", ThreadSlots(2))
+    release = asyncio.Event()
+    holding = [asyncio.Event() for _ in range(3)]
+
+    async def render(index: int) -> None:
+        async with chrome_slot():
+            holding[index].set()
+            _ = await release.wait()
+
+    renders = [asyncio.create_task(render(index)) for index in range(3)]
+
+    # When: the first two hold their slots
+    _ = await asyncio.wait_for(asyncio.gather(holding[0].wait(), holding[1].wait()), 10)
+
+    # Then: the third waits until one of them lets go
+    assert not holding[2].is_set()
+    release.set()
+    _ = await asyncio.wait_for(asyncio.gather(*renders), 10)
+    assert holding[2].is_set()
+
+
+async def test_waiting_for_a_chrome_slot_is_bounded_and_leaves_nothing_behind(monkeypatch: pytest.MonkeyPatch):
+    # Given: the only slot held, and a wait that has already run out
+    monkeypatch.setattr(chrome_runtime, "CHROME_SLOTS", ThreadSlots(1))
+    monkeypatch.setattr(chrome_runtime, "SLOT_WAIT_SECONDS", 0)
+    async with chrome_slot():
+        # When / Then: another render gives up with a clear error instead of waiting
+        with pytest.raises(ChromeBusyError, match="No Chrome slot"):
+            async with chrome_slot():
+                pytest.fail("the slot is taken")
+
+    # And: the failed wait took nothing, so the slot is free again
+    async with chrome_slot():
+        pass
+
+
+async def test_a_chrome_slot_returns_when_its_render_fails(monkeypatch: pytest.MonkeyPatch):
+    # Given: a render that raises while holding the only slot
+    monkeypatch.setattr(chrome_runtime, "CHROME_SLOTS", ThreadSlots(1))
+    monkeypatch.setattr(chrome_runtime, "SLOT_WAIT_SECONDS", 0)
+    with pytest.raises(RuntimeError, match="render failed"):
+        async with chrome_slot():
+            raise RuntimeError("render failed")
+
+    # When / Then: the next render gets the slot at once
+    async with chrome_slot():
+        pass

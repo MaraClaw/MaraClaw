@@ -1,8 +1,11 @@
-"""Typed views of the untyped boto3/botocore surface: client construction and ``ClientError`` payloads."""
+"""Typed views of the untyped boto3/botocore surface: client construction, ``ClientError`` payloads and response lists."""
 
+from collections.abc import Mapping
 from typing import Protocol, TypedDict, Unpack
 
 from botocore.config import Config
+
+from app.core.json_types import is_any_list, is_str_dict
 
 
 class ClientErrorDetail(TypedDict, total=False):
@@ -24,6 +27,13 @@ class ClientErrorResponse(TypedDict, total=False):
 class _ClientErrorLike(Protocol):
     @property
     def response(self) -> ClientErrorResponse: ...
+
+
+def mapping_items(value: object) -> list[Mapping[str, object]]:
+    """The mappings in a response list field; an absent or malformed field is an empty list."""
+    if not is_any_list(value):
+        return []
+    return [item for item in value if is_str_dict(item)]
 
 
 def client_error_response(exc: _ClientErrorLike) -> ClientErrorResponse:

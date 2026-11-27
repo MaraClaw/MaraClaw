@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.client_address import get_client_ip
 from app.core.security import require_role
 from app.records.user import UserRecord
 from app.services.admin_audit import field_change, write_admin_audit
@@ -42,12 +43,6 @@ class TavilyKeyOut(BaseModel):
     exhausted_until: datetime | None = None
     last_used_at: datetime | None = None
     created_at: datetime | None = None
-
-
-async def get_client_ip(request: Request) -> str | None:
-    if request.client is None:
-        return None
-    return request.client.host
 
 
 def _to_out(view: dict[str, object]) -> TavilyKeyOut:

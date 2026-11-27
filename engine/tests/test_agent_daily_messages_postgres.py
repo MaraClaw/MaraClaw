@@ -228,7 +228,6 @@ async def test_refused_web_message_rolls_back_the_whole_turn(writable_receipt_db
                 user=replace(db.user, tenant_id=tenant_id),
                 agent=replace(db.agent, tenant_id=tenant_id),
                 session_id=db.session_id,
-                history=[],
             )
 
     # Then the agent-level refusal leaves no message, queue row, user charge or agent charge.
@@ -257,7 +256,6 @@ async def test_accepted_web_message_charges_only_the_agent_once_and_replay_charg
                 user=replace(db.user, tenant_id=tenant_id),
                 agent=replace(db.agent, tenant_id=tenant_id),
                 session_id=db.session_id,
-                history=[],
             )
         assert accepted.replayed is expected_replay
 
@@ -284,7 +282,6 @@ async def test_exhausted_per_user_quota_does_not_refuse_inside_an_organization(w
             user=replace(db.user, tenant_id=tenant_id),
             agent=replace(db.agent, tenant_id=tenant_id),
             session_id=db.session_id,
-            history=[],
         )
 
     # Then only the agent's daily counter moves, and the stored allowance never does.

@@ -30,12 +30,8 @@ import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { ApiError, formatApiDetail } from '@/lib/http'
 import { loginSchema, type LoginFormValues } from '@/lib/login-schema'
 import { StaleSessionError } from '@/lib/session-policy'
-import {
-  isMultiTenantResponse,
-  isTokenResponse,
-  type NeedsVerificationDetail,
-  type TenantChoice,
-} from '@/lib/types/auth'
+import type { NeedsVerificationDetail, TenantChoice } from '@/lib/types/auth'
+import { isMultiTenantResponse, isTokenResponse } from '@/lib/types/auth-guards'
 import { cn } from '@/lib/utils'
 
 const easeOut = [0.23, 1, 0.32, 1] as const

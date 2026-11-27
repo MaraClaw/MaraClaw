@@ -29,6 +29,10 @@ LEASE_STOP_MARGIN = timedelta(seconds=60)
 LEASE_EXPIRED_ERROR = "Execution lease expired after its trigger was disabled"
 LEASE_LOST_ERROR = "Execution lease lost before the invocation finished"
 RUN_TIMEOUT_ERROR = "Trigger invocation ran out of its time budget"
+EXECUTION_RETRY_DELAY = timedelta(minutes=5)
+"""How long a failed retryable execution waits before it is claimed again."""
+EXECUTION_RETRY_WINDOW = timedelta(hours=6)
+"""A retryable execution that first started this long ago fails for good instead of queuing another attempt."""
 
 
 class ExecutionLeaseLostError(Exception):
@@ -140,6 +144,37 @@ async def mark_trigger_executions_failed(leases: Sequence[ExecutionLease], error
         return failed
 
     return await _await_in_fresh_context(fail())
+
+
+async def mark_trigger_executions_retry(leases: Sequence[ExecutionLease], error_text: str) -> list[uuid.UUID]:
+    """Record a failed attempt and queue each owned execution again after the retry delay.
+
+    The row keeps its first start, so ``fire_count`` counts once, and fails for good after the retry window.
+    """
+
+    async def retry() -> list[uuid.UUID]:
+        now = datetime.now(UTC)
+        retried: list[uuid.UUID] = []
+        for lease in leases:
+            changed = [
+                execution_id
+                for execution_id in lease.execution_ids
+                if await trigger_execution_dao.retry_later(
+                    execution_id,
+                    lease_token=lease.token,
+                    retry_at=now + EXECUTION_RETRY_DELAY,
+                    give_up_before=now - EXECUTION_RETRY_WINDOW,
+                    error_text=error_text,
+                    now=now,
+                )
+            ]
+            lost = set(lease.execution_ids) - set(changed)
+            if lost:
+                logger.warning(f"Execution lease lost; retry skipped for {list(lost)}")
+            retried.extend(changed)
+        return retried
+
+    return await _await_in_fresh_context(retry())
 
 
 async def fail_abandoned_trigger_executions() -> list[uuid.UUID]:

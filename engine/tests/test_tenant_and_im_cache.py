@@ -1,4 +1,4 @@
-"""Tenant row cache, IM token cache, and shared channel dedup."""
+"""Tenant row cache and IM token cache."""
 
 from __future__ import annotations
 
@@ -7,14 +7,17 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from tests.im_webhook_fixtures import channel_config
 from tests.test_redis_cache import FakeRedis
 
+from app.api import teams
 from app.core import redis_cache, tenant_cache
 from app.core.row_memo import clear_row_memo
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services import im_token_cache
-from app.services.channels import dedup as channel_dedup
+from app.services.channels import google_chat
+from im_token_cache_fakes import GoogleWire, TeamsWire, private_key_pem, service_account
 
 
 @pytest.fixture
@@ -29,11 +32,9 @@ def fake_cache(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(redis_cache, "_client", get_cache_redis)
     monkeypatch.setattr(tenant_cache, "_ttl", lambda: 60)
     monkeypatch.setattr(im_token_cache, "_ttl_enabled", lambda: True)
-    monkeypatch.setattr(channel_dedup, "_redis_ttl", lambda: 86400)
     yield client
     redis_cache.reset_circuit()
     clear_row_memo()
-    channel_dedup._stores.clear()
 
 
 def _tenant() -> TenantRecord:
@@ -262,19 +263,93 @@ async def test_tenant_cache_set_skips_after_bump(fake_cache: FakeRedis) -> None:
     assert await tenant_cache.get_cached_tenant(tenant.id) is None
 
 
-@pytest.mark.asyncio
-async def test_channel_dedup_shared_uses_redis(fake_cache: FakeRedis) -> None:
-    ns, key = "feishu", "evt-1"
-    assert await channel_dedup.already_processed_shared(ns, key) is False
-    await channel_dedup.mark_processed_shared(ns, key)
-    channel_dedup._stores.clear()
-    assert await channel_dedup.already_processed_shared(ns, key) is True
+SCOPE = google_chat.CHAT_BOT_SCOPE
 
 
-@pytest.mark.asyncio
-async def test_channel_dedup_redis_down_falls_to_local(fake_cache: FakeRedis) -> None:
+async def test_google_chat_token_is_stored_under_a_hashed_key_for_the_reported_lifetime(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wire = GoogleWire()
+    wire.install(monkeypatch)
+    account = service_account()
+
+    assert await google_chat._service_account_access_token(account, [SCOPE]) == "token-1"
+
+    ((key, value),) = fake_cache.store.items()
+    assert value == "token-1"
+    assert fake_cache.expires[key] == 3300
+    assert "bot@proj" not in key
+    assert private_key_pem(0) not in key
+    # A later caller, in this or another process, finds it without a second exchange.
+    assert await google_chat._service_account_access_token(account, [SCOPE]) == "token-1"
+    assert wire.exchanges == 1
+    # A rotated key is a different entry.
+    assert await google_chat._service_account_access_token(service_account(key=1), [SCOPE]) == "token-2"
+    assert len(fake_cache.store) == 2
+
+
+async def test_a_refused_google_chat_mint_reaches_every_waiting_caller_and_is_never_stored(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wire = GoogleWire()
+    wire.install(monkeypatch)
+    wire.token_status = 400
+    wire.token_gate.clear()
+    callers = [
+        asyncio.create_task(google_chat._service_account_access_token(service_account(), [SCOPE])) for _ in range(3)
+    ]
+    async with asyncio.timeout(5):
+        await wire.token_started.wait()
+    wire.token_gate.set()
+
+    outcomes = await asyncio.gather(*callers, return_exceptions=True)
+
+    assert [type(outcome) for outcome in outcomes] == [ValueError] * 3
+    assert wire.exchanges == 1
+    assert fake_cache.store == {}
+    wire.token_status = 200
+    assert await google_chat._service_account_access_token(service_account(), [SCOPE]) == "token-2"
+
+
+async def test_a_redis_outage_falls_open_to_a_direct_google_chat_mint(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wire = GoogleWire()
+    wire.install(monkeypatch)
     fake_cache.fail = True
-    ns, key = "slack", "evt-down"
-    assert await channel_dedup.already_processed_shared(ns, key) is False
-    await channel_dedup.mark_processed_shared(ns, key)
-    assert channel_dedup.already_processed(ns, key) is True
+
+    assert await google_chat._service_account_access_token(service_account(), [SCOPE]) == "token-1"
+    assert await google_chat._service_account_access_token(service_account(), [SCOPE]) == "token-2"
+
+    assert fake_cache.store == {}
+
+
+async def test_teams_token_is_stored_per_tenant_and_secret_under_a_hashed_key(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("TEAMS_TENANT_ID", raising=False)
+    wire = TeamsWire()
+    wire.install(monkeypatch)
+    config = channel_config("microsoft_teams")
+
+    assert await teams._get_teams_access_token(config) == "token-1"
+    assert await teams._get_teams_access_token(config) == "token-1"
+    config.extra_config = {"tenant_id": "contoso"}
+    assert await teams._get_teams_access_token(config) == "token-2"
+
+    assert len(wire.logins) == 2
+    assert sorted(fake_cache.store.values()) == ["token-1", "token-2"]
+    assert set(fake_cache.expires.values()) == {3300}
+    assert not any(part in key for key in fake_cache.store for part in ("bot-app", "access-token", "contoso"))
+
+
+async def test_a_redis_outage_falls_open_to_a_direct_teams_mint(
+    fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wire = TeamsWire()
+    wire.install(monkeypatch)
+    fake_cache.fail = True
+
+    assert await teams._get_teams_access_token(channel_config("microsoft_teams")) == "token-1"
+
+    assert fake_cache.store == {}

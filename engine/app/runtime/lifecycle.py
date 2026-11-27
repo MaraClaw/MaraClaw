@@ -21,10 +21,11 @@ from app.runtime.bootstrap import bootstrap
 from app.runtime.connectors import ConnectorManager, ReconcileRuntime
 from app.runtime.diagnostics import log_bwrap_startup_status
 from app.runtime.incident_alerts import IncidentAlerts
+from app.runtime.loop_lag import PROGRESS_BUDGET_SECONDS as EVENT_LOOP_LAG_BUDGET_SECONDS, sample_event_loop_lag
 from app.runtime.proxy import ShadowsocksProxy
 from app.runtime.readiness import Readiness
 from app.runtime.shutdown_budget import SETTLE_FRACTION, ShutdownBudget, abandoned, joins_until
-from app.runtime.tasks import OwnedTasks, loop_progress
+from app.runtime.tasks import OwnedTasks, RestartPolicy, loop_progress
 from app.services.channels.outbound_http import shutdown_outbound_client
 from app.services.docker_capacity import shutdown_docker_capacity
 from app.services.heartbeat import close_heartbeat_admission, drain_heartbeat_tasks, open_heartbeat_admission
@@ -90,6 +91,12 @@ class Runtime:
             await bootstrap()
         if any(role_enabled(roles, role) for role in ("api", "worker", "connector")):
             _ = await get_redis()
+            self.tasks.start(
+                "event_loop_lag",
+                sample_event_loop_lag(settings.EVENT_LOOP_LAG_INTERVAL_SECONDS),
+                requirement="loop",
+                progress_budget_seconds=EVENT_LOOP_LAG_BUDGET_SECONDS,
+            )
         if role_enabled(roles, "api"):
             from app.api.websocket import manager as ws_manager
 
@@ -173,6 +180,7 @@ class Runtime:
                 start_organization_admission_email_worker,
             )
             from app.services.scheduler import PROGRESS_BUDGET_SECONDS as SCHEDULER_BUDGET_SECONDS, start_scheduler
+            from app.services.system_email_service import wait_for_abandoned_sends
             from app.services.task_lease import (
                 PROGRESS_BUDGET_SECONDS as TASK_LEASE_RECOVERY_BUDGET_SECONDS,
                 task_lease_recovery_loop,
@@ -220,11 +228,16 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=CACHE_INVALIDATION_BUDGET_SECONDS,
             )
-            self.tasks.start(
+            mail_restarts = RestartPolicy(
+                budget=settings.WORKER_LOOP_RESTART_BUDGET,
+                max_backoff_seconds=settings.WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS,
+                before_restart=wait_for_abandoned_sends,
+            )
+            self.tasks.start_supervised(
                 "auth_email",
-                start_auth_email_worker(),
-                requirement="loop",
+                start_auth_email_worker,
                 progress_budget_seconds=AUTH_EMAIL_BUDGET_SECONDS,
+                policy=mail_restarts,
             )
             self.tasks.start(
                 "broadcast_fanout",
@@ -232,11 +245,11 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=BROADCAST_FANOUT_BUDGET_SECONDS,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "broadcast_email",
-                start_broadcast_email_worker(),
-                requirement="loop",
+                start_broadcast_email_worker,
                 progress_budget_seconds=BROADCAST_EMAIL_BUDGET_SECONDS,
+                policy=mail_restarts,
             )
             self.tasks.start(
                 "chat_history_retention",

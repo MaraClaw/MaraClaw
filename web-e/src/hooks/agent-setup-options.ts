@@ -1,6 +1,7 @@
 import { queryOptions, type QueryFunctionContext } from '@tanstack/react-query'
 
 import { getAgentSetup, retryAgentSetup, type AgentSetup } from '../lib/agent-setup-api.ts'
+import { queryPollInterval } from '../lib/poll-policy.ts'
 import type { SessionQueryScope } from './session-query-scope.ts'
 
 export function agentSetupKey(agentId: string) { return ['agent-setup', agentId] as const }
@@ -29,8 +30,7 @@ export function agentSetupOptions(scope: SessionQueryScope, agentId: string, can
     enabled: canManage && Boolean(agentId),
     staleTime: 0, retry: false,
     refetchOnMount: 'always', refetchOnWindowFocus: true,
-    refetchInterval: (query) => isSetupActive(query.state.data) ? 1500 : false,
-    refetchIntervalInBackground: true,
+    refetchInterval: queryPollInterval((setup: AgentSetup | undefined) => isSetupActive(setup) ? 1500 : false),
   }), queryFn }
 }
 

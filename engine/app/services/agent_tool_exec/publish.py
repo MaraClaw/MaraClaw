@@ -4,12 +4,18 @@ import re
 import secrets
 import uuid
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Final
 
+from app.config import get_settings
 from app.dao.agent_dao import agent_dao
 from app.dao.published_page_dao import published_page_dao
 from app.services.agent_tool_exec.registry import ToolArguments
 from app.services.platform_service import PublicBaseUrlNotConfiguredError, platform_service
 from app.services.storage_runtime import get_storage_backend, normalize_storage_key
+from app.services.storage_runtime.text_head import read_text_head
+
+TITLE_HEAD_BYTES: Final = 64 * 1024
+PAGE_TOO_LARGE_PREFIX: Final = "File is too large to publish"
 
 
 def _published_page_storage_key(agent_id: uuid.UUID, path: str) -> str | None:
@@ -48,9 +54,13 @@ async def _publish_page(agent_id: uuid.UUID, user_id: uuid.UUID, ws: Path, argum
     if not await storage.exists(storage_key) or not await storage.is_file(storage_key):
         return f"File not found: {path}"
 
+    max_bytes = get_settings().PUBLISHED_PAGE_MAX_BYTES
+    if (await storage.stat(storage_key)).size > max_bytes:
+        return f"{PAGE_TOO_LARGE_PREFIX}: {path} (limit {max_bytes} bytes)"
+
     try:
-        content = await storage.read_text(storage_key, encoding="utf-8", errors="replace")
-        title_match = re.search(r"<title[^>]*>(.*?)</title>", content, re.IGNORECASE | re.DOTALL)
+        head = await read_text_head(storage, storage_key, TITLE_HEAD_BYTES)
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", head.text, re.IGNORECASE | re.DOTALL)
         title = title_match.group(1).strip()[:200] if title_match else Path(path).stem
     except Exception:
         title = Path(path).stem

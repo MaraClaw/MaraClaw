@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from weakref import WeakSet
 
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow, dict_row
@@ -11,6 +12,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.config import get_settings
 from app.core.logging import logger
+from app.db.connection import DbConnection
 from app.db.errors import DbError
 from app.db.types import configure_connection
 from app.db.url import normalize_psycopg_conninfo
@@ -21,6 +23,8 @@ type PoolConfigure = Callable[[AsyncConnection[DictRow]], Awaitable[None]]
 
 _pool: EnginePool | None = None
 _durable: tuple[EnginePool, EnginePool] | None = None
+# Connections of the main pool whose session currently carries a request lock_timeout; only these need the reset.
+_request_lock_timeout_set: WeakSet[AsyncConnection[DictRow]] = WeakSet()
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,30 @@ def _pool_configure(limits: SessionLimits) -> PoolConfigure:
         await conn.commit()
 
     return configure
+
+
+async def set_request_lock_timeout(db: DbConnection, timeout_ms: int) -> None:
+    """Give one checked-out connection a session-level ``lock_timeout`` for the request that holds it.
+
+    Session level on purpose: ``SET LOCAL`` would vanish at the first mid-request commit
+    (``flush_request_transaction``). Only a connection of the main pool that a request bound ever carries it, and
+    :func:`_reset_request_lock_timeout` clears it before the connection is reused, so workers, the durable pool and
+    bootstrap never see it.
+    """
+    await db.execute("SELECT set_config('lock_timeout', %(ms)s, false)", {"ms": str(timeout_ms)})
+    _request_lock_timeout_set.add(db.raw)
+
+
+async def _reset_request_lock_timeout(conn: AsyncConnection[DictRow]) -> None:
+    """Pool ``reset`` hook: runs on an idle connection, so autocommit makes the clear one statement with no commit."""
+    if conn not in _request_lock_timeout_set:
+        return
+    _request_lock_timeout_set.discard(conn)
+    await conn.set_autocommit(True)
+    try:
+        await conn.execute("RESET lock_timeout")
+    finally:
+        await conn.set_autocommit(False)
 
 
 def _session_limits() -> SessionLimits:
@@ -85,6 +113,7 @@ async def init_pool(
     pool_min = min_size if min_size is not None else settings.DATABASE_POOL_MIN_SIZE
     pool_max = max_size if max_size is not None else settings.DATABASE_POOL_MAX_SIZE
     wait_timeout = pool_timeout if pool_timeout is not None else settings.DATABASE_POOL_TIMEOUT
+    max_waiting = settings.DATABASE_POOL_MAX_WAITING
 
     if pool_min < 0:
         raise ValueError("DATABASE_POOL_MIN_SIZE must be >= 0")
@@ -103,9 +132,11 @@ async def init_pool(
         min_size=pool_min,
         max_size=pool_max,
         timeout=wait_timeout,
+        max_waiting=max_waiting,
         open=False,
         configure=_pool_configure(limits),
         check=_check_pooled_connection,
+        reset=_reset_request_lock_timeout,
         kwargs={"autocommit": False, "row_factory": dict_row},
         name="maraclaw",
         max_idle=max_idle,
@@ -115,7 +146,7 @@ async def init_pool(
     typed_pool = pool
     _pool = typed_pool
     logger.info(
-        f"[db] psycopg pool opened min={pool_min} max={pool_max} timeout={wait_timeout}s "
+        f"[db] psycopg pool opened min={pool_min} max={pool_max} timeout={wait_timeout}s max_waiting={max_waiting} "
         f"max_idle={max_idle}s max_lifetime={max_lifetime}s statement_timeout={limits.statement_timeout_ms}ms "
         f"idle_in_transaction_session_timeout={limits.idle_in_transaction_session_timeout_ms}ms"
     )
@@ -181,12 +212,55 @@ async def close_pool() -> None:
 async def ping_pool() -> bool:
     """Return True when the pool can run ``SELECT 1``."""
     from app.core.json_types import int_from_row
-    from app.db.connection import DbConnection
 
     pool = get_pool()
     async with pool.connection() as conn:
         db = DbConnection(conn)
         return int_from_row(await db.fetchval("SELECT 1")) == 1
+
+
+@dataclass(frozen=True, slots=True)
+class PoolStats:
+    """One pool's saturation: the first four fields are the moment of the read, the rest count since the pool opened."""
+
+    name: str
+    max_size: int
+    size: int
+    available: int
+    requests_waiting: int
+    requests: int
+    requests_queued: int
+    requests_errors: int
+    requests_wait_ms: int
+
+
+def _read_stats(name: str, pool: EnginePool) -> PoolStats:
+    stats = pool.get_stats()
+    return PoolStats(
+        name=name,
+        max_size=stats["pool_max"],
+        size=stats["pool_size"],
+        available=stats["pool_available"],
+        requests_waiting=stats["requests_waiting"],
+        requests=stats.get("requests_num", 0),
+        requests_queued=stats.get("requests_queued", 0),
+        requests_errors=stats.get("requests_errors", 0),
+        requests_wait_ms=stats.get("requests_wait_ms", 0),
+    )
+
+
+def pool_stats() -> tuple[PoolStats, ...]:
+    """Saturation of the request pool and, once something opened it, the durable pool; empty before ``init_pool``.
+
+    Each reading is the pool's own in-memory ``get_stats()``: no connection is checked out and no lock is taken, so a
+    scrape never queues behind the saturation it reports.
+    """
+    readings: list[PoolStats] = []
+    if _pool is not None:
+        readings.append(_read_stats("main", _pool))
+    if _durable is not None:
+        readings.append(_read_stats("durable", _durable[1]))
+    return tuple(readings)
 
 
 def reset_pool_for_tests() -> None:

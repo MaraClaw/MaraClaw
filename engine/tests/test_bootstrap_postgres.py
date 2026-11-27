@@ -20,9 +20,10 @@ from app.config import get_settings
 from app.core.domain.users import UserRole
 from app.core.json_types import int_from_row
 from app.core.row_memo import clear_row_memo
-from app.core.security import check_membership_generation, create_access_token, load_user_from_access_token
+from app.core.security import check_generations, create_access_token, load_user_from_access_token
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.user_dao import user_dao
+from app.dao.workspace_dao import workspace_file_revision_dao
 from app.db.connection import DbConnection
 from app.db.errors import (
     CheckViolationError,
@@ -37,6 +38,7 @@ from app.main import app
 from app.records.channel_media import StoredFile
 from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundPlan, OutboundProvider, OutboundTarget
 from app.scripts import bootstrap_db
+from app.services import workspace_collaboration
 from organization_admission_fixtures import insert_admission_row
 
 
@@ -119,12 +121,19 @@ async def test_fresh_init_and_rerun_preserve_current_schema(schema_db: DbConnect
         ("tenants", "is_system"): "false",
         ("tenants", "is_default_end_user_org"): "false",
         ("local_departments", "description"): "''::text",
+        ("workspace_file_revisions", "content_omitted"): "false",
     }
     assert {key: defaults[key] for key in expected} == expected
     description = next(
         row for row in columns if (row["table_name"], row["column_name"]) == ("local_departments", "description")
     )
     assert (description["data_type"], description["is_nullable"]) == ("text", "NO")
+    omitted = next(
+        row
+        for row in columns
+        if (row["table_name"], row["column_name"]) == ("workspace_file_revisions", "content_omitted")
+    )
+    assert (omitted["data_type"], omitted["is_nullable"]) == ("boolean", "NO")
     required = {
         ("users", "quota_period_start"),
         ("tools", "tenant_id"),
@@ -896,9 +905,19 @@ async def test_legacy_users_without_membership_generation_are_upgraded_in_place(
     assert await schema_db.fetchall(_USERS_COLUMNS) == fresh_columns
     # And a token without a membership claim (generation 0) still works for an active row and never for an inactive one.
     _ = await bootstrap_db.init_pool()
-    await check_membership_generation(ids["active-a"], 0)
+    identity_ids = {name: uuid4() for name in ids}
+    for name, user_id in ids.items():
+        await schema_db.execute(
+            "INSERT INTO identities (id, email, password_hash) VALUES (%(id)s, %(email)s, 'hash')",
+            {"id": identity_ids[name], "email": f"{identity_ids[name]}@example.test"},
+        )
+        await schema_db.execute(
+            "UPDATE users SET identity_id = %(identity)s WHERE id = %(id)s",
+            {"identity": identity_ids[name], "id": user_id},
+        )
+    await check_generations(ids["active-a"], identity_ids["active-a"], auth=0, membership=0)
     with pytest.raises(HTTPException) as revoked:
-        await check_membership_generation(ids["inactive-a"], 0)
+        await check_generations(ids["inactive-a"], identity_ids["inactive-a"], auth=0, membership=0)
     assert revoked.value.status_code == 401
 
     # When later writes move generations and bootstrap reruns, Then it changes nothing.
@@ -1245,6 +1264,89 @@ async def test_trigger_definitions_are_unchanged_and_a_rerun_does_not_rewrite_th
     assert await schema_db.fetchall(_TRIGGER_ROWS) == first
 
 
+_DELETION_INDEXES = {
+    "ix_gateway_messages_reply_binding_id": "gateway_messages",
+    "ix_gateway_messages_sender_agent_id": "gateway_messages",
+    "ix_gateway_messages_sender_user_id": "gateway_messages",
+    "ix_chat_sessions_peer_agent_id": "chat_sessions",
+    "ix_chat_sessions_participant_id": "chat_sessions",
+    "ix_chat_messages_user_id": "chat_messages",
+    "ix_audit_logs_agent_id": "audit_logs",
+    "ix_audit_logs_user_id": "audit_logs",
+    "ix_approval_requests_agent_id": "approval_requests",
+}
+_DELETION_INDEX_ROWS = (
+    "SELECT i.relname AS name, t.relname AS tbl, i.oid::text AS oid, i.relfilenode::text AS filenode, "
+    "pg_get_indexdef(i.oid) AS definition FROM pg_class i JOIN pg_index x ON x.indexrelid = i.oid "
+    "JOIN pg_class t ON t.oid = x.indrelid WHERE i.relnamespace = current_schema()::regnamespace "
+    "AND i.relname = ANY(%(names)s) ORDER BY i.relname"
+)
+
+
+async def test_deletion_indexes_exist_and_a_rerun_leaves_them_alone(schema_db: DbConnection) -> None:
+    # Given the baseline bootstrapped once.
+    await bootstrap_db.main()
+    names = {"names": list(_DELETION_INDEXES)}
+    first = await schema_db.fetchall(_DELETION_INDEX_ROWS, names)
+    # Then every deletion index is a plain btree on its table and its one column.
+    assert {row["name"]: row["tbl"] for row in first} == _DELETION_INDEXES
+    assert all(str(row["definition"]).startswith("CREATE INDEX ") for row in first)
+    assert all(" USING btree (" in str(row["definition"]) for row in first)
+    # When the baseline reruns, Then no index was dropped, rebuilt or replaced.
+    await bootstrap_db.main()
+    assert await schema_db.fetchall(_DELETION_INDEX_ROWS, names) == first
+
+
+async def test_clearing_messages_revokes_bindings_only_for_a_canonical_session_id(schema_db: DbConnection) -> None:
+    # Given a bootstrapped schema, a bound web session, and a bound agent transfer trigger left as defined.
+    await bootstrap_db.main()
+    tenant_id, user_id, agent_id, session_id = (uuid4() for _ in range(4))
+    await schema_db.execute(
+        "INSERT INTO tenants (id, name, slug, tier) VALUES (%(tenant)s, 'Clear', 'clear', 'ultra')",
+        {"tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO users (id, tenant_id, display_name) VALUES (%(user)s, %(tenant)s, 'Owner')",
+        {"user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, role_description, creator_id, tenant_id, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) "
+        "VALUES (%(agent)s, 'Clear', 'Clear', %(user)s, %(tenant)s, 1, 1, 1, 'company', 'use', 1)",
+        {"agent": agent_id, "user": user_id, "tenant": tenant_id},
+    )
+    await schema_db.execute(
+        "INSERT INTO chat_sessions (id, agent_id, user_id, title, source_channel, is_primary) "
+        "VALUES (%(session)s, %(agent)s, %(user)s, 'Conversation', 'web', TRUE)",
+        {"session": session_id, "agent": agent_id, "user": user_id},
+    )
+    bound = "SELECT count(*) FROM openclaw_reply_bindings WHERE session_id = %(session)s"
+    assert await schema_db.fetchval(
+        "SELECT bind_openclaw_reply(%(agent)s, %(conversation)s)", {"agent": agent_id, "conversation": str(session_id)}
+    )
+
+    async def clear(conversation_id: str) -> None:
+        await schema_db.execute(
+            "INSERT INTO chat_messages (id, agent_id, user_id, role, content, conversation_id) "
+            "VALUES (gen_random_uuid(), %(agent)s, %(user)s, 'user', 'Hello', %(conversation)s)",
+            {"agent": agent_id, "user": user_id, "conversation": conversation_id},
+        )
+        await schema_db.execute(
+            "DELETE FROM chat_messages WHERE conversation_id = %(conversation)s", {"conversation": conversation_id}
+        )
+
+    # When messages of a non-UUID conversation (feishu_ ids), an upper-case spelling of the UUID, and a malformed
+    # UUID are deleted.
+    for foreign in ("feishu_oc_0123456789abcdef", str(session_id).upper(), str(session_id)[:-1] + "g", ""):
+        await clear(foreign)
+        # Then each delete succeeds and the session keeps its binding.
+        assert await schema_db.fetchval(bound, {"session": session_id}) == 1, foreign
+    # When the session's own messages are deleted, Then its binding is revoked and the session remains.
+    await clear(str(session_id))
+    assert await schema_db.fetchval(bound, {"session": session_id}) == 0
+    assert await schema_db.fetchval("SELECT count(*) FROM chat_sessions WHERE id = %(id)s", {"id": session_id}) == 1
+
+
 _DAMAGE = {
     "dropped": ["DROP TRIGGER {name} ON {table}"],
     "disabled": ["ALTER TABLE {table} DISABLE TRIGGER {name}"],
@@ -1402,3 +1504,55 @@ async def test_reply_binding_accepts_only_web_sessions_and_burst_tables_name_the
     assert await schema_db.fetchval(bind, {"agent": agent_id, "conversation": str(shared_id)}) is None
     assert await schema_db.fetchall(_TRANSCRIPT_COLUMNS) == columns
     assert await schema_db.fetchall(_TRANSCRIPT_INDEXES) == indexes
+
+
+async def test_workspace_revisions_keep_the_omitted_content_marker_through_the_dao(schema_db: DbConnection) -> None:
+    # Given a fresh baseline with an agent.
+    await bootstrap_db.main()
+    user_id, agent_id = uuid4(), uuid4()
+    await schema_db.execute(
+        "INSERT INTO users (id, display_name, quota_message_limit) VALUES (%(id)s, 'Revision QA', 1)", {"id": user_id}
+    )
+    await schema_db.execute(
+        "INSERT INTO agents (id, name, creator_id, role_description, max_triggers, min_poll_interval_min, "
+        "webhook_rate_limit, access_mode, company_access_level, heartbeat_interval_minutes) VALUES (%(id)s, "
+        "'Revision QA', %(user)s, '', 20, 5, 5, 'private', 'use', 240)",
+        {"id": agent_id, "user": user_id},
+    )
+    _ = await bootstrap_db.init_pool()
+
+    async def record(path: str, operation: str, before: str | None, after: str | None, *, omitted: bool) -> UUID:
+        revision = await workspace_collaboration.record_revision(
+            agent_id=agent_id,
+            path=path,
+            operation=operation,
+            actor_type="user",
+            actor_id=user_id,
+            before_content=before,
+            after_content=after,
+            content_omitted=omitted,
+        )
+        assert revision is not None
+        return revision.id
+
+    # When an ordinary write, a delete of a file too large to store, and an overwrite that changed nothing stored
+    # are recorded.
+    ordinary = await record("workspace/a.txt", "write", "old", "new", omitted=False)
+    deleted = await record("workspace/big.log", "delete", None, None, omitted=True)
+    overwritten = await record("workspace/big.log", "write", None, "small", omitted=True)
+    # Then the marker is stored per row, defaults to false, and reads back through the DAO.
+    stored = {
+        row["id"]: row["content_omitted"]
+        for row in await schema_db.fetchall("SELECT id, content_omitted FROM workspace_file_revisions")
+    }
+    assert stored == {ordinary: False, deleted: True, overwritten: True}
+    revision = await workspace_file_revision_dao.get_for_agent(deleted, agent_id)
+    assert revision is not None
+    assert (revision.content_omitted, revision.before_content, revision.after_content) == (True, None, None)
+    listed = await workspace_file_revision_dao.list_for_path(agent_id, "workspace/big.log")
+    assert {row.id: row.content_omitted for row in listed} == {deleted: True, overwritten: True}
+    # And a rerun of the baseline keeps the data and the marker.
+    await bootstrap_db.main()
+    _ = await bootstrap_db.init_pool()
+    assert await workspace_file_revision_dao.get_for_agent(ordinary, agent_id) is not None
+    assert await schema_db.fetchval("SELECT count(*) FROM workspace_file_revisions WHERE content_omitted") == 2

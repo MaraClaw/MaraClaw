@@ -5,9 +5,11 @@ from uuid import uuid4
 
 import pytest
 
+from app.dao import identity_dao
 from app.dao.company_admission_dao import company_admission_dao
 from app.records.agent import AgentRecord
 from app.records.identity import IdentityRecord
+from app.records.org import OrgMemberRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
@@ -16,25 +18,24 @@ from app.services.agent_tool_exec import okr_write_objectives
 
 
 @pytest.mark.parametrize(
-    ("profile", "expected_name", "expected_email"),
-    [
-        ({}, "User", None),
-        ({"name": "Ada"}, "Ada", None),
-        ({"email": "ada@example.com"}, "ada@example.com", "ada@example.com"),
-        ({"name": "Ada", "email": "ada@example.com"}, "Ada", "ada@example.com"),
-    ],
+    ("email", "phone"),
+    [(None, None), ("ada@example.com", None), (None, "15555550123"), ("ada@example.com", "15555550123")],
 )
-async def test_channel_provisioning_uses_real_contact_without_manufactured_handles(
-    monkeypatch, profile: dict[str, str], expected_name: str, expected_email: str | None
-):
+async def test_unmatched_channel_contact_creates_no_identity_or_user(monkeypatch, email: str | None, phone: str | None):
+    # Given a contact in the default end-user organization that is unlinked and matches no account.
     tenant_id = uuid4()
-    identity = IdentityRecord(id=uuid4(), email=expected_email)
+    identity = IdentityRecord(id=uuid4(), email=email)
     user = UserRecord(id=uuid4(), identity_id=identity.id, tenant_id=tenant_id, identity=identity)
-    lookup = AsyncMock(return_value=None)
+    member = OrgMemberRecord(id=uuid4(), name="Ada", email=email, phone=phone, tenant_id=tenant_id)
     create_identity = AsyncMock(return_value=identity)
     create_user = AsyncMock(return_value=user)
-    monkeypatch.setattr(channel_users.identity_dao, "get_by_email", lookup)
-    monkeypatch.setattr(channel_users.identity_dao, "create_identity", create_identity)
+    link = AsyncMock()
+    monkeypatch.setattr(channel_users.sso_service, "match_user_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(channel_users.sso_service, "match_user_by_mobile", AsyncMock(return_value=None))
+    monkeypatch.setattr(channel_users.org_member_dao, "update", link)
+    monkeypatch.setattr(identity_dao, "get_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr(identity_dao, "get_by_phone", AsyncMock(return_value=None))
+    monkeypatch.setattr(identity_dao, "create_identity", create_identity)
     monkeypatch.setattr(channel_users.user_dao, "create", create_user)
     monkeypatch.setattr(channel_users.user_dao, "get_with_identity", AsyncMock(return_value=user))
     monkeypatch.setattr(
@@ -47,21 +48,14 @@ async def test_channel_provisioning_uses_real_contact_without_manufactured_handl
         ),
     )
 
-    result = await channel_users.ChannelUserService()._create_channel_user("feishu", "external-123", profile, tenant_id)
+    # When an outbound tool resolves it.
+    result = await channel_users.linked_platform_user(member, tenant_id)
 
-    assert result is user
-    create_identity.assert_awaited_once_with(
-        email=expected_email, phone=None, password_hash=None, is_platform_admin=False, email_verified=True
-    )
-    assert create_user.await_args is not None
-    fields = create_user.await_args.kwargs["obj_in"]
-    assert fields["identity_id"] == identity.id
-    assert fields["tenant_id"] == tenant_id
-    assert fields["display_name"] == expected_name
-    if expected_email is None:
-        lookup.assert_not_awaited()
-    else:
-        lookup.assert_awaited_once_with(expected_email)
+    # Then it has no platform user and no identity, user or link was written.
+    assert result is None
+    create_identity.assert_not_awaited()
+    create_user.assert_not_awaited()
+    link.assert_not_awaited()
 
 
 async def test_okr_owner_email_resolves_to_membership_in_agent_tenant(monkeypatch):

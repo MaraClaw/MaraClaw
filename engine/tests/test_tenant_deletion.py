@@ -1,20 +1,29 @@
+import asyncio
 import inspect
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
-from app.api import tenants as tenants_api
+from app.api import background_tasks, tenants as tenants_api
 from app.core.domain.users import UserRole
 from app.dao.tenant_dao import TENANT_DELETE_CLEANUP_SQL, TenantDAO
 from app.db.connection import DbConnection
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
+from app.services import tenant_provisioning
+from deletion_content_pg import seed_deletion_branches, surviving
+
+if TYPE_CHECKING:
+    from tenant_deletion_pg_fixtures import DeletionPostgres
+
+pytest_plugins = ("tenant_deletion_pg_fixtures",)
 
 
 def make_user(tenant_id: uuid.UUID, role: str) -> UserRecord:
@@ -253,3 +262,17 @@ async def test_delete_rechecks_protection_after_preview(monkeypatch: pytest.Monk
     # Then
     assert error.value.status_code == 400
     cleanup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_company_deletion_removes_every_predicate_branch_and_nothing_else(deletion_pg: DeletionPostgres) -> None:
+    # Given one row per deletion branch of the company's agents, users and their participants, and rows that belong
+    # to another company.
+    branches = await seed_deletion_branches(deletion_pg)
+    # When the company is deleted.
+    await tenant_provisioning.delete_tenant_and_release_identities(deletion_pg.tenant_id)
+    await asyncio.gather(*tuple(background_tasks._tasks))
+    # Then no row reachable from the company survives, and the other company's rows do.
+    for deleted in (branches.agent, branches.tenant):
+        assert await surviving(deletion_pg, deleted) == {table: set() for table in deleted}
+    assert await surviving(deletion_pg, branches.kept) == {table: set(ids) for table, ids in branches.kept.items()}

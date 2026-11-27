@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { connectAgentChat } from '../src/lib/chat/ws-client.ts'
 import { createChatSubmissions } from '../src/lib/chat/submissions.ts'
+import { isTurnRejected } from '../src/lib/chat/protocol.ts'
+import type { ChatLine } from '../src/lib/chat/transcript.ts'
+import { recoverRejectedTurn } from '../src/lib/chat/turn-rejection.ts'
 import { canonicalMessage, canonicalSession, firstSubmission, fixture, secondSubmission, submission } from './socket-fixture.ts'
 
 const receipt = {
@@ -126,5 +129,34 @@ for (const boundary of ['owner', 'conversation', 'agent'] as const) {
     assert.equal(f.sockets.length, 1)
     assert.deepEqual(submissions.pending(), [])
     assert.deepEqual(f.events, [])
+  })
+}
+
+for (const [reason, retryable] of [['message_too_long', false], ['file_name_too_long', false], ['rate_limited', true]] as const) {
+  test(`${reason} rejection recovers the pending draft, keeps the socket open and ${retryable ? 'allows' : 'blocks'} retry`, async (t) => {
+    // Given
+    const f = fixture()
+    const conn = f.connect()
+    t.after(conn.close)
+    await Promise.resolve()
+    f.socket().open()
+    const envelope = submission('a very long paste')
+    conn.send(envelope)
+    const frame = { type: 'turn_rejected', reason, client_submission_id: firstSubmission, content: 'Refused' }
+    // When
+    f.socket().frame(JSON.stringify(frame))
+    // Then
+    assert.deepEqual(f.events, [frame])
+    const event = f.events[0]
+    assert.ok(event && isTurnRejected(event))
+    const line: ChatLine = { role: 'user', content: 'a very long paste', client_submission_id: firstSubmission,
+      submission: envelope, pending: true, delivery: 'unknown', composerText: 'a very long paste' }
+    const recovery = recoverRejectedTurn([line], event)
+    assert.equal(recovery.matched, true)
+    assert.equal(recovery.lines[0]?.delivery, 'rejected')
+    assert.equal(recovery.lines[0]?.retryable, retryable)
+    assert.equal(recovery.restoredText, 'a very long paste')
+    assert.equal(f.socket().readyState, 1)
+    assert.equal(f.socket().closes, 0)
   })
 }

@@ -195,27 +195,6 @@ class OrgMemberDAO(BaseDAO[OrgMemberRecord]):
             )
             return OrgMemberRecord.from_row(row) if row is not None else None
 
-    async def get_active_for_user_and_provider(
-        self,
-        *,
-        user_id: UUID,
-        provider_id: UUID,
-        tenant_id: UUID | None = None,
-    ) -> OrgMemberRecord | None:
-        params: dict[str, object] = {"user_id": user_id, "provider_id": provider_id}
-        tenant_sql = ""
-        if tenant_id is not None:
-            tenant_sql = " AND tenant_id = %(tenant_id)s"
-            params["tenant_id"] = tenant_id
-        async with self.session() as db:
-            row = await db.fetchone(
-                f"SELECT {self._select_list()} FROM org_members "
-                "WHERE user_id = %(user_id)s AND provider_id = %(provider_id)s "
-                f"AND status = 'active'{tenant_sql} LIMIT 1",
-                params,
-            )
-            return OrgMemberRecord.from_row(row) if row is not None else None
-
     async def find_related_to_agent_by_name(self, agent_id: UUID, name: str) -> OrgMemberRecord | None:
         """Find an org member linked to an agent via agent_relationships by display name."""
         async with self.session() as db:

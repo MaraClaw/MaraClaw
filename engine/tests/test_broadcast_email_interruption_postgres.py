@@ -43,6 +43,7 @@ async def test_interrupted_worker_recovers_committed_claim_after_pool_reopen(
     monkeypatch.setattr(worker, "datetime", clock)
     entered, finished, settled = anyio.Event(), anyio.Event(), anyio.Event()
     release = threading.Event()
+    token = anyio.lowlevel.current_token()
     message_ids: list[str] = []
     first_claims: list[BroadcastEmailRecord] = []
     real_mark_sent = outbox.mark_sent
@@ -52,10 +53,10 @@ async def test_interrupted_worker_recovers_committed_claim_after_pool_reopen(
         if len(message_ids) == 1:
             try:
                 if not accepted:
-                    anyio.from_thread.run_sync(entered.set)
+                    anyio.from_thread.run_sync(entered.set, token=token)
                     assert release.wait(timeout=10)
             finally:
-                anyio.from_thread.run_sync(finished.set)
+                anyio.from_thread.run_sync(finished.set, token=token)
 
     async def mark_sent(claim: BroadcastEmailRecord, *, now: datetime) -> bool:
         if accepted and claim.attempts == 1:

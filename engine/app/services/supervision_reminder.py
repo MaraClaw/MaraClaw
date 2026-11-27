@@ -19,13 +19,14 @@ from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.dao.llm_dao import llm_model_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.task_dao import task_dao, task_log_dao
 from app.records.agent import AgentRecord
 from app.records.task import TaskRecord
 from app.services.activity_logger import log_activity
+from app.services.llm.provider_health import ProviderUnavailableError, ensure_available, guarded
+from app.services.llm.router import load_agent_model_bundle, select_turn_model
 
 # Schedule JSON format:
 # Fields are freq (daily/weekly), interval (N), time (HH:MM), and weekdays (0-6).
@@ -152,20 +153,24 @@ async def _get_agent_reply(target_agent: AgentRecord, message: str) -> str | Non
         get_provider_base_url,
     )
 
-    model_id = target_agent.primary_model_id or target_agent.fallback_model_id
-    if not model_id:
-        return None
-
-    model = await llm_model_dao.get(model_id)
-    if not model:
-        return None
-    from app.services.enterprise_llm import model_usable_in_tenant
-
-    if not model_usable_in_tenant(model, getattr(target_agent, "tenant_id", None)):
+    model = select_turn_model(await load_agent_model_bundle(target_agent), agent_id=target_agent.id).model
+    if model is None:
         return None
 
     base_url = get_provider_base_url(model.provider, model.base_url)
     if base_url in (None, ""):
+        return None
+
+    try:
+        ensure_available(model)
+    except ProviderUnavailableError as error:
+        logger.warning(
+            "[supervision] no reply from {}: {}: provider={} model={}",
+            target_agent.id,
+            error,
+            model.provider,
+            model.model,
+        )
         return None
 
     static_prompt, dynamic_prompt = await build_agent_context(
@@ -179,10 +184,8 @@ async def _get_agent_reply(target_agent: AgentRecord, message: str) -> str | Non
 
     model, client = await create_fresh_llm_client_from_model(model, timeout=float(model.request_timeout or 60.0))
     try:
-        response = await client.complete(
-            messages=messages,
-            temperature=model.temperature,
-            max_tokens=512,
+        response = await guarded(
+            model, lambda: client.complete(messages=messages, temperature=model.temperature, max_tokens=512)
         )
         content = (response.content or "").strip()
         return content or None

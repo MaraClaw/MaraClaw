@@ -75,6 +75,7 @@ class FileRevisionResponse(TypedDict):
     session_id: str | None
     before_content: str | None
     after_content: str | None
+    content_omitted: bool
     created_at: str | None
     updated_at: str | None
 

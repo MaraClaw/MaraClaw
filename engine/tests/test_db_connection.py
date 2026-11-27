@@ -12,7 +12,10 @@ from app.db.connection import DbConnection
 from app.db.errors import (
     DbError,
     ForeignKeyViolationError,
+    LockNotAvailableError,
+    LockWaitTimeoutError,
     PoolCheckoutTimeoutError,
+    PoolQueueFullError,
     QueryCanceledError,
     UniqueViolationError,
     map_psycopg_error,
@@ -250,3 +253,75 @@ async def test_commit_and_rollback_map_overload_only(method: str) -> None:
     with pytest.raises(UniqueViolation) as raw_caught:
         await getattr(db, method)()
     assert raw_caught.value is other
+
+
+def _lock_not_available(message: str, source_function: str | None = None) -> Any:
+    from psycopg.errors import LockNotAvailable
+    from psycopg.pq import DiagnosticField
+
+    info: dict[int, bytes | None] = {DiagnosticField.MESSAGE_PRIMARY: message.encode()}
+    if source_function is not None:
+        info[DiagnosticField.SOURCE_FUNCTION] = source_function.encode()
+    return LockNotAvailable(message, info=info)
+
+
+def test_overload_error_classifies_full_queue_and_lock_timeout_but_not_nowait() -> None:
+    # Given a refused queue slot, a lock_timeout expiry and a NOWAIT refusal (same SQLSTATE 55P03), the last two as
+    # a server answer that carries no source function.
+    from psycopg_pool import TooManyRequests
+
+    full = TooManyRequests("too many requests")
+    timeout = _lock_not_available("canceling statement due to lock timeout")
+    nowait = _lock_not_available('could not obtain lock on row in relation "agents"')
+
+    # Then only the first two are overloads, and the lock wait is still a LockNotAvailableError.
+    assert isinstance(overload_error(full), PoolQueueFullError)
+    waited = overload_error(timeout)
+    assert isinstance(waited, LockWaitTimeoutError)
+    assert isinstance(waited, LockNotAvailableError)
+    assert waited.orig is timeout
+    assert overload_error(nowait) is None
+    mapped = map_psycopg_error(nowait)
+    assert type(mapped) is LockNotAvailableError
+    assert isinstance(map_psycopg_error(timeout), LockWaitTimeoutError)
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["canceling statement due to lock timeout", "hủy câu lệnh do hết thời gian chờ khóa", ""],
+    ids=["english", "translated", "empty"],
+)
+def test_lock_timeout_is_recognised_by_its_source_function_whatever_the_message(message: str) -> None:
+    # Given a 55P03 raised by ProcessInterrupts, whose message follows the server's lc_messages.
+    timeout = _lock_not_available(message, "ProcessInterrupts")
+
+    # Then it is a lock wait timeout, not a plain busy error.
+    waited = overload_error(timeout)
+    assert isinstance(waited, LockWaitTimeoutError)
+    assert waited.orig is timeout
+    assert isinstance(map_psycopg_error(timeout), LockWaitTimeoutError)
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["canceling statement due to lock timeout", 'could not obtain lock on row in relation "agents"'],
+    ids=["english-timeout-text", "nowait-text"],
+)
+def test_a_lock_error_from_another_source_function_is_never_a_lock_timeout(message: str) -> None:
+    # Given a 55P03 from the NOWAIT path, even one that carries the timeout's English text.
+    busy = _lock_not_available(message, "heap_lock_tuple")
+
+    # Then the source function wins over the message and the error stays a plain busy error.
+    assert overload_error(busy) is None
+    assert type(map_psycopg_error(busy)) is LockNotAvailableError
+
+
+def test_only_a_missing_source_function_falls_back_to_the_english_message() -> None:
+    # Given server answers without a source function, as a proxy that strips error fields forwards them.
+    english = _lock_not_available("canceling statement due to lock timeout")
+    translated = _lock_not_available("hủy câu lệnh do hết thời gian chờ khóa")
+
+    # Then the English text is still recognised, and a translated one cannot be told from a NOWAIT refusal.
+    assert isinstance(overload_error(english), LockWaitTimeoutError)
+    assert overload_error(translated) is None
+    assert type(map_psycopg_error(translated)) is LockNotAvailableError

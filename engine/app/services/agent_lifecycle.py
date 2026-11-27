@@ -10,7 +10,7 @@ from app.core.incident_reporting import report_exception
 from app.core.logging import logger
 from app.dao.agent_dao import agent_dao
 from app.db.errors import overload_error
-from app.db.session import flush_request_transaction
+from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.services.agent_lifecycle_events import AgentStopped, publish_agent_stopped
@@ -19,6 +19,7 @@ from app.services.agent_setup_lock import drain_on_cancel
 from app.services.agent_start_reconciler import EXPECTED_START_FAULTS, execute_start
 from app.services.agent_start_store import start_store
 from app.services.company_transfer_runtime_gate import assert_transfer_ready
+from app.services.docker_capacity import DockerBusyError
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_identity import GuestOwnershipError
 from app.services.openclaw_update_exclusion import locked_fresh_agent
@@ -89,7 +90,7 @@ async def run_start(operation: AgentStartOperation, agent: AgentRecord) -> Lifec
     except GuestOwnershipError as exc:
         logger.warning("Guest start ownership refused for agent {}: {}", agent.id, exc)
         return LifecycleFailure(502, "guest_start_failed", "Guest ownership could not be verified")
-    except HTTPException, OpenClawUpdateGateError:
+    except HTTPException, OpenClawUpdateGateError, DockerBusyError:
         raise
     except Exception as exc:
         if overload_error(exc) is not None:
@@ -117,8 +118,8 @@ async def stop_agent_guest(agent_id: UUID, persist: RuntimePersistence = persist
             if not stopped:
                 # Retain the ID so the existing stopped-guest worker can retry the Docker stop.
                 agent.status = AgentStatus.STOPPED
-            saved = await persist(agent)
-            await flush_request_transaction()
+            async with optional_connection_ctx():
+                saved = await persist(agent)
             if not stopped:
                 return LifecycleFailure(502, "guest_stop_failed", "Guest stop is pending retry")
             if agent_manager.docker_client is not None:

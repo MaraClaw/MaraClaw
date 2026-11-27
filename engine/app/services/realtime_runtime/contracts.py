@@ -1,6 +1,7 @@
 """Fixed Redis routing shapes without constraining websocket event payloads."""
 
-from collections.abc import Awaitable
+import json
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from typing import NotRequired, Protocol
 
@@ -25,6 +26,18 @@ class RealtimePresence(TypedDict, total=False, extra_items=str):
 
 
 presence_adapter = TypeAdapter(RealtimePresence)
+
+# One entry of a session index: (connection_id, instance_id, user_id), which is all a chunk's routing needs to know
+# about a socket watching the session. The member is immutable for the life of the connection, so removing it needs
+# the same three values; ``RealtimeRouter.registered`` hands them out.
+type SessionMember = tuple[str, str, str]
+session_member_adapter = TypeAdapter(SessionMember)
+
+
+def encode_session_member(connection_id: str, presence: Mapping[str, str]) -> str:
+    return json.dumps(
+        [connection_id, presence.get("instance_id", ""), presence.get("user_id", "")], separators=(",", ":")
+    )
 
 
 class ReceivedEnvelope(BaseModel):

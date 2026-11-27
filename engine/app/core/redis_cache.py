@@ -3,24 +3,97 @@
 Durable callers (password reset, locks, pubsub, webhooks) must keep using
 ``get_redis()``. This module is only for caches that may fall back to the
 source of truth when Redis is slow or down.
+
+Every fail-open cache *read or fill* goes through one breaker (``guarded``): a failure opens it, calls are then
+refused at once, and after the cooldown a single probe decides whether it closes again. Invalidation writes never
+consult it.
 """
 
 from __future__ import annotations
 
 import json
 import time
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import cast, final
 from uuid import uuid4
 
 from app.config import get_settings
-from app.core.cache_contracts import RedisValueRead
+from app.core.cache_contracts import RedisValueRead, SessionKeysRead
+from app.core.events import RedisPoolOverloadError
+from app.core.json_types import is_any_list, json_loads_value
 from app.core.logging import logger
 from app.records.cache_invalidation import CacheInvalidation, CacheInvalidationKind
 
 _COOLDOWN_SECONDS = 2.0
 _VERSION_MIN_TTL = 3600
-_cache_dead_until = 0.0
+
+
+class _Admission(StrEnum):
+    CALL = "call"
+    PROBE = "probe"
+
+
+class CacheUnavailableError(Exception):
+    """A guarded cache call was refused by the open breaker or failed; the caller falls back to the source of truth."""
+
+
+@final
+class CacheBreaker:
+    """Closed, open or half-open circuit for the cache Redis; the clock is injectable for tests.
+
+    A failure opens it for ``cooldown`` seconds. Past the cooldown exactly one caller is admitted as the probe while
+    every other call is still refused: a successful probe closes the circuit, a failed one reopens it for another
+    cooldown, and a probe that proved nothing (cancelled, busy pool) hands the slot to the next caller.
+    """
+
+    def __init__(self, *, cooldown: float = _COOLDOWN_SECONDS, clock: Callable[[], float] = time.monotonic) -> None:
+        self._cooldown = cooldown
+        self._clock = clock
+        self._opened = False
+        self._probing = False
+        self._retry_at = 0.0
+
+    def admit(self) -> _Admission | None:
+        """Admit the caller, or return None to refuse it."""
+        if not self._opened:
+            return _Admission.CALL
+        if self._probing or self._clock() < self._retry_at:
+            return None
+        self._probing = True
+        return _Admission.PROBE
+
+    def refusing(self) -> bool:
+        """Whether a call made right now would be refused."""
+        return self._opened and (self._probing or self._clock() < self._retry_at)
+
+    def trip(self) -> None:
+        self._opened = True
+        self._probing = False
+        self._retry_at = self._clock() + self._cooldown
+
+    def succeeded(self, admission: _Admission) -> None:
+        if admission is _Admission.PROBE:
+            self.reset()
+
+    def failed(self, admission: _Admission) -> None:
+        # A straggler admitted before the circuit opened says nothing new; only the probe may reopen it.
+        if admission is _Admission.PROBE or not self._opened:
+            self.trip()
+
+    def abandoned(self, admission: _Admission) -> None:
+        if admission is _Admission.PROBE:
+            self._probing = False
+
+    def reset(self) -> None:
+        self._opened = False
+        self._probing = False
+        self._retry_at = 0.0
+
+
+_breaker = CacheBreaker()
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,18 +119,40 @@ def _max_bytes() -> int:
 
 
 def _cooling_down() -> bool:
-    return time.monotonic() < _cache_dead_until
+    return _breaker.refusing()
 
 
 def _trip() -> None:
-    global _cache_dead_until
-    _cache_dead_until = time.monotonic() + _COOLDOWN_SECONDS
+    _breaker.trip()
 
 
 def reset_circuit() -> None:
-    """Test helper: clear the fail-open cooldown."""
-    global _cache_dead_until
-    _cache_dead_until = 0.0
+    """Test helper: close the fail-open circuit."""
+    _breaker.reset()
+
+
+async def guarded[T](call: Callable[[], Awaitable[T]]) -> T:
+    """Run one fail-open cache round trip under the breaker; raise ``CacheUnavailableError`` instead of waiting on a dead Redis.
+
+    ``call`` does only the Redis I/O (parse its reply outside). Any failure but a busy pool opens the circuit; a busy
+    pool (``RedisPoolOverloadError``) fails just this call, because Redis is not known to be down.
+    """
+    admission = _breaker.admit()
+    if admission is None:
+        raise CacheUnavailableError("circuit open")
+    try:
+        result = await call()
+    except RedisPoolOverloadError as exc:
+        _breaker.abandoned(admission)
+        raise CacheUnavailableError(type(exc).__name__) from exc
+    except Exception as exc:
+        _breaker.failed(admission)
+        raise CacheUnavailableError(type(exc).__name__) from exc
+    except BaseException:
+        _breaker.abandoned(admission)
+        raise
+    _breaker.succeeded(admission)
+    return result
 
 
 async def _client():
@@ -73,14 +168,13 @@ async def cache_get(key: str) -> str | None:
 
 
 async def _read_value(key: str) -> RedisValueRead | None:
-    if _cooling_down():
-        return None
+    async def read() -> object:
+        return await (await _client()).get(key)
+
     try:
-        client = await _client()
-        value = await client.get(key)
-    except Exception as exc:
-        _trip()
-        logger.debug("redis_cache get skipped: {}", type(exc).__name__)
+        value = await guarded(read)
+    except CacheUnavailableError as exc:
+        logger.debug("redis_cache get skipped: {}", exc)
         return None
     if isinstance(value, bytes):
         return RedisValueRead(value.decode())
@@ -89,31 +183,35 @@ async def _read_value(key: str) -> RedisValueRead | None:
 
 async def cache_set(key: str, value: str, *, ttl: int) -> bool:
     """SET with expiry. Returns False when skipped (ttl, size, or Redis error)."""
-    if ttl <= 0 or _cooling_down():
+    if ttl <= 0:
         return False
     if len(value.encode()) > _max_bytes():
         logger.debug("redis_cache set skipped (too large)")
         return False
+
+    async def write() -> object:
+        return await (await _client()).set(key, value, ex=ttl)
+
     try:
-        client = await _client()
-        _ = await client.set(key, value, ex=ttl)
-    except Exception as exc:
-        _trip()
-        logger.debug("redis_cache set skipped: {}", type(exc).__name__)
+        _ = await guarded(write)
+    except CacheUnavailableError as exc:
+        logger.debug("redis_cache set skipped: {}", exc)
         return False
     return True
 
 
 async def cache_set_nx(key: str, value: str, *, ttl: int) -> bool:
     """SET NX with expiry. True only when this caller created the key."""
-    if ttl <= 0 or _cooling_down():
+    if ttl <= 0:
         return False
+
+    async def claim() -> object:
+        return await (await _client()).set(key, value, ex=ttl, nx=True)
+
     try:
-        client = await _client()
-        return bool(await client.set(key, value, ex=ttl, nx=True))
-    except Exception as exc:
-        _trip()
-        logger.debug("redis_cache set_nx skipped: {}", type(exc).__name__)
+        return bool(await guarded(claim))
+    except CacheUnavailableError as exc:
+        logger.debug("redis_cache set_nx skipped: {}", exc)
         return False
 
 
@@ -136,16 +234,16 @@ async def _delete_now(*keys: str) -> None:
         logger.warning("redis_cache delete failed: keys={} error={}", len(keys), type(exc).__name__)
 
 
-async def cache_get_json(key: str) -> object | None:
-    raw = await cache_get(key)
-    if raw is None:
-        return None
+def _parse_json(raw: str) -> object | None:
     try:
-        from app.core.json_types import json_loads_value
-
         return json_loads_value(raw)
     except TypeError, ValueError:
         return None
+
+
+async def cache_get_json(key: str) -> object | None:
+    raw = await cache_get(key)
+    return None if raw is None else _parse_json(raw)
 
 
 async def cache_set_json(key: str, value: object, *, ttl: int) -> bool:
@@ -166,6 +264,47 @@ def _json_default(value: object) -> object:
 async def read_version(version_key: str) -> RedisValueRead | None:
     """Separate an unavailable read (None) from a successful miss (value=None)."""
     return await _read_value(version_key)
+
+
+def _decoded(value: object) -> str | None:
+    if isinstance(value, bytes):
+        return value.decode()
+    return value if isinstance(value, str) else None
+
+
+async def read_session_keys(
+    snapshot_key: str, user_version_key: str, identity_version_key: str | None
+) -> SessionKeysRead | None:
+    """Read a session snapshot and the generations that gate it in one round trip.
+
+    One non-transactional pipeline of single-key GETs, every key named by the caller, so a cluster-aware client can
+    route each one. Without ``identity_version_key`` the identity generation is not read and comes back None.
+    Returns None when the cache is unavailable, like ``read_version``; a successful miss has a None snapshot.
+    """
+    keys = [snapshot_key, user_version_key]
+    if identity_version_key is not None:
+        keys.append(identity_version_key)
+
+    async def read() -> object:
+        client = await _client()
+        async with client.pipeline(transaction=False) as pipe:
+            for key in keys:
+                _ = pipe.get(key)
+            return cast("object", await pipe.execute())
+
+    try:
+        replies = await guarded(read)
+    except CacheUnavailableError as exc:
+        logger.debug("redis_cache session read skipped: {}", exc)
+        return None
+    if not is_any_list(replies) or len(replies) != len(keys):
+        return None
+    raw_snapshot = _decoded(replies[0])
+    return SessionKeysRead(
+        None if raw_snapshot is None else _parse_json(raw_snapshot),
+        _decoded(replies[1]),
+        None if identity_version_key is None else _decoded(replies[2]),
+    )
 
 
 async def ensure_version(version_key: str, *, ttl: int) -> str | None:

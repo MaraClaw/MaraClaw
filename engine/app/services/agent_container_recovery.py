@@ -6,6 +6,7 @@ for an agent pinned to an image that no longer exists: its directory is snapshot
 compare-and-set and the start uses the configured image. A failed start restores the snapshot and the pin.
 """
 
+from functools import partial
 from pathlib import Path
 from uuid import UUID
 
@@ -24,6 +25,7 @@ from app.services.agent_manager import agent_manager
 from app.services.agent_runtime_loss import recovery_snapshot_id
 from app.services.agent_setup_lock import drain_on_cancel
 from app.services.agent_start_store import committed_start_connection, start_store
+from app.services.docker_capacity import DockerBusyError, DockerPriority, run_docker
 from app.services.guest_identity import GuestOwnershipError, owned_guest_containers, stop_guest_containers
 from app.services.guest_image import is_local_reference
 from app.services.openclaw_update_exclusion import locked_fresh_agent
@@ -41,6 +43,10 @@ def _unavailable(client: DockerClient, image: str) -> bool:
     return not client.image.exists(image) and (image.startswith("sha256:") or is_local_reference(image))
 
 
+async def _missing(client: DockerClient, image: str) -> bool:
+    return await run_docker(_unavailable, client, image, priority=DockerPriority.BACKGROUND)
+
+
 async def start_new_agent_container(agent_id: UUID) -> LifecycleOutcome:
     async def section() -> LifecycleOutcome:
         async with locked_fresh_agent(agent_id) as agent:
@@ -50,7 +56,7 @@ async def start_new_agent_container(agent_id: UUID) -> LifecycleOutcome:
             unpinned: str | None = None
             if client is not None:
                 try:
-                    guests = await to_thread.run_sync(owned_guest_containers, client, agent)
+                    guests = await run_docker(owned_guest_containers, client, agent, priority=DockerPriority.BACKGROUND)
                 except GuestOwnershipError as exc:
                     logger.warning("Guest recovery ownership refused for agent {}: {}", agent_id, exc)
                     return LifecycleFailure(502, "guest_start_failed", "Guest ownership could not be verified")
@@ -103,11 +109,11 @@ async def _image_plan(client: DockerClient, agent: AgentRecord) -> str | Lifecyc
     """``None`` to start as usual, the stale pin to clear first, or a refusal when no image can be used."""
     configured = get_settings().MARACLAW_OPENCLAW_IMAGE
     pinned = agent.openclaw_image_id
-    if pinned is not None and pinned != configured and await to_thread.run_sync(_unavailable, client, pinned):
-        if await to_thread.run_sync(_unavailable, client, configured):
+    if pinned is not None and pinned != configured and await _missing(client, pinned):
+        if await _missing(client, configured):
             return _IMAGE_UNAVAILABLE
         return pinned
-    if await to_thread.run_sync(_unavailable, client, pinned or configured):
+    if await _missing(client, pinned or configured):
         return _IMAGE_UNAVAILABLE
     return None
 
@@ -131,8 +137,10 @@ async def _roll_back(client: DockerClient | None, agent: AgentRecord, agent_dir:
     snapshot = recovery_snapshot_id(agent.id)
     try:
         if client is not None:
-            _ = await to_thread.run_sync(lambda: stop_guest_containers(client, agent, remove=True))
-    except (GuestOwnershipError, *_DOCKER_ERRORS) as exc:
+            _ = await run_docker(
+                partial(stop_guest_containers, client, agent, remove=True), priority=DockerPriority.BACKGROUND
+            )
+    except (GuestOwnershipError, DockerBusyError, *_DOCKER_ERRORS) as exc:
         logger.warning("Guest recovery could not remove the failed guest for agent {}: {}", agent.id, exc)
         return
     try:

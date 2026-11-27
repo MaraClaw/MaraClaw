@@ -1,4 +1,5 @@
-import { isGenesisAdmin, type UserOut } from './types/auth.ts'
+import type { UserOut } from './types/auth.ts'
+import { isGenesisAdmin } from './types/auth-guards.ts'
 
 export function tenantEmailScope(user: UserOut | null | undefined): string | null {
   if (!user?.is_active || !isGenesisAdmin(user)) return null

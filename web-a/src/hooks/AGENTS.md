@@ -21,9 +21,11 @@ Scope: query-option factories, context providers, session ownership and consumer
 - `company-options.ts`: company reads and mutations; `companyRuntimeOptions` keys runtime pages by company and cursor, forwards the signal and disables retries. Picker reads live under `['admin-companies', 'options', ...]`: `companyOptionsBrowseOptions` (infinite, load more by `next_cursor`), `companyOptionsSearchOptions(q)` (one ranked page keyed by the trimmed query, skipped when empty, no load more) and `companyOptionByIdOptions(id)` (`getTenant`, 404 is `null`, a non-UUID is never sent; `isCompanyId`).
 
 ### Providers
-- `use-auth.tsx`: auth context, session-scoped query provider and auth consumers.
+- `use-auth.tsx`: `AuthProvider`, `useAuth` and `useSessionCurrent`. It imports `lib/auth-api.ts` on demand (`retryingImport`), so the stored-session check and login wait for that chunk; a failed download fails them like a failed request.
+- `session-query-provider.tsx`: `SessionQueryProvider`, the session-generation-keyed `QueryClientProvider`, rendered by the lazy `SessionShell` route.
 - `use-theme.tsx`: theme preference, resolution, context and DOM application.
-- `use-translation.tsx`: `TranslationProvider` and `useTranslation`, persisted locale and localized number/date/distance formatting.
+- `use-translation.tsx`: `TranslationProvider` and `useTranslation`, persisted locale and localized number/date formatting.
+- `use-distance.ts`: `useDistance()`, relative time ("3 days ago") through date-fns in the active locale; separate from `useTranslation` so date-fns stays out of the entry chunk.
 
 ### Session ownership helpers
 - `session-mutation.ts`, `session-query-client.ts`: mutation ownership/lifecycle fencing and session query-client creation/retirement.
@@ -40,7 +42,7 @@ Scope: query-option factories, context providers, session ownership and consumer
 
 ## Invariants
 
-1. `AuthProvider` memoizes query scope by `snapshot.owner` and keys `QueryClientProvider` by `snapshot.owner.generation`.
+1. `SessionQueryProvider` (inside the lazy `SessionShell`, below `ProtectedRoute`) memoizes query scope by the auth `owner`, keys `QueryClientProvider` by `owner.generation` and runs `ownQueryClient` in an effect. Only the shell and the routes under it may use Query hooks; login, the password pages, `ProtectedRoute` and `App` stay Query-free.
    `useSessionCurrent` captures that owner for later current-session checks; retain both boundaries.
 2. Session query defaults: `staleTime: 30_000`, `retry: 1`, no window-focus refetch. Retirement cancels and clears; effect cleanup only cancels.
 3. `ownMutationOptions` wraps execution with `runOwned`, guards `onMutate` through `assertCurrent`, and fences success/error/settled with `isCurrent`.
@@ -74,6 +76,7 @@ Scope: query-option factories, context providers, session ownership and consumer
     DOM application updates root dark class, color scheme, theme dataset and theme-color meta.
     Theme and language storage go through `../lib/preference-storage.ts`: when the browser refuses storage, both providers still render and keep changes in memory.
 14. `TranslationProvider` persists `en|vi` in `maraclaw-admin-language` (invalid/missing becomes `en`) and updates document `lang`.
+    Vietnamese strings are a lazy chunk (`../lib/translations.ts`, imported only by `loadVietnamese()` in `../lib/i18n.ts`; other files use type-only imports). The provider renders nothing while a stored `vi` locale loads, falls back to English on a failed load (stored choice kept), and `setLocale('vi')` loads before switching. Non-React callers and tests `await loadVietnamese()` before relying on `vi` lookups.
     Typed messages and the client-owned translation boundary live in `../lib/i18n.ts`; API detail and user content stay outside that boundary.
 
 ## Gotchas

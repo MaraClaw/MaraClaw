@@ -11,7 +11,7 @@ import { agentLifecycleError } from '../src/lib/agent-lifecycle-errors.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
-import { canReviewAgentDeletions } from '../src/lib/types/auth.ts'
+import { canReviewAgentDeletions } from '../src/lib/types/auth-guards.ts'
 import { approvedDeletion, deletionRequest } from './agent-lifecycle-fixtures.ts'
 import { adminUser, createFixture } from './helpers.ts'
 

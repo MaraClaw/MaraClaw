@@ -1,3 +1,4 @@
+import { useDistance } from '@/hooks/use-distance'
 import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useId, useState } from 'react'
@@ -19,7 +20,8 @@ import { admissionMethodLabels, admissionStatusLabels } from './admission-labels
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
 
 export function AdmissionApprovalsPage() {
-  const { t, date, distance, number } = useTranslation()
+  const { t, date, number } = useTranslation()
+  const distance = useDistance()
   const filterId = useId()
   const client = useQueryClient()
   const [status, setStatus] = useState<AdmissionStatus>('pending')

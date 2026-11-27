@@ -202,10 +202,31 @@ async def test_cancellation_leaves_unacknowledged_lease_for_restart(store: Relay
     assert store.sends == ["authoritative"]
 
 
-@pytest.mark.parametrize(("attempt", "seconds"), [(0, 1), (1, 1), (2, 2), (9, 256), (10, 300), (10000, 300)])
-def test_retry_is_deterministic_and_bounded(attempt: int, seconds: int) -> None:
-    # Given / When / Then
-    assert relay.retry_delay(attempt) == timedelta(seconds=seconds)
+@pytest.mark.parametrize(
+    ("attempt", "unit", "seconds"),
+    [
+        (0, 1.0, 1),
+        (1, 1.0, 1),
+        (2, 1.0, 2),
+        (9, 1.0, 256),
+        (10, 1.0, 300),
+        (10000, 1.0, 300),
+        (1, 0.0, 0.5),
+        (10, 0.0, 150),
+        (10, 0.5, 225),
+        (10000, 0.0, 150),
+    ],
+)
+def test_retry_delay_is_jittered_within_the_ceiling(attempt: int, unit: float, seconds: float) -> None:
+    # Given the injected random unit, the delay runs from half the exponential step (0) to all of it (1).
+    assert relay.retry_delay(attempt, unit) == timedelta(seconds=seconds)
+
+
+def test_random_unit_stays_within_zero_and_one() -> None:
+    # Given / When / Then the production random source never pushes a delay past the 300 s ceiling.
+    units = [relay.jitter_unit() for _ in range(200)]
+    assert all(0.0 <= unit <= 1.0 for unit in units)
+    assert max(relay.retry_delay(10, unit) for unit in units) <= timedelta(seconds=relay.RETRY_CEILING_SECONDS)
 
 
 @pytest.fixture
@@ -276,14 +297,14 @@ class ClaimGate:
         monkeypatch.setattr(store, "claim_batch", self.claim_batch)
 
     async def claim_batch(
-        self, *, limit: int, lease_seconds: float, now: datetime
+        self, *, limit: int, lease_seconds: float, now: datetime, per_tenant_limit: int | None = None
     ) -> list[GatewayReportDeliveryRecord]:
         self.calls += 1
         if self.calls == self.hold_call:
             _ = await self.hold.wait()
         if self.error is not None:
             raise self.error
-        return await self._claim(limit=limit, lease_seconds=lease_seconds, now=now)
+        return await self._claim(limit=limit, lease_seconds=lease_seconds, now=now, per_tenant_limit=per_tenant_limit)
 
 
 @pytest.fixture

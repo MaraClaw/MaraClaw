@@ -8,11 +8,12 @@ from enum import StrEnum
 from typing import ClassVar, final, override
 from uuid import UUID
 
-from app.core.domain.triggers import TriggerExecutionStatus
-from app.core.json_types import int_from_row, is_str_dict, uuid_from_row
+from app.core.domain.triggers import TRIGGER_DISABLED_ERROR, TriggerExecutionStatus
+from app.core.json_types import int_from_row, is_str_dict, str_from_row, uuid_from_row
+from app.core.trigger_schedule import next_due_at
 from app.dao.base import BaseDAO
 from app.db.errors import LockNotAvailableError, UniqueViolationError
-from app.records.trigger import AgentTriggerRecord, TriggerExecutionRecord
+from app.records.trigger import AgentTriggerRecord, DueTrigger, TriggerExecutionRecord
 from app.records.trigger_execution_history import TriggerExecutionHistoryRecord
 
 ENQUEUE_LOCK_ATTEMPTS = 3
@@ -34,7 +35,26 @@ _TRIGGER_COLUMNS = (
     "is_system",
     "created_at",
     "expires_at",
+    "next_due_at",
 )
+
+_SCHEDULE_COLUMNS = frozenset(
+    {
+        "type",
+        "config",
+        "is_enabled",
+        "last_fired_at",
+        "fire_count",
+        "max_fires",
+        "cooldown_seconds",
+        "created_at",
+        "expires_at",
+    }
+)
+"""Columns a trigger's ``next_due_at`` is computed from: a write to any of them reschedules the trigger."""
+
+_AGENT_ZONE_SQL = "COALESCE(NULLIF(a.timezone, ''), NULLIF(x.timezone, ''), 'UTC')"
+"""The agent's effective timezone, as ``timezone_utils.get_agent_timezone`` resolves it: agent, then tenant, then UTC."""
 
 _EXECUTION_COLUMNS = (
     "id",
@@ -64,10 +84,97 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
     record_factory = staticmethod(AgentTriggerRecord.from_row)
 
     @override
+    async def create(self, *, obj_in: Mapping[str, object]) -> AgentTriggerRecord:
+        # The schedule counts from creation, so the row is created with the instant it is scheduled from.
+        data = {"created_at": datetime.now(UTC), **obj_in}
+        async with self.session():
+            created = await super().create(obj_in=data)
+            await self._apply_schedule(created)
+        return created
+
+    @override
     async def update(self, *, db_obj: AgentTriggerRecord, obj_in: Mapping[str, object]) -> AgentTriggerRecord:
+        changes = obj_in
         if "is_enabled" in obj_in and "self_disabled" not in obj_in:
-            return await super().update(db_obj=db_obj, obj_in={**obj_in, "self_disabled": False})
-        return await super().update(db_obj=db_obj, obj_in=obj_in)
+            changes = {**obj_in, "self_disabled": False}
+        # A disable settles the work that came due before it, so a later enable never runs it.
+        settles = changes.get("is_enabled") is False and changes.get("self_disabled") is not True
+        reschedules = not _SCHEDULE_COLUMNS.isdisjoint(changes)
+        if not (settles or reschedules):
+            return await super().update(db_obj=db_obj, obj_in=changes)
+        async with self.session():
+            updated = await super().update(db_obj=db_obj, obj_in=changes)
+            if settles:
+                _ = await trigger_execution_dao.fail_pending_for_triggers([db_obj.id])
+            if reschedules:
+                await self._apply_schedule(updated)
+        return updated
+
+    async def reschedule(self, trigger_ids: Sequence[UUID]) -> dict[UUID, datetime | None]:
+        """Recompute ``next_due_at`` of the triggers from their stored state and return what it became.
+
+        Every write of a schedule input calls it in the transaction of that write. The rows are read under a
+        ``FOR NO KEY UPDATE`` lock, so a concurrent writer's committed state is what the schedule is computed from.
+        """
+        if not trigger_ids:
+            return {}
+        async with self.session() as db:
+            rows = await db.fetchall(
+                f"SELECT {self._select_list('t')}, {_AGENT_ZONE_SQL} AS agent_timezone FROM agent_triggers t "
+                "JOIN agents a ON a.id = t.agent_id LEFT JOIN tenants x ON x.id = a.tenant_id "
+                "WHERE t.id = ANY(%(ids)s) ORDER BY t.id FOR NO KEY UPDATE OF t",
+                {"ids": list(trigger_ids)},
+            )
+            due = {
+                uuid_from_row(row["id"]): next_due_at(
+                    AgentTriggerRecord.from_row(row), str_from_row(row["agent_timezone"])
+                )
+                for row in rows
+            }
+            if not due:
+                return due
+            await db.execute(
+                "UPDATE agent_triggers AS t SET next_due_at = v.due "
+                "FROM unnest(%(ids)s::uuid[], %(dues)s::timestamptz[]) AS v(id, due) "
+                "WHERE t.id = v.id AND t.next_due_at IS DISTINCT FROM v.due",
+                {"ids": list(due), "dues": list(due.values())},
+            )
+        return due
+
+    async def reschedule_for_agent(self, agent_id: UUID) -> None:
+        """Recompute the enabled cron triggers of an agent whose effective timezone changed."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT id FROM agent_triggers WHERE agent_id = %(agent_id)s AND type = 'cron' AND is_enabled IS TRUE",
+                {"agent_id": agent_id},
+            )
+            _ = await self.reschedule([uuid_from_row(row["id"]) for row in rows])
+
+    async def reschedule_for_tenant(self, tenant_id: UUID) -> None:
+        """Recompute the enabled cron triggers of the tenant's agents that follow the tenant's timezone."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT t.id FROM agent_triggers t JOIN agents a ON a.id = t.agent_id "
+                "WHERE a.tenant_id = %(tenant_id)s AND NULLIF(a.timezone, '') IS NULL "
+                "AND t.type = 'cron' AND t.is_enabled IS TRUE",
+                {"tenant_id": tenant_id},
+            )
+            _ = await self.reschedule([uuid_from_row(row["id"]) for row in rows])
+
+    async def mark_skipped(self, trigger_id: UUID, now: datetime) -> None:
+        """Record a skipped occurrence (a non-workday) as the last firing, which moves the schedule on."""
+        async with self.session() as db:
+            row = await db.fetchone(
+                "UPDATE agent_triggers SET last_fired_at = %(now)s WHERE id = %(id)s RETURNING id",
+                {"now": now, "id": trigger_id},
+            )
+            if row is not None:
+                _ = await self.reschedule([trigger_id])
+
+    async def _apply_schedule(self, trigger: AgentTriggerRecord) -> None:
+        due = await self.reschedule([trigger.id])
+        if trigger.id in due:
+            trigger.next_due_at = due[trigger.id]
 
     async def advance_poll_baseline(self, trigger_id: UUID, *, expected_seq: int, value: str) -> bool:
         """Store a poll observation as the new baseline, only if the sequence is still ``expected_seq``.
@@ -119,7 +226,10 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                     "claimed_at": claimed_at.astimezone(UTC).isoformat(),
                 },
             )
-            return row is not None
+            if row is None:
+                return False
+            _ = await self.reschedule([trigger_id])
+            return True
 
     async def merge_user_config(self, trigger_id: UUID, user_config: Mapping[str, object]) -> bool:
         """Merge user-edited config keys into the row's current config inside the UPDATE statement.
@@ -153,14 +263,17 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                 """,
                 {"trigger_id": trigger_id, "user_config": as_jsonb(dict(user_config))},
             )
-            return row is not None
+            if row is None:
+                return False
+            _ = await self.reschedule([trigger_id])
+            return True
 
     async def record_first_starts(self, execution_ids: Sequence[UUID], *, now: datetime) -> None:
         """Record first starts with trigger row locks already held by the caller (claim)."""
         if not execution_ids:
             return
         async with self.session() as db:
-            await db.execute(
+            rows = await db.fetchall(
                 """
                 UPDATE agent_triggers AS t
                 SET last_fired_at = %(now)s,
@@ -180,9 +293,11 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
                     WHERE id = ANY(%(ids)s) GROUP BY trigger_id
                 ) AS f
                 WHERE t.id = f.trigger_id
+                RETURNING t.id
                 """,
                 {"ids": list(execution_ids), "now": now},
             )
+            _ = await self.reschedule([uuid_from_row(row["id"]) for row in rows])
 
     async def list_for_agent(self, agent_id: UUID) -> list[AgentTriggerRecord]:
         async with self.session() as db:
@@ -209,20 +324,33 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             )
             return [AgentTriggerRecord.from_row(row) for row in rows]
 
-    async def list_enabled_page(self, *, after: UUID | None, limit: int) -> list[AgentTriggerRecord]:
-        """Keyset page of enabled triggers in id order: those with ``id > after`` (from the lowest id when ``None``)."""
-        params: dict[str, object] = {"limit": limit}
+    async def list_due_page(
+        self, *, now: datetime, after: tuple[datetime, UUID] | None, limit: int
+    ) -> list[DueTrigger]:
+        """Keyset page, by (``next_due_at``, id), of the enabled triggers due at ``now``, each with its agent's zone.
+
+        Reads through the partial index ``ix_agent_triggers_due``, so the cost follows the rows that are due, not the
+        rows configured. ``after`` is the position of the last row of the previous page (the start when ``None``).
+        """
+        params: dict[str, object] = {"now": now, "limit": limit}
         keyset_sql = ""
         if after is not None:
-            params["after"] = after
-            keyset_sql = " AND id > %(after)s"
+            params["after_due"], params["after_id"] = after
+            keyset_sql = " AND (t.next_due_at, t.id) > (%(after_due)s, %(after_id)s)"
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM agent_triggers WHERE is_enabled IS TRUE{keyset_sql} "
-                "ORDER BY id LIMIT %(limit)s",
+                f"SELECT {self._select_list('t')}, {_AGENT_ZONE_SQL} AS agent_timezone FROM agent_triggers t "
+                "JOIN agents a ON a.id = t.agent_id LEFT JOIN tenants x ON x.id = a.tenant_id "
+                "WHERE t.is_enabled IS TRUE AND t.next_due_at IS NOT NULL AND t.next_due_at <= %(now)s"
+                f"{keyset_sql} ORDER BY t.next_due_at, t.id LIMIT %(limit)s",
                 params,
             )
-            return [AgentTriggerRecord.from_row(row) for row in rows]
+        due: list[DueTrigger] = []
+        for row in rows:
+            trigger = AgentTriggerRecord.from_row(row)
+            if trigger.next_due_at is not None:
+                due.append(DueTrigger(trigger, trigger.next_due_at, str_from_row(row["agent_timezone"])))
+        return due
 
     async def find_webhook_by_token(self, token: str) -> AgentTriggerRecord | None:
         """Find an enabled webhook trigger whose config.token matches."""
@@ -252,16 +380,21 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
             )
             return int_from_row(value)
 
-    async def disable_for_tenant(self, tenant_id: UUID) -> int:
+    async def _disable_agents(self, agent_filter: str, params: Mapping[str, object]) -> int:
+        """Disable the triggers of the filtered agents and settle their pending executions in one transaction."""
         async with self.session() as db:
             rows = await db.fetchall(
-                "UPDATE agent_triggers SET is_enabled = FALSE, self_disabled = FALSE "
+                "UPDATE agent_triggers SET is_enabled = FALSE, self_disabled = FALSE, next_due_at = NULL "
                 "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN ("
-                "SELECT id FROM agents WHERE tenant_id = %(tenant_id)s"
+                f"SELECT id FROM agents WHERE {agent_filter}"
                 ") RETURNING id",
-                {"tenant_id": tenant_id},
+                params,
             )
+            _ = await trigger_execution_dao.fail_pending_for_triggers([uuid_from_row(row["id"]) for row in rows])
             return len(rows)
+
+    async def disable_for_tenant(self, tenant_id: UUID) -> int:
+        return await self._disable_agents("tenant_id = %(tenant_id)s", {"tenant_id": tenant_id})
 
     async def disable_for_creator(self, creator_id: UUID, *, tenant_id: UUID | None = None) -> int:
         agent_filter = "creator_id = %(creator_id)s"
@@ -269,15 +402,10 @@ class AgentTriggerDAO(BaseDAO[AgentTriggerRecord]):
         if tenant_id is not None:
             agent_filter += " AND tenant_id = %(tenant_id)s"
             params["tenant_id"] = tenant_id
-        async with self.session() as db:
-            rows = await db.fetchall(
-                "UPDATE agent_triggers SET is_enabled = FALSE, self_disabled = FALSE "
-                "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN ("
-                f"SELECT id FROM agents WHERE {agent_filter}"
-                ") RETURNING id",
-                params,
-            )
-            return len(rows)
+        return await self._disable_agents(agent_filter, params)
+
+    async def disable_for_agent(self, agent_id: UUID) -> int:
+        return await self._disable_agents("id = %(agent_id)s", {"agent_id": agent_id})
 
 
 @final
@@ -410,6 +538,70 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
             )
             return [uuid_from_row(row["id"]) for row in rows]
 
+    async def fail_pending_for_triggers(self, trigger_ids: Sequence[UUID]) -> list[UUID]:
+        """Fail the pending executions of triggers that were just disabled, recording why.
+
+        Rows a claim holds are skipped, never waited on: that claim moves them to processing, and the lease
+        recovery of a disabled trigger settles them. Call it in the transaction that disables the triggers.
+        """
+        if not trigger_ids:
+            return []
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                UPDATE trigger_executions
+                SET status = 'failed',
+                    finished_at = %(now)s,
+                    last_error = %(error_text)s
+                WHERE id IN (
+                    SELECT id FROM trigger_executions
+                    WHERE trigger_id = ANY(%(trigger_ids)s) AND status = 'pending'
+                    FOR UPDATE SKIP LOCKED
+                )
+                RETURNING id
+                """,
+                {"trigger_ids": list(trigger_ids), "now": datetime.now(UTC), "error_text": TRIGGER_DISABLED_ERROR},
+            )
+            return [uuid_from_row(row["id"]) for row in rows]
+
+    async def retry_later(
+        self,
+        execution_id: UUID,
+        *,
+        lease_token: str,
+        retry_at: datetime,
+        give_up_before: datetime,
+        error_text: str,
+        now: datetime,
+    ) -> bool:
+        """Record a failed attempt and queue the execution again at ``retry_at``; fail it for good once it started
+        before ``give_up_before``. Fenced like ``finish``: only the lease owner writes."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                UPDATE trigger_executions
+                SET status = CASE WHEN started_at < %(give_up_before)s THEN 'failed' ELSE 'pending' END,
+                    scheduled_at = CASE WHEN started_at < %(give_up_before)s THEN scheduled_at ELSE %(retry_at)s END,
+                    finished_at = CASE WHEN started_at < %(give_up_before)s THEN %(now)s END,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    last_error = %(error_text)s
+                WHERE id = %(id)s
+                  AND status = 'processing'
+                  AND lease_owner = %(lease_token)s
+                RETURNING id
+                """,
+                {
+                    "id": execution_id,
+                    "lease_token": lease_token,
+                    "retry_at": retry_at,
+                    "give_up_before": give_up_before,
+                    "error_text": error_text,
+                    "now": now,
+                },
+            )
+            return bool(rows)
+
     async def try_enqueue(self, *, obj_in: Mapping[str, object]) -> tuple[TriggerExecutionRecord | None, bool]:
         """Insert an execution row; return (None, False) on idempotency conflict.
 
@@ -486,7 +678,10 @@ class TriggerExecutionDAO(BaseDAO[TriggerExecutionRecord]):
         # Every predicate stays on the locked rows so a concurrent change is rechecked after the lock is taken.
         ready = """
             (
-                (e.status = 'pending' AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE)
+                (
+                    e.status = 'pending' AND e.scheduled_at <= %(now)s
+                    AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE
+                )
                 OR (
                     e.status = 'processing'
                     AND (e.lease_expires_at IS NULL OR e.lease_expires_at < %(now)s)

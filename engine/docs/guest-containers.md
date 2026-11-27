@@ -142,12 +142,23 @@ readiness keeps polling. What the caller does on a readiness failure is unchange
 newly created guest is stopped, and an existing resumed guest is left as is. The
 upgrade executor has its own readiness loop and does not use this early exit.
 
-Guest start, stop, admission, the image check, readiness and the metrics container
-status run their Docker CLI calls on the guest Docker lane
-([docker_capacity.py](../app/services/docker_capacity.py)): 16 threads per event loop,
-apart from the thread pool the rest of the engine borrows, so a stalled daemon
-delays only guest Docker work. Each call holds one thread until it returns. When the
-waiting start is cancelled, or its operation is stopped while a probe runs (checked
+Guest start, stop, admission, the image check, readiness, the metrics container
+status and every background Docker sweep (start reconciler, container recovery,
+deletion and transfer cleanup, orphan sweep, resource-pressure and workspace-quota
+sampling, the admin runtime and tier-change observations) run their Docker CLI calls
+on the guest Docker lane
+([docker_capacity.py](../app/services/docker_capacity.py)): `DOCKER_LANE_THREADS`
+threads (default 16) per event loop, apart from the thread pool the rest of the engine
+borrows, so a stalled daemon delays only guest Docker work. Each call holds one thread
+until it returns, and readiness holds one only while a probe attempt runs, never
+while it waits for the next attempt. Calls beyond the threads queue, interactive
+work (user start and stop) ahead of background work, and each priority queues at most
+`DOCKER_LANE_QUEUE_LIMIT` calls (default 256). A call arriving at a full queue gets
+`DockerBusyError`: an HTTP route answers 503 with `Retry-After`, a start refused
+this way stays pending and is retried by the start reconciler under the
+`capacity_exceeded` code, a stop refused this way changes nothing and can be retried,
+and a background loop skips that pass. A caller cancelled while queued leaves without
+running its call. When the waiting start is cancelled, or its operation is stopped while a probe runs (checked
 every 2 seconds during the probe as well as before it), ordinary readiness returns
 at once and kills the probe's CLI, which its lane thread reaps.
 
@@ -360,9 +371,14 @@ next measurement. System agents and agents without an organization have no quota
 The required worker loop `agent_workspace_quota`
 ([loop](../app/services/agent_workspace_quota_worker.py),
 [measurement](../app/services/agent_workspace_quota.py)) reads non-system agents that
-belong to an organization in id-ordered pages of 50, measures each, then sleeps
-`AGENT_WORKSPACE_QUOTA_INTERVAL_SECONDS` (default `600`, range `30` to `86400`). One
-agent's failure is logged and the pass continues.
+belong to an organization in id-ordered pages of 50, measures up to
+`AGENT_WORKSPACE_QUOTA_CONCURRENCY` of a page at once (default `4`, range `1` to `32`; each
+in-flight agent holds one directory-walk thread and may run one Docker layer read), then
+sleeps `AGENT_WORKSPACE_QUOTA_INTERVAL_SECONDS` (default `600`, range `30` to `86400`). A pass
+takes about the fleet size divided by the concurrency in directory walks. One agent's
+failure is logged and the pass continues. Agents whose usage row asks to be measured first
+(a failed walk, below, or a re-measure a request handed over) are paged before all others
+and not measured again in that pass.
 
 - The directory size sums regular files. Symlinks are neither followed nor counted, a
   hard-linked file counts once, and unreadable or vanished entries are skipped.
@@ -380,7 +396,18 @@ agent's failure is logged and the pass continues.
   an organization) loses its row.
 - Measurements are ordered by when they started, not when they land. A measurement
   whose start is older than the stored one is dropped (no write, no alert), so a slow
-  pass cannot undo the re-measure that follows a file delete.
+  pass cannot undo the re-measure that follows a file delete. The same holds for the
+  worker's concurrent lanes: the later start is what stays stored, the alert is claimed
+  once per overage, and each stored measurement feeds the resource-pressure episodes once.
+- A directory walk that passes its 120-second deadline stops and is recorded on the
+  agent's row (`walk_failed_at`), so it is visible and the next pass measures that agent
+  first. The platform-admin runtime inventory (`GET /api/admin/companies/{id}/runtime`)
+  returns it per agent with `remeasure_requested_at` and `measured_at`. It is not a
+  measurement: the stored sizes, `over_since` and alert state stay as they were, so it
+  neither lifts nor creates a block, and nothing is sampled or alerted.
+  An agent that was never measured gets a row with an empty `measured_at` and zero
+  placeholder sizes, which blocks nothing; any later measurement replaces it. A stored
+  measurement that started at or after the failure clears it.
 
 While an agent is over quota, only **new human work** is refused. The check runs in the
 accepting transaction, right before the per-agent daily message charge:
@@ -403,9 +430,14 @@ notification to the agent's creator, naming the split ("files X, container Y").
 clears when a measurement finds the agent back under quota, so the next overage alerts
 again.
 
-`DELETE /api/agents/{id}/files/content` re-measures an agent that is currently blocked,
-so deleting enough files lifts the block without waiting for the next pass. The
-re-measure never fails the delete.
+`DELETE /api/agents/{id}/files/content` re-measures an agent that is currently blocked and
+waits at most 5 seconds for it, so deleting enough files lifts the block at once when the
+workspace can be walked in that time. A slower re-measure is stopped and the agent's row is
+marked for priority re-measurement (`remeasure_requested_at`): the worker measures it first
+in its next pass, and the block lifts as soon as that measurement finds the workspace under
+its allowance. While an earlier hand-off is younger than the walk deadline, a further delete
+only renews the mark instead of starting another walk. The re-measure never fails the delete.
+The start that recreates a guest to clear a layer-caused block waits the same way.
 
 When the host files alone fit the allowance, the container's writable layer is the
 cause: the refusal message and the alert then say to stop and start the agent, and

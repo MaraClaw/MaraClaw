@@ -1,8 +1,9 @@
-"""Shared Redis cache for IM provider access tokens (Feishu / WeCom / DingTalk).
+"""Shared Redis cache for IM provider access tokens (Feishu / WeCom / DingTalk / Google Chat / Teams).
 
 Keys hash the public id **and** the secret so a caller cannot reuse another
-app's token. Tokens are bearer secrets - never log them. Redis errors fall
-open to a fresh HTTP mint.
+app's token; a caller whose secret is a large key (a service-account private key)
+passes a digest of it. Tokens are bearer secrets - never log them. Redis errors
+fall open to a fresh HTTP mint.
 
 ``get_or_mint_im_token`` is the one read path: a cache miss starts a single mint
 per key per event loop in its own task, so a cancelled caller cannot fail the

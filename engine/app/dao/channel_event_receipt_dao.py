@@ -72,5 +72,27 @@ class ChannelEventReceiptDAO:
             )
             return datetime_from_row(row["provider_timestamp"]) if row is not None else None
 
+    async def purge_older_than(self, *, older_than: datetime, limit: int) -> int:
+        """Delete up to ``limit`` receipts created before ``older_than``, oldest first, and return how many went.
+
+        A receipt is a dedup record, so the caller keeps ``older_than`` beyond the provider's retry window. The
+        media descriptors and burst outcomes of a deleted receipt go with it through their ``ON DELETE CASCADE``.
+        Rows another transaction holds are skipped, never waited on. The picked rows are deleted by ``ctid`` (a TID
+        scan), which the statement's own row locks keep in place.
+        """
+        async with connection_ctx() as db:
+            rows = await db.fetchall(
+                """
+                WITH expired AS (
+                    SELECT ctid FROM channel_event_receipts
+                    WHERE created_at < %(cutoff)s
+                    ORDER BY created_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ) DELETE FROM channel_event_receipts WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING event_key
+                """,
+                {"cutoff": older_than, "limit": limit},
+            )
+            return len(rows)
+
 
 channel_event_receipt_dao = ChannelEventReceiptDAO()

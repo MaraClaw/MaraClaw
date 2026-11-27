@@ -9,8 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TypeIs
 from urllib.parse import urlparse
-
-from croniter import croniter
+from zoneinfo import ZoneInfo
 
 from app.core.json_types import (
     JsonObject,
@@ -24,15 +23,22 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.core.outbound_policy import OutboundPolicyError, validate_public_url
 from app.core.outbound_transport import public_http_client
+from app.core.trigger_schedule import (
+    MIN_POLL_INTERVAL_MINUTES,
+    config_number,
+    configured_timezone,
+    cron_next_run,
+    poll_checkpoint,
+    poll_reference,
+    zone_info,
+)
 from app.dao.agent_dao import agent_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.trigger_dao import agent_trigger_dao
 from app.db.session import connection_ctx
 from app.records.trigger import AgentTriggerRecord
-from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY, poll_checkpoint, poll_sequence
-
-MIN_POLL_INTERVAL_MINUTES = 5
+from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY, poll_sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,14 +52,6 @@ class PollObservation:
     value: str
     expected_seq: int
     fire: bool
-
-
-def _config_number(value: JsonValue) -> int | float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float):
-        return value
-    return None
 
 
 def _is_dict(value: object) -> TypeIs[dict[object, object]]:
@@ -120,112 +118,9 @@ async def should_skip_non_workday(trigger: AgentTriggerRecord, local_now: dateti
 
 async def mark_trigger_skipped(trigger_id: uuid.UUID, now: datetime) -> None:
     try:
-        async with connection_ctx() as db:
-            await db.execute(
-                "UPDATE agent_triggers SET last_fired_at = %(now)s WHERE id = %(id)s",
-                {"now": now, "id": trigger_id},
-            )
+        await agent_trigger_dao.mark_skipped(trigger_id, now)
     except Exception as e:
         logger.warning(f"Failed to mark skipped trigger {trigger_id}: {e}")
-
-
-async def mark_trigger_fired(trigger_id: uuid.UUID, now: datetime) -> None:
-    try:
-        async with connection_ctx() as db:
-            await db.execute(
-                """
-                UPDATE agent_triggers
-                SET last_fired_at = %(now)s,
-                    fire_count = fire_count + 1,
-                    is_enabled = CASE
-                        WHEN type = 'once' THEN FALSE
-                        WHEN max_fires IS NOT NULL AND fire_count + 1 >= max_fires THEN FALSE
-                        ELSE is_enabled
-                    END,
-                    self_disabled = CASE
-                        WHEN is_enabled IS TRUE AND (type = 'once' OR
-                            (max_fires IS NOT NULL AND fire_count + 1 >= max_fires))
-                        THEN TRUE ELSE self_disabled
-                    END
-                WHERE id = %(id)s
-                """,
-                {"now": now, "id": trigger_id},
-            )
-    except Exception as e:
-        logger.warning(f"Failed to mark fired trigger {trigger_id}: {e}")
-
-
-async def handle_okr_report_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
-    if trigger.name not in {"daily_okr_report", "weekly_okr_report", "monthly_okr_report"}:
-        return False
-
-    from zoneinfo import ZoneInfo
-
-    from app.services.okr_reporting import (
-        generate_company_daily_report,
-        generate_company_monthly_report,
-        generate_company_weekly_report,
-    )
-    from app.services.timezone_utils import get_agent_timezone
-
-    agent = await agent_dao.get(trigger.agent_id)
-    if not agent or not agent.tenant_id:
-        return True
-
-    tenant_id = agent.tenant_id
-    async with connection_ctx() as db:
-        settings = await db.fetchone(
-            "SELECT enabled FROM okr_settings WHERE tenant_id = %(tenant_id)s",
-            {"tenant_id": tenant_id},
-        )
-    if settings is None or not settings.get("enabled"):
-        return True
-
-    tz_name = await get_agent_timezone(trigger.agent_id)
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = ZoneInfo("UTC")
-    local_today = now.astimezone(tz).date()
-
-    if trigger.name == "daily_okr_report":
-        _ = await generate_company_daily_report(tenant_id, local_today - timedelta(days=1))
-    elif trigger.name == "weekly_okr_report":
-        previous_week_anchor = local_today - timedelta(days=7)
-        week_start = previous_week_anchor - timedelta(days=previous_week_anchor.weekday())
-        _ = await generate_company_weekly_report(tenant_id, week_start)
-    else:
-        previous_month_end = local_today.replace(day=1) - timedelta(days=1)
-        _ = await generate_company_monthly_report(tenant_id, previous_month_end)
-
-    await mark_trigger_fired(trigger.id, now)
-    logger.info(f"[Trigger] Auto-generated OKR report for trigger {trigger.name}")
-    return True
-
-
-async def handle_okr_collection_trigger(trigger: AgentTriggerRecord, now: datetime) -> bool:
-    if trigger.name != "daily_okr_collection":
-        return False
-
-    from app.services.okr_daily_collection import trigger_daily_collection_for_tenant
-
-    agent = await agent_dao.get(trigger.agent_id)
-    if not agent or not agent.tenant_id:
-        return True
-
-    tenant_id = agent.tenant_id
-    async with connection_ctx() as db:
-        settings = await db.fetchone(
-            "SELECT enabled, daily_report_enabled FROM okr_settings WHERE tenant_id = %(tenant_id)s",
-            {"tenant_id": tenant_id},
-        )
-    if settings is None or not settings.get("enabled") or not settings.get("daily_report_enabled"):
-        return True
-
-    _ = await trigger_daily_collection_for_tenant(tenant_id)
-    await mark_trigger_fired(trigger.id, now)
-    logger.info(f"[Trigger] Deterministic OKR collection sent for trigger {trigger.name}")
-    return True
 
 
 def is_private_url(url: str) -> bool:
@@ -251,18 +146,16 @@ def is_private_url(url: str) -> bool:
         return True
 
 
-def _poll_reference(trigger: AgentTriggerRecord, checkpoint: str | None) -> datetime | None:
-    """The later of the last firing (or creation) and the last claimed poll: the interval counts from it."""
-    reference = trigger.last_fired_at or trigger.created_at
-    if checkpoint is None:
-        return reference
-    try:
-        checked = datetime.fromisoformat(checkpoint)
-    except ValueError:
-        return reference
-    if checked.tzinfo is None:
-        checked = checked.replace(tzinfo=UTC)
-    return checked if reference is None else max(reference, checked)
+async def schedule_timezone(trigger: AgentTriggerRecord, agent_timezone: str | None = None) -> ZoneInfo:
+    """The zone a trigger's schedule is evaluated in: its configured timezone, else its agent's, else UTC."""
+    tz_name = configured_timezone(_json_config(trigger.config))
+    if tz_name is None and agent_timezone is not None:
+        tz_name = agent_timezone
+    if tz_name is None:
+        from app.services.timezone_utils import get_agent_timezone
+
+        tz_name = await get_agent_timezone(trigger.agent_id)
+    return zone_info(tz_name)
 
 
 async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime, *, agent_timezone: str | None = None) -> bool:
@@ -288,27 +181,11 @@ async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime, *, agent_
             return False
         base = trigger.last_fired_at or trigger.created_at
         try:
-            configured_timezone = cfg.get("timezone")
-            if isinstance(configured_timezone, str) and configured_timezone:
-                tz_name = configured_timezone
-            elif agent_timezone is not None:
-                tz_name = agent_timezone
-            else:
-                from app.services.timezone_utils import get_agent_timezone
-
-                tz_name = await get_agent_timezone(trigger.agent_id)
-            from zoneinfo import ZoneInfo
-
-            try:
-                tz = ZoneInfo(tz_name)
-            except KeyError, Exception:
-                tz = ZoneInfo("UTC")
+            tz = await schedule_timezone(trigger, agent_timezone)
             if base is None:
                 return False
             local_now = now.astimezone(tz)
-            local_base = base.astimezone(tz) if base.tzinfo else base.replace(tzinfo=tz)
-            cron = croniter(expr, local_base)
-            next_run = cron.get_next(datetime)
+            next_run = cron_next_run(expr, base, tz)
             if local_now >= next_run:
                 if await should_skip_non_workday(trigger, local_now):
                     await mark_trigger_skipped(trigger.id, now)
@@ -333,7 +210,7 @@ async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime, *, agent_
             return False
 
     if t == "interval":
-        minutes = _config_number(cfg.get("minutes", 30))
+        minutes = config_number(cfg.get("minutes", 30))
         if minutes is None:
             return False
         base = trigger.last_fired_at or trigger.created_at
@@ -342,12 +219,12 @@ async def evaluate_trigger(trigger: AgentTriggerRecord, now: datetime, *, agent_
         return (now - base) >= timedelta(minutes=minutes)
 
     if t == "poll":
-        configured_interval = _config_number(cfg.get("interval_min", 5))
+        configured_interval = config_number(cfg.get("interval_min", 5))
         if configured_interval is None:
             return False
         interval_min = max(configured_interval, MIN_POLL_INTERVAL_MINUTES)
         checkpoint = poll_checkpoint(cfg)
-        base = _poll_reference(trigger, checkpoint)
+        base = poll_reference(trigger, checkpoint)
         if base is None or (now - base) < timedelta(minutes=interval_min):
             return False
         # One winner per interval across replicas; a failed or unchanged poll waits for the next interval too.

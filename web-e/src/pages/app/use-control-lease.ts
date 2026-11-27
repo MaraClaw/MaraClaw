@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import type { SessionQueryScope } from '@/hooks/session-query-scope'
 import { controlScreenshot, type ControlLease, type ControlResult, type CredentialCapture } from '@/lib/control-api'
 import { ApiError, userFacingRequestError } from '@/lib/http'
+import { startPollLoop } from '@/lib/poll-loop'
 
 export function useControlLease(scope: SessionQueryScope) {
   const { t: translate } = useTranslation()
@@ -105,19 +106,24 @@ export function useControlLease(scope: SessionQueryScope) {
   useEffect(() => {
     if (!lease) return
     let cancelled = false
-    let pending = false
     async function tick() {
-      if (cancelled || pending || !lease || !isCurrent(lease)) return
-      pending = true
-      const result = await request(controlScreenshot)
-      pending = false
+      if (cancelled || !lease || !isCurrent(lease)) return
+      let failure: unknown = null
+      const result = await request(async (captured) => {
+        try {
+          return await controlScreenshot(captured)
+        } catch (error) {
+          failure = error
+          throw error
+        }
+      })
+      if (failure !== null) throw failure
       if (!cancelled && isCurrent(lease) && result?.screenshot) setScreenshot(result.screenshot)
     }
-    void tick()
-    const timer = window.setInterval(() => void tick(), 2500)
+    const stop = startPollLoop({ cadence: 2500, tick, immediate: true })
     return () => {
       cancelled = true
-      window.clearInterval(timer)
+      stop()
     }
   }, [lease, isCurrent, request])
 

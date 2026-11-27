@@ -17,6 +17,11 @@ worker termination. Only the worker imports the SDK. Worker stdout/stderr are ca
 and discarded, including unexpected SDK console output and errors. Neither QR images
 nor credentials are written to disk. Do not log raw protocol frames in the caller.
 
+An optional `--worker-heap-mb=<MiB>` argument (1-99999) sets the SDK worker's V8
+old-generation limit; the parent passes it at spawn, and without it Node's defaults apply.
+A worker that exceeds it, like any worker that dies, ends only this process: it writes
+`closed` with `transport_failed` when the init token is known and exits.
+
 `npm test` builds and tests the production SDK adapter through its typed client seam,
 plus the real supervisor over subprocess pipes. It never contacts a live Zalo account.
 The SDK's published root declaration re-exports an extensionless directory, which is

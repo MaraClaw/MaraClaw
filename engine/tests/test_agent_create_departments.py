@@ -142,6 +142,7 @@ async def creation(monkeypatch):
     monkeypatch.setattr(onboarding, "is_onboarded", AsyncMock(return_value=False))
     app = FastAPI()
     app.include_router(agents.router, prefix="/api")
+    app.include_router(agents.runtime_router, prefix="/api")
     app.dependency_overrides[agents.get_current_user] = lambda: store.actor
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

@@ -7,6 +7,7 @@ import pytest
 
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
+    CopyRequest,
     MaterializedFile,
     StorageBackend,
     StorageConditionalRaceError,
@@ -795,3 +796,35 @@ async def test_fallback_removes_empty_directories_only_from_the_primary(tmp_path
     # Then
     assert not (tmp_path / "primary" / "A" / "skills" / "demo").exists()
     assert (tmp_path / "legacy" / "A" / "skills" / "demo").is_dir()
+
+
+async def test_fallback_batch_delete_clears_both_sides_and_checks_legacy_only_files(tmp_path: Path):
+    primary, legacy = LocalStorageBackend(str(tmp_path / "p")), LocalStorageBackend(str(tmp_path / "l"))
+    storage = FallbackStorageBackend(primary, legacy)
+    await primary.write_bytes("d/both", b"new")
+    await legacy.write_bytes("d/both", b"old")
+    await legacy.write_bytes("d/legacy", b"old")
+    await legacy.write_bytes("d/edited", b"old")
+    versions = [entry.version() for entry in await storage.list_dir("d")]
+    await legacy.write_bytes("d/edited", b"changed after the listing")
+
+    results = await storage.delete_batch_if_match(versions)
+
+    assert {key: result.ok for key, result in results.items()} == {"d/both": True, "d/edited": False, "d/legacy": True}
+    assert [entry.name for entry in await storage.list_dir("d")] == ["edited"]
+
+
+async def test_fallback_batch_copy_takes_legacy_only_sources_without_promoting_them(tmp_path: Path):
+    primary, legacy = LocalStorageBackend(str(tmp_path / "p")), LocalStorageBackend(str(tmp_path / "l"))
+    storage = FallbackStorageBackend(primary, legacy)
+    await primary.write_bytes("s/new", b"in primary")
+    await legacy.write_bytes("s/old", b"in legacy")
+    versions = {entry.name: entry.version() for entry in await storage.list_dir("s")}
+
+    results = await storage.copy_batch_if_match(
+        [CopyRequest(versions["new"], "t/new"), CopyRequest(versions["old"], "t/old")]
+    )
+
+    assert (results["s/new"].ok, results["s/old"].ok) == (True, True)
+    assert (await primary.read_bytes("t/new"), await primary.read_bytes("t/old")) == (b"in primary", b"in legacy")
+    assert not await primary.exists("s/old")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -20,6 +21,7 @@ from app.dao.base import BaseDAO
 from app.db.types import as_jsonb
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 
+_CANONICAL_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _SESSION_COLUMNS = (
     "id",
     "agent_id",
@@ -632,6 +634,17 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
             )
             return [ChatMessageRecord.from_row(row) for row in reversed(rows)]
 
+    async def conversation_has_messages(self, *, agent_id: UUID, conversation_id: str) -> bool:
+        """Whether the conversation holds any message; one index probe that reads no row."""
+        async with self.session() as db:
+            return bool(
+                await db.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM chat_messages "
+                    "WHERE agent_id = %(agent_id)s AND conversation_id = %(conversation_id)s)",
+                    {"agent_id": agent_id, "conversation_id": conversation_id},
+                )
+            )
+
     async def history_revision(self, session_id: UUID) -> str | None:
         async with self.session() as db:
             row = await db.fetchone(
@@ -975,14 +988,16 @@ class ChatMessageDAO(BaseDAO[ChatMessageRecord]):
 
     async def delete_for_conversation(self, conversation_id: str) -> None:
         async with self.session() as db:
-            await db.execute(
-                "SELECT id FROM chat_sessions WHERE id::text = %(conversation_id)s FOR UPDATE",
-                {"conversation_id": conversation_id},
-            )
-            await db.execute(
-                "DELETE FROM openclaw_reply_bindings WHERE session_id::text = %(conversation_id)s",
-                {"conversation_id": conversation_id},
-            )
+            # Same guard as revoke_openclaw_reply_bindings(): conversation_id also holds non-UUID values, and only
+            # a canonical lowercase UUID can name a session. Typed comparisons keep both lookups on their indexes.
+            if _CANONICAL_UUID.fullmatch(conversation_id):
+                session_id = UUID(conversation_id)
+                await db.execute(
+                    "SELECT id FROM chat_sessions WHERE id = %(session_id)s FOR UPDATE", {"session_id": session_id}
+                )
+                await db.execute(
+                    "DELETE FROM openclaw_reply_bindings WHERE session_id = %(session_id)s", {"session_id": session_id}
+                )
             await db.execute(
                 "DELETE FROM chat_messages WHERE conversation_id = %(conversation_id)s",
                 {"conversation_id": conversation_id},

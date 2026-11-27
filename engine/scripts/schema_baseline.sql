@@ -921,15 +921,21 @@ CREATE TABLE IF NOT EXISTS agent_daily_message_usage (
 
 -- Last measured host workspace directory plus guest writable-layer bytes per agent (agents of organizations only).
 -- over_since is set while the measurement exceeds limit_bytes and blocks new human work; notified_at records the one
--- in-app alert of that overage.
+-- in-app alert of that overage. walk_failed_at is the start of the latest attempt whose directory walk passed its
+-- deadline, and remeasure_requested_at the moment a request path handed its re-measure to the worker; either makes the
+-- next pass measure the agent first, and the first stored measurement that started at or after it clears it. A failed
+-- walk never changes the stored sizes or over_since; for an agent never measured it leaves a row with NULL measured_at
+-- whose zero sizes are placeholders.
 CREATE TABLE IF NOT EXISTS agent_workspace_usage (
     agent_id UUID PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     dir_bytes BIGINT NOT NULL CHECK (dir_bytes >= 0),
     layer_bytes BIGINT NOT NULL CHECK (layer_bytes >= 0),
     limit_bytes BIGINT NOT NULL CHECK (limit_bytes > 0),
-    measured_at TIMESTAMPTZ NOT NULL,
+    measured_at TIMESTAMPTZ,
     over_since TIMESTAMPTZ,
-    notified_at TIMESTAMPTZ
+    notified_at TIMESTAMPTZ,
+    walk_failed_at TIMESTAMPTZ,
+    remeasure_requested_at TIMESTAMPTZ
 );
 
 -- Last reconciled state of the durable workspace mirror, one row per agent and workspace-relative path. The local_*
@@ -1377,6 +1383,7 @@ CREATE TABLE IF NOT EXISTS agent_triggers (
 	is_system BOOLEAN NOT NULL DEFAULT false, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	expires_at TIMESTAMP WITH TIME ZONE, 
+	next_due_at TIMESTAMP WITH TIME ZONE, 
 	PRIMARY KEY (id), 
 	CONSTRAINT uq_agent_trigger_name UNIQUE (agent_id, name), 
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
@@ -1387,6 +1394,11 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_tr
 -- Serves agent_trigger_dao.find_webhook_by_token on the public webhook endpoint; the predicate must stay identical to
 -- that query's WHERE so the planner can use it. Deliberately not UNIQUE: tokens are not unique by constraint, and a
 -- unique build would abort this single-transaction baseline on a database that already holds duplicates.
+-- Serves agent_trigger_dao.list_due_page, the daemon's due scan: the earliest instant a time-based or on_message trigger can
+-- be due (see app/core/trigger_schedule.py), so a tick reads the rows that are due, not every enabled trigger. The
+-- predicate must stay identical to that query's WHERE so the planner can use it.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_triggers_due ON agent_triggers (next_due_at, id) WHERE is_enabled IS TRUE AND next_due_at IS NOT NULL$ddl$);
+
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_triggers_webhook_token ON agent_triggers ((config->>'token')) WHERE type = 'webhook' AND is_enabled IS TRUE$ddl$);
 
 CREATE TABLE IF NOT EXISTS agent_user_onboardings (
@@ -1427,6 +1439,9 @@ DO $$ BEGIN
 	END IF;
 END $$;
 
+-- Serves agent and tenant deletion, which delete approvals by agent_id.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_approval_requests_agent_id ON approval_requests (agent_id)$ddl$);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
 	id UUID NOT NULL, 
 	user_id UUID, 
@@ -1441,6 +1456,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at)$ddl$);
+
+-- Serve agent and tenant deletion, which delete audit rows by agent_id and user_id.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_agent_id ON audit_logs (agent_id)$ddl$);
+
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_user_id ON audit_logs (user_id)$ddl$);
 
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
 	id UUID NOT NULL,
@@ -1523,6 +1543,9 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_w
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_personal_lid
     ON whatsapp_personal_connections(lid_jid) WHERE lid_jid IS NOT NULL$ddl$);
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_agent ON whatsapp_personal_connections(agent_id)$ddl$);
+-- The fleet ceiling counts unexpired leases under an advisory lock (app/dao/personal_bridge_fleet.py).
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_whatsapp_personal_live_leases
+    ON whatsapp_personal_connections(lease_until) WHERE claim_token IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS whatsapp_personal_auth (
     config_id UUID NOT NULL REFERENCES whatsapp_personal_connections(config_id) ON DELETE CASCADE,
@@ -1583,6 +1606,8 @@ CREATE TABLE IF NOT EXISTS zalo_personal_connections (
 );
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_zalo_personal_account ON zalo_personal_connections(account_id)
     WHERE account_id IS NOT NULL$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_zalo_personal_live_leases
+    ON zalo_personal_connections(lease_until) WHERE claim_token IS NOT NULL$ddl$);
 
 CREATE TABLE IF NOT EXISTS zalo_personal_auth (
     config_id UUID NOT NULL REFERENCES zalo_personal_connections(config_id) ON DELETE CASCADE,
@@ -1659,6 +1684,7 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_channel_
     ON channel_event_receipts (config_id, provider, provider_account_id, agent_id, tenant_id,
                                conversation_id, provider_timestamp DESC)
     WHERE provider_timestamp IS NOT NULL AND provider_timestamp <= created_at$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_channel_event_receipts_created_at ON channel_event_receipts (created_at)$ddl$);
 
 CREATE OR REPLACE FUNCTION protect_channel_event_receipt() RETURNS trigger AS $$
 BEGIN
@@ -1708,6 +1734,9 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_mes
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_conv_created_id ON chat_messages (conversation_id, created_at DESC, id DESC)$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_participant_id ON chat_messages (participant_id)$ddl$);
+
+-- Serves tenant deletion by user_id. ux_chat_messages_submission leads with user_id but is partial, so it cannot.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_messages_user_id ON chat_messages (user_id)$ddl$);
 
 -- Serves agent-scoped conversation reads (list_recent, list_for_agent_conversation) in created_at order.
 -- Add no dependency statistics on (agent_id, conversation_id): the planner costs a BitmapAnd of the single-column
@@ -1763,6 +1792,12 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS uq_c
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_agent_id ON chat_sessions (agent_id)$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_user_id ON chat_sessions (user_id)$ddl$);
+
+-- Serve agent and tenant deletion, which delete sessions by peer_agent_id and by the participants of the deleted
+-- agents and users.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_peer_agent_id ON chat_sessions (peer_agent_id)$ddl$);
+
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_participant_id ON chat_sessions (participant_id)$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_chat_sessions_is_primary ON chat_sessions (is_primary)$ddl$);
 
@@ -1889,8 +1924,13 @@ BEGIN
         DELETE FROM openclaw_reply_bindings WHERE session_id = OLD.id;
         RETURN NEW;
     END IF;
-    PERFORM id FROM chat_sessions WHERE id::text = OLD.conversation_id FOR UPDATE;
-    DELETE FROM openclaw_reply_bindings WHERE session_id::text = OLD.conversation_id;
+    -- conversation_id also holds non-UUID values (feishu_ ids), so the typed comparison only runs behind this guard,
+    -- never in the same WHERE as the regex: SQL does not promise evaluation order. Typed UUIDs reach the primary key
+    -- and the session_id index; a text cast on the column would scan every session once per deleted message.
+    IF OLD.conversation_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+        PERFORM id FROM chat_sessions WHERE id = OLD.conversation_id::uuid FOR UPDATE;
+        DELETE FROM openclaw_reply_bindings WHERE session_id = OLD.conversation_id::uuid;
+    END IF;
     RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;
@@ -1996,9 +2036,12 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
         'source_agent_unavailable', 'source_tenant_changed',
         'destination_agent_unavailable', 'destination_tenant_changed',
         'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected',
-        'whatsapp_window_unavailable', 'whatsapp_window_expired'
+        'whatsapp_window_unavailable', 'whatsapp_window_expired',
+        'provider_permanent_error', 'attempts_exhausted', 'age_exhausted'
     )),
     terminal_at TIMESTAMP WITH TIME ZONE,
+    failure_detail TEXT CHECK (char_length(failure_detail) <= 200),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     im_plan JSONB,
     next_chunk INTEGER NOT NULL DEFAULT 0 CHECK (next_chunk >= 0),
     CHECK (im_plan IS NOT NULL OR next_chunk = 0),
@@ -2010,6 +2053,7 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     ) IS TRUE),
     CHECK ((terminal_reason IS NULL) = (terminal_at IS NULL)),
     CHECK (terminal_at IS NULL OR delivered_at IS NULL),
+    CHECK (failure_detail IS NULL OR terminal_at IS NOT NULL),
     UNIQUE (message_id, destination_kind, destination_id)
 );
 
@@ -2042,9 +2086,21 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS idx_gateway
     ON gateway_report_deliveries (available_at, id) WHERE delivered_at IS NULL AND terminal_at IS NULL$ddl$);
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS idx_gateway_report_deliveries_tenant
     ON gateway_report_deliveries (tenant_id)$ddl$);
+-- Serves the retention purge of delivered or terminal rows; a pending row is outside it.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_report_deliveries_finished_at
+    ON gateway_report_deliveries ((COALESCE(delivered_at, terminal_at)))
+    WHERE delivered_at IS NOT NULL OR terminal_at IS NOT NULL$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_pending_queue
     ON gateway_messages (agent_id, conversation_id, created_at, id) WHERE status = 'pending'$ddl$);
+-- Serve the ON DELETE SET NULL of reply bindings and the deletion of an agent's or a tenant's sent messages; the
+-- agent_id lookup is already led by ix_gateway_messages_agent_created.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_reply_binding_id
+    ON gateway_messages (reply_binding_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_sender_agent_id
+    ON gateway_messages (sender_agent_id)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_sender_user_id
+    ON gateway_messages (sender_user_id)$ddl$);
 -- Serves the NOT EXISTS delivered-row probes of claim_head, claim_ordinary_head and pending_dispatch_page.
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_gateway_messages_delivered_lane
     ON gateway_messages (agent_id, conversation_id) WHERE status = 'delivered'$ddl$);
@@ -2461,6 +2517,9 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tasks_le
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tasks_agent_created_id ON tasks (agent_id, created_at DESC, id DESC)$ddl$);
 
+-- Serves the done-task retention purge; a task marked done without completed_at is aged from updated_at.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_tasks_done_finished_at ON tasks ((COALESCE(completed_at, updated_at))) WHERE status = 'done'$ddl$);
+
 CREATE TABLE IF NOT EXISTS user_tenant_onboardings (
 	id UUID NOT NULL, 
 	user_id UUID NOT NULL, 
@@ -2519,6 +2578,7 @@ CREATE TABLE IF NOT EXISTS workspace_file_revisions (
 	after_content TEXT, 
 	content_hash VARCHAR(64) NOT NULL, 
 	group_key VARCHAR(200), 
+	content_omitted BOOLEAN NOT NULL DEFAULT false, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
@@ -2532,6 +2592,10 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspac
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_created_at ON workspace_file_revisions (created_at)$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_group_key ON workspace_file_revisions (group_key)$ddl$);
+
+-- Serves the retention purge's probe for a newer revision of the same file.
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_file_created
+	ON workspace_file_revisions (agent_id, path, created_at DESC, id DESC)$ddl$);
 
 CREATE TABLE IF NOT EXISTS task_logs (
 	id UUID NOT NULL, 
@@ -2567,6 +2631,8 @@ CREATE TABLE IF NOT EXISTS trigger_executions (
 );
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_trigger_executions_status_scheduled ON trigger_executions (status, scheduled_at)$ddl$);
+
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_trigger_executions_claimable ON trigger_executions (scheduled_at, id) WHERE status IN ('pending', 'processing')$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_trigger_executions_agent_id ON trigger_executions (agent_id)$ddl$);
 
@@ -2651,6 +2717,9 @@ CREATE TABLE IF NOT EXISTS web_search_export_payloads (
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
 	PRIMARY KEY (event_id)
 );
+
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_web_search_export_payloads_created_at
+	ON web_search_export_payloads (created_at)$ddl$);
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE UNIQUE INDEX IF NOT EXISTS ux_users_id_tenant ON users (id, tenant_id)$ddl$);
 CREATE TABLE IF NOT EXISTS local_departments (

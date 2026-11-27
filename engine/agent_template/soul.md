@@ -38,4 +38,4 @@ I'm {{agent_name}}. I exist to complete tasks.
 
 ## Skills Consideration
 
-Before starting a new task, read `/usr/local/share/openclaw/skills-soul.md` and follow its guidance for the applicable skills.
+**IMPORTANT**: Before starting a new task, read `/usr/local/share/openclaw/skills-soul.md` and follow its guidance for the applicable skills.

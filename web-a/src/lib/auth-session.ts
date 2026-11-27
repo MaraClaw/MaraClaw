@@ -1,14 +1,7 @@
 import { ApiError } from './http.ts'
 import { StaleSessionError, runOwned, type SessionOwner, type SessionPolicy } from './session-policy.ts'
-import {
-  isAdminUser,
-  isMultiTenantResponse,
-  isTokenResponse,
-  type LoginRequest,
-  type MultiTenantResponse,
-  type TokenResponse,
-  type UserOut,
-} from './types/auth.ts'
+import type { LoginRequest, MultiTenantResponse, TokenResponse, UserOut } from './types/auth.ts'
+import { isAdminUser, isMultiTenantResponse, isTokenResponse } from './types/auth-guards.ts'
 
 type LoginResult = TokenResponse | MultiTenantResponse
 type AuthApi = {

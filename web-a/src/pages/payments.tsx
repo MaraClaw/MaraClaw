@@ -5,7 +5,7 @@ import { SectionRail, type SectionRailItem } from '@/components/layout/section-r
 import { useAuth } from '@/hooks/use-auth'
 import { useCapacityAccess } from '@/hooks/use-capacity'
 import { useTranslation } from '@/hooks/use-translation'
-import { canReviewOrganizationAdmissions } from '@/lib/types/auth'
+import { canReviewOrganizationAdmissions } from '@/lib/types/auth-guards'
 import { CapacityPaymentSettingsSection } from '@/pages/capacity-payment-settings'
 import { CapacityPaymentsPanel } from '@/pages/capacity-payments'
 import { OrganizationAdmissionsPanel } from '@/pages/organization-admissions'

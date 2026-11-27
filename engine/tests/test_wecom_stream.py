@@ -4,12 +4,14 @@ import uuid
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import override
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
 from app.core.json_types import JsonObject
 from app.services import wecom_stream
+from app.services.channel_user_service import ChannelUserResolutionError
+from app.services.channels import submissions, wecom_media
 from app.services.wecom_stream import (
     WeComStreamManager,
     _build_wecom_conv_id,
@@ -17,6 +19,7 @@ from app.services.wecom_stream import (
     _extract_wecom_chat_type,
     _extract_wecom_sender_id,
 )
+from im_token_cache_fakes import captured_app_log
 from stream_source_fixtures import connection_config
 
 
@@ -524,3 +527,99 @@ async def test_reconcile_corrects_a_stale_connected_flag_on_a_row_without_a_live
     # Then: no client starts and the stale flag is corrected
     assert manager.tracked_agents() == set()
     set_connected.assert_awaited_once_with(config.id, connected=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["text", "image"])
+@pytest.mark.parametrize("refusal", ["missing_id", "unlinked"])
+async def test_stream_message_that_cannot_be_accepted_is_finished_with_an_empty_reply(
+    monkeypatch: pytest.MonkeyPatch, kind: str, refusal: str
+) -> None:
+    # Given: a live client whose acceptance refuses a sender who is not a linked member
+    client = FakeWSClient({})
+    install_sdk(monkeypatch, client)
+    reply = AsyncMock()
+    monkeypatch.setattr(wecom_stream, "_reply_stream", reply)
+    acceptance = AsyncMock(side_effect=ChannelUserResolutionError("Link your channel identity in the web application."))
+    monkeypatch.setattr(submissions, "accept_channel_event", acceptance)
+    monkeypatch.setattr(wecom_media, "is_channel_event_replay", acceptance)
+    manager = WeComStreamManager()
+    agent_id = uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "wecom")
+    await manager.start_client(agent_id, "bot", "secret")
+    await asyncio.wait_for(client.initial_connection.wait(), timeout=1)
+    detail: JsonObject = (
+        {"content": "hello"}
+        if kind == "text"
+        else {"url": wecom_media.WECOM_STREAM_ORIGIN + "/signed", "aeskey": "key"}
+    )
+    body: JsonObject = {
+        "msgtype": kind,
+        "msgid": "" if refusal == "missing_id" else "native-1",
+        "from_userid": "sender",
+        kind: detail,
+    }
+    frame = SimpleNamespace(body=body)
+
+    # When: the SDK delivers the message
+    try:
+        await client.handlers[f"message.{kind}"](frame)
+    finally:
+        await manager.stop_client(agent_id)
+
+    # Then: the stream is finished without text, so the sender gets no error reply, and the message was not accepted
+    reply.assert_awaited_once_with(client, frame, "stream", "")
+    assert acceptance.await_count == (0 if refusal == "missing_id" else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["text", "image", "file", "mixed", "video"])
+async def test_stream_message_without_a_sender_id_is_refused_before_any_download_store_or_acceptance(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    # Given: a live client, with every seam that would accept, download or store a message recorded
+    client = FakeWSClient({})
+    install_sdk(monkeypatch, client)
+    reply = AsyncMock()
+    monkeypatch.setattr(wecom_stream, "_reply_stream", reply)
+    acceptance, download, store = AsyncMock(), Mock(), AsyncMock()
+    monkeypatch.setattr(submissions, "accept_channel_event", acceptance)
+    monkeypatch.setattr(wecom_media, "accept_channel_event", acceptance)
+    monkeypatch.setattr(wecom_media, "is_channel_event_replay", acceptance)
+    monkeypatch.setattr(wecom_media, "public_http_client", download)
+    monkeypatch.setattr(wecom_media, "store_agent_upload", store)
+    manager = WeComStreamManager()
+    agent_id = uuid.uuid4()
+    connection_config(monkeypatch, agent_id, "wecom")
+    await manager.start_client(agent_id, "bot", "secret")
+    await asyncio.wait_for(client.initial_connection.wait(), timeout=1)
+    attachment: JsonObject = {"url": wecom_media.WECOM_STREAM_ORIGIN + "/signed", "aeskey": "key"}
+    details: dict[str, JsonObject] = {
+        "text": {"content": "hello"},
+        "mixed": {
+            "msg_item": [{"type": "text", "text": {"content": "caption"}}, {"type": "image", "image": attachment}]
+        },
+    }
+    body: JsonObject = {
+        "msgtype": kind,
+        "msgid": "native-1",
+        "chattype": "single",
+        kind: details.get(kind, attachment),
+    }
+    frame = SimpleNamespace(body=body)
+
+    # When: the SDK delivers a frame that names no sender
+    try:
+        with captured_app_log() as app_log:
+            await client.handlers["message" if kind == "video" else f"message.{kind}"](frame)
+    finally:
+        await manager.stop_client(agent_id)
+
+    # Then: the warning carries the frame's keys, the reply is the text path's, and nothing was accepted, fetched or stored
+    warnings = [line for line in app_log if "Missing sender id" in line]
+    assert len(warnings) == 1
+    assert f"body_keys={list(body)}" in warnings[0]
+    reply.assert_awaited_once_with(client, frame, "stream", "Unable to identify the sender for this WeCom message.")
+    acceptance.assert_not_awaited()
+    download.assert_not_called()
+    store.assert_not_awaited()

@@ -11,11 +11,13 @@ from uuid import UUID
 
 from app.core.json_types import int_from_row, str_findall, str_from_row, str_from_row_opt, uuid_from_row
 from app.core.row_memo import memo_drop, memo_get, memo_set
+from app.core.single_flight import SingleFlight
 from app.core.tenant_cache import bump_tenant_cache, get_cached_tenant, peek_tenant_version, set_cached_tenant
 from app.dao.base import BaseDAO, as_uuid
 from app.dao.deletion_cleanup import execute_cleanup
 from app.dao.tenant_deletion_sql import TENANT_DELETE_CLEANUP_SQL
-from app.db.session import long_running_statement
+from app.dao.trigger_dao import agent_trigger_dao
+from app.db.session import get_connection, long_running_statement
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 
@@ -117,6 +119,9 @@ _TENANT_COLUMNS = (
 )
 
 
+_loads: SingleFlight[tuple[UUID, str], TenantRecord | None] = SingleFlight()
+
+
 @final
 class TenantDAO(BaseDAO[TenantRecord]):
     """DAO for Tenant records."""
@@ -141,9 +146,18 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 memo_set("tenant", redis_hit.id, redis_hit)
                 return redis_hit
             observed_ver = await peek_tenant_version(tenant_id)
-        tenant = await super().get(record_id)
+        if observed_ver is not None and tenant_id is not None and get_connection() is None:
+            # Misses of one version share a load and a fill; inside a transaction the load must see its own writes.
+            tenant = await _loads.run((tenant_id, observed_ver), lambda: self._load_and_cache(record_id, observed_ver))
+        else:
+            tenant = await self._load_and_cache(record_id, observed_ver)
         if tenant is not None:
             memo_set("tenant", tenant.id, tenant)
+        return tenant
+
+    async def _load_and_cache(self, record_id: UUID, observed_ver: str | None) -> TenantRecord | None:
+        tenant = await super().get(record_id)
+        if tenant is not None:
             await set_cached_tenant(tenant, observed_ver=observed_ver)
         return tenant
 
@@ -157,7 +171,10 @@ class TenantDAO(BaseDAO[TenantRecord]):
                 await lock_tenants(db, (db_obj.id,))
                 if "is_active" in obj_in:
                     await invalidate_tenant_agents(db, db_obj.id)
-            updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+            async with self.session():
+                updated = await super().update(db_obj=db_obj, obj_in=obj_in)
+                if "timezone" in obj_in:
+                    await agent_trigger_dao.reschedule_for_tenant(updated.id)
             memo_set("tenant", updated.id, updated)
             await bump_tenant_cache(updated.id)
             return updated

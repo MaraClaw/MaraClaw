@@ -16,6 +16,7 @@ from psycopg.errors import ForeignKeyViolation, LockNotAvailable, UniqueViolatio
 from psycopg.rows import DictRow
 
 from app.core.json_types import JsonObject, JsonValue
+from app.core.trigger_schedule import POLL_CHECKPOINT_KEY
 from app.dao.trigger_dao import trigger_execution_dao
 from app.db import session as session_module
 from app.db.connection import DbConnection
@@ -24,7 +25,7 @@ from app.records.trigger import AgentTriggerRecord
 from app.services.trigger_runtime import evaluator
 from app.services.trigger_runtime.dispatch import enqueue_due_trigger
 from app.services.trigger_runtime.evaluator import evaluate_trigger
-from app.services.trigger_runtime.keys import POLL_CHECKPOINT_KEY, POLL_OBSERVED_KEY
+from app.services.trigger_runtime.keys import POLL_OBSERVED_KEY
 
 NOW = datetime(2026, 11, 5, tzinfo=UTC)
 TRIGGER_LOCK = "SELECT 1 FROM agent_triggers WHERE id = %(trigger_id)s FOR KEY SHARE"
@@ -73,6 +74,9 @@ class _Cursor:
     async def execute(self, query: str, params: dict[str, object]) -> None:
         sql = " ".join(query.split())
         raw = self.raw
+        if sql.startswith("SELECT t.id, t.agent_id"):
+            # The reschedule read after a checkpoint claim: the fake holds no trigger row to recompute.
+            return
         assert raw.blocks or sql.startswith("UPDATE agent_triggers"), "SQL must run in a transaction/savepoint"
         raw.events.append(sql)
         if sql == TRIGGER_LOCK:
@@ -130,6 +134,9 @@ class _Cursor:
 
     async def fetchone(self) -> dict[str, object] | None:
         return self.row
+
+    async def fetchall(self) -> list[dict[str, object]]:
+        return []
 
 
 class _Raw:

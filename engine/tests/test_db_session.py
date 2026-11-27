@@ -35,6 +35,7 @@ from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_works
 from transaction_pool_fakes import CountingPool
 
 _REAL_FLUSH_VERSIONS = redis_cache.flush_deferred_versions
+_REAL_FLUSH_ACL = access_cache.flush_deferred_acl
 
 
 @pytest.mark.asyncio
@@ -825,6 +826,30 @@ async def test_redis_failure_after_commit_keeps_commit_and_launches_callbacks(
 
 
 @pytest.mark.asyncio
+async def test_open_cache_breaker_never_suppresses_the_post_commit_invalidation_flush(
+    callback_scope, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a tripped read breaker and the real flushes of both invalidation families
+    raw, _events = callback_scope
+    cache = _install_cache(monkeypatch)
+    monkeypatch.setattr(access_cache, "get_cache_redis", AsyncMock(return_value=cache))
+    monkeypatch.setattr(access_cache, "_ttl_seconds", lambda: 45)
+    monkeypatch.setattr(access_cache, "flush_deferred_acl", _REAL_FLUSH_ACL)
+    monkeypatch.setattr(redis_cache, "flush_deferred_versions", _REAL_FLUSH_VERSIONS)
+    redis_cache._trip()
+    agent_id = uuid4()
+    # When the scope commits
+    async with connection_ctx():
+        await access_cache.bump_agent_acl_version(agent_id)
+        await redis_cache.bump_version("ver")
+    # Then both rotations were published and the breaker stayed open
+    assert raw.commits == 1
+    assert cache.store["ver"]
+    assert cache.store[f"aclver:{agent_id}"]
+    assert redis_cache._cooling_down()
+
+
+@pytest.mark.asyncio
 async def test_cancellation_during_flush_propagates_and_still_launches(
     callback_scope, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -947,3 +972,48 @@ async def test_guest_write_exclusion_authorizes_in_one_scope_then_holds_no_check
     assert guest_write_pool.active == 0
     await dependency.aclose()
     assert (guest_write_pool.checkouts, guest_write_pool.releases) == (3, 3)
+
+
+@pytest.mark.asyncio
+async def test_bind_crud_connection_sets_the_request_lock_timeout_at_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    monkeypatch.setattr(session_module.get_settings(), "DATABASE_REQUEST_LOCK_TIMEOUT_MS", 2500)
+
+    agen = bind_crud_connection()
+    await agen.__anext__()
+    await flush_request_transaction()
+    with pytest.raises(StopAsyncIteration):
+        await agen.__anext__()
+
+    # Session level, once, and never SET LOCAL (which the mid-request commit above would have discarded).
+    assert raw.executed == [("SELECT set_config('lock_timeout', %(ms)s, false)", {"ms": "2500"})]
+    assert raw.commits == 2
+
+
+@pytest.mark.asyncio
+async def test_zero_request_lock_timeout_leaves_the_server_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    monkeypatch.setattr(session_module.get_settings(), "DATABASE_REQUEST_LOCK_TIMEOUT_MS", 0)
+
+    agen = bind_crud_connection()
+    await agen.__anext__()
+    with pytest.raises(StopAsyncIteration):
+        await agen.__anext__()
+
+    assert raw.executed == []
+
+
+@pytest.mark.asyncio
+async def test_connections_not_bound_to_a_request_never_get_a_lock_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _FakeRawConnection()
+    monkeypatch.setattr(session_module, "get_pool", lambda: _FakePool(raw))
+    monkeypatch.setattr(session_module, "durable_pool", AsyncMock(return_value=_FakePool(raw)))
+
+    async with connection_ctx() as db:
+        await db.execute("SELECT 1")
+    async with session_module.durable_transaction() as db:
+        await db.execute("SELECT 1")
+
+    assert all("lock_timeout" not in query for query, _params in raw.executed)

@@ -120,6 +120,23 @@ for (const kind of ['JSON', 'multipart'] as const) {
     assert.equal(stored(), null)
   })
 
+  test(`${kind} still expires the session on a 401 that carries a Retry-After`, async () => {
+    // Given
+    const { store, client, stored } = fixture(() => Promise.resolve(
+      new Response('{"detail":"expired"}', { status: 401, headers: { 'Retry-After': '7' } }),
+    ))
+    const seen: string[] = []
+    store.subscribe(() => seen.push(store.getSnapshot().status))
+    // When
+    const rejected = assert.rejects(request(client), (error: unknown) =>
+      error instanceof ApiError && error.status === 401 && error.retryAfterMs === null,
+    )
+    // Then
+    await rejected
+    assert.deepEqual(seen, ['anonymous'])
+    assert.equal(stored(), null)
+  })
+
   test(`${kind} preserves the session when a public request returns 401`, async () => {
     // Given
     let authorization: string | null = null

@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from functools import partial
+from itertools import batched
 from pathlib import Path
 from typing import override
 
-import anyio
 from botocore.exceptions import ClientError
 
-from app.core.json_types import is_any_list, is_str_dict, json_as_int
+from app.core.json_types import json_as_int
 from app.services.storage_runtime.base import (
+    BATCH_KEY_LIMIT,
+    ConditionalWriteResult,
+    CopyRequest,
     MaterializedFile,
     StorageDeleteFailedError,
     StorageEntry,
@@ -21,10 +23,14 @@ from app.services.storage_runtime.base import (
     StorageSnapshot,
     StorageVersion,
     checked_page_limit,
+    deleted_result,
+    kept_result,
     walk_order,
 )
 from app.services.storage_runtime.disposition import content_disposition
+from app.services.storage_runtime.s3_batch import copied_result, copy_conflict, delete_verdicts, quoted_etag
 from app.services.storage_runtime.s3_connection import (
+    S3CopySource,
     S3GetArguments,
     S3ListArguments,
     S3ObjectIdentity,
@@ -32,16 +38,10 @@ from app.services.storage_runtime.s3_connection import (
 )
 from app.services.storage_runtime.s3_create import S3CreateBackend
 from app.services.storage_runtime.s3_read import materialize_object, read_object, read_object_snapshot
-from app.services.storage_runtime.s3_types import client_error_response
+from app.services.storage_runtime.s3_types import client_error_response, mapping_items
 from app.services.storage_runtime.utils import normalize_storage_key
 
 _LAST_CODE_POINT = "\U0010ffff"
-
-
-def _mapping_items(value: object) -> list[Mapping[str, object]]:
-    if not is_any_list(value):
-        return []
-    return [item for item in value if is_str_dict(item)]
 
 
 class S3StorageBackend(S3CreateBackend):
@@ -56,24 +56,17 @@ class S3StorageBackend(S3CreateBackend):
     async def _object_exists(self, key: str) -> bool:
         object_key = self._object_key(key)
         client = self._client_or_raise()
-        response = await asyncio.to_thread(
-            client.list_objects_v2,
-            Bucket=self.bucket,
-            Prefix=object_key,
-            MaxKeys=1,
+        response = await self.lane.run(
+            partial(client.list_objects_v2, Bucket=self.bucket, Prefix=object_key, MaxKeys=1)
         )
-        return any(item.get("Key") == object_key for item in _mapping_items(response.get("Contents")))
+        return any(item.get("Key") == object_key for item in mapping_items(response.get("Contents")))
 
     @override
     async def is_dir(self, key: str) -> bool:
         prefix = self._object_key(key).rstrip("/") + "/"
         client = self._client_or_raise()
-        response = await asyncio.to_thread(
-            client.list_objects_v2,
-            Bucket=self.bucket,
-            Prefix=prefix,
-            Delimiter="/",
-            MaxKeys=1,
+        response = await self.lane.run(
+            partial(client.list_objects_v2, Bucket=self.bucket, Prefix=prefix, Delimiter="/", MaxKeys=1)
         )
         return bool(response.get("Contents") or response.get("CommonPrefixes"))
 
@@ -112,10 +105,10 @@ class S3StorageBackend(S3CreateBackend):
 
     def _listing_entries(self, page: Mapping[str, object], prefix: str) -> list[StorageEntry]:
         entries: list[StorageEntry] = []
-        for item in _mapping_items(page.get("CommonPrefixes")):
+        for item in mapping_items(page.get("CommonPrefixes")):
             rel = _strip_prefix(str(item.get("Prefix", "")).rstrip("/"), self.prefix)
             entries.append(StorageEntry(name=rel.split("/")[-1], key=rel, is_dir=True))
-        for item in _mapping_items(page.get("Contents")):
+        for item in mapping_items(page.get("Contents")):
             raw = str(item.get("Key", ""))
             if raw and raw != prefix:
                 entries.append(self._file_entry(item, _strip_prefix(raw, self.prefix)))
@@ -136,7 +129,7 @@ class S3StorageBackend(S3CreateBackend):
         while True:
             page = await self._list_page(arguments)
             last_key = ""
-            for item in _mapping_items(page.get("Contents")):
+            for item in mapping_items(page.get("Contents")):
                 raw = str(item.get("Key", ""))
                 last_key = max(last_key, raw)
                 if not raw.startswith(prefix) or raw == prefix or raw <= skip_through:
@@ -175,14 +168,14 @@ class S3StorageBackend(S3CreateBackend):
         """Every object under ``prefix`` from one delimiter-free listing; directory markers are not files."""
         object_prefix = self._listing_prefix(prefix)
         async for page in self._list_pages({"Bucket": self.bucket, "Prefix": object_prefix}):
-            for item in _mapping_items(page.get("Contents")):
+            for item in mapping_items(page.get("Contents")):
                 raw = str(item.get("Key", ""))
                 if raw and raw != object_prefix and not raw.endswith("/"):
                     yield self._file_entry(item, _strip_prefix(raw, self.prefix))
 
     async def _list_page(self, arguments: S3ListArguments) -> Mapping[str, object]:
         client = self._client_or_raise()
-        return await anyio.to_thread.run_sync(partial(client.list_objects_v2, **arguments), abandon_on_cancel=True)
+        return await self.lane.run(partial(client.list_objects_v2, **arguments), abandon_on_cancel=True)
 
     async def _list_pages(self, arguments: S3ListArguments) -> AsyncGenerator[Mapping[str, object]]:
         page_arguments: S3ListArguments = arguments
@@ -208,7 +201,7 @@ class S3StorageBackend(S3CreateBackend):
     async def read_bytes(self, key: str) -> bytes:
         client = self._client_or_raise()
         get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
-        return await anyio.to_thread.run_sync(read_object, get_object, None, abandon_on_cancel=True)
+        return await self.lane.run(partial(read_object, get_object, None), abandon_on_cancel=True)
 
     @override
     async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
@@ -221,7 +214,7 @@ class S3StorageBackend(S3CreateBackend):
                 return b""
             arguments["Range"] = f"bytes={offset}-{offset + max_bytes - 1}"
         get_object = partial(client.get_object, **arguments)
-        return await anyio.to_thread.run_sync(read_object, get_object, max_bytes, offset, abandon_on_cancel=True)
+        return await self.lane.run(partial(read_object, get_object, max_bytes, offset), abandon_on_cancel=True)
 
     @override
     async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
@@ -229,8 +222,8 @@ class S3StorageBackend(S3CreateBackend):
             raise ValueError("max_bytes must be nonnegative")
         client = self._client_or_raise()
         get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
-        return await anyio.to_thread.run_sync(
-            read_object_snapshot, get_object, normalize_storage_key(key), max_bytes, abandon_on_cancel=True
+        return await self.lane.run(
+            partial(read_object_snapshot, get_object, normalize_storage_key(key), max_bytes), abandon_on_cancel=True
         )
 
     @override
@@ -240,7 +233,7 @@ class S3StorageBackend(S3CreateBackend):
         # but GCS applies a different default - causing SignatureDoesNotMatch.
         resolved_ct = content_type or "application/octet-stream"
         client = self._client_or_raise()
-        await anyio.to_thread.run_sync(
+        await self.lane.run(
             partial(
                 client.put_object,
                 Bucket=self.bucket,
@@ -253,7 +246,7 @@ class S3StorageBackend(S3CreateBackend):
     @override
     async def delete(self, key: str) -> None:
         client = self._client_or_raise()
-        await anyio.to_thread.run_sync(partial(client.delete_object, Bucket=self.bucket, Key=self._object_key(key)))
+        await self.lane.run(partial(client.delete_object, Bucket=self.bucket, Key=self._object_key(key)))
 
     @override
     async def delete_tree(self, key: str) -> None:
@@ -262,18 +255,83 @@ class S3StorageBackend(S3CreateBackend):
         failed = 0
         async for page in self._list_pages({"Bucket": self.bucket, "Prefix": prefix}):
             objects: list[S3ObjectIdentity] = []
-            for item in _mapping_items(page.get("Contents")):
+            for item in mapping_items(page.get("Contents")):
                 item_key = item.get("Key")
                 if isinstance(item_key, str):
                     objects.append({"Key": item_key})
             if not objects:
                 continue
-            response = await anyio.to_thread.run_sync(
+            response = await self.lane.run(
                 partial(client.delete_objects, Bucket=self.bucket, Delete={"Objects": objects})
             )
-            failed += len(_mapping_items(response.get("Errors")))
+            failed += len(mapping_items(response.get("Errors")))
         if failed:
             raise StorageDeleteFailedError(key, failed)
+
+    @override
+    async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+        """One ``DeleteObjects`` per 1000 keys, each key carrying the ETag it was listed with.
+
+        The provider compares that ETag as it deletes, so a key that changed since the listing comes back refused and
+        stays. A version with no ETag matches no object and is left alone; keys the provider does not answer for raise.
+        """
+        client = self._client_or_raise()
+        results: dict[str, ConditionalWriteResult] = {}
+        unconfirmed: list[str] = []
+        for chunk in batched(versions, BATCH_KEY_LIMIT, strict=False):
+            sendable = {self._object_key(version.key): version for version in chunk if version.etag}
+            results.update(
+                {version.key: kept_result(version.key, exists=False) for version in chunk if not version.etag}
+            )
+            if not sendable:
+                continue
+            objects: list[S3ObjectIdentity] = [
+                {"Key": object_key, "ETag": quoted_etag(version.etag)} for object_key, version in sendable.items()
+            ]
+            response = await self.lane.run(
+                partial(client.delete_objects, Bucket=self.bucket, Delete={"Objects": objects})
+            )
+            verdicts = delete_verdicts(response, sendable)
+            for object_key, version in sendable.items():
+                if object_key in verdicts.deleted:
+                    results[version.key] = deleted_result(version.key)
+                elif object_key in verdicts.changed:
+                    results[version.key] = kept_result(version.key, exists=True)
+                elif object_key in verdicts.absent:
+                    results[version.key] = kept_result(version.key, exists=False)
+                else:
+                    unconfirmed.append(version.key)
+        if unconfirmed:
+            raise StorageDeleteFailedError(unconfirmed[0], len(unconfirmed))
+        return results
+
+    @override
+    async def copy_batch_if_match(self, copies: Sequence[CopyRequest]) -> dict[str, ConditionalWriteResult]:
+        """A server-side ``CopyObject`` per file, sent only while the source still has its listed ETag; no body is read."""
+        return {copy.source.key: await self.copy_if_match(copy) for copy in copies}
+
+    async def copy_if_match(self, copy: CopyRequest) -> ConditionalWriteResult:
+        """Copy one object on the provider; a source that changed or is gone is a conflict, every other failure raises."""
+        if not copy.source.etag:
+            return kept_result(copy.source.key, exists=False)
+        client = self._client_or_raise()
+        source: S3CopySource = {"Bucket": self.bucket, "Key": self._object_key(copy.source.key)}
+        try:
+            response = await self.lane.run(
+                partial(
+                    client.copy_object,
+                    Bucket=self.bucket,
+                    Key=self._object_key(copy.destination_key),
+                    CopySource=source,
+                    CopySourceIfMatch=quoted_etag(copy.source.etag),
+                )
+            )
+        except ClientError as exc:
+            conflict = copy_conflict(exc, copy.source.key)
+            if conflict is None:
+                raise
+            return conflict
+        return copied_result(copy.destination_key, copy.source.size, response)
 
     @override
     async def stat(self, key: str) -> StorageEntry:
@@ -303,11 +361,7 @@ class S3StorageBackend(S3CreateBackend):
         client = self._client_or_raise()
         object_key = self._object_key(key)
         try:
-            response = await asyncio.to_thread(
-                client.head_object,
-                Bucket=self.bucket,
-                Key=object_key,
-            )
+            response = await self.lane.run(partial(client.head_object, Bucket=self.bucket, Key=object_key))
         except ClientError as exc:
             if client_error_response(exc).get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
                 return StorageVersion(key=normalize_storage_key(key), exists=False, is_dir=False)
@@ -334,7 +388,7 @@ class S3StorageBackend(S3CreateBackend):
     async def materialize(self, key: str) -> MaterializedFile:
         client = self._client_or_raise()
         get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
-        return await materialize_object(get_object, Path(normalize_storage_key(key)).suffix)
+        return await materialize_object(self.lane, get_object, Path(normalize_storage_key(key)).suffix)
 
     @override
     async def presign_download_url(
@@ -344,11 +398,13 @@ class S3StorageBackend(S3CreateBackend):
         params: dict[str, str] = {"Bucket": self.bucket, "Key": self._object_key(key)}
         if filename is not None and filename != "":
             params["ResponseContentDisposition"] = content_disposition(filename, "inline" if inline else "attachment")
-        url = await asyncio.to_thread(
-            client.generate_presigned_url,
-            ClientMethod="get_object",
-            Params=params,
-            ExpiresIn=self.presign_ttl_seconds if expires_in_seconds is None else expires_in_seconds,
+        url = await self.lane.run(
+            partial(
+                client.generate_presigned_url,
+                ClientMethod="get_object",
+                Params=params,
+                ExpiresIn=self.presign_ttl_seconds if expires_in_seconds is None else expires_in_seconds,
+            )
         )
         if url and self.endpoint_url not in (None, ""):
             from urllib.parse import urlparse, urlunparse

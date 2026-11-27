@@ -1,4 +1,5 @@
--- A recent-history read (chat_message_dao.list_recent): the chat WebSocket history load and shared-session context.
+-- A recent-history read (chat_message_dao.list_recent). Intake and the chat socket no longer issue it; it remains
+-- background read pressure on chat_messages and a guard for the index that serves it.
 \set n random(1, :agents)
 \set k random(1, 10)
 SELECT * FROM chat_messages

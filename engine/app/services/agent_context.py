@@ -6,26 +6,29 @@ workspace files and composes a comprehensive system prompt.
 
 import uuid
 from pathlib import Path
+from typing import Final
 
 from app.config import get_settings
 from app.core.domain.channels import ChannelType
 from app.core.json_types import is_str_dict
 from app.core.logging import logger
 from app.services.storage import get_storage_backend, normalize_storage_key
+from app.services.storage_runtime.text_head import read_text_capped, read_text_head
 
 settings = get_settings()
 
+SKILL_HEAD_BYTES: Final = 64 * 1024
+"""Bytes of a skill file read for its index row. Frontmatter whose closing `---` lies beyond them is parsed like a file
+without a closing `---`: the name stays the file's own and the description is its first plain line."""
+
 
 async def _read_file_safe(key: str, max_chars: int = 3000) -> str:
-    """Read a storage-backed text file, return empty string if missing."""
+    """Read the start of a storage-backed text file, cut to max_chars; empty string if missing."""
     storage = get_storage_backend()
     if not await storage.exists(key) or not await storage.is_file(key):
         return ""
     try:
-        content = (await storage.read_text(key, encoding="utf-8", errors="replace")).strip()
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n...(truncated)"
-        return content
+        return await read_text_capped(storage, key, max_chars)
     except Exception:
         return ""
 
@@ -101,7 +104,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
                     skill_md_key = f"{entry_key}/skill.md"
                 if await storage.exists(skill_md_key):
                     try:
-                        content = (await storage.read_text(skill_md_key, encoding="utf-8", errors="replace")).strip()
+                        content = (await read_text_head(storage, skill_md_key, SKILL_HEAD_BYTES)).text.strip()
                         name, desc = _parse_skill_frontmatter(content, entry.name)
                         skills.append((name, desc, f"{entry.name}/SKILL.md"))
                     except Exception:
@@ -110,7 +113,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
             # Case 2: Flat file - skills/<name>.md
             elif Path(entry.name).suffix == ".md":
                 try:
-                    content = (await storage.read_text(entry_key, encoding="utf-8", errors="replace")).strip()
+                    content = (await read_text_head(storage, entry_key, SKILL_HEAD_BYTES)).text.strip()
                     name, desc = _parse_skill_frontmatter(content, Path(entry.name).stem)
                     skills.append((name, desc, entry.name))
                 except Exception:
@@ -228,7 +231,10 @@ async def build_agent_context(
     - skills/ → skill names + summaries
     - Database → relationship network (human + agent)
     """
-    from app.services.agent_context_cache import read_cached_text, set_cached_text
+    from app.services.agent_context_cache import load_cached_text, read_cached_texts
+
+    # One cache round trip covers all three kinds, so a Redis outage costs a turn at most one cache timeout.
+    cached = await read_cached_texts(agent_id, ("soul", "memory", "skills"))
 
     # --- Soul ---
     # Soul is the agent's full author-curated identity; detailed souls (e.g.
@@ -237,28 +243,35 @@ async def build_agent_context(
     # denies things its soul plainly states, with no log of the truncation.
     # Memory and relationships below keep small caps because they grow
     # unbounded at runtime; the soul does not (only seeded/explicitly edited).
-    soul, soul_ver = await read_cached_text(agent_id, "soul")
-    if soul is None:
+    async def load_soul() -> str:
         soul = await _read_file_safe(normalize_storage_key(f"{agent_id}/soul.md"), 30000)
         if soul.startswith("# "):
             soul = "\n".join(soul.split("\n")[1:]).strip()
-        await set_cached_text(agent_id, "soul", soul, observed_ver=soul_ver)
+        return soul
+
+    soul = cached["soul"].text
+    if soul is None:
+        soul = await load_cached_text(agent_id, "soul", cached["soul"].ver, load_soul)
 
     # --- Memory ---
-    memory, memory_ver = await read_cached_text(agent_id, "memory")
-    if memory is None:
+    async def load_memory() -> str:
         memory = await _read_file_safe(normalize_storage_key(f"{agent_id}/memory/memory.md"), 2000)
         if not memory:
             memory = await _read_file_safe(normalize_storage_key(f"{agent_id}/memory.md"), 2000)
         if memory.startswith("# "):
             memory = "\n".join(memory.split("\n")[1:]).strip()
-        await set_cached_text(agent_id, "memory", memory, observed_ver=memory_ver)
+        return memory
+
+    memory = cached["memory"].text
+    if memory is None:
+        memory = await load_cached_text(agent_id, "memory", cached["memory"].ver, load_memory)
 
     # --- Skills index (progressive disclosure) ---
-    skills_text, skills_ver = await read_cached_text(agent_id, "skills")
+    skills_text = cached["skills"].text
     if skills_text is None:
-        skills_text = await _load_skills_index(agent_id)
-        await set_cached_text(agent_id, "skills", skills_text, observed_ver=skills_ver)
+        skills_text = await load_cached_text(
+            agent_id, "skills", cached["skills"].ver, lambda: _load_skills_index(agent_id)
+        )
 
     # --- Relationships ---
     relationships = await _load_relationships_from_db(agent_id)

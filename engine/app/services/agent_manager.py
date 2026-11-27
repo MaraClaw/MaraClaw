@@ -33,7 +33,7 @@ from app.services.chatgpt_subscription import (
     AUTH_KIND_CHATGPT_SUBSCRIPTION,
     ensure_fresh_access_token as ensure_chatgpt_token,
 )
-from app.services.docker_capacity import run_docker
+from app.services.docker_capacity import DockerBusyError, run_docker
 from app.services.gogcli_persistence import restore_gogcli_state
 from app.services.gogcli_runtime import gogcli_docker_extras
 from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
@@ -871,6 +871,8 @@ class AgentManager:
         except GuestOwnershipError as exc:
             logger.warning("Guest stop ownership refused for agent {}: {}", agent.id, exc)
             return False
+        except DockerBusyError:
+            raise
         except Exception as exc:
             logger.error("Failed to stop guest for agent {}: {}", agent.id, type(exc).__name__)
             return False

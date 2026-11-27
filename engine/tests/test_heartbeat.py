@@ -1,17 +1,23 @@
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
-from dataclasses import replace
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from tests.bounded_read_fakes import RecordingStorage
+from tests.health_caller_fakes import ModelPair, install_model_pair
+from tests.llm_retry_fakes import install_provider_health, trip
 from tests.test_background_llm import BackgroundClient
 
 from app.records.agent import AgentRecord
 from app.services import heartbeat
+from app.services.llm.provider_health import Admission, is_unavailable, model_key
+from app.services.llm.retry_policy import LLMHTTPError
 from app.services.llm.types import LLMResponse, LLMToolCall, ToolPayload
+from app.services.storage_runtime.text_head import TRUNCATED_MARKER, head_bytes_for_chars
 from test_finish_protocol import _finish_response, _model
 from worker_progress_fixtures import WorkerHTTP, worker_http
 
@@ -54,7 +60,10 @@ async def test_run_agent_oneshot_logs_zero_completed_rounds(monkeypatch: pytest.
     # Given: an agent and client that reach the loop with no allowed rounds.
     agent_id = uuid.uuid4()
     model_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
     fake_agent = SimpleNamespace(
+        id=agent_id,
+        tenant_id=tenant_id,
         primary_model_id=model_id,
         fallback_model_id=None,
         name="Heartbeat Agent",
@@ -62,6 +71,9 @@ async def test_run_agent_oneshot_logs_zero_completed_rounds(monkeypatch: pytest.
         creator_id=None,
     )
     fake_model = SimpleNamespace(
+        id=model_id,
+        tenant_id=tenant_id,
+        enabled=True,
         provider="openai",
         model="test-model",
         base_url=None,
@@ -76,8 +88,8 @@ async def test_run_agent_oneshot_logs_zero_completed_rounds(monkeypatch: pytest.
     async def get_agent(_id: object) -> object:
         return fake_agent
 
-    async def get_model(_id: object) -> object:
-        return fake_model
+    async def get_models(_ids: object) -> list[object]:
+        return [fake_model]
 
     async def build_context(*args: object) -> tuple[str, str]:
         return "system", "dynamic"
@@ -85,7 +97,7 @@ async def test_run_agent_oneshot_logs_zero_completed_rounds(monkeypatch: pytest.
     async def get_tools(*args: object) -> list[dict[str, object]]:
         return []
 
-    def record_info(message: str) -> None:
+    def record_info(message: str, *_args: object) -> None:
         info_messages.append(message)
 
     def record_exception(message: str) -> None:
@@ -95,7 +107,7 @@ async def test_run_agent_oneshot_logs_zero_completed_rounds(monkeypatch: pytest.
     from app.dao.llm_dao import llm_model_dao
 
     monkeypatch.setattr(agent_dao, "get", get_agent)
-    monkeypatch.setattr(llm_model_dao, "get", get_model)
+    monkeypatch.setattr(llm_model_dao, "get_many", get_models)
     monkeypatch.setattr("app.services.agent_context.build_agent_context", build_context)
     monkeypatch.setattr("app.services.agent_tools.get_agent_tools_for_llm", get_tools)
     monkeypatch.setattr("app.services.llm.get_model_api_key", lambda model: "key")
@@ -136,7 +148,7 @@ async def test_daily_quota_charges_each_heartbeat_request_and_skips_when_capped(
     usage, activity, execute, notify = AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
     monkeypatch.setattr(agent_dao, "consume_llm_call", charge, raising=False)
     monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=agent))
-    monkeypatch.setattr("app.dao.llm_dao.llm_model_dao.get", AsyncMock(return_value=model))
+    monkeypatch.setattr("app.dao.llm_dao.llm_model_dao.get_many", AsyncMock(return_value=[model]))
     monkeypatch.setattr("app.dao.activity_log_dao.agent_activity_log_dao.list_for_agent", AsyncMock(return_value=[]))
     monkeypatch.setattr(notification_dao, "list_unread_for_agent", AsyncMock(return_value=[]))
     monkeypatch.setattr(heartbeat, "get_storage_backend", lambda: SimpleNamespace(exists=AsyncMock(return_value=False)))
@@ -175,10 +187,219 @@ async def test_daily_quota_charges_each_heartbeat_request_and_skips_when_capped(
     notify.assert_not_awaited()
 
 
+@dataclass(frozen=True, slots=True)
+class _Seams:
+    charge: AsyncMock
+    notify: AsyncMock
+    mark_read: AsyncMock
+    warnings: list[str]
+
+
+def _wire(monkeypatch: pytest.MonkeyPatch, pair: ModelPair, unread: Sequence[SimpleNamespace] = ()) -> _Seams:
+    from app.dao.agent_dao import agent_dao
+    from app.dao.notification_dao import notification_dao
+
+    seams = _Seams(AsyncMock(return_value=pair.agent), AsyncMock(), AsyncMock(), [])
+    monkeypatch.setattr(agent_dao, "consume_llm_call", seams.charge, raising=False)
+    monkeypatch.setattr(agent_dao, "get", AsyncMock(return_value=pair.agent))
+    monkeypatch.setattr("app.dao.activity_log_dao.agent_activity_log_dao.list_for_agent", AsyncMock(return_value=[]))
+    monkeypatch.setattr(notification_dao, "list_unread_for_agent", AsyncMock(return_value=list(unread)))
+    monkeypatch.setattr(notification_dao, "mark_read", seams.mark_read)
+    monkeypatch.setattr(heartbeat, "get_storage_backend", lambda: SimpleNamespace(exists=AsyncMock(return_value=False)))
+    monkeypatch.setattr("app.services.agent_context.build_agent_context", AsyncMock(return_value=("", "")))
+    monkeypatch.setattr("app.services.agent_tools.get_agent_tools_for_llm", AsyncMock(return_value=[]))
+    monkeypatch.setattr("app.services.token_tracker.record_token_usage", AsyncMock())
+    monkeypatch.setattr("app.services.activity_logger.log_activity", AsyncMock())
+    monkeypatch.setattr(heartbeat, "_notify_oneshot_error", seams.notify)
+    monkeypatch.setattr(
+        heartbeat.logger,
+        "warning",
+        lambda message, *args: seams.warnings.append(message.format(*args) if args else message),
+    )
+    return seams
+
+
+async def _heartbeat_instruction(
+    monkeypatch: pytest.MonkeyPatch, heartbeat_md: bytes | None
+) -> tuple[str, RecordingStorage, str]:
+    pair = install_model_pair(monkeypatch, [_finish_response("done")])
+    _ = _wire(monkeypatch, pair)
+    key = heartbeat.agent_storage_key(pair.agent.id, "HEARTBEAT.md")
+    storage = RecordingStorage({} if heartbeat_md is None else {key: heartbeat_md})
+    monkeypatch.setattr(heartbeat, "get_storage_backend", lambda: storage)
+
+    await heartbeat._run_heartbeat(pair.agent.id)
+
+    (messages,) = pair.primary_client.messages_seen
+    instruction = messages[1].content
+    assert isinstance(instruction, str)
+    return instruction, storage, key
+
+
+async def test_a_small_heartbeat_file_is_the_instruction_followed_by_the_posting_rules(monkeypatch):
+    custom = "Check the garden \u20ac"
+    text, storage, key = await _heartbeat_instruction(monkeypatch, f"\n {custom} \n".encode())
+
+    assert text.startswith(custom)
+    assert not text.removeprefix(custom).startswith(TRUNCATED_MARKER)
+    assert storage.reads == [(key, head_bytes_for_chars(heartbeat.HEARTBEAT_MD_MAX_CHARS), 0)]
+    assert storage.whole_reads == []
+
+
+async def test_a_huge_heartbeat_file_is_cut_with_the_same_rules_after_it(monkeypatch):
+    short, _, _ = await _heartbeat_instruction(monkeypatch, b"short")
+    rules = short.removeprefix("short")
+    limit = heartbeat.HEARTBEAT_MD_MAX_CHARS
+
+    text, storage, key = await _heartbeat_instruction(monkeypatch, b"h" * (limit * 10))
+
+    assert text == "h" * limit + TRUNCATED_MARKER + rules
+    assert storage.reads == [(key, head_bytes_for_chars(limit), 0)]
+    assert storage.whole_reads == []
+
+
+async def test_a_character_cut_at_the_end_of_the_heartbeat_head_is_dropped(monkeypatch):
+    padding = head_bytes_for_chars(heartbeat.HEARTBEAT_MD_MAX_CHARS) - 4
+
+    text, _, _ = await _heartbeat_instruction(monkeypatch, b" " * padding + "\u20ac".encode() * 5)
+
+    assert text.startswith("\u20ac" + TRUNCATED_MARKER)
+    assert "\ufffd" not in text
+
+
+@pytest.mark.parametrize("heartbeat_md", [None, b" \n\t "])
+async def test_a_missing_or_blank_heartbeat_file_keeps_the_default_instruction(monkeypatch, heartbeat_md):
+    text, _, _ = await _heartbeat_instruction(monkeypatch, heartbeat_md)
+
+    assert text.startswith(heartbeat.DEFAULT_HEARTBEAT_INSTRUCTION)
+
+
+async def _run(path: str, agent_id: uuid.UUID) -> None:
+    if path == "heartbeat":
+        await heartbeat._run_heartbeat(agent_id)
+    else:
+        _ = await heartbeat.run_agent_oneshot(agent_id, "task")
+
+
+@pytest.mark.parametrize("path", ["heartbeat", "oneshot"])
+async def test_open_circuit_refuses_the_run_without_a_request_or_a_charge(monkeypatch, path):
+    # Given a primary whose provider circuit is open and no fallback.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    pair = install_model_pair(monkeypatch, [_finish_response("unused")])
+    seams = _wire(monkeypatch, pair)
+    trip(tracker, pair.primary, failures=2)
+
+    # When the run starts.
+    await _run(path, pair.agent.id)
+
+    # Then nothing was sent or charged, and the refusal was logged once (the one-shot also tells its requester).
+    assert pair.primary_client.messages_seen == []
+    seams.charge.assert_not_awaited()
+    assert sum("unavailable" in line for line in seams.warnings) == 1
+    assert seams.notify.await_count == (path == "oneshot")
+
+
+async def test_refused_heartbeat_leaves_the_inbox_unread(monkeypatch):
+    # Given an unread notification for an agent whose only model is open.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    pair = install_model_pair(monkeypatch, [])
+    unread = SimpleNamespace(id=uuid.uuid4(), sender_name="Ada", type="message", title="Hello", body="please review")
+    seams = _wire(monkeypatch, pair, [unread])
+    trip(tracker, pair.primary, failures=2)
+
+    # When its heartbeat runs.
+    await heartbeat._run_heartbeat(pair.agent.id)
+
+    # Then the run was skipped before the inbox was drained and before any client was built.
+    seams.mark_read.assert_not_awaited()
+    assert pair.created == []
+
+
+@pytest.mark.parametrize("path", ["heartbeat", "oneshot"])
+async def test_unhealthy_primary_is_skipped_for_the_fallback(monkeypatch, path):
+    # Given an open primary and a healthy fallback.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    pair = install_model_pair(monkeypatch, [_finish_response("unused")], [_finish_response("done")])
+    seams = _wire(monkeypatch, pair)
+    trip(tracker, pair.primary, failures=2)
+
+    # When the run starts.
+    await _run(path, pair.agent.id)
+
+    # Then the fallback answered and the primary was never called.
+    assert pair.created == ["fallback"]
+    assert len(pair.fallback_client.messages_seen) == 1
+    assert pair.primary_client.messages_seen == []
+    assert seams.charge.await_count == 1
+
+
+@pytest.mark.parametrize("path", ["heartbeat", "oneshot"])
+async def test_retryable_failures_open_the_circuit_and_later_runs_send_nothing(monkeypatch, path):
+    # Given a provider that answers 503 and a circuit that opens after two failures.
+    _tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    down = LLMHTTPError(503, "upstream busy")
+    pair = install_model_pair(monkeypatch, [down, down])
+    seams = _wire(monkeypatch, pair)
+
+    # When three runs start.
+    for _ in range(3):
+        await _run(path, pair.agent.id)
+
+    # Then the first two each reached the provider and the third was refused before it, uncharged.
+    assert len(pair.primary_client.messages_seen) == 2
+    assert seams.charge.await_count == 2
+    assert is_unavailable(pair.primary)
+
+
+@pytest.mark.parametrize("path", ["heartbeat", "oneshot"])
+async def test_successful_probe_closes_the_circuit(monkeypatch, path):
+    # Given an open circuit whose cooldown has ended.
+    tracker, clock = install_provider_health(monkeypatch, threshold=2)
+    pair = install_model_pair(monkeypatch, [_finish_response("probe"), _finish_response("after")])
+    seams = _wire(monkeypatch, pair)
+    key = model_key(pair.primary)
+    assert key is not None
+    trip(tracker, pair.primary, failures=2)
+    clock.advance(30)
+
+    # When the next run is admitted as the probe and the provider answers.
+    await _run(path, pair.agent.id)
+
+    # Then the circuit is closed and the following run goes out like any other.
+    assert tracker.admit(key) is Admission.CALL
+    await _run(path, pair.agent.id)
+    assert len(pair.primary_client.messages_seen) == 2
+    assert seams.charge.await_count == 2
+
+
+@pytest.mark.parametrize("path", ["heartbeat", "oneshot"])
+async def test_circuit_opening_mid_run_stops_before_the_next_request(monkeypatch, path):
+    # Given a run whose first round succeeds while another agent's failures open the same provider circuit.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    pair = install_model_pair(monkeypatch, [LLMResponse(content="continue"), _finish_response("never")])
+    seams = _wire(monkeypatch, pair)
+    complete = pair.primary_client.complete
+
+    async def provider_goes_down(**kwargs):
+        response = await complete(**kwargs)
+        trip(tracker, pair.primary, failures=2)
+        return response
+
+    monkeypatch.setattr(pair.primary_client, "complete", provider_goes_down)
+
+    # When the run reaches its second round.
+    await _run(path, pair.agent.id)
+
+    # Then it stopped there: no second request, no second charge, and the client was closed.
+    assert len(pair.primary_client.messages_seen) == 1
+    assert seams.charge.await_count == 1
+    assert pair.primary_client.closed
+    assert seams.notify.await_count == (path == "oneshot")
+
+
 class _TickHarness:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.dao.agent_dao import agent_dao
-        from app.dao.tenant_dao import tenant_dao
 
         self.agent_id: uuid.UUID = uuid.uuid4()
         self.agent: SimpleNamespace = SimpleNamespace(
@@ -214,13 +435,20 @@ class _TickHarness:
         self.reconcile_cancelled: asyncio.Event = asyncio.Event()
         self.finish_reconcile_cleanup: asyncio.Event = asyncio.Event()
 
-        async def candidates() -> list[SimpleNamespace]:
+        async def candidates(now: datetime, limit: int) -> list[SimpleNamespace]:
             if self.fail == "candidates":
                 raise OSError("candidate read failed")
             if self.block_candidates:
                 self.in_candidates.set()
                 await self.finish_candidates.wait()
-            return self.agents
+            # The interval check the SQL selection makes.
+            due = [
+                agent
+                for agent in self.agents
+                if agent.last_heartbeat_at is None
+                or now - agent.last_heartbeat_at >= timedelta(minutes=agent.heartbeat_interval_minutes)
+            ]
+            return due[:limit]
 
         async def claim(_agent_id: uuid.UUID, **_kwargs: object) -> bool:
             self.claims += 1
@@ -269,17 +497,11 @@ class _TickHarness:
                 case _:
                     return
 
-        async def no_tenants(_ids: object) -> list[object]:
-            return []
-
         monkeypatch.setattr(agent_dao, "list_heartbeat_candidates", candidates)
         monkeypatch.setattr(agent_dao, "claim_heartbeat", claim)
         monkeypatch.setattr(agent_dao, "get", get_agent)
-        monkeypatch.setattr(tenant_dao, "get_by_ids", no_tenants)
         monkeypatch.setattr("app.services.agent_stops.reconcile_stopped_containers", reconcile)
         monkeypatch.setattr("app.services.audit_logger.write_audit_log", audit)
-        monkeypatch.setattr("app.services.timezone_utils.get_agent_timezone_sync", lambda *_args: "UTC")
-        monkeypatch.setattr(heartbeat, "_is_in_active_hours", lambda *_args: True)
 
 
 @pytest.fixture
@@ -327,6 +549,37 @@ async def test_tick_claims_only_as_many_due_agents_as_free_slots(tick: _TickHarn
     finally:
         for _ in range(held):
             slots.release()
+
+
+async def test_tick_selects_at_most_the_free_slots_and_claims_every_selected_agent_together(
+    tick: _TickHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.dao.agent_dao import agent_dao
+
+    # Given more due agents than one worker runs at once
+    asked: list[int] = []
+    original = agent_dao.list_heartbeat_candidates
+
+    async def bounded(now: datetime, limit: int) -> Sequence[AgentRecord]:
+        asked.append(limit)
+        return await original(now, limit)
+
+    monkeypatch.setattr(agent_dao, "list_heartbeat_candidates", bounded)
+    tick.agents.extend(SimpleNamespace(**(vars(tick.agent) | {"id": uuid.uuid4()})) for _ in range(14))
+    tick.block_claim = True
+    # When a tick runs and every claim waits for the database
+    ticking = asyncio.create_task(heartbeat._heartbeat_tick())
+    await tick.in_claim.wait()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    # Then the selection was bounded by the worker's heartbeat slots and all selected claims were in flight together
+    assert asked == [heartbeat.HEARTBEAT_CONCURRENCY]
+    assert tick.claims == heartbeat.HEARTBEAT_CONCURRENCY
+    tick.finish_claim.set()
+    assert await ticking
+    assert len(heartbeat._HEARTBEAT_TASKS) == heartbeat.HEARTBEAT_CONCURRENCY
+    tick.run_until.set()
+    _ = await asyncio.gather(*heartbeat._HEARTBEAT_TASKS)
 
 
 async def test_tick_defers_a_due_agent_until_its_in_flight_heartbeat_finishes(tick: _TickHarness) -> None:

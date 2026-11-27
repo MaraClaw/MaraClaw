@@ -27,6 +27,7 @@ npm test
 - Shared helpers are named `*-fixture.ts`, one per domain; read the matching fixture before writing a new case. Notable ones:
   - `attachment-fixture.ts`: isolated auth/query/cache/preview wiring; exposes `dispose()`.
   - `socket-fixture.ts`: `ControlledSocket`, synthetic frames, sent messages and close records, plus an injected clock (`manualClock`, `elapse`), `signal` online/visibility sources, connection-state records, a ticket counter, and `outage`/`stall` ticket issuers.
+  - `poll-fixture.ts`: `pageVisibility` (a synthetic `document`, restored afterwards), `pollInterval` (what an observer would schedule next for a query's options), `throttled` (429/503 with `Retry-After`) and `assertBackedOff`.
   - `chat-history-fixture.ts`, `trigger-executions-fixture.ts`: page data with opaque cursors containing reserved characters.
   - `openclaw-update-fixture.ts`, `agent-lifecycle-fixture.ts`, `agent-deletion-fixture.ts`, `auth-account-fixture.ts`: domain records and session harnesses.
 - `auth-integration.test.ts` has file-local `wire(...)`, not a global setup hook.

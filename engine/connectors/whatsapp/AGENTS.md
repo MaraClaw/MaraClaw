@@ -4,7 +4,7 @@ Personal QR WhatsApp bridge: private Node 26 ESM package `@maraclaw/whatsapp-bri
 
 ## Structure
 
-`src/`: `bridge.ts` (main thread, stdio), `worker.ts` (worker entry), `runtime.ts` (lifecycle), `protocol.ts` (frames), `peer.ts` (framed output and RPC), `auth.ts` + `auth-codec.ts` (parent-backed credentials), `transport.ts` (Baileys), `input.ts` (self-chat intake), `sends.ts` (send outcomes), `diagnostics.ts`, `media_protocol.ts` + `media_offers.ts` + `media_transport.ts` (bounded inbound retrieval). `dist/` and `node_modules/` are gitignored; `dist/src/bridge.js` is the spawned entry.
+`src/`: `bridge.ts` (process entry: creates the worker with `resourceLimits`), `supervisor.ts` (main thread: stdio, deadlines, worker lifetime), `limits.ts` (`workerLimits`), `worker.ts` (worker entry), `runtime.ts` (lifecycle), `protocol.ts` (frames), `peer.ts` (framed output and RPC), `auth.ts` + `auth-codec.ts` (parent-backed credentials), `transport.ts` (Baileys), `input.ts` (self-chat intake), `sends.ts` (send outcomes), `diagnostics.ts`, `media_protocol.ts` + `media_offers.ts` + `media_transport.ts` (bounded inbound retrieval). `dist/` and `node_modules/` are gitignored; `dist/src/bridge.js` is the spawned entry.
 
 ## Protocol
 
@@ -13,6 +13,7 @@ Personal QR WhatsApp bridge: private Node 26 ESM package `@maraclaw/whatsapp-bri
 - Frames are capped at 1 MiB. `Frames.push` enforces this on raw bytes before JSON parsing, even for an unterminated line, and decodes UTF-8 fatally. `Peer.emit` refuses larger output.
 - stdout isolation: only the main thread writes stdout. Baileys runs in a `worker_threads` Worker whose stdout/stderr are discarded, so dependency output cannot corrupt framing. The worker returns finished lines; a non-string, unterminated, oversized or backlogged line ends the bridge. Never write to `console` or `process.stdout` elsewhere.
 - The first frame must be `init` (15 s limit); its token is the capability. Later tokens are compared with `timingSafeEqual`. A second `init`, mismatch, malformed frame, stdin EOF, SIGTERM or SIGINT starts shutdown.
+- Heap ceiling: the parent appends `--worker-heap-mb=<MiB>` to the command (not an `init` field, because the worker exists before `init`); `workerLimits` turns it into the worker's `maxOldGenerationSizeMb`, no flag keeps Node's defaults and a malformed one aborts startup. A worker `error` (including `ERR_WORKER_OUT_OF_MEMORY`) or non-zero `exit` that the bridge did not cause emits the `worker_exit` failure diagnostic and ends the process with status 1; the parent reads any non-zero status as a transient child death, so never turn that path back into exit 0.
 - Leases: `init` and `lease` carry `lease_ms` (parent sends 30000 about every second). The bridge exits if none arrives within `lease_ms` + 2.25 s; the runtime stops with `lease_expired`.
 - Shutdown always ends with a `closed` frame whose reason is `logged_out`, `replaced`, `forbidden`, `transport_failed`, `auth_store_failed`, `lease_expired` or `shutdown`, then worker termination and exit.
 
@@ -42,7 +43,7 @@ Personal QR WhatsApp bridge: private Node 26 ESM package `@maraclaw/whatsapp-bri
 
 ```bash
 npm ci          # Node >=26; CI and Docker use 26.13.1
-npm test        # builds, then node --test on the files listed in package.json
+npm test        # builds, then node --test on the files listed in package.json (`test/oom-bridge.ts` and `oom-worker.ts` are the fixtures of its out-of-memory case)
 npm run build   # tsc -p tsconfig.json
 ```
 

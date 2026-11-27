@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
-from app.core import access_cache, permissions
+from app.core import access_cache, permissions, redis_cache
 from app.core.access_cache import bump_agent_acl_version
 from app.core.domain.agents import AgentSharingMode, PermissionAccessLevel, PermissionGrantScope
 from app.core.domain.users import UserRole
@@ -103,10 +103,12 @@ class FakeRedis:
 def _reset_memo_and_ttl(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     access_cache.clear_request_memo()
     access_cache._deferred_acl.set(None)
+    redis_cache.reset_circuit()
     monkeypatch.setattr(access_cache, "_ttl_seconds", lambda: 45)
     yield
     access_cache.clear_request_memo()
     access_cache._deferred_acl.set(None)
+    redis_cache.reset_circuit()
 
 
 def _user(**overrides):
@@ -514,6 +516,39 @@ async def test_access_helpers_observe_version_before_decision_inputs(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bump_before", ["snapshot", "reread"])
+async def test_agent_needing_rows_is_read_again_after_the_version_is_observed(monkeypatch, bump_before):
+    user = _user()
+    agent = _agent(tenant_id=user.tenant_id, access_mode="custom", company_access_level=None)
+    fake = FakeRedis()
+    reads = 0
+
+    async def redis():
+        return fake
+
+    async def agent_input(_id):
+        nonlocal reads
+        reads += 1
+        if reads == (1 if bump_before == "snapshot" else 2):
+            fake.store[f"aclver:{agent.id}"] = "1"
+        return agent
+
+    monkeypatch.setattr(access_cache, "get_cache_redis", redis)
+    monkeypatch.setattr(permissions.agent_dao, "get", agent_input)
+    monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
+    monkeypatch.setattr(
+        permissions.agent_permission_dao,
+        "list_for_agent",
+        AsyncMock(return_value=[SimpleNamespace(scope_type="user", scope_id=user.id, access_level="use")]),
+    )
+    # A change committed before the version was observed is in the re-read; one committed after it voids the fill.
+    assert (await permissions.check_agent_access(user, agent.id))[1] == "use"
+    assert reads == 2
+    stored = any(key.startswith("acl:v1:") for key in fake.store)
+    assert stored is (bump_before == "snapshot")
+
+
+@pytest.mark.asyncio
 async def test_inactive_user_id_helper_rejects_even_a_request_memo(monkeypatch):
     user = _user(is_active=False)
     agent = _agent(tenant_id=user.tenant_id)
@@ -543,6 +578,53 @@ class _SessionPool:
 
     def connection(self) -> _SessionPoolCM:
         return _SessionPoolCM(self._raw)
+
+
+class _CountingPool(_SessionPool):
+    def __init__(self, raw: _SessionRaw) -> None:
+        super().__init__(raw)
+        self.checkouts = 0
+
+    @override
+    def connection(self) -> _SessionPoolCM:
+        self.checkouts += 1
+        return super().connection()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("memoized", [False, True])
+async def test_transfer_gate_and_agent_load_share_one_connection(monkeypatch, memoized):
+    from app.db import session as session_module
+    from app.services import company_transfer_runtime_gate
+
+    user = _user()
+    agent = _agent(tenant_id=user.tenant_id, creator_id=user.id)
+    pool = _CountingPool(_SessionRaw())
+    seen: dict[str, object] = {}
+
+    async def is_pending(_agent_id):
+        seen["gate"] = session_module.get_connection()
+        return False
+
+    async def load_agent(_agent_id):
+        seen["agent"] = session_module.get_connection()
+        return agent
+
+    monkeypatch.setattr(session_module, "get_pool", lambda: pool)
+    monkeypatch.setattr(company_transfer_runtime_gate.company_transfer_cleanup_dao, "is_pending", is_pending)
+    monkeypatch.setattr(permissions.agent_dao, "get", load_agent)
+    if memoized:
+        access_cache.memo_set(user.id, agent.id, agent, PermissionAccessLevel.MANAGE)
+    token = session_module._conn_ctx.set(None)
+    try:
+        await permissions.check_agent_access(user, agent.id)
+    finally:
+        session_module._conn_ctx.reset(token)
+
+    assert pool.checkouts == 1
+    assert seen["gate"] is not None
+    if not memoized:
+        assert seen["agent"] is seen["gate"]
 
 
 @pytest.mark.asyncio
@@ -632,9 +714,11 @@ class _SocketTimeoutRedis(FakeRedis):
 
 
 @pytest.mark.asyncio
-async def test_stalled_redis_costs_one_wait_and_is_never_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stalled_redis_costs_one_wait_then_calls_return_at_once_and_is_never_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     user = _user()
-    agent = _agent(tenant_id=user.tenant_id)
+    agent = _agent(tenant_id=user.tenant_id, access_mode="custom", company_access_level=None)
     fake = _SocketTimeoutRedis()
 
     async def cache_redis():
@@ -647,12 +731,23 @@ async def test_stalled_redis_costs_one_wait_and_is_never_cancelled(monkeypatch: 
     monkeypatch.setattr(asyncio, "wait_for", forbidden_wait_for)
     monkeypatch.setattr(permissions.user_dao, "get", AsyncMock(return_value=user))
     monkeypatch.setattr(permissions.agent_dao, "get", AsyncMock(return_value=agent))
+    monkeypatch.setattr(
+        permissions.agent_permission_dao,
+        "list_for_agent",
+        AsyncMock(return_value=[SimpleNamespace(scope_type="user", scope_id=user.id, access_level="use")]),
+    )
 
     _, level = await permissions.check_agent_access(user, agent.id)
 
     assert level == "use"
     assert fake.round_trips == 1
     assert fake.cancelled == 0
+
+    # The timeout opened the breaker, so later checks no longer wait a socket timeout each: they skip Redis at once.
+    for _ in range(3):
+        access_cache.clear_request_memo()
+        assert (await permissions.check_agent_access(user, agent.id))[1] == "use"
+    assert fake.round_trips == 1
 
 
 @pytest.mark.asyncio
@@ -730,8 +825,6 @@ async def test_deferred_flush_is_one_pipeline_with_ttl_and_drops_win(monkeypatch
 
 @pytest.mark.asyncio
 async def test_failed_invalidation_warns_and_ignores_the_read_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.core import redis_cache
-
     agent_id = uuid.uuid4()
     fake = FakeRedis()
     recorder = _WarningRecorder()
@@ -753,3 +846,70 @@ async def test_failed_invalidation_warns_and_ignores_the_read_circuit(monkeypatc
     assert len(recorder.warnings) == 1
     assert "invalidation failed" in recorder.warnings[0]
     assert "RuntimeError" in recorder.warnings[0]
+
+
+class _Clock:
+    now = 50.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.asyncio
+async def test_open_breaker_makes_every_acl_cache_call_return_without_touching_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRedis()
+    monkeypatch.setattr(access_cache, "get_cache_redis", AsyncMock(return_value=fake))
+    redis_cache._trip()
+
+    assert await access_cache.read_acl_snapshot(uuid.uuid4(), uuid.uuid4()) is access_cache.NO_ACL_SNAPSHOT
+    assert await access_cache.read_acl_version(uuid.uuid4()) == "0"
+    await access_cache.set_cached_level(_user(), uuid.uuid4(), PermissionAccessLevel.USE, observed_ver="0")
+
+    assert fake.round_trips == 0
+
+
+@pytest.mark.asyncio
+async def test_acl_reads_probe_once_after_the_cooldown_and_recover_when_redis_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(redis_cache, "_breaker", redis_cache.CacheBreaker(cooldown=2.0, clock=clock))
+    fake = FakeRedis()
+    monkeypatch.setattr(access_cache, "get_cache_redis", AsyncMock(return_value=fake))
+    user_id, agent_id = uuid.uuid4(), uuid.uuid4()
+
+    fake.fail = True
+    assert await access_cache.read_acl_snapshot(user_id, agent_id) is access_cache.NO_ACL_SNAPSHOT
+    fake.fail = False
+    assert await access_cache.read_acl_snapshot(user_id, agent_id) is access_cache.NO_ACL_SNAPSHOT
+    assert fake.round_trips == 1
+
+    # The first call after the cooldown is the probe; it still fails, so the breaker reopens.
+    clock.now += 2.0
+    fake.fail = True
+    assert await access_cache.read_acl_snapshot(user_id, agent_id) is access_cache.NO_ACL_SNAPSHOT
+    fake.fail = False
+    assert await access_cache.read_acl_snapshot(user_id, agent_id) is access_cache.NO_ACL_SNAPSHOT
+    assert fake.round_trips == 2
+
+    clock.now += 2.0
+    assert (await access_cache.read_acl_snapshot(user_id, agent_id)).version is not None
+    assert (await access_cache.read_acl_snapshot(user_id, agent_id)).version is not None
+    assert fake.round_trips == 4
+
+
+@pytest.mark.asyncio
+async def test_invalidation_writes_ignore_an_open_breaker_and_do_not_close_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(redis_cache, "_breaker", redis_cache.CacheBreaker(cooldown=2.0, clock=clock))
+    fake = FakeRedis()
+    monkeypatch.setattr(access_cache, "get_cache_redis", AsyncMock(return_value=fake))
+    agent_id = uuid.uuid4()
+    redis_cache._trip()
+
+    await access_cache.bump_agent_acl_version(agent_id)
+
+    assert fake.store[f"aclver:{agent_id}"] not in ("0", "")
+    assert redis_cache._cooling_down()

@@ -759,9 +759,13 @@ async def test_recovery_sql_preserves_pending_enable_guard(table, monkeypatch):
     query = table.connections[0].executed[0][0]
     assert "FOR UPDATE OF e SKIP LOCKED" in query
     assert "FOR NO KEY UPDATE OF t SKIP LOCKED" in query
-    assert "(e.status = 'pending' AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE)" in query
+    flat = " ".join(query.split())
+    assert (
+        "( e.status = 'pending' AND e.scheduled_at <= %(now)s "
+        "AND e.source = ANY(%(sources)s) AND t.is_enabled IS TRUE )"
+    ) in flat
     assert query.count("e.source = ANY") == 1
-    assert "(t.is_enabled IS TRUE OR t.self_disabled IS TRUE)" in " ".join(query.split())
+    assert "(t.is_enabled IS TRUE OR t.self_disabled IS TRUE)" in flat
     assert "OR t.type = 'once'" not in query
     assert "t.fire_count >= t.max_fires" not in query
 
@@ -812,7 +816,7 @@ async def test_empty_tick_still_claims_and_invokes_in_fresh_context(table, monke
     _, trigger = await claimed_lease(monkeypatch, table)
     launched = asyncio.Event()
 
-    async def enabled(*, after, limit):
+    async def enabled(*, now, after, limit):
         return []
 
     async def claim(_now, *, max_agents):
@@ -822,7 +826,7 @@ async def test_empty_tick_still_claims_and_invokes_in_fresh_context(table, monke
         assert session_module.get_connection() is None
         launched.set()
 
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", enabled)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_due_page", enabled)
     monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim)
     monkeypatch.setattr(trigger_daemon, "_invoke_agent_for_triggers", invoke)
     monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
@@ -853,12 +857,12 @@ async def test_ticks_pass_free_slots_down_to_the_claim_and_a_full_process_only_r
         recovered.append(len(asked))
         return []
 
-    async def enabled(*, after, limit):
+    async def enabled(*, now, after, limit):
         return []
 
     monkeypatch.setattr(trigger_execution_dao, "claim_pending", claim_pending)
     monkeypatch.setattr(dispatch, "fail_abandoned_trigger_executions", recover, raising=False)
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", enabled)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_due_page", enabled)
     monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
     capacity = trigger_daemon.InvocationCapacity(2)
     monkeypatch.setattr(trigger_daemon, "_capacity", capacity)
@@ -910,12 +914,12 @@ async def test_invocation_returns_its_slot_once_and_an_uncertain_commit_is_not_a
     async def claim(_now, *, max_agents):
         return {trigger.agent_id: [trigger]}, {trigger.agent_id}
 
-    async def enabled(*, after, limit):
+    async def enabled(*, now, after, limit):
         return []
 
     monkeypatch.setattr(trigger_execution_dao, "finish", finish)
     monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim)
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", enabled)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_due_page", enabled)
     monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
     capacity = trigger_daemon.InvocationCapacity(1)
     monkeypatch.setattr(trigger_daemon, "_capacity", capacity)
@@ -1022,11 +1026,11 @@ async def test_timed_out_invocation_keeps_its_slot_until_its_task_finishes(table
     async def claim(_now, *, max_agents):
         return {trigger.agent_id: [trigger]}, {trigger.agent_id}
 
-    async def enabled(*, after, limit):
+    async def enabled(*, now, after, limit):
         return []
 
     monkeypatch.setattr(trigger_daemon, "claim_ready_trigger_invocations", claim)
-    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_enabled_page", enabled)
+    monkeypatch.setattr(trigger_daemon.agent_trigger_dao, "list_due_page", enabled)
     monkeypatch.setattr(trigger_daemon, "_last_invoke", {})
     capacity = trigger_daemon.InvocationCapacity(2)
     monkeypatch.setattr(trigger_daemon, "_capacity", capacity)
@@ -1237,3 +1241,136 @@ async def test_wall_jump_between_reply_and_delivery_stops_invocation(table, monk
     assert messages == ["user"]
     assert effects == []
     assert table.rows[lease.execution_ids[0]]["last_error"] == executions.LEASE_LOST_ERROR
+
+
+def okr_firing(trigger, name="daily_okr_report"):
+    return replace(trigger, name=name, type="cron", config={**trigger.config, "okr_period": "2026-11-25"})
+
+
+def fail_when_model_runs(monkeypatch, trigger):
+    async def llm(**_kwargs):
+        raise AssertionError("an OKR firing never reaches the model")
+
+    fake_invoker(monkeypatch, trigger, llm)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name", ["daily_okr_collection", "daily_okr_report", "weekly_okr_report", "monthly_okr_report"]
+)
+async def test_okr_firing_runs_deterministically_under_the_lease_and_completes(table, monkeypatch, name):
+    # Given a claimed OKR execution and a model that must not run
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    firing = okr_firing(trigger, name)
+    fail_when_model_runs(monkeypatch, trigger)
+    ran = []
+
+    async def run(owned, *, guard):
+        guard()
+        ran.append(owned)
+
+    monkeypatch.setattr(invoker, "run_okr_firing", run)
+    # When the invocation runs
+    await asyncio.wait_for(invoker.invoke_agent_for_triggers(trigger.agent_id, [firing]), 1)
+    # Then the work ran once for that execution and the execution completed
+    assert ran == [firing]
+    assert table.rows[lease.execution_ids[0]]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_failed_okr_firing_is_queued_again_instead_of_failing_or_refiring(table, monkeypatch):
+    # Given a claimed OKR execution whose work raises, and a recorded retry write
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    firing = okr_firing(trigger)
+    fail_when_model_runs(monkeypatch, trigger)
+    retries = []
+
+    async def run(_owned, *, guard):
+        guard()
+        raise RuntimeError("provider down")
+
+    async def retry_later(execution_id, **kwargs):
+        retries.append((execution_id, kwargs))
+        return True
+
+    monkeypatch.setattr(invoker, "run_okr_firing", run)
+    monkeypatch.setattr(trigger_execution_dao, "retry_later", retry_later)
+    # When the invocation runs
+    await asyncio.wait_for(invoker.invoke_agent_for_triggers(trigger.agent_id, [firing]), 1)
+    # Then the failure is recorded for the owned execution on the retry schedule, and no terminal write was made
+    [(execution_id, kwargs)] = retries
+    assert execution_id == lease.execution_ids[0]
+    assert kwargs["lease_token"] == lease.token
+    assert kwargs["error_text"] == "provider down"
+    assert kwargs["retry_at"] - kwargs["now"] == executions.EXECUTION_RETRY_DELAY
+    assert kwargs["now"] - kwargs["give_up_before"] == executions.EXECUTION_RETRY_WINDOW
+    assert table.rows[lease.execution_ids[0]]["status"] == "processing"
+
+
+@pytest.mark.asyncio
+async def test_okr_failure_does_not_fail_the_model_triggers_of_the_same_invocation(table, monkeypatch):
+    # Given one OKR execution that fails and one ordinary trigger execution that succeeds for the same agent
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    other_execution, other_trigger = queued(table, started=True)
+    table.rows[other_execution.id].update(status="processing", lease_owner=lease.token)
+    ordinary = replace(
+        trigger, id=other_trigger.id, config={**trigger.config, "_execution_id": str(other_execution.id)}
+    )
+    firing = okr_firing(trigger)
+
+    async def llm(**_kwargs):
+        return "reply"
+
+    fake_invoker(monkeypatch, trigger, llm)
+    record_messages(monkeypatch)
+
+    async def run(_owned, *, guard):
+        raise RuntimeError("provider down")
+
+    async def retry_later(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(invoker, "run_okr_firing", run)
+    monkeypatch.setattr(trigger_execution_dao, "retry_later", retry_later)
+    # When they are invoked together
+    await asyncio.wait_for(invoker.invoke_agent_for_triggers(trigger.agent_id, [firing, ordinary]), 1)
+    # Then the model trigger still completed on its own
+    assert table.rows[other_execution.id]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_okr_firing_stops_at_lease_loss_and_fails_the_owned_row(table, monkeypatch):
+    # Given an OKR execution whose work finds the lease lost
+    lease, trigger = await claimed_lease(monkeypatch, table)
+    firing = okr_firing(trigger)
+    fail_when_model_runs(monkeypatch, trigger)
+
+    async def run(_owned, *, guard):
+        raise executions.ExecutionLeaseLostError("taken over")
+
+    monkeypatch.setattr(invoker, "run_okr_firing", run)
+    # When the invocation runs, Then it is a lease loss, not a retryable failure
+    await asyncio.wait_for(invoker.invoke_agent_for_triggers(trigger.agent_id, [firing]), 1)
+    row = table.rows[lease.execution_ids[0]]
+    assert (row["status"], row["last_error"]) == ("failed", executions.LEASE_LOST_ERROR)
+
+
+@pytest.mark.asyncio
+async def test_retry_write_is_fenced_to_the_lease_owner(table, monkeypatch):
+    # Given two executions of which only the first is still owned
+    lease, _trigger = await claimed_lease(monkeypatch, table)
+    stolen = uuid4()
+    calls = []
+
+    async def retry_later(execution_id, **kwargs):
+        calls.append((execution_id, kwargs["lease_token"]))
+        return execution_id != stolen
+
+    monkeypatch.setattr(trigger_execution_dao, "retry_later", retry_later)
+    # When both are queued again under the lease token
+    retried = await executions.mark_trigger_executions_retry(
+        [executions.ExecutionLease(lease.token, (lease.execution_ids[0], stolen))], "provider down"
+    )
+    # Then only the owned execution is reported as queued again
+    assert retried == [lease.execution_ids[0]]
+    assert calls == [(lease.execution_ids[0], lease.token), (stolen, lease.token)]

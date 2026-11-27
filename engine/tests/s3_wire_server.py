@@ -4,6 +4,9 @@ It speaks just the path-style calls the storage backend makes (PutObject with ``
 GetObject, DeleteObject, DeleteObjects, ListObjectsV2) and records every call, so tests can assert both what was
 stored and whether the provider was reached at all. It also keeps the bucket's ``?versioning`` status and
 ``?lifecycle`` document (``state.versioning`` and ``state.lifecycle``), recorded as ``?versioning`` / ``?lifecycle`` calls.
+
+GetObject answers a single ``Range`` as S3 does (``_select_range``) and records the header of each ranged GET as a
+``RANGE`` call next to its ``GET``; ``state.ranges(key)`` lists them in request order.
 """
 
 import hashlib
@@ -18,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 type PutFault = Literal["reject_403", "reject_500", "apply_then_500", "apply_then_drop"]
 type DeleteFault = Literal["reject_500", "apply_then_500"]
+type RangeOutcome = tuple[int, int] | Literal["ignored", "unsatisfiable"]
 PAGE_SIZE = 1000
 BUCKET_CONFIGS = ("versioning", "lifecycle")
 
@@ -49,9 +53,35 @@ class S3State:
     def count(self, method: str, key_prefix: str = "") -> int:
         return sum(1 for verb, key in self.calls if verb == method and key.startswith(key_prefix))
 
+    def ranges(self, key: str) -> list[str]:
+        """The ``Range`` header of every ranged GET of ``key``, in request order (a whole-object GET adds none)."""
+        recorded = (value.partition("@") for verb, value in self.calls if verb == "RANGE")
+        return [header for header, _, target in recorded if target == key]
+
 
 def _etag(data: bytes) -> str:
     return hashlib.md5(data, usedforsecurity=False).hexdigest()
+
+
+def _select_range(header: str, size: int) -> RangeOutcome:
+    """The inclusive byte span a ``Range`` header selects of a ``size``-byte object, resolved the way S3 does.
+
+    A start at or past the end (any range on an empty object, or ``bytes=-0``) is ``"unsatisfiable"``; an end past the
+    end is clamped and a suffix longer than the object selects all of it. A header S3 does not serve as a range (more
+    than one range, another unit, text that is not a range, an end before the start) is ``"ignored"``: the whole object
+    comes back with 200.
+    """
+    parsed = re.fullmatch(r"bytes=(\d*)-(\d*)", header)
+    if parsed is None or not any(parsed.groups()):
+        return "ignored"
+    start, end = parsed.groups()
+    if not start:
+        suffix = int(end)
+        return "unsatisfiable" if suffix == 0 or size == 0 else (max(size - suffix, 0), size - 1)
+    first = int(start)
+    if end and int(end) < first:
+        return "ignored"
+    return "unsatisfiable" if first >= size else (first, min(int(end), size - 1) if end else size - 1)
 
 
 def _decode_aws_chunked(raw: bytes) -> bytes:
@@ -88,9 +118,9 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             _ = self.wfile.write(body)
 
-    def _error(self, status: int, code: str) -> None:
+    def _error(self, status: int, code: str, headers: dict[str, str] | None = None) -> None:
         body = f"<Error><Code>{code}</Code><Message>{code}</Message></Error>".encode()
-        self._reply(status, body, {"Content-Type": "application/xml"})
+        self._reply(status, body, {"Content-Type": "application/xml", **(headers or {})})
 
     def _target(self) -> tuple[str, dict[str, list[str]]]:
         parts = urlsplit(self.path)
@@ -149,6 +179,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._put_bucket_config(config)
             return
         data, state = self._read_body(), self._state()
+        source = self.headers.get("x-amz-copy-source")
+        if source is not None:
+            self._copy_object(key, unquote(source).lstrip("/").partition("/")[2])
+            return
         with state.lock:
             state.calls.append(("PUT", key))
             fault, gate = state.put_faults.get(key), state.gates.get(key)
@@ -178,6 +212,26 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._reply(200, headers={"ETag": f'"{_etag(data)}"'})
 
+    def _copy_object(self, key: str, source: str) -> None:
+        """CopyObject: the bytes move inside the provider; ``x-amz-copy-source-if-match`` must equal the source's ETag."""
+        state = self._state()
+        wanted = self.headers.get("x-amz-copy-source-if-match", "").strip('"')
+        with state.lock:
+            state.calls.append(("COPY", key))
+            fault, data = state.put_faults.get(key), state.objects.get(source)
+            if data is not None and (not wanted or wanted == _etag(data)) and fault != "reject_500":
+                state.objects[key] = data
+                state.content_types[key] = state.content_types.get(source, "")
+        if data is None:
+            self._error(404, "NoSuchKey")
+        elif wanted and wanted != _etag(data):
+            self._error(412, "PreconditionFailed")
+        elif fault is not None:
+            self._error(500, "InternalError")
+        else:
+            xml = f"<CopyObjectResult><ETag>&quot;{_etag(data)}&quot;</ETag></CopyObjectResult>"
+            self._reply(200, xml.encode(), {"Content-Type": "application/xml"})
+
     def do_HEAD(self) -> None:
         key, _ = self._target()
         state = self._state()
@@ -198,13 +252,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_bucket_config(config)
             return
         if "list-type" not in query:
+            requested = self.headers.get("Range")
             with state.lock:
                 state.calls.append(("GET", key))
+                if requested is not None:
+                    state.calls.append(("RANGE", f"{requested}@{key}"))
                 data = state.objects.get(key)
             if data is None:
                 self._error(404, "NoSuchKey")
             else:
-                self._reply(200, data, {"ETag": f'"{_etag(data)}"'})
+                self._serve_object(data, requested)
             return
         prefix = query.get("prefix", [""])[0]
         after = query.get("continuation-token", [""])[0]
@@ -224,6 +281,17 @@ class _Handler(BaseHTTPRequestHandler):
             f"<IsTruncated>{str(truncated).lower()}</IsTruncated>{token}{contents}</ListBucketResult>"
         )
         self._reply(200, xml.encode(), {"Content-Type": "application/xml"})
+
+    def _serve_object(self, data: bytes, requested: str | None) -> None:
+        headers = {"ETag": f'"{_etag(data)}"'}
+        selected = "ignored" if requested is None else _select_range(requested, len(data))
+        if selected == "unsatisfiable":
+            self._error(416, "InvalidRange", {"Content-Range": f"bytes */{len(data)}"})
+        elif selected == "ignored":
+            self._reply(200, data, headers)
+        else:
+            first, last = selected
+            self._reply(206, data[first : last + 1], {**headers, "Content-Range": f"bytes {first}-{last}/{len(data)}"})
 
     def do_DELETE(self) -> None:
         key, _ = self._target()
@@ -252,12 +320,21 @@ class _Handler(BaseHTTPRequestHandler):
             return
         deleted, errors = [], []
         with state.lock:
-            for key in (unescape(match) for match in re.findall(r"<Key>(.*?)</Key>", body)):
+            objects = re.findall(r"<Object>(.*?)</Object>", body, re.DOTALL)
+            state.calls.append(("DELETEOBJECTS", str(len(objects))))
+            for entry in objects:
+                key = unescape(next(iter(re.findall(r"<Key>(.*?)</Key>", entry)), ""))
+                etag = re.search(r"<ETag>(.*?)</ETag>", entry)
                 state.calls.append(("MULTIDELETE", key))
+                code = ""
                 if key in state.refused_deletes:
-                    errors.append(
-                        f"<Error><Key>{escape(key)}</Key><Code>AccessDenied</Code><Message>no</Message></Error>"
-                    )
+                    code = "AccessDenied"
+                elif etag is not None and key not in state.objects:
+                    code = "NoSuchKey"
+                elif etag is not None and unescape(etag.group(1)).strip('"') != _etag(state.objects[key]):
+                    code = "PreconditionFailed"
+                if code:
+                    errors.append(f"<Error><Key>{escape(key)}</Key><Code>{code}</Code><Message>no</Message></Error>")
                 else:
                     _ = state.objects.pop(key, None)
                     deleted.append(f"<Deleted><Key>{escape(key)}</Key></Deleted>")

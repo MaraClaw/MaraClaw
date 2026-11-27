@@ -1,5 +1,5 @@
-from datetime import timedelta
-from uuid import UUID
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import anyio
 import httpx
@@ -23,8 +23,9 @@ from app.core.domain.users import UserRole
 from app.core.security import get_current_user
 from app.dao.web_search_analytics_sql import SearchAnalyticsDashboardProjection
 from app.dao.web_search_event_dao import web_search_event_dao
-from app.db.connection import DbConnection
+from app.db.connection import DbConnection, Params, Row
 from app.records.user import UserRecord
+from app.scripts.bootstrap_db import SCHEMA_BASELINE, _statement_bodies
 
 __all__ = ["analytics_db"]
 
@@ -162,3 +163,183 @@ async def test_dashboard_retains_ranking_limits_with_high_diversity(analytics_db
     assert result["system_summary"]["event_count"] == 100
     assert result["system_summary"]["unique_orgs"] == 30
     assert result["system_summary"]["unique_agents"] == 0
+
+
+CUTOFF = datetime(2026, 11, 1, tzinfo=UTC)
+OLD = CUTOFF - timedelta(days=3)
+RECENT = CUTOFF + timedelta(days=3)
+# A purge that waits on a locked row fails after this long instead of hanging the run.
+FAIL_AFTER_SECONDS = 10
+
+
+async def add_event(db: DbConnection, occurred_at: datetime, *, state: str = "exported") -> UUID:
+    event_id = uuid4()
+    await db.execute(
+        "INSERT INTO web_search_events (id, occurred_at, kind, method, http_status, status_class, latency_ms, "
+        "query_hash, export_state) VALUES (%(id)s, %(at)s, 'search', 'POST', 200, 'ok', 5, 'hash', %(state)s)",
+        {"id": event_id, "at": occurred_at, "state": state},
+    )
+    return event_id
+
+
+async def add_payload(db: DbConnection, event_id: UUID, created_at: datetime) -> None:
+    await db.execute(
+        "INSERT INTO web_search_export_payloads (event_id, raw_query, created_at) VALUES (%(id)s, 'raw', %(at)s)",
+        {"id": event_id, "at": created_at},
+    )
+
+
+async def event_ids(db: DbConnection) -> set[UUID]:
+    return {row["id"] for row in await db.fetchall("SELECT id FROM web_search_events") if isinstance(row["id"], UUID)}
+
+
+async def payload_ids(db: DbConnection) -> set[UUID]:
+    rows = await db.fetchall("SELECT event_id FROM web_search_export_payloads")
+    return {row["event_id"] for row in rows if isinstance(row["event_id"], UUID)}
+
+
+async def test_event_retention_deletes_old_events_in_bounded_oldest_first_batches(
+    analytics_db: AnalyticsDatabase,
+) -> None:
+    # Given five old events in every export state, one exactly at the cutoff and one after it.
+    db = analytics_db.db
+    states = ["pending", "exporting", "exported", "skipped", "exported"]
+    old = [await add_event(db, OLD + timedelta(minutes=minutes), state=state) for minutes, state in enumerate(states)]
+    boundary, recent = await add_event(db, CUTOFF), await add_event(db, RECENT)
+    # When batches of two are deleted until one comes back short.
+    first = await web_search_event_dao.delete_older_than(CUTOFF, limit=2)
+    left_after_first = await event_ids(db)
+    second = await web_search_event_dao.delete_older_than(CUTOFF, limit=2)
+    third = await web_search_event_dao.delete_older_than(CUTOFF, limit=2)
+    fourth = await web_search_event_dao.delete_older_than(CUTOFF, limit=2)
+    # Then no batch exceeded its limit, the oldest went first, and only events strictly before the cutoff went.
+    assert (first, second, third, fourth) == (2, 2, 1, 0)
+    assert left_after_first == {*old[2:], boundary, recent}
+    assert await event_ids(db) == {boundary, recent}
+
+
+async def test_payload_retention_deletes_old_payloads_in_bounded_oldest_first_batches(
+    analytics_db: AnalyticsDatabase,
+) -> None:
+    # Given five old payloads of pending events, one at the cutoff and one after it.
+    db = analytics_db.db
+    events = [await add_event(db, RECENT, state="pending") for _ in range(7)]
+    for minutes, event_id in enumerate(events[:5]):
+        await add_payload(db, event_id, OLD + timedelta(minutes=minutes))
+    await add_payload(db, events[5], CUTOFF)
+    await add_payload(db, events[6], RECENT)
+    # When batches of two are deleted until one comes back short.
+    first = await web_search_event_dao.delete_payloads_older_than(CUTOFF, limit=2)
+    left_after_first = await payload_ids(db)
+    second = await web_search_event_dao.delete_payloads_older_than(CUTOFF, limit=2)
+    third = await web_search_event_dao.delete_payloads_older_than(CUTOFF, limit=2)
+    fourth = await web_search_event_dao.delete_payloads_older_than(CUTOFF, limit=2)
+    # Then the batches were bounded and oldest first, and no event row went with its payload.
+    assert (first, second, third, fourth) == (2, 2, 1, 0)
+    assert left_after_first == {*events[2:]}
+    assert await payload_ids(db) == {events[5], events[6]}
+    assert await event_ids(db) == set(events)
+
+
+async def test_orphaned_payload_retention_keeps_payloads_of_pending_and_exporting_events(
+    analytics_db: AnalyticsDatabase,
+) -> None:
+    # Given payloads of pending and exporting events, and payloads that no export waits for: exported and skipped
+    # events and an event that is gone.
+    db = analytics_db.db
+    waiting = [await add_event(db, RECENT, state="pending"), await add_event(db, RECENT, state="exporting")]
+    orphans = [await add_event(db, RECENT, state="exported"), await add_event(db, RECENT, state="skipped"), uuid4()]
+    for event_id in [*waiting, *orphans]:
+        await add_payload(db, event_id, RECENT)
+    # When batches of two are deleted until one comes back short.
+    first = await web_search_event_dao.delete_orphaned_payloads(limit=2)
+    second = await web_search_event_dao.delete_orphaned_payloads(limit=2)
+    third = await web_search_event_dao.delete_orphaned_payloads(limit=2)
+    # Then only the orphans went, in bounded batches.
+    assert (first, second, third) == (2, 1, 0)
+    assert await payload_ids(db) == set(waiting)
+
+
+async def test_retention_skips_rows_another_transaction_holds_without_waiting(
+    analytics_db: AnalyticsDatabase,
+) -> None:
+    # Given an old event and an old payload, each locked by another open transaction, and a free pair beside them.
+    db = analytics_db.db
+    held_event, free_event = await add_event(db, OLD), await add_event(db, OLD)
+    held_payload, free_payload = await add_event(db, RECENT), await add_event(db, RECENT)
+    for event_id in (held_payload, free_payload):
+        await add_payload(db, event_id, OLD)
+    async with await AsyncConnection[DictRow].connect(analytics_db.dsn, row_factory=dict_row) as other:
+        holder = DbConnection(other)
+        await holder.execute(f'SET search_path TO "{analytics_db.schema}"')
+        await holder.fetchall("SELECT id FROM web_search_events WHERE id = %(id)s FOR UPDATE", {"id": held_event})
+        await holder.fetchall(
+            "SELECT event_id FROM web_search_export_payloads WHERE event_id = %(id)s FOR UPDATE", {"id": held_payload}
+        )
+        await db.execute("SET lock_timeout = '1s'")
+        # When the purges run meanwhile.
+        with anyio.fail_after(FAIL_AFTER_SECONDS):
+            events = await web_search_event_dao.delete_older_than(CUTOFF, limit=10)
+            payloads = await web_search_event_dao.delete_payloads_older_than(CUTOFF, limit=10)
+        left_events, left_payloads = await event_ids(db), await payload_ids(db)
+        await other.rollback()
+        await db.execute("RESET lock_timeout")
+    # Then they completed without waiting, took only the free rows, and the held rows went on the next batch.
+    assert (events, payloads) == (1, 1)
+    assert held_event in left_events
+    assert free_event not in left_events
+    assert (held_payload in left_payloads, free_payload in left_payloads) == (True, False)
+    assert await web_search_event_dao.delete_older_than(CUTOFF, limit=10) == 1
+    assert await web_search_event_dao.delete_payloads_older_than(CUTOFF, limit=10) == 1
+
+
+async def test_retention_statements_walk_the_cutoff_indexes_in_small_batches(
+    analytics_db: AnalyticsDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given the baseline's own indexes on both tables, thousands of old events and payloads, analyzed, and the exact
+    # statements the DAO sends (captured).
+    db = analytics_db.db
+    for statement in _statement_bodies(SCHEMA_BASELINE.read_text()):
+        if statement.startswith("CREATE OR REPLACE FUNCTION pg_temp.baseline_ensure_index") or (
+            statement.startswith("SELECT pg_temp.baseline_ensure_index")
+            and ("ON web_search_events " in statement or "ON web_search_export_payloads " in statement)
+        ):
+            await db.execute(statement)
+    await db.execute(
+        "INSERT INTO web_search_events (id, occurred_at, kind, method, http_status, status_class, latency_ms, "
+        "query_hash, export_state) SELECT gen_random_uuid(), %(at)s + g * interval '1 minute', 'search', 'POST', 200, "
+        "'ok', 5, 'hash', 'exported' FROM generate_series(1, 3000) g",
+        {"at": OLD},
+    )
+    await db.execute(
+        "INSERT INTO web_search_export_payloads (event_id, raw_query, created_at) "
+        "SELECT gen_random_uuid(), 'raw', %(at)s + g * interval '1 minute' FROM generate_series(1, 3000) g",
+        {"at": OLD},
+    )
+    await db.execute("ANALYZE web_search_events")
+    await db.execute("ANALYZE web_search_export_payloads")
+    captured: list[tuple[str, Params]] = []
+    original = db.fetchall
+
+    async def spy(query: str, params: Params = None) -> list[Row]:
+        captured.append((query, params))
+        return await original(query, params)
+
+    monkeypatch.setattr(db, "fetchall", spy)
+    _ = await web_search_event_dao.delete_older_than(CUTOFF, limit=50)
+    _ = await web_search_event_dao.delete_payloads_older_than(CUTOFF, limit=50)
+    (events_query, events_params), (payloads_query, payloads_params) = captured[-2:]
+    # When the planner is asked about each statement with sequential scans forbidden.
+    await db.execute("SET enable_seqscan = off")
+    events_plan = "\n".join(
+        str(row["QUERY PLAN"]) for row in await original("EXPLAIN (COSTS OFF) " + events_query, events_params)
+    )
+    payloads_plan = "\n".join(
+        str(row["QUERY PLAN"]) for row in await original("EXPLAIN (COSTS OFF) " + payloads_query, payloads_params)
+    )
+    # Then each reads an index ordered by its cutoff column and deletes by TID.
+    assert "ix_web_search_events_occurred_tenant" in events_plan
+    assert "ix_web_search_export_payloads_created_at" in payloads_plan
+    for plan in (events_plan, payloads_plan):
+        assert "Tid Scan" in plan
+        assert "Seq Scan" not in plan

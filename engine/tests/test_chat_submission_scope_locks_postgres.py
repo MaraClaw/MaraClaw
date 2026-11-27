@@ -64,7 +64,6 @@ async def test_submission_quota_and_native_scope_locks_complete_without_a_cycle(
                         user=world.owner,
                         agent=world.held,
                         session_id=world.db.session_id,
-                        history=[],
                     )
                 )
         except DbError as error:
@@ -129,7 +128,6 @@ async def test_owner_submission_and_human_lane_claim_complete_without_a_cycle(
                         user=world.owner,
                         agent=world.held,
                         session_id=session_id,
-                        history=[],
                     )
                 )
         except DbError as error:
@@ -243,7 +241,6 @@ async def test_submission_locks_the_agent_before_the_session_native_work_writes(
                         user=world.owner,
                         agent=world.held,
                         session_id=world.db.session_id,
-                        history=[],
                     )
                 )
         except DbError as error:

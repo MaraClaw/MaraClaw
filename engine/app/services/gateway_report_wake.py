@@ -1,6 +1,7 @@
 """Idle-wait shortcut for the report relay; PostgreSQL stays the only durable queue.
 
 A wake carries no data. Losing one (Redis down, no worker listening) costs at most the relay's polling interval.
+The listener's long-lived subscription lives in the Pub/Sub pool, so a burst of command traffic never starves it.
 """
 
 import asyncio
@@ -12,7 +13,7 @@ from uuid import uuid4
 import anyio
 
 from app.api.background_tasks import schedule_background_task
-from app.core.events import get_redis
+from app.core.events import get_pubsub_redis, get_redis
 from app.core.logging import logger
 
 WAKE_CHANNEL: Final = "gateway_report_relay:wake"
@@ -33,9 +34,11 @@ class _WakePubSub(Protocol):
     async def aclose(self) -> None: ...
 
 
-class _WakeRedis(Protocol):
+class _WakePublisher(Protocol):
     def publish(self, channel: str, message: str) -> Awaitable[int]: ...
 
+
+class _WakeSubscriber(Protocol):
     def pubsub(self) -> _WakePubSub: ...
 
 
@@ -59,7 +62,7 @@ async def _announce() -> None:
     signal_local()
     try:
         async with asyncio.timeout(_PUBLISH_TIMEOUT):
-            _ = await cast("_WakeRedis", await get_redis()).publish(WAKE_CHANNEL, _ORIGIN)
+            _ = await cast("_WakePublisher", await get_redis()).publish(WAKE_CHANNEL, _ORIGIN)
     except Exception as exc:
         logger.warning("[GatewayReportRelay] wake publish failed; workers fall back to polling: {}", exc)
 
@@ -83,7 +86,7 @@ async def subscribe_wakes() -> None:
     while True:
         pubsub = None
         try:
-            pubsub = cast("_WakeRedis", await get_redis()).pubsub()
+            pubsub = cast("_WakeSubscriber", await get_pubsub_redis()).pubsub()
             await pubsub.subscribe(WAKE_CHANNEL)
             if degraded:
                 logger.info("[GatewayReportRelay] wake subscription restored")

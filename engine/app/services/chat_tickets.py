@@ -12,8 +12,9 @@ from redis.exceptions import RedisError
 from app.config import get_settings
 from app.core.events import get_redis
 from app.core.permissions import check_agent_access, is_agent_expired
-from app.core.security import check_membership_generation, check_token_generation, load_user_principal
+from app.core.security import check_generations, load_user_principal
 from app.dao.chat_dao import chat_session_dao
+from app.db.session import optional_connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
 from app.records.user import UserRecord
@@ -67,16 +68,29 @@ async def authorize_identity(binding: ChatTicketBinding) -> tuple[UserRecord, Ag
     deadline with ``is_expired``.
     """
     user = await load_user_principal(binding.user_id, fresh=True)
+    agent, level = await authorize_principal(
+        user,
+        binding.agent_id,
+        tenant_id=binding.tenant_id,
+        auth_generation=binding.auth_generation,
+        membership_generation=binding.membership_generation,
+    )
+    return user, agent, level
+
+
+async def authorize_principal(
+    user: UserRecord, agent_id: uuid.UUID, *, tenant_id: uuid.UUID, auth_generation: int, membership_generation: int
+) -> tuple[AgentRecord, str]:
+    """Authorize a principal the caller has already loaded: both generations, its tenant, then access to the agent."""
     if user.identity is None:
         raise HTTPException(401, "Identity unavailable")
-    await check_token_generation(user.identity.id, binding.auth_generation)
-    await check_membership_generation(user.id, binding.membership_generation)
-    if user.tenant_id != binding.tenant_id:
+    await check_generations(user.id, user.identity.id, auth=auth_generation, membership=membership_generation)
+    if user.tenant_id != tenant_id:
         raise HTTPException(403, "Membership changed")
-    agent, level = await check_agent_access(user, binding.agent_id, fresh=True)
+    agent, level = await check_agent_access(user, agent_id, fresh=True, user_is_current=True)
     if is_agent_expired(agent):
         raise HTTPException(403, "Agent expired")
-    return user, agent, level
+    return agent, level
 
 
 async def authorized_session(binding: ChatTicketBinding, user: UserRecord, agent: AgentRecord) -> ChatSessionRecord:
@@ -89,9 +103,24 @@ async def authorized_session(binding: ChatTicketBinding, user: UserRecord, agent
     return session
 
 
-async def issue(binding: ChatTicketBinding) -> ChatTicketResponse:
-    user, agent, _ = await authorize(binding)
-    session = await authorized_session(binding, user, agent)
+async def authorize_message(binding: ChatTicketBinding) -> tuple[UserRecord, AgentRecord, str]:
+    """Authorize one socket message and confirm its session still opens, every read on one pooled checkout."""
+    async with optional_connection_ctx():
+        user, agent, level = await authorize(binding)
+        _ = await authorized_session(binding, user, agent)
+    return user, agent, level
+
+
+async def issue(
+    binding: ChatTicketBinding, authorized: tuple[UserRecord, AgentRecord] | None = None
+) -> ChatTicketResponse:
+    """Store a ticket for ``binding``; ``authorized`` is a user and agent the caller has just authorized for it."""
+    async with optional_connection_ctx():
+        if authorized is None:
+            user, agent, _ = await authorize(binding)
+        else:
+            user, agent = authorized
+        session = await authorized_session(binding, user, agent)
     binding = binding.model_copy(update={"authorize_deliveries": is_canonical(session)})
     ticket = secrets.token_urlsafe(32)
     try:
@@ -116,19 +145,25 @@ async def create(
 ) -> ChatTicketResponse:
     if user.tenant_id is None:
         raise HTTPException(403, "Tenant membership required")
-    agent, _ = await check_agent_access(user, request.agent_id, fresh=True)
-    if is_agent_expired(agent):
-        raise HTTPException(403, "Agent expired")
+    async with optional_connection_ctx():
+        agent, _ = await authorize_principal(
+            user,
+            request.agent_id,
+            tenant_id=user.tenant_id,
+            auth_generation=auth_generation,
+            membership_generation=membership_generation,
+        )
+        session_id = await resolve_session(request, user.id)
     binding = ChatTicketBinding(
         user_id=user.id,
         tenant_id=user.tenant_id,
         agent_id=request.agent_id,
-        session_id=await resolve_session(request, user.id),
+        session_id=session_id,
         auth_deadline=auth_deadline,
         auth_generation=auth_generation,
         membership_generation=membership_generation,
     )
-    return await issue(binding)
+    return await issue(binding, (user, agent))
 
 
 async def redeem(ticket: str) -> ChatTicketBinding:

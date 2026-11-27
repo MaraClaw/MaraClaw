@@ -11,7 +11,7 @@ import pytest
 from app.core.json_types import JsonObject
 from app.records.org import OrgMemberRecord
 from app.services import agent_tools
-from app.services.agent_tool_exec import channel_context, registry
+from app.services.agent_tool_exec import registry
 from app.services.agent_tool_exec.registry import ToolArgumentValue
 
 type QueuedResponse = JsonObject | BaseException
@@ -270,7 +270,7 @@ async def test_drive_delete_preserves_async_success_and_permission_error(monkeyp
     )
 
 
-async def test_calendar_create_auto_invites_sender_and_resolves_names_through_facade(monkeypatch) -> None:
+async def test_calendar_create_invites_only_the_named_attendees_and_resolves_names_through_facade(monkeypatch) -> None:
     target = _calendar_module()
     _patch_credentials(monkeypatch, _FakeFeishuService())
     resolved_names: list[ToolArgumentValue] = []
@@ -293,23 +293,18 @@ async def test_calendar_create_auto_invites_sender_and_resolves_names_through_fa
         {"code": 0, "data": {"event": {"event_id": "event-1"}}},
         {"code": 0},
         {"code": 0},
-        {"code": 0},
     )
     monkeypatch.setattr(target, "_httpx_module", lambda: httpx)
-    token = channel_context.channel_feishu_sender_open_id.set("ou_sender")
-    try:
-        result = await target._feishu_calendar_create(
-            uuid.uuid4(),
-            {
-                "summary": "Planning",
-                "start_time": "2026-07-07T09:00:00+08:00",
-                "end_time": "2026-07-07T10:00:00+08:00",
-                "user_email": "owner@example.test",
-                "attendee_names": ["Alice"],
-            },
-        )
-    finally:
-        channel_context.channel_feishu_sender_open_id.reset(token)
+    result = await target._feishu_calendar_create(
+        uuid.uuid4(),
+        {
+            "summary": "Planning",
+            "start_time": "2026-07-07T09:00:00+08:00",
+            "end_time": "2026-07-07T10:00:00+08:00",
+            "user_email": "owner@example.test",
+            "attendee_names": ["Alice"],
+        },
+    )
 
     assert result == (
         "✅ 日历事件已创建！\n"
@@ -324,7 +319,6 @@ async def test_calendar_create_auto_invites_sender_and_resolves_names_through_fa
     assert attendee_payloads == [
         {"attendees": [{"type": "user", "user_id": "ou_Alice123"}]},
         {"attendees": [{"type": "user", "user_id": "ou_email"}]},
-        {"attendees": [{"type": "user", "user_id": "ou_sender"}]},
     ]
 
 
@@ -378,9 +372,7 @@ async def test_approval_handlers_preserve_check_err_mapping_success_and_exceptio
 
 
 @pytest.mark.parametrize("search", ["Alice", "alicefull", "af"])
-async def test_user_search_uses_facade_db_seams_and_contact_refresh_deletes_cache(
-    monkeypatch, tmp_path, search
-) -> None:
+async def test_user_search_uses_facade_db_seams(monkeypatch, search) -> None:
     from app.dao.agent_dao import agent_dao
     from app.dao.org_member_dao import org_member_dao
 
@@ -415,23 +407,13 @@ async def test_user_search_uses_facade_db_seams_and_contact_refresh_deletes_cach
         "  邮箱: alice@example.test"
     )
 
-    cache_file = tmp_path / "feishu_contacts_cache.json"
-    cache_file.write_text("{}")
-    monkeypatch.setattr(target, "_contacts_cache_file", lambda _agent_id: cache_file)
 
-    await target._feishu_contacts_refresh(uuid.uuid4())
-
-    assert not cache_file.exists()
-
-
-async def test_user_search_db_miss_returns_empty_cache_message_without_facade_cache(monkeypatch) -> None:
+async def test_user_search_db_miss_asks_for_an_open_id_or_email(monkeypatch) -> None:
     from app.dao.agent_dao import agent_dao
     from app.dao.org_member_dao import org_member_dao
 
     target = _contacts_module()
     _patch_credentials(monkeypatch)
-    monkeypatch.delattr(agent_tools, "_cached_users", raising=False)
-    monkeypatch.setattr(target, "_cached_users", [])
 
     async def fake_get_agent(_agent_id):
         return SimpleNamespace(tenant_id=uuid.uuid4())
@@ -444,41 +426,9 @@ async def test_user_search_db_miss_returns_empty_cache_message_without_facade_ca
 
     result = await target._feishu_user_search(uuid.uuid4(), {"name": "Bob"})
 
-    assert result == (
-        "❌ 本地通讯录缓存为空，暂时无法搜索「Bob」。\n\n"
-        "通讯录缓存会在同事向机器人发消息时自动建立。\n"
-        "如果「覃睿」从未给机器人发过消息，可以请他先给机器人发一条消息，"
-        "之后就能直接搜索到他了。\n\n"
-        "或者，请直接告诉我「覃睿」的飞书 open_id 或邮箱，我可以立刻操作。"
-    )
-
-
-async def test_user_search_db_miss_returns_cache_miss_message_with_module_cache(monkeypatch) -> None:
-    from app.dao.agent_dao import agent_dao
-    from app.dao.org_member_dao import org_member_dao
-
-    target = _contacts_module()
-    _patch_credentials(monkeypatch)
-    monkeypatch.delattr(agent_tools, "_cached_users", raising=False)
-    monkeypatch.setattr(target, "_cached_users", [{"name": "Alice"}, {"name": "Carol"}])
-
-    async def fake_get_agent(_agent_id):
-        return SimpleNamespace(tenant_id=uuid.uuid4())
-
-    async def fake_list_active_filtered(**_kwargs):
-        raise RuntimeError("db unavailable")
-
-    monkeypatch.setattr(agent_dao, "get", fake_get_agent)
-    monkeypatch.setattr(org_member_dao, "list_active_filtered", fake_list_active_filtered)
-
-    result = await target._feishu_user_search(uuid.uuid4(), {"name": "Bob"})
-
-    assert result == (
-        "❌ 未在本地通讯录（已缓存 2 人）中找到「Bob」。\n\n"
-        "通讯录缓存来自给机器人发过消息的同事。\n"
-        "如果「{name}」从未给机器人发消息，请他先发一条，之后即可自动识别。\n"
-        "或者请直接提供其飞书 open_id / 工作邮箱。"
-    )
+    assert result.startswith("❌")
+    assert "「Bob」" in result
+    assert "open_id" in result
 
 
 async def test_task12_registry_handlers_call_extracted_modules_not_facade(monkeypatch) -> None:

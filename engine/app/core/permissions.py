@@ -22,6 +22,7 @@ from app.core.domain.agents import (
 from app.core.domain.users import UserRole
 from app.dao import agent_dao, agent_permission_dao, org_member_dao, user_dao
 from app.dao.org_department_dao import org_department_dao
+from app.db.session import optional_connection_ctx
 from app.records.agent import AgentPermissionRecord, AgentRecord
 from app.records.agent_agent_relationship import AgentAgentRelationshipRecord
 from app.records.agent_relationship import AgentRelationshipRecord
@@ -523,11 +524,15 @@ async def evaluate_human_relationship_statuses(
 
 
 async def check_agent_access(
-    user: _UserLike, agent_id: uuid.UUID, *, fresh: bool = False
+    user: _UserLike, agent_id: uuid.UUID, *, fresh: bool = False, user_is_current: bool = False
 ) -> tuple[AgentRecord, PermissionAccessLevel]:
     """Check if a user has access to a specific agent.
 
-    Returns (agent, access_level) where access_level is 'manage' or 'use'.
+    Returns (agent, access_level) where access_level is 'manage' or 'use'. The transfer gate and every read share one
+    connection. An agent decided by the caller's ``user`` and the agent alone (creator, administrator, company level,
+    another tenant) never touches the decision cache or reloads the user. Otherwise the ACL version is observed first,
+    then the user and the agent are read again, so a cached or filled decision never rests on older inputs. A ``fresh``
+    check re-reads the user from SQL up front unless ``user_is_current`` says the caller just loaded it there.
     """
     if not getattr(user, "is_active", True):
         raise HTTPException(403, "User is inactive")
@@ -539,39 +544,54 @@ async def check_agent_access(
     user_id = user.id
     from app.services.company_transfer_runtime_gate import assert_transfer_ready
 
-    await assert_transfer_ready(agent_id)
-    memo = access_cache.memo_get(user_id, agent_id)
-    if memo is not None:
-        _reject_expired_use(memo[0], memo[1])
-        return memo
+    async with optional_connection_ctx():
+        await assert_transfer_ready(agent_id)
+        memo = access_cache.memo_get(user_id, agent_id)
+        if memo is not None:
+            _reject_expired_use(memo[0], memo[1])
+            return memo
 
-    snapshot = access_cache.NO_ACL_SNAPSHOT if fresh else await access_cache.read_acl_snapshot(user_id, agent_id)
-    current_user = await user_dao.get(user_id)
-    if current_user is None or not current_user.is_active:
+        if fresh and not user_is_current:
+            user = await _read_current_user(user_id)
+        agent = await _read_current_agent(agent_id)
+        observed: str | None = None
+        cached: PermissionAccessLevel | None = None
+        cacheable = not fresh and isinstance(_access_without_permissions(user, agent), _NeedPerms)
+        if cacheable:
+            snapshot = await access_cache.read_acl_snapshot(user_id, agent_id)
+            observed = snapshot.version
+            user = await _read_current_user(user_id)
+            cached = await access_cache.get_cached_level(user, agent_id, snapshot)
+            if cached is None:
+                agent = await _read_current_agent(agent_id)
+
+        level = cached if cached is not None else await compute_agent_access_level(user, agent)
+        if level is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this agent")
+        _reject_expired_use(agent, level)
+
+        if not fresh:
+            if cacheable and cached is None:
+                await access_cache.set_cached_level(user, agent_id, level, observed_ver=observed)
+            access_cache.memo_set(user_id, agent_id, agent, level)
+        return agent, level
+
+
+async def _read_current_user(user_id: uuid.UUID) -> UserRecord:
+    user = await user_dao.get(user_id)
+    if user is None or not user.is_active:
         raise HTTPException(403, "User is inactive")
-    user = current_user
+    return user
+
+
+async def _read_current_agent(agent_id: uuid.UUID) -> AgentRecord:
     from app.core.row_memo import memo_drop
 
     memo_drop("agent", agent_id)
     agent = await agent_dao.get(agent_id)
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-
-    cached = None if fresh else await access_cache.get_cached_level(user, agent_id, snapshot)
-    if cached is not None:
-        _reject_expired_use(agent, cached)
-        access_cache.memo_set(user_id, agent_id, agent, cached)
-        return agent, cached
-
-    level = await compute_agent_access_level(user, agent)
-    if level is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this agent")
-    _reject_expired_use(agent, level)
-
-    if not fresh:
-        await access_cache.set_cached_level(user, agent_id, level, observed_ver=snapshot.version)
-        access_cache.memo_set(user_id, agent_id, agent, level)
-    return agent, level
+    return agent
 
 
 def is_agent_creator(user: _UserLike, agent: _AgentLike) -> bool:

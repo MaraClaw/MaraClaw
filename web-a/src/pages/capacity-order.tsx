@@ -18,7 +18,7 @@ import { formatBillingMonth, formatCalendarDate, formatUsdCents, formatVnd } fro
 import { canCancelOrder, canSubmitEvidence, vietnamToday } from '@/lib/capacity-order-state'
 import { ApiError } from '@/lib/http'
 import type { Translator } from '@/lib/i18n'
-import { isPlatformAdminUser } from '@/lib/types/auth'
+import { isPlatformAdminUser } from '@/lib/types/auth-guards'
 
 function PaymentInstructions({ order }: { readonly order: CapacityOrder }) {
   const { t, locale, number } = useTranslation()

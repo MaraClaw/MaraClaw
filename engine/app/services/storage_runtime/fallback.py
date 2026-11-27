@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from heapq import merge
 from pathlib import Path
 from typing import BinaryIO, override
 
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
+    CopyRequest,
     MaterializedFile,
     StorageBackend,
     StorageConditionalRaceError,
@@ -19,8 +20,15 @@ from app.services.storage_runtime.base import (
     StorageSnapshot,
     StorageVersion,
     WriteCondition,
+    kept_result,
     walk_order,
 )
+from app.services.storage_runtime.upload_source import UploadSource
+
+
+def _absent_in(result: ConditionalWriteResult) -> bool:
+    """Whether a batch answer says the key was not there, so the other side of the fallback may still hold it."""
+    return result.conflict and result.current_version is not None and not result.current_version.exists
 
 
 class FallbackStorageBackend(StorageBackend):
@@ -216,6 +224,26 @@ class FallbackStorageBackend(StorageBackend):
         return await self.primary.write_bytes_if_match(key, data, condition=condition, content_type=content_type)
 
     @override
+    async def write_source_if_match(
+        self,
+        key: str,
+        source: UploadSource,
+        *,
+        condition: WriteCondition | None = None,
+        content_type: str | None = None,
+    ) -> ConditionalWriteResult:
+        if condition and condition.require_absent and await self.fallback.exists(key):
+            return ConditionalWriteResult(ok=False, conflict=True)
+        if not self.promote and condition and condition.version_token is not None and await self._local_only(key):
+            legacy = await self.fallback.get_version(key)
+            if legacy.token != condition.version_token:
+                return ConditionalWriteResult(ok=False, conflict=True, current_version=legacy)
+            return await self.primary.write_source_if_match(
+                key, source, condition=WriteCondition(require_absent=True), content_type=content_type
+            )
+        return await self.primary.write_source_if_match(key, source, condition=condition, content_type=content_type)
+
+    @override
     async def delete_if_match(self, key: str, *, condition: WriteCondition | None = None) -> ConditionalWriteResult:
         if self.promote:
             await self._promote_file(key)
@@ -225,6 +253,48 @@ class FallbackStorageBackend(StorageBackend):
         if result.ok:
             await self.fallback.delete(key)
         return result
+
+    @override
+    async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+        """Batch the primary, then settle what it did not hold with the legacy side, whose listed stamp it checks.
+
+        A key the primary deleted loses its legacy copy too; a key the primary does not have is a legacy-only file and
+        is deleted from the fallback only while its stamp still matches. Promotion plays no part: a legacy file that
+        is about to be deleted is not copied into the primary first.
+        """
+        results = await self.primary.delete_batch_if_match(versions)
+        legacy_only = [version for version in versions if _absent_in(results[version.key])]
+        for version in versions:
+            if results[version.key].ok:
+                await self.fallback.delete(version.key)
+        if legacy_only:
+            results.update(await self.fallback.delete_batch_if_match(legacy_only))
+        return results
+
+    @override
+    async def copy_batch_if_match(self, copies: Sequence[CopyRequest]) -> dict[str, ConditionalWriteResult]:
+        """Copy inside the primary; a source only the legacy side holds is streamed from its materialized file.
+
+        Legacy files are not version-checked on the way in: the delete that follows a move checks their stamp, and
+        a file that changed in between stays in place.
+        """
+        results = await self.primary.copy_batch_if_match(copies)
+        for copy in copies:
+            if _absent_in(results[copy.source.key]):
+                results[copy.source.key] = await self._copy_legacy(copy)
+        return results
+
+    async def _copy_legacy(self, copy: CopyRequest) -> ConditionalWriteResult:
+        try:
+            legacy = await self.fallback.materialize(copy.source.key)
+        except FileNotFoundError:
+            return kept_result(copy.source.key, exists=False)
+        if legacy is None:
+            raise RuntimeError(f"Fallback file has no local copy: {copy.source.key}")
+        try:
+            return await self.primary.create_file_if_absent(copy.destination_key, legacy.path)
+        finally:
+            legacy.close()
 
     @override
     async def open_local_file(self, key: str) -> tuple[BinaryIO, os.stat_result] | None:

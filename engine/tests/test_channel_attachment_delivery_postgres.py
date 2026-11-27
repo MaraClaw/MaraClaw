@@ -12,9 +12,8 @@ from fastapi import FastAPI
 from app.api import background_tasks, slack
 from app.api.websocket import manager
 from app.config import get_settings
-from app.services.channels import binding, slack_submissions, submissions
+from app.services.channels import binding, slack_submissions
 from app.services.channels.binding import _publish_user_message
-from app.services.openclaw_routing import PreparedOpenClawMessage
 from app.services.storage_runtime import facade
 from channel_shared_postgres_fixtures import canonical_sessions, live_channel, schema_db
 
@@ -34,11 +33,6 @@ async def test_signed_im_attachment_persists_and_publishes_reference_once(
     monkeypatch.setattr(binding, "_publish_user_message", _publish_user_message)
     published = AsyncMock()
     monkeypatch.setattr(manager, "send_to_session", published)
-
-    async def prepare(*, agent, content, history):
-        return PreparedOpenClawMessage(agent, content, "primary", None, "attachment-qa")
-
-    monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     data = b"office attachment payload"
     downloads = 0
 

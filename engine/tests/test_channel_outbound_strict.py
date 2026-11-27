@@ -12,6 +12,7 @@ from app.records.agent import AgentRecord
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat import ChatSessionRecord
 from app.services.channels import outbound
+from im_token_cache_fakes import install_token_cache
 
 CHANNELS = ("feishu", "slack", "microsoft_teams", "google_chat", "wecom", "dingtalk", "whatsapp", "wechat", "discord")
 
@@ -312,3 +313,42 @@ async def test_config_lookup_closes_before_send(monkeypatch) -> None:
     monkeypatch.setattr(outbound.channel_config_dao, "session", db_session)
     monkeypatch.setattr(slack, "_send_slack_messages", send)
     await outbound.deliver_session_reply(agent=agent, session=session, content="report", strict=True)
+
+
+@pytest.mark.parametrize("channel", ["microsoft_teams", "google_chat"])
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_strict_delivery_retries_a_rejected_token_once(monkeypatch, configured, channel: str, persistent: bool):
+    from app.api import teams
+    from app.services.channels import google_chat
+
+    cache = install_token_cache(monkeypatch)
+    issued = iter(["stale", "fresh", "never-needed"])
+
+    async def access_token(*args: object, **kwargs: object) -> str:
+        return next(issued)
+
+    monkeypatch.setattr(teams, "_get_teams_access_token", access_token)
+    monkeypatch.setattr(google_chat, "_service_account_access_token", access_token)
+    authorizations: list[str] = []
+    original = httpx.AsyncClient
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers["Authorization"])
+        if len(authorizations) == 1 or persistent:
+            return httpx.Response(401, json={"error": {"code": "Unauthorized"}})
+        return httpx.Response(200, json={"id": "id", "name": "spaces/space/messages/id"})
+
+    def client(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        return original(transport=httpx.MockTransport(handle))
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    agent, session = _session(channel)
+
+    if persistent:
+        with pytest.raises(httpx.HTTPStatusError):
+            await outbound.deliver_session_reply(agent=agent, session=session, content="report", strict=True)
+    else:
+        await outbound.deliver_session_reply(agent=agent, session=session, content="report", strict=True)
+
+    assert authorizations == ["Bearer stale", "Bearer fresh"]
+    assert [rejected for _, rejected in cache.rejected] == ["stale"]

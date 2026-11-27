@@ -1,3 +1,4 @@
+import threading
 from dataclasses import replace
 from unittest.mock import Mock
 from uuid import uuid4
@@ -151,6 +152,25 @@ async def test_test_uses_disabled_saved_config_and_current_admin_only(smtp_admin
     assert send.call_args.args[0].smtp_host == "smtp.example.com"
     assert send.call_args.args[1] == "admin@example.com"
     assert send.call_args.args[0].public_only is True
+
+
+async def test_test_sends_on_the_system_email_lane(smtp_admin: SMTPAdmin, monkeypatch):
+    # Given a saved tenant transport and a send that records the thread it runs on
+    smtp_admin.saved[smtp_admin.tenant_id] = email_config.stored_settings(
+        TenantEmailUpdate.model_validate(COMPLETE), {}, public_only=True
+    )
+    threads: list[str] = []
+    monkeypatch.setattr(
+        system_email_service,
+        "_send_email_with_config_sync",
+        lambda *_args: threads.append(threading.current_thread().name),
+    )
+    # When the organization tests its SMTP settings.
+    async with AsyncClient(transport=ASGITransport(app=smtp_admin.app), base_url="http://test") as client:
+        result = await client.post(BASE + "/test")
+    # Then the one send ran on a system email lane thread, not a shared pool thread.
+    assert result.status_code == 200
+    assert [name.startswith("system-email-lane") for name in threads] == [True]
 
 
 async def test_test_never_falls_back_to_platform(smtp_admin: SMTPAdmin, monkeypatch):

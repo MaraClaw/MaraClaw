@@ -202,3 +202,15 @@ def test_json_schema_is_exportable_when_adapter_is_built_from_named_contract() -
     assert "ReadOnlySessionErrorEvent" in definitions
     properties = json_object_from(json_object_from(definitions["CorrelatedTurnRejectedEvent"])["properties"])
     assert json_object_from(properties["client_submission_id"])["format"] == "uuid"
+
+
+@pytest.mark.parametrize("reason", ["message_too_long", "file_name_too_long", "rate_limited"])
+def test_limit_rejections_are_correlated_and_never_onboarding(reason: str) -> None:
+    submission_id = str(uuid4())
+    event = CHAT_SERVER_EVENT_ADAPTER.validate_python(
+        {"type": "turn_rejected", "reason": reason, "content": "refused", "client_submission_id": submission_id}
+    )
+    assert isinstance(event, CorrelatedTurnRejectedEvent)
+    assert event.reason == reason
+    with pytest.raises(ValidationError):
+        _ = CHAT_SERVER_EVENT_ADAPTER.validate_python({"type": "turn_rejected", "reason": reason, "content": "refused"})

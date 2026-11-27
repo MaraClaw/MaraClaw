@@ -1,21 +1,30 @@
-"""Unit tests for Google Chat helpers, channel registry, dedupe, and redaction."""
+"""Unit tests for Google Chat helpers, channel registry, and redaction."""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
+import threading
+from collections.abc import Iterator
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
+from tests.im_webhook_fixtures import AGENT_ID, channel_config
 
 from app.api import google_chat as google_chat_api
 from app.core.domain.channels import ChannelType
-from app.core.json_types import JsonObject
+from app.core.json_types import JsonObject, json_object_from
+from app.records.outbound_plan import OutboundChunk, OutboundProvider
 from app.services.agent_tool_exec.channel_messaging import _outbound_senders
-from app.services.channels.dedup import already_processed, mark_processed, remember_if_new
+from app.services.channels import google_chat, google_chat_media, outbound_transport, submissions
 from app.services.channels.google_chat import (
     CHAT_ISSUER,
     chunk_text,
@@ -26,6 +35,8 @@ from app.services.channels.google_chat import (
     sync_text_response,
     verify_google_chat_bearer,
 )
+from app.services.channels.outbound_http import reset_outbound_client
+from app.services.channels.outbound_plan import ConfiguredOutbound
 from app.services.channels.redact import channel_config_out, redact_extra_config
 from app.services.channels.types import (
     CHANNEL_TYPES,
@@ -33,6 +44,15 @@ from app.services.channels.types import (
     normalize_channel_type,
     outbound_provider_key,
 )
+from im_token_cache_fakes import (
+    GoogleWire,
+    TokenCache,
+    captured_app_log,
+    install_token_cache,
+    private_key_pem,
+    service_account,
+)
+from test_channel_delivery_transport import configured
 
 
 def test_channel_type_registry_includes_google_chat():
@@ -193,16 +213,6 @@ def test_chunk_text():
     assert sum(len(c) for c in chunks) == 8000
 
 
-def test_dedup_mark_after_success():
-    ns = f"test-{uuid4()}"
-    key = "evt-1"
-    assert already_processed(ns, key) is False
-    mark_processed(ns, key)
-    assert already_processed(ns, key) is True
-    assert remember_if_new(ns, "evt-2") is False
-    assert remember_if_new(ns, "evt-2") is True
-
-
 def test_redact_service_account_json():
     extra: JsonObject = {
         "audience": "123",
@@ -295,7 +305,6 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
     config = SimpleNamespace(id=uuid4(), app_id="chat-app", is_configured=True, verification_token="token")
     monkeypatch.setattr(google_chat_api.channel_config, "get_channel_config", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat_api.gchat, "audience_for_config", lambda _: "")
-    monkeypatch.setattr(google_chat_api.gchat, "has_service_account", lambda _: True)
     message_name = "spaces/A/messages/B"
     payload = json.dumps(
         {
@@ -315,9 +324,6 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
             return_value={"type": "http.request", "body": payload},
         ),
     )
-    marked = AsyncMock()
-    monkeypatch.setattr(google_chat_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=True))
-    monkeypatch.setattr(google_chat_api.channel_dedup, "mark_processed_shared", marked)
     started, release = asyncio.Event(), asyncio.Event()
     from app.services.openclaw_routing import GuestConfigWriteError
 
@@ -336,8 +342,6 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
             raise failure
 
     monkeypatch.setattr(submissions, "accept_channel_event", accept)
-    schedule = AsyncMock()
-    monkeypatch.setattr(google_chat_api, "schedule_background_task", schedule)
     # When
     operation = asyncio.create_task(google_chat_api.google_chat_event_webhook(agent_id, request))
     try:
@@ -351,8 +355,6 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
             await asyncio.wait_for(operation, 1)
     else:
         assert await asyncio.wait_for(operation, 1) == {}
-    marked.assert_not_awaited()
-    schedule.assert_not_called()
 
 
 # --- Configure route: credential validation, omission preservation, authorization, redaction ---
@@ -563,3 +565,302 @@ async def test_only_the_creator_may_configure(configure):
 
     assert response.status_code == 403
     assert configure.agent.id not in configure.dao.rows
+
+
+# --- service-account access tokens through the shared IM token cache ---
+
+SCOPE = google_chat.CHAT_BOT_SCOPE
+CANARY = "canary-provider-text-8d2f"
+RESOURCE = "spaces/S/messages/M/attachments/A"
+
+
+@pytest.fixture
+def token_cache(monkeypatch: pytest.MonkeyPatch) -> TokenCache:
+    return install_token_cache(monkeypatch)
+
+
+@pytest.fixture
+def wire(monkeypatch: pytest.MonkeyPatch, token_cache: TokenCache) -> Iterator[GoogleWire]:
+    reset_outbound_client()
+    google = GoogleWire()
+    google.install(monkeypatch)
+    yield google
+    reset_outbound_client()
+
+
+def _outbound() -> ConfiguredOutbound:
+    outbound = configured(OutboundProvider.GOOGLE_CHAT)
+    outbound.config.extra_config["service_account_json"] = json_object_from(service_account())
+    return replace(outbound, target=outbound.target.model_copy(update={"destination": "spaces/S"}))
+
+
+def _chunk(text: str = "hello") -> OutboundChunk:
+    return OutboundChunk(text=text, key=uuid4())
+
+
+def _unauthenticated() -> httpx.Response:
+    return httpx.Response(401, json={"error": {"status": "UNAUTHENTICATED"}})
+
+
+def _posted() -> httpx.Response:
+    return httpx.Response(200, json={"name": "spaces/S/messages/M"})
+
+
+def _sole_token(cache: TokenCache) -> tuple[tuple[str, str, str], str]:
+    ((key, token),) = cache.items()
+    return key, token
+
+
+async def test_a_burst_of_sends_mints_one_token(wire, token_cache):
+    outbound = _outbound()
+    wire.token_gate.clear()
+    sends = [asyncio.create_task(outbound_transport.send_chunk(outbound, _chunk(f"part {n}"))) for n in range(5)]
+    async with asyncio.timeout(5):
+        await wire.token_started.wait()
+    wire.token_gate.set()
+    _ = await asyncio.gather(*sends)
+
+    assert wire.exchanges == 1
+    assert wire.authorizations == ["Bearer token-1"] * 5
+    assert _sole_token(token_cache)[1] == "token-1"
+
+
+@pytest.mark.parametrize(("expires_in", "ttl"), [(3600, 3300), (1200, 900), (None, 3300), (200, 1)])
+async def test_the_cache_ttl_follows_expires_in_less_the_refresh_skew(wire, token_cache, expires_in, ttl):
+    wire.expires_in = expires_in
+
+    assert await google_chat._service_account_access_token(service_account(), [SCOPE]) == "token-1"
+
+    assert list(token_cache.ttls.values()) == [ttl]
+
+
+async def test_the_assertion_names_the_account_scope_and_the_fixed_token_endpoint(wire):
+    _ = await google_chat._service_account_access_token(service_account(), [SCOPE])
+
+    claims = wire.assertions[0]
+    assert claims["iss"] == claims["sub"] == "bot@proj.iam.gserviceaccount.com"
+    assert claims["aud"] == google_chat.OAUTH_ENDPOINT
+    assert claims["scope"] == SCOPE
+    assert isinstance(claims["iat"], int)
+    assert claims["exp"] == claims["iat"] + 3600
+
+
+async def test_the_cache_key_covers_account_key_digest_and_scopes_and_never_holds_the_key(wire, token_cache):
+    account = service_account()
+    other_scopes = [SCOPE, "https://www.googleapis.com/auth/chat.messages"]
+
+    tokens = [
+        await google_chat._service_account_access_token(account, [SCOPE]),
+        await google_chat._service_account_access_token(account, [SCOPE]),
+        await google_chat._service_account_access_token(account, other_scopes),
+        await google_chat._service_account_access_token(service_account(key=1), [SCOPE]),
+        await google_chat._service_account_access_token(service_account("other@proj.iam.gserviceaccount.com"), [SCOPE]),
+    ]
+
+    assert tokens == ["token-1", "token-1", "token-2", "token-3", "token-4"]
+    assert wire.exchanges == 4
+    assert {provider for provider, _, _ in token_cache} == {"google_chat"}
+    digest = hashlib.sha256(private_key_pem(0).encode()).hexdigest()
+    key = ("google_chat", "bot@proj.iam.gserviceaccount.com", f"{digest}\0{SCOPE}")
+    assert key in token_cache
+    assert not any("PRIVATE KEY" in part for entry in token_cache for part in entry)
+
+
+async def test_signing_runs_off_the_event_loop(wire, token_cache, monkeypatch):
+    signed_on: list[int] = []
+    sign = google_chat._sign_assertion
+
+    def spy(claims: dict[str, object], private_key: str) -> str:
+        signed_on.append(threading.get_ident())
+        return sign(claims, private_key)
+
+    monkeypatch.setattr(google_chat, "_sign_assertion", spy)
+
+    _ = await google_chat._service_account_access_token(service_account(), [SCOPE])
+
+    assert len(signed_on) == 1
+    assert signed_on[0] != threading.get_ident()
+
+
+async def test_a_disallowed_token_uri_is_refused_before_any_signing_or_exchange(wire, token_cache):
+    account = {**service_account(), "token_uri": "https://evil.example/token"}
+
+    with pytest.raises(ValueError, match="Disallowed service-account token_uri"):
+        _ = await google_chat._service_account_access_token(account, [SCOPE])
+
+    assert wire.exchanges == 0
+    assert token_cache == {}
+    allowed = {**service_account(), "token_uri": google_chat.OAUTH_ENDPOINT}
+    assert await google_chat._service_account_access_token(allowed, [SCOPE]) == "token-1"
+
+
+@pytest.mark.parametrize(
+    ("pinned", "message"),
+    [
+        (False, "Token exchange failed: 400"),
+        (True, "Google Chat media token exchange failed (400); verify service account access"),
+    ],
+)
+async def test_a_refused_exchange_is_never_cached_and_carries_no_provider_text(
+    wire, token_cache, caplog, pinned, message
+):
+    caplog.set_level(logging.DEBUG)
+    wire.token_status = 400
+    wire.refusal_text = CANARY
+
+    with captured_app_log() as app_log:
+        with pytest.raises(ValueError) as refused:
+            _ = await google_chat._service_account_access_token(service_account(), [SCOPE], pinned=pinned)
+        assert token_cache == {}
+        wire.token_status = 200
+        assert await google_chat._service_account_access_token(service_account(), [SCOPE], pinned=pinned) == "token-2"
+
+    assert str(refused.value) == message
+    assert wire.exchanges == 2
+    assert CANARY not in str(refused.value) + caplog.text + "".join(app_log)
+
+
+async def test_an_exchange_without_an_access_token_is_refused_and_not_cached(wire, token_cache, monkeypatch):
+    async def empty(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"access_token": "", "expires_in": 3600})
+
+    monkeypatch.setattr(wire, "handle", empty)
+
+    with pytest.raises(ValueError, match="no access_token"):
+        _ = await google_chat._service_account_access_token(service_account(), [SCOPE])
+
+    assert token_cache == {}
+
+
+async def test_a_rejected_token_is_dropped_and_the_chunk_retried_once_with_the_same_request_id(wire, token_cache):
+    wire.replies = [_unauthenticated(), _posted()]
+    chunk = _chunk()
+
+    assert await outbound_transport.send_chunk(_outbound(), chunk) is None
+
+    assert wire.authorizations == ["Bearer token-1", "Bearer token-2"]
+    assert [request.url.params["requestId"] for request in wire.requests] == [str(chunk.key)] * 2
+    assert json.loads(wire.requests[0].content) == json.loads(wire.requests[1].content) == {"text": "hello"}
+    key, token = _sole_token(token_cache)
+    assert token == "token-2"
+    assert token_cache.rejected == [(key, "token-1")]
+
+
+async def test_a_second_rejection_is_reported_after_exactly_one_retry(wire, token_cache):
+    wire.replies = [_unauthenticated()]
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await outbound_transport.send_chunk(_outbound(), _chunk())
+
+    assert wire.authorizations == ["Bearer token-1", "Bearer token-2"]
+    assert wire.exchanges == 2
+
+
+async def test_other_failures_are_not_retried_and_keep_the_cached_token(wire, token_cache):
+    wire.replies = [httpx.Response(403, json={"error": {"status": "PERMISSION_DENIED"}})]
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await outbound_transport.send_chunk(_outbound(), _chunk())
+
+    assert wire.authorizations == ["Bearer token-1"]
+    assert token_cache.rejected == []
+    assert _sole_token(token_cache)[1] == "token-1"
+
+
+async def test_a_proactive_send_shares_one_token_across_chunks_and_retries_a_rejection_once(wire, token_cache):
+    wire.replies = [_unauthenticated(), _posted()]
+    config = channel_config("google_chat")
+    config.extra_config = {"service_account_json": json_object_from(service_account())}
+
+    sent = await google_chat.send_google_chat_message(
+        config, space_name="spaces/S", text="x" * (2 * google_chat.CHAT_MSG_CHUNK + 100), strict=True
+    )
+
+    assert sent == {"name": "spaces/S/messages/M"}
+    assert wire.authorizations == ["Bearer token-1", "Bearer token-2", "Bearer token-2", "Bearer token-2"]
+    assert wire.exchanges == 2
+
+
+async def test_no_token_assertion_or_key_reaches_a_log(wire, token_cache, caplog):
+    caplog.set_level(logging.DEBUG)
+    wire.prefix = "canary-access"
+    wire.replies = [_unauthenticated(), _posted()]
+
+    with captured_app_log() as app_log:
+        await outbound_transport.send_chunk(_outbound(), _chunk())
+
+    logged = caplog.text + "".join(app_log)
+    assert "canary-access" not in logged
+    assert "PRIVATE KEY" not in logged
+    assert "eyJ" not in logged
+
+
+# --- uploaded media shares the cached token ---
+
+
+@pytest.fixture
+def media_intake(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    accept, store = AsyncMock(), AsyncMock(return_value=("", "report.docx", ""))
+    monkeypatch.setattr(submissions, "is_channel_event_replay", AsyncMock(return_value=False))
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    monkeypatch.setattr(google_chat_media, "store_agent_upload", store)
+    return SimpleNamespace(accept=accept, store=store)
+
+
+async def _download_media() -> None:
+    config = channel_config("google_chat")
+    config.extra_config = {"service_account_json": json_object_from(service_account())}
+    event = submissions.ChannelEvent(config.id, AGENT_ID, "google_chat", "native", "sender", "room", "caption")
+    attachment = google_chat_media.GoogleChatAttachment.model_validate(
+        {"name": RESOURCE, "contentName": "report.docx", "attachmentDataRef": {"resourceName": RESOURCE}}
+    )
+    await google_chat_media.accept_google_chat_media(event, config, (attachment,))
+
+
+async def test_a_media_download_reuses_the_token_an_outbound_send_cached(wire, token_cache, media_intake):
+    wire.replies = [_posted(), httpx.Response(200, content=b"office")]
+
+    await outbound_transport.send_chunk(_outbound(), _chunk())
+    await _download_media()
+
+    assert wire.exchanges == 1
+    assert wire.authorizations == ["Bearer token-1", "Bearer token-1"]
+    media_intake.store.assert_awaited_once()
+    media_intake.accept.assert_awaited_once()
+
+
+async def test_a_rejected_media_token_is_renewed_once_and_the_download_retried(wire, token_cache, media_intake):
+    wire.replies = [httpx.Response(401), httpx.Response(200, content=b"office")]
+
+    await _download_media()
+
+    assert wire.authorizations == ["Bearer token-1", "Bearer token-2"]
+    assert wire.exchanges == 2
+    key, token = _sole_token(token_cache)
+    assert token == "token-2"
+    assert token_cache.rejected == [(key, "token-1")]
+    media_intake.accept.assert_awaited_once()
+
+
+async def test_media_still_denied_after_the_retry_reports_the_existing_422(wire, token_cache, media_intake):
+    wire.replies = [httpx.Response(401)]
+
+    with pytest.raises(HTTPException) as denied:
+        await _download_media()
+
+    assert denied.value.status_code == 422
+    assert "denied media access" in str(denied.value.detail)
+    assert wire.authorizations == ["Bearer token-1", "Bearer token-2"]
+    media_intake.accept.assert_not_awaited()
+
+
+async def test_a_forbidden_media_download_is_a_422_without_a_retry(wire, token_cache, media_intake):
+    wire.replies = [httpx.Response(403)]
+
+    with pytest.raises(HTTPException) as denied:
+        await _download_media()
+
+    assert denied.value.status_code == 422
+    assert wire.authorizations == ["Bearer token-1"]
+    assert token_cache.rejected == []
+    media_intake.accept.assert_not_awaited()

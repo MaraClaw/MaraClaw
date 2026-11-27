@@ -4,7 +4,6 @@ from datetime import timedelta
 from typing import Final
 from uuid import UUID
 
-from anyio import to_thread
 from fastapi import HTTPException
 
 from app.core.acl_locks import lock_tenants
@@ -26,11 +25,12 @@ from app.schemas.admin_companies import (
 )
 from app.services.admin_audit import field_change, write_admin_audit
 from app.services.agent_manager import agent_manager
-from app.services.agent_resource_pressure_docker import inspect_guests
+from app.services.agent_resource_pressure_docker import GuestInspection, inspect_guests
 from app.services.capacity_ledger import coverage, vn_today
 from app.services.capacity_pricing import month_start
 from app.services.coded_errors import conflict
 from app.services.company_capacity import company_caps, company_usage
+from app.services.docker_capacity import DockerBusyError, DockerPriority, run_docker
 from app.services.organization_plans import plan_for
 from app.services.quota_guard import agent_limit_for_tier
 
@@ -134,13 +134,23 @@ async def preview_tier_change(
         )
     references = list(dict.fromkeys(guest.container_id for guest in preview.running_guests))
     docker = agent_manager.docker_client
-    inspections = (
-        await to_thread.run_sync(inspect_guests, docker, references, GUEST_INSPECT_TIMEOUT_SECONDS)
-        if references and docker is not None
-        else None
-        if references
-        else {}
-    )
+    inspections: dict[str, GuestInspection] | None = {}
+    if references:
+        try:
+            inspections = (
+                await run_docker(
+                    inspect_guests,
+                    docker,
+                    references,
+                    GUEST_INSPECT_TIMEOUT_SECONDS,
+                    priority=DockerPriority.BACKGROUND,
+                )
+                if docker is not None
+                else None
+            )
+        except DockerBusyError:
+            # An observation the busy lane cannot serve is unavailable, like one Docker cannot answer.
+            inspections = None
     return preview.model_copy(
         update={
             "guest_observation_available": inspections is not None

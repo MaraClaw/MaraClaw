@@ -1,7 +1,8 @@
 """Scripted HTTP fakes and per-provider fixtures for the LLM retry tests.
 
 Nothing here sleeps or touches the network: ``install_retry_policy`` swaps the shared policy's sleep for a
-recorder and ``ScriptedHttpClient`` plays back the outcomes a test queues.
+recorder and ``ScriptedHttpClient`` plays back the outcomes a test queues. ``install_provider_health`` swaps the
+process-wide provider circuit tracker for one on a hand-advanced clock.
 """
 
 from collections.abc import Awaitable, Callable, Iterable
@@ -9,12 +10,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace, TracebackType
 from typing import Any, Literal
+from uuid import uuid4
 
 import httpx
 import pytest
 
-from app.services.llm import retry_policy
+from app.records.llm import LLMModelRecord
+from app.services.llm import provider_health, retry_policy
 from app.services.llm.base import ChunkCallback, LLMClient, ThinkingCallback, ToolCallback
+from app.services.llm.provider_health import Admission, ProviderHealth, model_key
 from app.services.llm.providers import AnthropicClient, GeminiClient, OpenAICompatibleClient, OpenAIResponsesClient
 from app.services.llm.retry_policy import RetryPolicy
 from app.services.llm.types import LLMMessage, LLMResponse
@@ -193,9 +197,12 @@ FAILURES: list[object] = [
 
 
 def install_retry_policy(
-    monkeypatch: pytest.MonkeyPatch, sleep: Callable[[float], Awaitable[None]] | None = None
+    monkeypatch: pytest.MonkeyPatch, sleep: Callable[[float], Awaitable[None]] | None = None, jitter: float = 0.5
 ) -> list[float]:
-    """Replace the shared policy with a deterministic one and return the list its waits are recorded in."""
+    """Replace the shared policy with a deterministic one and return the list its waits are recorded in.
+
+    ``jitter`` is the fixed value every random draw returns (0.0 to 1.0).
+    """
     sleeps: list[float] = []
 
     async def recording_sleep(seconds: float) -> None:
@@ -203,9 +210,55 @@ def install_retry_policy(
         if sleep is not None:
             await sleep(seconds)
 
-    policy = RetryPolicy(sleep=recording_sleep, jitter=lambda: 0.5, now=lambda: FIXED_NOW)
+    policy = RetryPolicy(sleep=recording_sleep, jitter=lambda: jitter, now=lambda: FIXED_NOW)
     monkeypatch.setattr(retry_policy, "RETRY_POLICY", policy)
     return sleeps
+
+
+class FakeClock:
+    """A monotonic clock a test advances by hand."""
+
+    def __init__(self) -> None:
+        self.now: float = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def install_provider_health(
+    monkeypatch: pytest.MonkeyPatch, *, threshold: int = 3, cooldown: float = 30.0
+) -> tuple[ProviderHealth, FakeClock]:
+    """Replace the process-wide tracker with one on a fake clock; the clock only moves when the test advances it."""
+    clock = FakeClock()
+    tracker = ProviderHealth(failure_threshold=threshold, cooldown=cooldown, clock=clock)
+    monkeypatch.setattr(provider_health, "health_tracker", lambda: tracker)
+    return tracker, clock
+
+
+def health_model(name: str = "primary", provider: str = "openai") -> LLMModelRecord:
+    """A model row with its own id, so its circuit is independent of every other model's."""
+    return LLMModelRecord(
+        id=uuid4(),
+        provider=provider,
+        model=name,
+        base_url="https://example.invalid/v1",
+        api_key_encrypted="",
+        label=name,
+        temperature=0.0,
+        max_output_tokens=256,
+        request_timeout=1,
+    )
+
+
+def trip(tracker: ProviderHealth, model: LLMModelRecord, failures: int = 3) -> None:
+    """Open the model's circuit with consecutive failures; ``failures`` is the tracker's threshold."""
+    key = model_key(model)
+    assert key is not None
+    for _ in range(failures):
+        _ = tracker.failed(key, Admission.CALL)
 
 
 def capture_retry_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:

@@ -16,6 +16,7 @@ from cryptography.exceptions import InvalidTag
 from fastapi import HTTPException
 from pydantic import JsonValue, ValidationError
 
+from app.config import get_settings
 from app.core.logging import logger
 from app.core.permissions import is_agent_expired
 from app.dao.whatsapp_personal_auth_dao import read_auth
@@ -38,7 +39,10 @@ from app.services.channels.whatsapp_personal_protocol import Closed, Message
 
 async def spawn_child(command: Sequence[str]) -> Process:
     path = os.environ.get("PATH")
-    return await anyio.open_process(command, stderr=subprocess.DEVNULL, env={} if path is None else {"PATH": path})
+    heap = f"--worker-heap-mb={get_settings().WHATSAPP_PERSONAL_WORKER_HEAP_MB}"
+    return await anyio.open_process(
+        [*command, heap], stderr=subprocess.DEVNULL, env={} if path is None else {"PATH": path}
+    )
 
 
 @final

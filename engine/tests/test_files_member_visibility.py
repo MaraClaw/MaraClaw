@@ -13,6 +13,7 @@ import anyio
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
+from tests.rate_limit_fakes import install_limiter_redis
 
 from app.api import file_previews, files as files_api, pages as pages_api
 from app.config import get_settings
@@ -197,7 +198,13 @@ async def api(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytes
     )
     open_guest_write_gate(monkeypatch)
     app = FastAPI()
-    for router in (files_api.router, files_api.upload_router, file_previews.router, pages_api.router):
+    for router in (
+        files_api.router,
+        files_api.upload_router,
+        file_previews.router,
+        pages_api.router,
+        pages_api.publish_router,
+    ):
         app.include_router(router, prefix="/api")
     app.dependency_overrides[get_current_user] = lambda: user
     transport = httpx.ASGITransport(app=app)
@@ -690,3 +697,8 @@ async def test_member_write_through_a_guest_link_planted_after_the_route_check_c
     assert response.status_code in {403, 404}, response.text
     assert_link_targets_untouched(api)
     await api.assert_runtime_untouched()
+
+
+@pytest.fixture(autouse=True)
+def limiter_redis(monkeypatch):
+    return install_limiter_redis(monkeypatch)

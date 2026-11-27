@@ -44,6 +44,7 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.schemas import ChannelConfigOut
 from app.services import im_token_cache
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels.config import get_channel_config_metadata
 from app.services.channels.redact import channel_config_out
 from app.services.channels.wecom_media import WeComMedia, accept_wecom_media
@@ -428,6 +429,7 @@ async def wecom_event_webhook(
         user_text = msg_root.findtext("Content", "").strip()
         if not user_text:
             return Response(content="success", media_type="text/plain")
+        _require_message_id(msg_id)
 
         try:
             await _process_wecom_text(agent_id, config, from_user, user_text, chat_id=chat_id, message_id=msg_id)
@@ -450,6 +452,7 @@ async def wecom_event_webhook(
         media_id = msg_root.findtext("MediaId", "")
         if not media_id:
             return Response(content="success", media_type="text/plain")
+        _require_message_id(msg_id)
         filename = (
             msg_root.findtext("FileName", "")
             or {"image": "image.jpg", "video": "video.mp4", "file": "file.bin"}[msg_type]
@@ -470,6 +473,12 @@ async def wecom_event_webhook(
             return Response(status_code=503)
 
     return Response(content="success", media_type="text/plain")
+
+
+def _require_message_id(message_id: str) -> None:
+    """A callback message without ``MsgId`` has no identity to dedupe on and never gains one: 400, so WeCom does not retry it."""
+    if not message_id:
+        raise HTTPException(status_code=400, detail="WeCom message ID is required")
 
 
 async def _process_wecom_kf_event(
@@ -528,14 +537,20 @@ async def _process_wecom_kf_event(
                     msg = json_object_from(raw_msg)
                     kind = json_as_str_or(msg.get("msgtype"))
                     if json_as_int(msg.get("origin")) == 3 and kind in ("text", "image", "file", "video"):
-                        mid = msg.get("msgid")
+                        mid = json_as_str_or(msg.get("msgid"))
+                        if not mid:
+                            logger.warning("[WeCom KF] Skipped a {} message without an ID for agent {}", kind, agent_id)
+                            continue
                         text = json_as_str_or(json_object_from(msg.get("text")).get("content")).strip()
                         media: tuple[WeComMedia, ...] = ()
                         if kind != "text":
                             item = json_object_from(msg.get(kind))
                             media_id = json_as_str_or(item.get("media_id"))
                             if not media_id:
-                                raise HTTPException(400, "WeCom KF media ID is required")
+                                logger.warning(
+                                    "[WeCom KF] Skipped a {} message without a media ID for agent {}", kind, agent_id
+                                )
+                                continue
                             filename = (
                                 json_as_str_or(item.get("file_name"))
                                 or {"image": "image.jpg", "video": "video.mp4", "file": "file.bin"}[kind]
@@ -551,7 +566,7 @@ async def _process_wecom_kf_event(
                                 text,
                                 is_kf=True,
                                 open_kfid=json_as_str(msg.get("open_kfid")),
-                                kf_msg_id=json_as_str(mid),
+                                kf_msg_id=mid,
                                 kind=kind,
                                 media=media,
                             )
@@ -576,8 +591,6 @@ async def _process_wecom_text(
     media: tuple[WeComMedia, ...] = (),
 ):
     native_id = kf_msg_id or message_id
-    if not native_id:
-        raise HTTPException(status_code=400, detail="WeCom message ID is required")
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
     native = ChannelEvent(
@@ -592,10 +605,13 @@ async def _process_wecom_text(
         media_ids=tuple(item.fingerprint_id() for item in media),
         is_group=bool(chat_id),
     )
-    if media:
-        await accept_wecom_media(native, config, media)
-    else:
-        await accept_channel_event(native)
+    try:
+        if media:
+            await accept_wecom_media(native, config, media)
+        else:
+            await accept_channel_event(native)
+    except ChannelUserResolutionError:
+        logger.info("[WeCom] Ignored a message from a sender who is not a linked member of agent {}", agent_id)
 
 
 # ─── OAuth Callback (SSO) ──────────────────────────────

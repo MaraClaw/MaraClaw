@@ -31,7 +31,14 @@ test('the personal session preserves Zalo recovery data across resume and fences
   let current = true
   const connected = Promise.withResolvers<ReturnType<typeof zaloPersonalStatusSchema.parse>>()
   const initial = zaloPersonalStatusSchema.parse({ ...status, resumable: true, diagnostics })
-  const session = createPersonalSession({ current: () => current, read: async () => initial, change: async () => connected.promise })
+  const later = (callback: () => void, delay: number) => setTimeout(callback, delay)
+  const session = createPersonalSession({ current: () => current, read: async () => initial, change: async () => connected.promise }, {
+    now: Date.now, later, cancel: clearTimeout,
+    poll: {
+      hidden: () => false, random: () => 1, onVisible: () => () => {},
+      schedule: (callback, delay) => { const timer = later(callback, delay); return () => clearTimeout(timer) },
+    },
+  })
   t.after(session.stop)
   const ready = Promise.withResolvers<void>()
   const unsubscribe = session.subscribe(() => { if (!session.getSnapshot().loading) ready.resolve() })

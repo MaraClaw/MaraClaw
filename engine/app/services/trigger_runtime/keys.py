@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from croniter import croniter
 
@@ -14,22 +14,17 @@ POLL_OBSERVED_KEY = "_poll_observed"
 """In-memory only: the observed value `evaluate_trigger` hands to `enqueue_due_trigger`; never persisted."""
 
 
-POLL_CHECKPOINT_KEY = "_poll_checked_at"
-"""Persisted ISO time of the last claimed poll; written only by `claim_poll_checkpoint`, cleared on a source edit."""
-
-
-def poll_checkpoint(cfg: Mapping[str, object]) -> str | None:
-    """The stored checkpoint as the claim compares it: a string, or None when absent or not a string."""
-    value = cfg.get(POLL_CHECKPOINT_KEY)
-    return value if isinstance(value, str) else None
-
-
 def poll_sequence(cfg: Mapping[str, object]) -> int:
     """Stored per-trigger poll sequence; an absent or malformed value counts as 0 (legacy rows)."""
     value = cfg.get("_poll_seq")
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
     return value
+
+
+def build_okr_execution_key(trigger: AgentTriggerRecord, period: date) -> str:
+    """One key per OKR trigger and report period: workers, ticks and retries of a period share one execution."""
+    return f"okr:{trigger.id}:{period.isoformat()}"
 
 
 def build_scheduled_execution_key(trigger: AgentTriggerRecord, now: datetime) -> str:

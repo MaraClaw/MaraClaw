@@ -61,7 +61,8 @@ class SizedBody:
 class UploadSource:
     """An open regular file with the size taken from its handle; ``md5`` is empty unless requested.
 
-    Whoever sends the bytes owns ``close``, which is idempotent.
+    The opener owns ``close``, which is idempotent; a send never closes the source it was given, so one source can be
+    sent again, for example after a conditional write lost to a same-bytes rewrite.
     """
 
     stream: FileIO
@@ -71,6 +72,15 @@ class UploadSource:
     def body(self) -> SizedBody:
         _ = self.stream.seek(0)
         return SizedBody(self.stream, self.size)
+
+    def measured_md5(self, label: Path) -> str:
+        """The MD5 of the first ``size`` bytes, hashed in bounded chunks unless already known; the stream is rewound."""
+        if self.md5:
+            return self.md5
+        _ = self.stream.seek(0)
+        digest = _md5_of_prefix(label, self.stream, self.size)
+        _ = self.stream.seek(0)
+        return digest
 
     def close(self) -> None:
         self.stream.close()

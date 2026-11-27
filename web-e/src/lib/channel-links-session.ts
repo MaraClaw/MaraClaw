@@ -1,4 +1,5 @@
 import type { ChannelLinkCode, ChannelLinkStatus } from './channel-links-api.ts'
+import { startPollLoop, type PollLoopEnvironment } from './poll-loop.ts'
 
 type LinkView = {
   readonly status: ChannelLinkStatus | null
@@ -16,21 +17,21 @@ type LinkTransport = {
 }
 
 /** Codes and external identity hints exist only for this mounted owner and agent. */
-export function createChannelLinkSession(transport: LinkTransport) {
+export function createChannelLinkSession(transport: LinkTransport, pollEnvironment?: PollLoopEnvironment) {
   let view: LinkView = { status: null, code: null, loading: true, busy: false, expired: false, error: null }
   let active = false
   let epoch = 0
   let request: AbortController | undefined
-  let poll: ReturnType<typeof setTimeout> | undefined
+  let stopPolling: (() => void) | undefined
   let expiry: ReturnType<typeof setTimeout> | undefined
   const listeners = new Set<() => void>()
   const publish = (next: LinkView) => { view = next; for (const listener of listeners) listener() }
   const current = (token: number) => active && transport.current() && token === epoch
   function cancel() {
     request?.abort()
-    if (poll !== undefined) clearTimeout(poll)
+    stopPolling?.()
     if (expiry !== undefined) clearTimeout(expiry)
-    request = undefined; poll = undefined; expiry = undefined
+    request = undefined; stopPolling = undefined; expiry = undefined
   }
   function begin() { epoch += 1; cancel(); return epoch }
   function signal() { request = new AbortController(); return AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]) }
@@ -40,15 +41,27 @@ export function createChannelLinkSession(transport: LinkTransport) {
     cancel()
     publish({ status: null, code: null, loading: false, busy: false, expired: false, error: 'Unable to update your account link. Refresh status and try again.' })
   }
+  // A shown code is re-read every 2 s through the shared poll loop, which idles while the page is hidden. A failed
+  // read ends the poll (`fail`) until the member refreshes.
+  function schedule(token: number) {
+    if (token !== epoch) return
+    if (current(token) && view.code) {
+      stopPolling ??= startPollLoop({ cadence: 2000, tick: () => read(token) }, pollEnvironment)
+      return
+    }
+    stopPolling?.()
+    stopPolling = undefined
+  }
   async function read(token: number) {
     try {
       const status = await transport.read(signal())
-      if (!current(token)) return
-      const code = status.available && !status.linked ? view.code : null
-      publish({ ...view, status, code, loading: false, busy: false, error: null })
-      if (code) poll = setTimeout(() => { void read(token) }, 2000)
-      else if (expiry !== undefined) { clearTimeout(expiry); expiry = undefined }
-    } catch (error) { fail(error, token) }
+      if (current(token)) {
+        const code = status.available && !status.linked ? view.code : null
+        publish({ ...view, status, code, loading: false, busy: false, error: null })
+        if (!code && expiry !== undefined) { clearTimeout(expiry); expiry = undefined }
+      }
+    } catch (error) { fail(error, token); return }
+    schedule(token)
   }
   async function issue() {
     if (!active || !transport.current() || view.loading || view.busy || !view.status?.available) return
@@ -65,7 +78,7 @@ export function createChannelLinkSession(transport: LinkTransport) {
         begin()
         publish({ ...view, code: null, busy: false, expired: true })
       }, deadline - Date.now())
-      poll = setTimeout(() => { void read(token) }, 2000)
+      schedule(token)
     } catch (error) { fail(error, token) }
   }
   async function unlink() {

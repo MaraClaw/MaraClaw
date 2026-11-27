@@ -42,6 +42,9 @@ class ChatRejectionReason(StrEnum):
     INVALID_ATTACHMENTS = "invalid_attachments"
     OPENCLAW_UPDATE_REQUIRED = "openclaw_update_required"
     OPENCLAW_UPDATE_IN_PROGRESS = "openclaw_update_in_progress"
+    MESSAGE_TOO_LONG = "message_too_long"
+    FILE_NAME_TOO_LONG = "file_name_too_long"
+    RATE_LIMITED = "rate_limited"
 
 
 type OnboardingRejectionReason = Literal[
@@ -55,7 +58,13 @@ type OnboardingRejectionReason = Literal[
 ]
 type SubmissionRejectionReason = (
     OnboardingRejectionReason
-    | Literal[ChatRejectionReason.SUBMISSION_CONFLICT, ChatRejectionReason.INVALID_ATTACHMENTS]
+    | Literal[
+        ChatRejectionReason.SUBMISSION_CONFLICT,
+        ChatRejectionReason.INVALID_ATTACHMENTS,
+        ChatRejectionReason.MESSAGE_TOO_LONG,
+        ChatRejectionReason.FILE_NAME_TOO_LONG,
+        ChatRejectionReason.RATE_LIMITED,
+    ]
 )
 
 

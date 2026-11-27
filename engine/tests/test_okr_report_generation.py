@@ -1,18 +1,29 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import anyio
 import pytest
+from tests.llm_retry_fakes import health_model, install_provider_health, trip
 from tests.test_transaction_boundaries import pool
 from tests.transaction_pool_fakes import CountingPool
 
+from app.core.json_types import JsonObject
 from app.dao.okr_dao import company_report_dao, member_daily_report_dao
 from app.db.session import get_connection
+from app.records.agent import AgentRecord
 from app.records.llm import LLMModelRecord
 from app.records.okr import CompanyReportRecord, MemberDailyReportRecord
+from app.records.trigger import AgentTriggerRecord
 from app.services import okr_report_generation as generation, okr_reporting as reporting
+from app.services.llm.provider_health import Admission, is_unavailable, model_key
+from app.services.llm.retry_policy import LLMHTTPError
+from app.services.trigger_runtime import okr
+from app.services.trigger_runtime.executions import ExecutionLeaseLostError
 
 __all__ = ["pool"]
 
@@ -330,6 +341,120 @@ async def test_fallback_success_runs_without_connection(store: ReportStore, monk
     assert saved.needs_refresh is False
 
 
+def _answering(monkeypatch: pytest.MonkeyPatch, **outcomes: str | Exception) -> list[str]:
+    """Replace the provider call with one that plays each model's outcome and returns the models it was asked."""
+    asked: list[str] = []
+
+    async def complete(**kwargs: object) -> dict[str, object]:
+        asked.append(str(kwargs["model"]))
+        outcome = outcomes[str(kwargs["model"])]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return {"choices": [{"message": {"content": outcome}}]}
+
+    monkeypatch.setattr(reporting, "chat_complete", complete)
+    return asked
+
+
+async def _generate(primary: LLMModelRecord, fallback: LLMModelRecord | None = None) -> str:
+    return await reporting._generate_llm_report_content(
+        TENANT,
+        "daily",
+        DAY,
+        DAY,
+        {},
+        fallback_content="deterministic report",
+        models=reporting.ResolvedReportModels(primary, fallback, None),
+    )
+
+
+async def test_open_primary_is_skipped_for_the_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an open primary circuit and a healthy fallback.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary, fallback = health_model("primary"), health_model("fallback")
+    trip(tracker, primary, failures=2)
+    asked = _answering(monkeypatch, primary="unused", fallback="fallback report")
+
+    # When the report is generated.
+    content = await _generate(primary, fallback)
+
+    # Then only the fallback was asked, and it wrote the report.
+    assert asked == ["fallback"]
+    assert "fallback report" in content
+
+
+async def test_no_healthy_model_publishes_the_deterministic_report_without_a_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given both models' circuits are open.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary, fallback = health_model("primary"), health_model("fallback")
+    trip(tracker, primary, failures=2)
+    trip(tracker, fallback, failures=2)
+    asked = _answering(monkeypatch, primary="unused", fallback="unused")
+    warnings: list[str] = []
+    monkeypatch.setattr(reporting.logger, "warning", lambda message: warnings.append(message))
+
+    # When the report is generated.
+    content = await _generate(primary, fallback)
+
+    # Then it falls back to the deterministic content with no provider request and one warning.
+    assert content == "deterministic report"
+    assert asked == []
+    assert len(warnings) == 1
+
+
+async def test_retryable_failures_are_recorded_and_then_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a provider that answers 503 and a circuit that opens after two failures.
+    _tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary = health_model("primary")
+    asked = _answering(monkeypatch, primary=LLMHTTPError(503, "upstream busy"))
+
+    # When the report is generated three times.
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="All configured OKR report models failed"):
+            await _generate(primary)
+    content = await _generate(primary)
+
+    # Then the first two reached the provider and raised; the third was refused before it.
+    assert asked == ["primary", "primary"]
+    assert content == "deterministic report"
+    assert is_unavailable(primary)
+
+
+async def test_refused_primary_does_not_hide_a_failing_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an open primary and a fallback that fails.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    primary, fallback = health_model("primary"), health_model("fallback")
+    trip(tracker, primary, failures=2)
+    asked = _answering(monkeypatch, primary="unused", fallback=LLMHTTPError(503, "upstream busy"))
+
+    # When the report is generated.
+    # Then the failure still raises, so the prior report is kept instead of replaced by the deterministic one.
+    with pytest.raises(RuntimeError, match="All configured OKR report models failed"):
+        await _generate(primary, fallback)
+    assert asked == ["fallback"]
+
+
+async def test_successful_probe_closes_the_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an open circuit whose cooldown has ended.
+    tracker, clock = install_provider_health(monkeypatch, threshold=2)
+    primary = health_model("primary")
+    key = model_key(primary)
+    assert key is not None
+    trip(tracker, primary, failures=2)
+    clock.advance(30)
+    asked = _answering(monkeypatch, primary="probe report")
+
+    # When the report is generated as the probe and the provider answers.
+    content = await _generate(primary)
+
+    # Then the circuit is closed.
+    assert "probe report" in content
+    assert asked == ["primary"]
+    assert tracker.admit(key) is Admission.CALL
+
+
 @pytest.mark.parametrize("kind", ["weekly", "monthly"])
 async def test_rollup_stays_dirty_until_missing_intermediate_is_generated(kind: str, store: ReportStore) -> None:
     await reporting.upsert_member_daily_report(TENANT, "user", MEMBER, DAY, "submitted progress")
@@ -342,3 +467,113 @@ async def test_rollup_stays_dirty_until_missing_intermediate_is_generated(kind: 
         await generation.generate_company_report(TENANT, "weekly", DAY)
     complete = await generation.generate_company_report(TENANT, kind, DAY)
     assert complete.needs_refresh is False
+
+
+class SettingsDb:
+    def __init__(self, row: dict[str, object] | None) -> None:
+        self.row = row
+
+    async def fetchone(self, _sql: str, _params: object) -> dict[str, object] | None:
+        return self.row
+
+
+def firing(name: str, period: str | None = "2026-11-25") -> AgentTriggerRecord:
+    config: JsonObject = {} if period is None else {"okr_period": period}
+    return AgentTriggerRecord(uuid4(), uuid4(), name=name, type="cron", config=config)
+
+
+@pytest.fixture
+def okr_run(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    tenant_id = uuid4()
+    state = SimpleNamespace(
+        tenant_id=tenant_id,
+        settings={"enabled": True, "daily_report_enabled": True},
+        calls=[],
+        agent=AgentRecord(uuid4(), "OKR", uuid4(), tenant_id=tenant_id),
+    )
+
+    @asynccontextmanager
+    async def connection() -> AsyncGenerator[SettingsDb]:
+        yield SettingsDb(state.settings)
+
+    def recorder(label: str) -> AsyncMock:
+        async def call(*args: object, **kwargs: object) -> None:
+            state.calls.append((label, args, kwargs))
+
+        return AsyncMock(side_effect=call)
+
+    monkeypatch.setattr(okr, "agent_dao", SimpleNamespace(get=AsyncMock(return_value=state.agent)))
+    monkeypatch.setattr(okr, "connection_ctx", connection)
+    monkeypatch.setattr(okr, "trigger_daily_collection_for_tenant", recorder("collection"))
+    monkeypatch.setattr(reporting, "generate_company_daily_report", recorder("daily"))
+    monkeypatch.setattr(reporting, "generate_company_weekly_report", recorder("weekly"))
+    monkeypatch.setattr(reporting, "generate_company_monthly_report", recorder("monthly"))
+    return state
+
+
+@pytest.mark.parametrize(
+    ("name", "label"),
+    [
+        ("daily_okr_report", "daily"),
+        ("weekly_okr_report", "weekly"),
+        ("monthly_okr_report", "monthly"),
+        ("daily_okr_collection", "collection"),
+    ],
+)
+async def test_okr_execution_runs_for_the_period_it_is_keyed_by(
+    okr_run: SimpleNamespace, name: str, label: str
+) -> None:
+    # Given an execution carrying its report period, When it runs a day later than it was due
+    guard = Mock()
+    await okr.run_okr_firing(firing(name), guard=guard)
+    # Then the one matching generation or send ran for exactly that period, never for the current date
+    [(called, args, kwargs)] = okr_run.calls
+    assert called == label
+    assert args == (okr_run.tenant_id, date(2026, 11, 25))
+    assert kwargs == ({"guard": guard} if label == "collection" else {})
+    guard.assert_called()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [None, {"enabled": False, "daily_report_enabled": True}],
+)
+@pytest.mark.parametrize("name", ["daily_okr_report", "daily_okr_collection"])
+async def test_okr_execution_without_enabled_okr_completes_without_work(
+    okr_run: SimpleNamespace, name: str, settings: dict[str, object] | None
+) -> None:
+    # Given a tenant without OKR enabled
+    okr_run.settings = settings
+    # When the execution runs, Then there is nothing to send and nothing raised
+    await okr.run_okr_firing(firing(name), guard=Mock())
+    assert okr_run.calls == []
+
+
+async def test_collection_needs_daily_reports_enabled_but_reports_do_not(okr_run: SimpleNamespace) -> None:
+    # Given daily collection switched off while OKR stays on
+    okr_run.settings = {"enabled": True, "daily_report_enabled": False}
+    # When both kinds of execution run
+    await okr.run_okr_firing(firing("daily_okr_collection"), guard=Mock())
+    await okr.run_okr_firing(firing("daily_okr_report"), guard=Mock())
+    # Then only the report was generated
+    assert [call[0] for call in okr_run.calls] == ["daily"]
+
+
+async def test_okr_execution_without_a_period_fails_so_it_is_retried_not_run_for_today(
+    okr_run: SimpleNamespace,
+) -> None:
+    # Given an execution that lost its period, When it runs, Then it raises instead of picking a date itself
+    with pytest.raises(ValueError, match="report period"):
+        await okr.run_okr_firing(firing("daily_okr_report", period=None), guard=Mock())
+    assert okr_run.calls == []
+
+
+async def test_okr_execution_stops_before_sending_once_the_lease_is_lost(okr_run: SimpleNamespace) -> None:
+    # Given a lease guard that has already lost
+    def lost() -> None:
+        raise ExecutionLeaseLostError("taken over")
+
+    # When the execution runs, Then the lost lease stops it before any send or generation
+    with pytest.raises(ExecutionLeaseLostError):
+        await okr.run_okr_firing(firing("daily_okr_collection"), guard=lost)
+    assert okr_run.calls == []

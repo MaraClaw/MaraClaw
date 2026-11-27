@@ -27,7 +27,10 @@ import {
   uploadWorkspaceFile,
   writeFileContent,
   type AgentOut,
+  type FileContentResult,
 } from '@/lib/workspace-api'
+
+type UnreadableFile = Exclude<FileContentResult, { readonly kind: 'content' }>
 
 function FileImagePreview({ agentId, path }: { agentId: string; path: string }) {
   const { t: translate } = useTranslation()
@@ -77,6 +80,7 @@ export function AgentFilesPage() {
   const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [version, setVersion] = useState<string | undefined>()
+  const [unreadable, setUnreadable] = useState<UnreadableFile | null>(null)
   const uploadPolicy = useQuery({
     queryKey: ['upload-policy'],
     queryFn: ({ signal }) => getUploadPolicy({ signal, owner: scope.owner }),
@@ -105,8 +109,15 @@ export function AgentFilesPage() {
     mutationFn: (filePath: string) => readFileContent(agent.id, filePath),
     onSuccess(data) {
       setSelected(data.path)
+      if (data.kind !== 'content') {
+        setDraft('')
+        setVersion(undefined)
+        setUnreadable(data)
+        return
+      }
       setDraft(data.content)
       setVersion(data.version_token)
+      setUnreadable(null)
     },
     onError(error) {
       toast.error(userFacingRequestError(error, translate("Cannot read file")))
@@ -138,6 +149,11 @@ export function AgentFilesPage() {
       toast.error(userFacingRequestError(error, translate("Unable to start download. Try again.")))
     },
   })
+
+  const editorNotice = selected === null || unreadable === null ? null
+    : unreadable.kind === 'too-large'
+      ? translate("This file is larger than the {limit} editor limit. Download it to view or change it.", { limit: formatUploadLimit(unreadable.maxBytes, locale) })
+      : translate("This file ({size}) is not text, so it cannot be edited here. Download it to view or change it.", { size: formatUploadLimit(unreadable.size, locale) })
 
   return (
     <div className="grid min-h-[28rem] grid-cols-1 md:grid-cols-[240px_1fr]">
@@ -234,7 +250,7 @@ export function AgentFilesPage() {
                       {translate("Unlock")}</Button>
                   </>
                 ) : null}
-                <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
+                <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending || unreadable !== null}>
                   {translate("Save")}</Button>
                 {canManage ? (
                   <Button
@@ -256,7 +272,23 @@ export function AgentFilesPage() {
             {token && /\.(png|jpe?g|gif|webp|svg)$/i.test(selected) ? (
               <FileImagePreview key={`${agent.id}:${selected}`} agentId={agent.id} path={selected} />
             ) : null}
-            <Textarea aria-label={translate("Contents of {path}", { path: selected })} className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
+          </>
+        ) : (
+          <p className="p-6 text-sm text-muted-foreground">{translate("Select a file to read or edit.")}</p>
+        )}
+        {/* The status paragraph stays mounted across file selections, so a changed notice is announced. */}
+        <div className={editorNotice === null ? undefined : 'space-y-2 rounded-xl border border-border p-4 text-sm'}>
+          <p role="status">{editorNotice}</p>
+          {selected !== null && editorNotice !== null ? (
+            <Button type="button" size="sm" variant="outline" disabled={download.isPending} onClick={() => download.mutate(selected)}>
+              {translate("Download")}</Button>
+          ) : null}
+        </div>
+        {selected ? (
+          <>
+            {unreadable === null ? (
+              <Textarea aria-label={translate("Contents of {path}", { path: selected })} className="min-h-[22rem] font-mono text-xs" value={draft} onChange={scope.effect((event) => setDraft(event.target.value))} />
+            ) : null}
             {revisions.isError ? <RequestErrorToast error={revisions.error} message="Unable to load file revisions. Try again." /> : null}
             {(revisions.data ?? []).length > 0 ? (
               <div className="mt-3 space-y-1">
@@ -286,9 +318,7 @@ export function AgentFilesPage() {
               </div>
             ) : null}
           </>
-        ) : (
-          <p className="p-6 text-sm text-muted-foreground">{translate("Select a file to read or edit.")}</p>
-        )}
+        ) : null}
       </section>
     </div>
   )

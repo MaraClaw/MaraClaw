@@ -53,9 +53,11 @@ def _spy_claims(store: RelayStore, monkeypatch: pytest.MonkeyPatch) -> tuple[any
     idle_poll, claimed, limits = anyio.Event(), anyio.Event(), list[int]()
     real = store.claim_batch
 
-    async def claim_batch(*, limit: int, lease_seconds: float, now: datetime) -> list[GatewayReportDeliveryRecord]:
+    async def claim_batch(
+        *, limit: int, lease_seconds: float, now: datetime, per_tenant_limit: int | None = None
+    ) -> list[GatewayReportDeliveryRecord]:
         limits.append(limit)
-        rows = await real(limit=limit, lease_seconds=lease_seconds, now=now)
+        rows = await real(limit=limit, lease_seconds=lease_seconds, now=now, per_tenant_limit=per_tenant_limit)
         (claimed if rows else idle_poll).set()
         return rows
 
@@ -195,10 +197,14 @@ async def test_subscriber_wakes_on_foreign_messages_and_reconnects_after_failure
             pubsubs.append(FakePubSub(outcomes, fail=not pubsubs))
             return pubsubs[-1]
 
-    async def get_redis() -> Client:
+    async def get_pubsub_redis() -> Client:
         return Client()
 
-    monkeypatch.setattr(wake, "get_redis", get_redis)
+    async def command_pool_is_not_the_subscribers() -> Client:
+        pytest.fail("the long-lived subscription must come from the Pub/Sub pool, not the command pool")
+
+    monkeypatch.setattr(wake, "get_pubsub_redis", get_pubsub_redis)
+    monkeypatch.setattr(wake, "get_redis", command_pool_is_not_the_subscribers)
     with wake.listen() as event:
         async with anyio.create_task_group() as tasks:
             tasks.start_soon(wake.subscribe_wakes)
@@ -216,3 +222,16 @@ async def test_subscriber_wakes_on_foreign_messages_and_reconnects_after_failure
             tasks.cancel_scope.cancel()
     assert len(pubsubs) == 2
     assert all(p.closed for p in pubsubs)
+
+
+async def test_wake_publication_uses_the_command_pool_not_the_subscribers(
+    redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def pubsub_pool_is_not_the_publishers() -> FakeRedis:
+        pytest.fail("a wake is published on the command pool, which must not hold Pub/Sub connections")
+
+    monkeypatch.setattr(wake, "get_pubsub_redis", pubsub_pool_is_not_the_publishers)
+
+    await wake._announce()
+
+    assert redis.published == [(wake.WAKE_CHANNEL, wake._ORIGIN)]

@@ -1,6 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import override
+from typing import Final, override
 
 import pytest
 from psycopg import OperationalError
@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.config import (
     MAX_RETENTION_DAYS,
+    MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS,
     MIN_GATEWAY_MESSAGE_RETENTION_DAYS,
     MIN_TRIGGER_EXECUTION_RETENTION_DAYS,
     Settings,
@@ -20,9 +21,35 @@ from worker_progress_fixtures import WorkerHTTP, worker_http
 __all__ = ["worker_http"]
 
 NOW = datetime(2026, 11, 12, tzinfo=UTC)
-ACTIVITY_DAYS = 30
-EXECUTION_DAYS = 14
-GATEWAY_DAYS = 90
+# Each retained table: its setting, a distinct window, and the module attribute holding its DAO.
+WINDOWS: Final = {
+    "ACTIVITY_LOG_RETENTION_DAYS": 30,
+    "TRIGGER_EXECUTION_RETENTION_DAYS": 14,
+    "GATEWAY_MESSAGE_RETENTION_DAYS": 90,
+    "NOTIFICATION_RETENTION_DAYS": 45,
+    "TASK_RETENTION_DAYS": 60,
+    "CHANNEL_EVENT_RECEIPT_RETENTION_DAYS": 21,
+    "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS": 10,
+    "WORKSPACE_REVISION_RETENTION_DAYS": 180,
+}
+DAO_ATTRIBUTES: Final = {
+    "ACTIVITY_LOG_RETENTION_DAYS": "agent_activity_log_dao",
+    "TRIGGER_EXECUTION_RETENTION_DAYS": "trigger_execution_dao",
+    "GATEWAY_MESSAGE_RETENTION_DAYS": "gateway_message_dao",
+    "NOTIFICATION_RETENTION_DAYS": "notification_dao",
+    "TASK_RETENTION_DAYS": "task_dao",
+    "CHANNEL_EVENT_RECEIPT_RETENTION_DAYS": "channel_event_receipt_dao",
+    "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS": "gateway_report_delivery_dao",
+    "WORKSPACE_REVISION_RETENTION_DAYS": "workspace_file_revision_dao",
+}
+# Retention windows that accept any positive number of days, unlike the three with a floor.
+UNBOUNDED_BELOW: Final = (
+    "ACTIVITY_LOG_RETENTION_DAYS",
+    "NOTIFICATION_RETENTION_DAYS",
+    "TASK_RETENTION_DAYS",
+    "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS",
+    "WORKSPACE_REVISION_RETENTION_DAYS",
+)
 
 
 class Clock:
@@ -61,6 +88,43 @@ class GatewayDAO(ScriptedPurge):
         return self.next_outcome(completed_before, limit)
 
 
+class NotificationDAO(ScriptedPurge):
+    async def purge_older_than(self, *, older_than: datetime, limit: int) -> int:
+        return self.next_outcome(older_than, limit)
+
+
+class TaskDAO(ScriptedPurge):
+    async def purge_finished_before(self, *, finished_before: datetime, limit: int) -> int:
+        return self.next_outcome(finished_before, limit)
+
+
+class ReceiptDAO(ScriptedPurge):
+    async def purge_older_than(self, *, older_than: datetime, limit: int) -> int:
+        return self.next_outcome(older_than, limit)
+
+
+class DeliveryDAO(ScriptedPurge):
+    async def purge_finished_before(self, *, finished_before: datetime, limit: int) -> int:
+        return self.next_outcome(finished_before, limit)
+
+
+class RevisionDAO(ScriptedPurge):
+    async def purge_superseded_before(self, *, created_before: datetime, limit: int) -> int:
+        return self.next_outcome(created_before, limit)
+
+
+FAKES: Final[dict[str, type[ScriptedPurge]]] = {
+    "ACTIVITY_LOG_RETENTION_DAYS": ActivityDAO,
+    "TRIGGER_EXECUTION_RETENTION_DAYS": ExecutionDAO,
+    "GATEWAY_MESSAGE_RETENTION_DAYS": GatewayDAO,
+    "NOTIFICATION_RETENTION_DAYS": NotificationDAO,
+    "TASK_RETENTION_DAYS": TaskDAO,
+    "CHANNEL_EVENT_RECEIPT_RETENTION_DAYS": ReceiptDAO,
+    "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS": DeliveryDAO,
+    "WORKSPACE_REVISION_RETENTION_DAYS": RevisionDAO,
+}
+
+
 @pytest.fixture
 def sleeps(monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP) -> list[float]:
     recorded: list[float] = []
@@ -71,18 +135,21 @@ def sleeps(monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP) -> list[flo
 
     monkeypatch.setattr(worker, "sleep", paced)
     monkeypatch.setattr(worker, "datetime", Clock)
-    monkeypatch.setattr(get_settings(), "ACTIVITY_LOG_RETENTION_DAYS", ACTIVITY_DAYS)
-    monkeypatch.setattr(get_settings(), "TRIGGER_EXECUTION_RETENTION_DAYS", EXECUTION_DAYS)
-    monkeypatch.setattr(get_settings(), "GATEWAY_MESSAGE_RETENTION_DAYS", GATEWAY_DAYS)
+    for setting, days in WINDOWS.items():
+        monkeypatch.setattr(get_settings(), setting, days)
     return recorded
 
 
+def scripted(**scripts: list[int | Exception]) -> dict[str, ScriptedPurge]:
+    """A fake DAO per table, each with the script given under its setting name (empty when not given)."""
+    return {setting: fake(scripts.get(setting, [])) for setting, fake in FAKES.items()}
+
+
 def start(
-    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, activity: object, executions: object, gateway: object
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, daos: dict[str, ScriptedPurge]
 ) -> asyncio.Task[object]:
-    monkeypatch.setattr(worker, "agent_activity_log_dao", activity)
-    monkeypatch.setattr(worker, "trigger_execution_dao", executions)
-    monkeypatch.setattr(worker, "gateway_message_dao", gateway)
+    for setting, dao in daos.items():
+        monkeypatch.setattr(worker, DAO_ATTRIBUTES[setting], dao)
     return worker_http.start_loop(
         "operational_log_retention",
         worker.start_operational_log_retention_worker(),
@@ -94,8 +161,8 @@ async def test_empty_pass_beats_then_polls(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, sleeps: list[float]
 ) -> None:
     # Given no table holds anything older than its window.
-    activity, executions, gateway = ActivityDAO([]), ExecutionDAO([]), GatewayDAO([])
-    task = start(monkeypatch, worker_http, activity, executions, gateway)
+    daos = scripted()
+    task = start(monkeypatch, worker_http, daos)
     await worker_http.pacing.paused()
     # When the budget lapses while the loop sleeps, then the next empty pass runs.
     worker_http.pacing.now += worker.PROGRESS_BUDGET_SECONDS + 1
@@ -103,23 +170,20 @@ async def test_empty_pass_beats_then_polls(
     await worker_http.pacing.step()
     # Then that empty pass beat, and every pass purged one batch per table below its own cutoff before the poll sleep.
     await worker_http.ready(expected=True)
-    assert activity.purges == [(NOW - timedelta(days=ACTIVITY_DAYS), worker.PURGE_LIMIT)] * 2
-    assert executions.purges == [(NOW - timedelta(days=EXECUTION_DAYS), worker.PURGE_LIMIT)] * 2
-    assert gateway.purges == [(NOW - timedelta(days=GATEWAY_DAYS), worker.PURGE_LIMIT)] * 2
+    for setting, dao in daos.items():
+        assert dao.purges == [(NOW - timedelta(days=WINDOWS[setting]), worker.PURGE_LIMIT)] * 2
     assert sleeps == [worker.POLL_SECONDS] * 2
     assert not task.done()
 
 
-@pytest.mark.parametrize("failing", ["activity", "executions", "gateway"])
+@pytest.mark.parametrize("failing", sorted(WINDOWS))
 async def test_database_error_on_any_table_backs_off_without_beating_and_still_attempts_the_others(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, sleeps: list[float], failing: str
 ) -> None:
     # Given one table whose purge fails twice, then recovers, and healthy other tables.
     broken: list[int | Exception] = [DbError("down"), OperationalError("down"), 0]
-    activity = ActivityDAO(broken if failing == "activity" else [])
-    executions = ExecutionDAO(broken if failing == "executions" else [])
-    gateway = GatewayDAO(broken if failing == "gateway" else [])
-    task = start(monkeypatch, worker_http, activity, executions, gateway)
+    daos = scripted(**{failing: broken})
+    task = start(monkeypatch, worker_http, daos)
     await worker_http.pacing.paused()
     # When the budget lapses on the first failed pass and the second failed pass is retried.
     worker_http.pacing.now += worker.PROGRESS_BUDGET_SECONDS + 1
@@ -133,43 +197,44 @@ async def test_database_error_on_any_table_backs_off_without_beating_and_still_a
     await worker_http.ready(expected=True)
     assert sleeps == [worker.DB_RETRY_BASE_SECONDS, worker.DB_RETRY_BASE_SECONDS * 2, worker.POLL_SECONDS]
     assert worker.DB_RETRY_CAP_SECONDS < worker.PROGRESS_BUDGET_SECONDS
-    assert len(activity.purges) == len(executions.purges) == len(gateway.purges) == 3
+    assert {len(dao.purges) for dao in daos.values()} == {3}
 
 
-async def test_full_batch_from_any_table_loops_without_sleeping(
+async def test_full_batch_from_any_table_loops_without_sleeping_and_every_table_gets_each_pass(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, sleeps: list[float]
 ) -> None:
     # Given a backlog where each table in turn is the only full one, then every table is short.
     full = worker.PURGE_LIMIT
-    activity, executions = ActivityDAO([full, 3, 7, 0]), ExecutionDAO([3, full, 0, 0])
-    gateway = GatewayDAO([0, 1, full, 4])
-    _ = start(monkeypatch, worker_http, activity, executions, gateway)
+    tables = list(WINDOWS)
+    scripts: dict[str, list[int | Exception]] = {
+        setting: [full if turn == position else 1 for turn in range(len(tables))]
+        for position, setting in enumerate(tables)
+    }
+    daos = scripted(**scripts)
+    _ = start(monkeypatch, worker_http, daos)
     # When the loop first sleeps.
     await worker_http.pacing.paused()
-    # Then four passes ran back to back, and only the pass where every batch was short ended in the poll sleep.
-    assert len(activity.purges) == len(executions.purges) == len(gateway.purges) == 4
+    # Then one more pass than tables ran back to back, each taking a batch from every table, and only the pass where
+    # every batch was short ended in the poll sleep.
+    assert {len(dao.purges) for dao in daos.values()} == {len(tables) + 1}
     assert sleeps == [worker.POLL_SECONDS]
     await worker_http.ready(expected=True)
 
 
-@pytest.mark.parametrize(
-    "disabled", ["ACTIVITY_LOG_RETENTION_DAYS", "TRIGGER_EXECUTION_RETENTION_DAYS", "GATEWAY_MESSAGE_RETENTION_DAYS"]
-)
+@pytest.mark.parametrize("disabled", sorted(WINDOWS))
 async def test_zero_retention_for_one_table_makes_no_call_for_it(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, sleeps: list[float], disabled: str
 ) -> None:
     # Given one table's retention disabled.
     monkeypatch.setattr(get_settings(), disabled, 0)
-    daos: dict[str, ScriptedPurge] = {
-        "ACTIVITY_LOG_RETENTION_DAYS": ActivityDAO([]),
-        "TRIGGER_EXECUTION_RETENTION_DAYS": ExecutionDAO([]),
-        "GATEWAY_MESSAGE_RETENTION_DAYS": GatewayDAO([]),
-    }
-    _ = start(monkeypatch, worker_http, *daos.values())
+    daos = scripted()
+    _ = start(monkeypatch, worker_http, daos)
     # When the loop completes its first pass.
     await worker_http.pacing.paused()
     # Then only the enabled tables were purged, and the pass beat and slept.
-    assert {name: len(dao.purges) for name, dao in daos.items()} == {name: int(name != disabled) for name in daos}
+    assert {setting: len(dao.purges) for setting, dao in daos.items()} == {
+        setting: int(setting != disabled) for setting in daos
+    }
     assert sleeps == [worker.POLL_SECONDS]
     await worker_http.ready(expected=True)
 
@@ -178,11 +243,10 @@ async def test_zero_retention_for_every_table_never_purges_and_stays_ready(
     monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, sleeps: list[float]
 ) -> None:
     # Given retention disabled for every table.
-    monkeypatch.setattr(get_settings(), "ACTIVITY_LOG_RETENTION_DAYS", 0)
-    monkeypatch.setattr(get_settings(), "TRIGGER_EXECUTION_RETENTION_DAYS", 0)
-    monkeypatch.setattr(get_settings(), "GATEWAY_MESSAGE_RETENTION_DAYS", 0)
-    activity, executions, gateway = ActivityDAO([]), ExecutionDAO([]), GatewayDAO([])
-    task = start(monkeypatch, worker_http, activity, executions, gateway)
+    for setting in WINDOWS:
+        monkeypatch.setattr(get_settings(), setting, 0)
+    daos = scripted()
+    task = start(monkeypatch, worker_http, daos)
     await worker_http.pacing.paused()
     # When more than the progress budget passes in poll steps.
     for _ in range(4):
@@ -190,9 +254,7 @@ async def test_zero_retention_for_every_table_never_purges_and_stays_ready(
         await worker_http.ready(expected=True)
     # Then the loop beat on every pass without a single DAO call.
     assert worker_http.pacing.now > worker.PROGRESS_BUDGET_SECONDS
-    assert activity.purges == []
-    assert executions.purges == []
-    assert gateway.purges == []
+    assert all(dao.purges == [] for dao in daos.values())
     assert sleeps == [worker.POLL_SECONDS] * 5
     assert not task.done()
 
@@ -210,7 +272,9 @@ async def test_hung_purge_goes_stale_without_being_cancelled(
             await asyncio.Event().wait()
             return 0
 
-    task = start(monkeypatch, worker_http, HungDAO([]), ExecutionDAO([]), GatewayDAO([]))
+    daos = scripted()
+    daos["ACTIVITY_LOG_RETENTION_DAYS"] = HungDAO([])
+    task = start(monkeypatch, worker_http, daos)
     await asyncio.wait_for(entered.wait(), 2)
     await worker_http.ready(expected=True)
     # When the progress budget lapses on the injected clock.
@@ -221,13 +285,76 @@ async def test_hung_purge_goes_stale_without_being_cancelled(
     assert sleeps == []
 
 
+async def test_cancelling_mid_pass_stops_before_the_next_table(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, sleeps: list[float]
+) -> None:
+    # Given the second table's purge hanging after the first table's batch returned.
+    entered = asyncio.Event()
+
+    class HungExecutionDAO(ExecutionDAO):
+        @override
+        async def purge_finished_before(self, *, finished_before: datetime, limit: int) -> int:
+            entered.set()
+            await asyncio.Event().wait()
+            return 0
+
+    daos = scripted()
+    daos["TRIGGER_EXECUTION_RETENTION_DAYS"] = HungExecutionDAO([])
+    task = start(monkeypatch, worker_http, daos)
+    await asyncio.wait_for(entered.wait(), 2)
+    # When the loop is cancelled as shutdown does.
+    _ = task.cancel()
+    _ = await asyncio.gather(task, return_exceptions=True)
+    # Then the batch that had returned stands, no later table was started, and nothing slept.
+    assert len(daos["ACTIVITY_LOG_RETENTION_DAYS"].purges) == 1
+    assert all(len(daos[setting].purges) == 0 for setting in list(WINDOWS)[2:])
+    assert sleeps == []
+
+
 def test_settings_default_to_keeping_everything() -> None:
     # Given no configuration.
     defaults = Settings.model_validate({})
     # Then no table is purged.
-    assert defaults.ACTIVITY_LOG_RETENTION_DAYS == 0
-    assert defaults.TRIGGER_EXECUTION_RETENTION_DAYS == 0
-    assert defaults.GATEWAY_MESSAGE_RETENTION_DAYS == 0
+    for setting in WINDOWS:
+        assert getattr(defaults, setting) == 0
+
+
+@pytest.mark.parametrize("setting", UNBOUNDED_BELOW)
+@pytest.mark.parametrize("days", [1, 6, 365, MAX_RETENTION_DAYS])
+def test_retention_without_a_floor_accepts_any_positive_window(setting: str, days: int) -> None:
+    loaded = Settings.model_validate({setting: days})
+    assert getattr(loaded, setting) == days
+
+
+@pytest.mark.parametrize("setting", UNBOUNDED_BELOW)
+@pytest.mark.parametrize("days", [-1, MAX_RETENTION_DAYS + 1])
+def test_retention_without_a_floor_rejects_negative_and_oversized_days(setting: str, days: int) -> None:
+    with pytest.raises(ValidationError) as raised:
+        Settings.model_validate({setting: days})
+    assert [error["loc"] for error in raised.value.errors()] == [(setting,)]
+
+
+@pytest.mark.parametrize("days", [0, MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS, 30, MAX_RETENTION_DAYS])
+def test_channel_event_receipt_retention_accepts_zero_and_at_least_seven_days(days: int) -> None:
+    loaded = Settings.model_validate({"CHANNEL_EVENT_RECEIPT_RETENTION_DAYS": days})
+    assert days == loaded.CHANNEL_EVENT_RECEIPT_RETENTION_DAYS
+
+
+@pytest.mark.parametrize("days", [1, 3, MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS - 1, -1, MAX_RETENTION_DAYS + 1])
+def test_channel_event_receipt_retention_rejects_one_to_six_negative_and_oversized_days(days: int) -> None:
+    with pytest.raises(ValidationError) as raised:
+        Settings.model_validate({"CHANNEL_EVENT_RECEIPT_RETENTION_DAYS": days})
+    assert [error["loc"] for error in raised.value.errors()] == [("CHANNEL_EVENT_RECEIPT_RETENTION_DAYS",)]
+
+
+def test_channel_event_receipt_retention_is_validated_when_settings_load_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an environment that asks for a six day window.
+    monkeypatch.setenv("CHANNEL_EVENT_RECEIPT_RETENTION_DAYS", "6")
+    # Then loading settings fails.
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 @pytest.mark.parametrize("days", [0, MIN_TRIGGER_EXECUTION_RETENTION_DAYS, 30, MAX_RETENTION_DAYS])
@@ -274,15 +401,3 @@ def test_gateway_message_retention_is_validated_when_settings_load_from_the_envi
     # Then loading settings fails.
     with pytest.raises(ValidationError):
         Settings()
-
-
-@pytest.mark.parametrize("days", [1, 6, 365, MAX_RETENTION_DAYS])
-def test_activity_log_retention_accepts_any_positive_window(days: int) -> None:
-    loaded = Settings.model_validate({"ACTIVITY_LOG_RETENTION_DAYS": days})
-    assert days == loaded.ACTIVITY_LOG_RETENTION_DAYS
-
-
-@pytest.mark.parametrize("days", [-1, MAX_RETENTION_DAYS + 1])
-def test_activity_log_retention_rejects_negative_and_oversized_days(days: int) -> None:
-    with pytest.raises(ValidationError):
-        Settings.model_validate({"ACTIVITY_LOG_RETENTION_DAYS": days})

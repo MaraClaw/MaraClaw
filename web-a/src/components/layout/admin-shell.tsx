@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useNotificationUnreadCount } from '@/hooks/use-notifications'
 import { useTransferReviewAccess } from '@/hooks/use-transfer-reviews'
-import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canSendBroadcast, canViewClawbook, isPlatformAdminUser } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canSendBroadcast, canViewClawbook, isPlatformAdminUser } from '@/lib/types/auth-guards'
 import { cn } from '@/lib/utils'
 
 type NavItem = {

@@ -10,7 +10,6 @@ import httpx
 from app.core.json_types import JsonObject, is_json_object, json_as_str, json_object_from, json_object_from_response
 from app.core.logging import logger
 from app.services import agent_tools
-from app.services.agent_tool_exec.channel_context import channel_feishu_sender_open_id
 from app.services.im_sdk_types import is_object_list
 
 from .registry import ToolArguments, ToolArgumentValue, tool_arg_str
@@ -192,16 +191,14 @@ async def _feishu_calendar_list(agent_id: uuid.UUID, arguments: ToolArguments) -
     start_iso = _to_iso(start_arg, now)
     end_iso = _to_iso(end_arg, now + timedelta(days=7))
 
-    sender_open_id = channel_feishu_sender_open_id.get(None)
+    busy_open_id: str | None = None
     if (user_open_id := arguments.get("user_open_id")) is not None and user_open_id:
-        sender_open_id = _string_argument(arguments, "user_open_id")
+        busy_open_id = _string_argument(arguments, "user_open_id")
     elif user_email:
-        resolved = await agent_tools._feishu_resolve_open_id(token, user_email)
-        if resolved not in (None, ""):
-            sender_open_id = resolved
+        busy_open_id = await agent_tools._feishu_resolve_open_id(token, user_email)
 
     freebusy_section = (
-        await _freebusy_section(sender_open_id, token, start_iso, end_iso) if sender_open_id not in (None, "") else ""
+        await _freebusy_section(busy_open_id, token, start_iso, end_iso) if busy_open_id not in (None, "") else ""
     )
     agent_cal_id, cal_err = await agent_tools._get_agent_calendar_id(token)
     if agent_cal_id in (None, ""):
@@ -235,14 +232,14 @@ async def _feishu_calendar_list(agent_id: uuid.UUID, arguments: ToolArguments) -
     return "\n".join(lines) if lines else "📅 该时间段内没有日程。"
 
 
-async def _freebusy_section(sender_open_id: str, token: str, start_iso: str, end_iso: str) -> str:
+async def _freebusy_section(open_id: str, token: str, start_iso: str, end_iso: str) -> str:
     try:
         async with _httpx_client(timeout=10) as client:
             response = await client.post(
                 "https://open.feishu.cn/open-apis/calendar/v4/freebusy/list",
                 headers={"Authorization": f"Bearer {token}"},
                 params={"user_id_type": "open_id"},
-                json={"time_min": start_iso, "time_max": end_iso, "user_id": sender_open_id},
+                json={"time_min": start_iso, "time_max": end_iso, "user_id": open_id},
             )
         data = _response_mapping(response)
         if data.get("code") != 0:

@@ -1641,6 +1641,11 @@ export const vietnamese = {
   'Workspace used / limit': 'Dung lượng không gian làm việc đã dùng / giới hạn',
   'Workspace measured': 'Thời điểm đo không gian làm việc',
   'Workspace over limit since': 'Không gian làm việc vượt giới hạn từ',
+  'Workspace measurement status': 'Trạng thái đo không gian làm việc',
+  'Last measurement failed at {time}': 'Lần đo gần nhất thất bại lúc {time}',
+  'Last measurement succeeded': 'Lần đo gần nhất thành công',
+  'Never measured': 'Chưa từng đo',
+  'Re-measure requested at {time}': 'Đã yêu cầu đo lại lúc {time}',
   'System company tiers are managed by the platform and cannot be changed here.': 'Gói của công ty hệ thống do nền tảng quản lý và không thể thay đổi tại đây.',
   'Target tier': 'Gói mới',
   'Preview tier change': 'Xem trước thay đổi gói',
@@ -1681,6 +1686,10 @@ export const vietnamese = {
   'No comments on this post yet.': 'Bài đăng này chưa có bình luận.',
   'Comments': 'Bình luận',
   'Load more comments': 'Tải thêm bình luận',
+  'This page couldn’t be downloaded': 'Không tải được trang này',
+  'Check your connection and try again.': 'Kiểm tra kết nối rồi thử lại.',
+  'This page stopped working': 'Trang này đã gặp lỗi',
+  'Try again, or open another page.': 'Thử lại hoặc mở một trang khác.',
 } as const
 
 export type MessageKey = keyof typeof vietnamese

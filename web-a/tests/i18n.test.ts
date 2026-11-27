@@ -1,8 +1,25 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { parseLocale, translate } from '../src/lib/i18n.ts'
+import { loadVietnamese, parseLocale, translate, translateOwned } from '../src/lib/i18n.ts'
 import { vietnamese } from '../src/lib/translations.ts'
+
+// Module state is shared by the whole file: this test must stay first, before anything loads the dictionary.
+test('Vietnamese lookups fall back to the English key until the dictionary is loaded', () => {
+  assert.equal(translate('vi', 'Added {name}', { name: 'Ada' }), 'Added Ada')
+  assert.equal(translateOwned('vi', 'Added {name}'), 'Added {name}')
+})
+
+test('loadVietnamese shares one load and then serves synchronous translations', async () => {
+  const first = loadVietnamese()
+  assert.equal(loadVietnamese(), first)
+  await first
+  assert.equal(translate('vi', 'Added {name}', { name: 'Ada' }), vietnamese['Added {name}'].replace('{name}', 'Ada'))
+  assert.equal(translate('en', 'Added {name}', { name: 'Ada' }), 'Added Ada')
+  assert.equal(translateOwned('vi', 'Added {name}'), vietnamese['Added {name}'])
+  assert.equal(translateOwned('vi', 'Not a dictionary key'), 'Not a dictionary key')
+  assert.equal(translateOwned('vi', undefined), undefined)
+})
 
 test('stored locale accepts en/vi and falls back to English for missing or invalid values', () => {
   for (const [stored, expected] of [
@@ -13,7 +30,8 @@ test('stored locale accepts en/vi and falls back to English for missing or inval
   }
 })
 
-test('translation interpolates all named slots in both locales', () => {
+test('translation interpolates all named slots in both locales', async () => {
+  await loadVietnamese()
   for (const locale of ['en', 'vi'] as const) {
     const rendered = translate(locale, 'Language: {current}. Switch to {next}', {
       current: 'Alpha', next: 'Beta',

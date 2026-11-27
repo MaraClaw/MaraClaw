@@ -1,7 +1,7 @@
 from contextlib import suppress
 from uuid import UUID
 
-from anyio import sleep, to_thread
+from anyio import sleep
 from psycopg import Error as PsycopgError
 from pywhales.exceptions import DockerException, NoSuchContainer
 from redis.exceptions import RedisError
@@ -18,6 +18,7 @@ from app.services.agent_manager import agent_manager
 from app.services.agent_runtime_loss import guest_published, report_runtime_loss
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, drain_on_cancel, setup_workspace_lock
 from app.services.agent_start_store import committed_start_connection, start_store
+from app.services.docker_capacity import DockerBusyError, DockerPriority, background_docker, run_docker
 from app.services.guest_admission import (
     GuestAdmissionError,
     GuestStartPreflightError,
@@ -63,6 +64,10 @@ async def execute_start(operation: AgentStartOperation, agent: AgentRecord, *, d
         raise
     except GuestOwnershipError:
         await start_store.fail(operation, "ownership_conflict")
+        raise
+    except DockerBusyError:
+        # The lane is full: the start stays pending and retries on its schedule.
+        await start_store.fail(operation, "capacity_exceeded")
         raise
     except DbError, PsycopgError, RedisError:
         await start_store.fail(operation, "publication_failed")
@@ -153,7 +158,7 @@ async def cleanup_cancelled_start(operation: AgentStartOperation) -> None:
     )
     for reference in references:
         try:
-            guest = await to_thread.run_sync(inspect_guest_container, client, reference)
+            guest = await run_docker(inspect_guest_container, client, reference, priority=DockerPriority.BACKGROUND)
             break
         except NoSuchContainer:
             continue
@@ -164,7 +169,7 @@ async def cleanup_cancelled_start(operation: AgentStartOperation) -> None:
             return
         if guest.id == candidate or labels.get("maraclaw.start_operation") == str(operation.operation_id):
             guest_resolutions.drop(operation.agent_id)
-            await to_thread.run_sync(client.container.stop, guest.id)
+            await run_docker(client.container.stop, guest.id, priority=DockerPriority.BACKGROUND)
     async with committed_start_connection() as db:
         await db.execute(
             "UPDATE agent_start_operations SET cleanup_complete=true WHERE operation_id=%(op)s AND state='cancelled'",
@@ -184,7 +189,8 @@ async def reconcile_agent_start(operation: AgentStartOperation, *, due_only: boo
                 await assert_no_active_run(operation.agent_id)
                 agent = await start_store.recover(operation)
                 if agent is not None:
-                    await execute_start(operation, agent, due_only=due_only)
+                    with background_docker():
+                        await execute_start(operation, agent, due_only=due_only)
                     return
                 await cleanup_cancelled_start(operation)
         except OpenClawUpdateInProgressError:
@@ -216,6 +222,10 @@ async def reconcile_agent_starts_once(*, retrying: frozenset[UUID] = frozenset()
         except GuestStartStoppedError as exc:
             # Superseded: already settled, with nothing failed and nothing to retry.
             logger.info("Pending guest start for agent {} ended at a checkpoint: {}", operation.agent_id, exc.reason)
+            loop_progress().beat()
+        except DockerBusyError:
+            # A skipped pass, not a failure: the operation retries on its schedule and the loop is healthy.
+            logger.info("Pending guest start for agent {} skipped: the Docker lane is busy", operation.agent_id)
             loop_progress().beat()
         except (GuestAdmissionError, GuestStartPreflightError, GuestOwnershipError) as exc:
             logger.warning("Pending guest start retry failed for agent {}: {}", operation.agent_id, type(exc).__name__)

@@ -26,6 +26,11 @@ port.on('message', (raw: unknown) => {
   const stop = control.safeParse(raw);
   if (stop.success) { runtime.stop(stop.data.reason); return; }
   const frame = parentFrame.parse(raw);
+  if (workerData === 'oom') {
+    // Bounded, so a heap ceiling that is not applied ends in a failed assertion instead of a runaway allocation.
+    const hoard: number[][] = [];
+    for (let index = 0; index < 512; index++) hoard.push(new Array<number>(100_000).fill(index));
+  }
   if (workerData === 'stuck') {
     port.postMessage(JSON.stringify({ id: 'qr', token: frame.token, type: 'qr', value: png,
       expires_at: new Date(Date.now() + 100_000).toISOString() }) + '\n');

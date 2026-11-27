@@ -1,17 +1,22 @@
-"""SQL-shape tests for the activity log, trigger execution and gateway message retention batches (no live Postgres)."""
+"""SQL-shape tests for the retention batches of every opt-in table (no live Postgres)."""
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any, override
 
 import pytest
 
 from app.dao.activity_log_dao import agent_activity_log_dao
+from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.gateway_message_dao import gateway_message_dao
+from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
+from app.dao.notification_dao import notification_dao
+from app.dao.task_dao import task_dao
 from app.dao.trigger_dao import trigger_execution_dao
+from app.dao.workspace_dao import workspace_file_revision_dao
 from app.db import session as session_module
 from app.scripts import bootstrap_db
 from test_crud_perf import _FakeCursor, _FakePool, _FakeRawConnection
@@ -115,17 +120,128 @@ async def test_gateway_reclaim_clears_payloads_of_one_bounded_oldest_first_batch
     assert params == {"cutoff": CUTOFF, "limit": 5}
 
 
-@pytest.mark.parametrize("purge", ["activity", "execution", "gateway"])
+type Purge = Callable[[], Awaitable[int]]
+
+PURGES: dict[str, Purge] = {
+    "activity": lambda: agent_activity_log_dao.purge_older_than(older_than=CUTOFF, limit=5),
+    "execution": lambda: trigger_execution_dao.purge_finished_before(finished_before=CUTOFF, limit=5),
+    "gateway": lambda: gateway_message_dao.reclaim_completed_before(completed_before=CUTOFF, limit=5),
+    "notification": lambda: notification_dao.purge_older_than(older_than=CUTOFF, limit=5),
+    "task": lambda: task_dao.purge_finished_before(finished_before=CUTOFF, limit=5),
+    "receipt": lambda: channel_event_receipt_dao.purge_older_than(older_than=CUTOFF, limit=5),
+    "delivery": lambda: gateway_report_delivery_dao.purge_finished_before(finished_before=CUTOFF, limit=5),
+    "revision": lambda: workspace_file_revision_dao.purge_superseded_before(created_before=CUTOFF, limit=5),
+}
+
+
+async def test_notification_purge_deletes_one_bounded_oldest_first_batch_in_its_own_transaction(
+    raw: PurgeConnection,
+) -> None:
+    # Given a statement that removes three rows.
+    raw.deleted = 3
+    # When notifications are purged with a limit of five.
+    deleted = await notification_dao.purge_older_than(older_than=CUTOFF, limit=5)
+    # Then one statement ran, committed on its own, bounded by the limit and skipping rows held elsewhere.
+    assert deleted == 3
+    assert raw.commits == 1
+    [(query, params)] = raw.executed
+    assert squashed(query) == (
+        "WITH expired AS ( SELECT ctid FROM notifications WHERE created_at < %(cutoff)s "
+        "ORDER BY created_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED ) "
+        "DELETE FROM notifications WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired)) RETURNING id"
+    )
+    assert params == {"cutoff": CUTOFF, "limit": 5}
+
+
+async def test_task_purge_only_selects_done_tasks_and_deletes_their_logs_in_the_same_statement(
+    raw: PurgeConnection,
+) -> None:
+    # Given a statement that removes two tasks.
+    raw.deleted = 2
+    # When finished tasks are purged with a limit of five.
+    deleted = await task_dao.purge_finished_before(finished_before=CUTOFF, limit=5)
+    # Then one statement ran and committed on its own; it picks done tasks by their finish time, bounded and skipping
+    # rows held elsewhere, and removes the picked tasks' logs before the tasks.
+    assert deleted == 2
+    assert raw.commits == 1
+    [(query, params)] = raw.executed
+    assert squashed(query) == (
+        "WITH expired AS ( SELECT ctid, id FROM tasks "
+        "WHERE status = 'done' AND COALESCE(completed_at, updated_at) < %(cutoff)s "
+        "ORDER BY COALESCE(completed_at, updated_at) LIMIT %(limit)s FOR UPDATE SKIP LOCKED ), "
+        "logs AS ( DELETE FROM task_logs WHERE task_id IN (SELECT id FROM expired) ) "
+        "DELETE FROM tasks WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired)) RETURNING id"
+    )
+    assert params == {"cutoff": CUTOFF, "limit": 5}
+
+
+async def test_receipt_purge_deletes_one_bounded_oldest_first_batch_in_its_own_transaction(
+    raw: PurgeConnection,
+) -> None:
+    # Given a statement that removes three receipts.
+    raw.deleted = 3
+    # When receipts are purged with a limit of five.
+    deleted = await channel_event_receipt_dao.purge_older_than(older_than=CUTOFF, limit=5)
+    # Then one statement ran, committed on its own, bounded by the limit and skipping rows held elsewhere.
+    assert deleted == 3
+    assert raw.commits == 1
+    [(query, params)] = raw.executed
+    assert squashed(query) == (
+        "WITH expired AS ( SELECT ctid FROM channel_event_receipts WHERE created_at < %(cutoff)s "
+        "ORDER BY created_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED ) "
+        "DELETE FROM channel_event_receipts WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired)) RETURNING event_key"
+    )
+    assert params == {"cutoff": CUTOFF, "limit": 5}
+
+
+async def test_delivery_purge_only_selects_delivered_or_terminal_rows_in_one_bounded_batch(
+    raw: PurgeConnection,
+) -> None:
+    # Given a statement that removes four deliveries.
+    raw.deleted = 4
+    # When finished deliveries are purged with a limit of five.
+    deleted = await gateway_report_delivery_dao.purge_finished_before(finished_before=CUTOFF, limit=5)
+    # Then one statement ran, committed on its own, and selects only rows with a delivered or terminal stamp.
+    assert deleted == 4
+    assert raw.commits == 1
+    [(query, params)] = raw.executed
+    assert squashed(query) == (
+        "WITH expired AS ( SELECT ctid FROM gateway_report_deliveries "
+        "WHERE (delivered_at IS NOT NULL OR terminal_at IS NOT NULL) "
+        "AND COALESCE(delivered_at, terminal_at) < %(cutoff)s "
+        "ORDER BY COALESCE(delivered_at, terminal_at) LIMIT %(limit)s FOR UPDATE SKIP LOCKED ) "
+        "DELETE FROM gateway_report_deliveries WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired)) RETURNING id"
+    )
+    assert params == {"cutoff": CUTOFF, "limit": 5}
+
+
+async def test_revision_purge_only_selects_revisions_with_a_newer_one_in_one_bounded_batch(
+    raw: PurgeConnection,
+) -> None:
+    # Given a statement that removes two revisions.
+    raw.deleted = 2
+    # When superseded revisions are purged with a limit of five.
+    deleted = await workspace_file_revision_dao.purge_superseded_before(created_before=CUTOFF, limit=5)
+    # Then one statement ran, committed on its own, and picks only a revision another one of its file follows.
+    assert deleted == 2
+    assert raw.commits == 1
+    [(query, params)] = raw.executed
+    assert squashed(query) == (
+        "WITH superseded AS ( SELECT r.ctid FROM workspace_file_revisions AS r WHERE r.created_at < %(cutoff)s "
+        "AND EXISTS ( SELECT 1 FROM workspace_file_revisions AS n WHERE n.agent_id = r.agent_id "
+        "AND n.path = r.path AND (n.created_at, n.id) > (r.created_at, r.id) ) "
+        "ORDER BY r.created_at LIMIT %(limit)s FOR UPDATE OF r SKIP LOCKED ) "
+        "DELETE FROM workspace_file_revisions WHERE ctid = ANY(ARRAY(SELECT ctid FROM superseded)) RETURNING id"
+    )
+    assert params == {"cutoff": CUTOFF, "limit": 5}
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
 async def test_purge_reports_zero_when_nothing_matched(raw: PurgeConnection, purge: str) -> None:
     # Given a statement that removes nothing.
     raw.deleted = 0
     # When any purge runs.
-    if purge == "activity":
-        deleted = await agent_activity_log_dao.purge_older_than(older_than=CUTOFF, limit=5)
-    elif purge == "execution":
-        deleted = await trigger_execution_dao.purge_finished_before(finished_before=CUTOFF, limit=5)
-    else:
-        deleted = await gateway_message_dao.reclaim_completed_before(completed_before=CUTOFF, limit=5)
+    deleted = await PURGES[purge]()
     # Then it returns zero after a single statement.
     assert deleted == 0
     assert len(raw.executed) == 1
@@ -156,3 +272,33 @@ async def test_gateway_reclaim_predicate_is_the_partial_index_predicate(raw: Pur
         "WHERE status = 'completed' AND result IS NOT NULL$ddl$);"
     ) in baseline
     assert "m.status = 'completed' AND m.result IS NOT NULL" in squashed(query)
+
+
+@pytest.mark.parametrize(
+    ("index", "predicate", "purge"),
+    [
+        (
+            "ix_tasks_done_finished_at ON tasks ((COALESCE(completed_at, updated_at))) WHERE status = 'done'",
+            "status = 'done' AND COALESCE(completed_at, updated_at) < %(cutoff)s",
+            "task",
+        ),
+        (
+            (
+                "ix_gateway_report_deliveries_finished_at ON gateway_report_deliveries "
+                "((COALESCE(delivered_at, terminal_at))) WHERE delivered_at IS NOT NULL OR terminal_at IS NOT NULL"
+            ),
+            "(delivered_at IS NOT NULL OR terminal_at IS NOT NULL) AND COALESCE(delivered_at, terminal_at) < %(cutoff)s",
+            "delivery",
+        ),
+    ],
+)
+async def test_partial_index_purge_predicates_repeat_the_index_predicate(
+    raw: PurgeConnection, index: str, predicate: str, purge: str
+) -> None:
+    # Given the baseline index a purge relies on and the statement the purge sends.
+    baseline = squashed(bootstrap_db.SCHEMA_BASELINE.read_text())
+    _ = await PURGES[purge]()
+    [(query, _params)] = raw.executed
+    # Then the index is declared idempotently, and the purge repeats its predicate and expression verbatim.
+    assert f"CREATE INDEX IF NOT EXISTS {index}$ddl$);" in baseline
+    assert predicate in squashed(query)

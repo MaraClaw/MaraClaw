@@ -7,7 +7,7 @@ MESSAGING_AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "send_channel_file",
-            "description": "Send a file to a specific person or back to the current conversation. If member_name is provided, the system resolves the recipient across all connected channels (Feishu, Slack, etc.) and delivers the file via the appropriate channel. If member_name is omitted, the file is sent back through the current conversation channel.",
+            "description": "Send a file to a specific person, or get a download link for it. If member_name is provided, the system resolves the recipient across all connected channels (Feishu, Slack, etc.) and delivers the file via the appropriate channel. If member_name is omitted, nothing is sent: the result is a download link to include in your reply.",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -23,6 +23,7 @@ _REVISION_COLUMNS = (
     "after_content",
     "content_hash",
     "group_key",
+    "content_omitted",
     "created_at",
     "updated_at",
 )
@@ -97,6 +98,34 @@ class WorkspaceFileRevisionDAO(BaseDAO[WorkspaceFileRevisionRecord]):
                 },
             )
             return WorkspaceFileRevisionRecord.from_row(row) if row is not None else None
+
+    async def purge_superseded_before(self, *, created_before: datetime, limit: int) -> int:
+        """Delete up to ``limit`` revisions created before ``created_before`` that a newer revision replaced.
+
+        A revision is superseded when another revision of the same agent file (``agent_id``, ``path``) sorts after
+        it by ``(created_at, id)``, so the newest revision of every file stays however old it is, and concurrent
+        batches cannot remove a file's last revision: each row they take has a newer one that no batch may take.
+        The probe reads ``ix_workspace_file_revisions_file_created``. Rows another transaction holds are skipped,
+        never waited on. The picked rows are deleted by ``ctid`` (a TID scan), which the statement's own row locks
+        keep in place.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH superseded AS (
+                    SELECT r.ctid FROM workspace_file_revisions AS r
+                    WHERE r.created_at < %(cutoff)s
+                      AND EXISTS (
+                          SELECT 1 FROM workspace_file_revisions AS n
+                          WHERE n.agent_id = r.agent_id AND n.path = r.path AND (n.created_at, n.id) > (r.created_at, r.id)
+                      )
+                    ORDER BY r.created_at LIMIT %(limit)s FOR UPDATE OF r SKIP LOCKED
+                ) DELETE FROM workspace_file_revisions WHERE ctid = ANY(ARRAY(SELECT ctid FROM superseded))
+                  RETURNING id
+                """,
+                {"cutoff": created_before, "limit": limit},
+            )
+            return len(rows)
 
 
 @final

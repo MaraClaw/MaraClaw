@@ -3,7 +3,7 @@
 import asyncio
 import contextvars
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
@@ -173,15 +173,33 @@ def _authorizing_binding(
     return None
 
 
-async def read_delivery_acl_version(agent_id: str, targets: Iterable[tuple[WebSocket, str | None]]) -> str | None:
+def authorizes_deliveries(agent_id: str, targets: Iterable[tuple[WebSocket, str | None]]) -> bool:
+    """Whether some target socket is bound to a canonical session and so authorizes against the agent ACL version."""
+    return any(_authorizing_binding(websocket, agent_id, session_id) is not None for websocket, session_id in targets)
+
+
+async def read_delivery_acl_version(
+    agent_id: str,
+    targets: Iterable[tuple[WebSocket, str | None]],
+    *,
+    prefetched: Callable[[], Awaitable[str | None]] | None = None,
+) -> str | None:
     """Read the agent ACL version once for a delivery, and only if some target socket authorizes its deliveries.
 
     Only a socket bound to a canonical session authorizes against the ACL, so a delivery reaching none gains no Redis
     read. Pass the result to ``authorize_chat_delivery`` for every socket of the delivery, before any of them
     authorizes.
+
+    ``prefetched`` is a version the caller already has on its way, such as the one the router reads in the same
+    Redis round trip as the presence lookup: it is awaited instead of a second read, and when it yields ``None`` (the
+    round trip failed or never carried a version) the version is read here as without it.
     """
-    if all(_authorizing_binding(websocket, agent_id, session_id) is None for websocket, session_id in targets):
+    if not authorizes_deliveries(agent_id, targets):
         return None
+    if prefetched is not None:
+        version = await prefetched()
+        if version is not None:
+            return version
     return await access_cache.read_acl_version(UUID(agent_id))
 
 

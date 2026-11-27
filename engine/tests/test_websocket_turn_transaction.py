@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.api import background_tasks, websocket as ws_api
+from app.config import get_settings
 from app.core.domain.users import UserRole
 from app.dao.user_dao import user_dao
 from app.db import session
@@ -32,6 +33,7 @@ from app.services import (
     shared_chat,
 )
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
+from app.services.chat_submission_window import SubmissionWindow
 from app.services.llm.turn import ModelBundle
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, OpenClawUpdateRequiredError
 from app.services.quota_guard import AgentExpired, QuotaExceeded
@@ -47,7 +49,8 @@ class TurnState:
     pending: list[str] = field(default_factory=list)
     committed: list[str] = field(default_factory=list)
     frames: list[dict[str, object]] = field(default_factory=list)
-    prepared_history: list[object] = field(default_factory=list)
+    prepared_contents: list[str] = field(default_factory=list)
+    history_reads: list[dict[str, object]] = field(default_factory=list)
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     fail_enqueue: bool = False
     missing_model: bool = False
@@ -117,7 +120,8 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
 
     async def prepare(**kwargs):
         assert (session.get_connection() is None) == state.onboarding
-        state.prepared_history.extend(kwargs["history"])
+        assert kwargs.keys() == {"agent", "content"}
+        state.prepared_contents.append(kwargs["content"])
         if state.gate is not None:
             raise state.gate
         if state.missing_model:
@@ -164,13 +168,9 @@ async def turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncIterator[tuple
     async def get_session(session_id, agent_id):
         return canonical(session_id, agent_id)
 
-    async def recent(**_kwargs):
-        # Differs from the socket's own history, so a turn that reloads the stored transcript shows it.
-        return [
-            ChatMessageRecord(
-                id=uuid4(), agent_id=state.agent.id, user_id=state.user.id, role="assistant", content="stored prior"
-            )
-        ]
+    async def recent(**kwargs):
+        state.history_reads.append(kwargs)
+        return []
 
     async def lookup(candidate):
         assert session.get_connection() is not None
@@ -251,6 +251,7 @@ async def drive_turn(
     onboarding: bool = False,
     role: str = "member",
     payload: dict[str, object] | None = None,
+    payloads: list[dict[str, object]] | None = None,
     denied: bool = False,
 ):
     user, agent = state.user, state.agent
@@ -263,7 +264,9 @@ async def drive_turn(
         received += 1
         if received == 1:
             return {"type": "websocket.connect"}
-        if received == 2:
+        if payloads is not None and received - 2 < len(payloads):
+            return {"type": "websocket.receive", "text": json.dumps(payloads[received - 2])}
+        if payloads is None and received == 2:
             data = payload if payload is not None else {"content": "hello", "client_submission_id": state.submission_id}
             text = '{"kind":"onboarding_trigger"}' if onboarding else json.dumps(data)
             return {"type": "websocket.receive", "text": text}
@@ -279,8 +282,6 @@ async def drive_turn(
                 assert session.get_connection() is None
                 assert state.committed
                 assert not state.pending
-            if payload.get("type") == "status":
-                assert len(handler.conversation) == 2
             state.frames.append(payload)
         else:
             state.frames.append(message)
@@ -301,17 +302,15 @@ async def drive_turn(
         auth_generation=0,
         authorize_deliveries=True,
     )
-    handler.conversation = [{"role": "assistant", "content": "prior"}]
     from fastapi import HTTPException
 
     monkeypatch.setattr(
         chat_tickets,
-        "authorize",
+        "authorize_message",
         AsyncMock(side_effect=HTTPException(403, "Revoked"))
         if denied
         else AsyncMock(return_value=(user, agent, "use")),
     )
-    monkeypatch.setattr(chat_tickets, "authorized_session", AsyncMock())
     if denied or not state.session_exists:
         await handler.message_loop()
     else:
@@ -342,9 +341,9 @@ async def test_accepted_turn_commits_before_append_status_and_wake(monkeypatch, 
             },
         )
     assert state.frames == expected
-    assert len(handler.conversation) == 2
-    # The canonical session may have turns from the owner's other tabs: both turn kinds prepare from the store.
-    assert state.prepared_history == [{"role": "assistant", "content": "stored prior"}]
+    # Neither turn kind reads the transcript: the guest keeps its own history.
+    assert len(state.prepared_contents) == 1
+    assert not state.history_reads
     echo = ws_api.manager.send_to_session
     assert isinstance(echo, AsyncMock)
     if onboarding:
@@ -364,6 +363,20 @@ async def test_accepted_turn_commits_before_append_status_and_wake(monkeypatch, 
             },
             user_id=str(state.user.id),
         )
+
+
+async def test_socket_keeps_no_conversation_state_however_many_turns_it_carries(monkeypatch, turn):
+    state, _raw = turn
+    payloads: list[dict[str, object]] = [
+        {"content": f"turn {index}", "client_submission_id": str(uuid4())} for index in range(3)
+    ]
+
+    handler = await drive_turn(monkeypatch, state, payloads=payloads)
+
+    assert [frame["type"] for frame in state.frames] == ["turn_accepted", "status"] * 3
+    assert len(state.messages) == 3
+    assert not state.history_reads
+    assert not [name for name, value in vars(handler).items() if isinstance(value, list | dict | set)]
 
 
 @pytest.mark.parametrize("soul", ["Voice sentinel: dry-witted pilot.\nRole sentinel: travel desk lead.", None])
@@ -397,7 +410,7 @@ async def test_rejection_leaves_no_charge_chat_claim_gateway_wake_or_context(mon
     if reason == "guest_config_failed":
         state.gate = routing.GuestConfigWriteError("private config details")
 
-    handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
+    await drive_turn(monkeypatch, state, onboarding=onboarding)
     await background_tasks.drain_background_tasks(grace_seconds=0)
 
     assert not state.pending
@@ -405,7 +418,6 @@ async def test_rejection_leaves_no_charge_chat_claim_gateway_wake_or_context(mon
     assert not state.wake.is_set()
     assert raw.commits == 0
     assert raw.rollbacks == int(not onboarding or reason == "enqueue_failed")
-    assert len(handler.conversation) == 1
     assert len(state.frames) == 1
     assert state.frames[0]["type"] == "turn_rejected"
     assert state.frames[0]["reason"] == reason
@@ -428,12 +440,11 @@ async def test_real_model_preparation_accepts_without_writing_guest_config(
     monkeypatch.setattr(routing, "get_cached_bundle", lambda _agent: ModelBundle(primary=model))
     writer = Mock(side_effect=OSError("private config path"))
     monkeypatch.setattr(exclusion.agent_manager, "write_guest_config", writer)
-    handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
+    await drive_turn(monkeypatch, state, onboarding=onboarding)
     await asyncio.wait_for(state.wake.wait(), timeout=1)
     assert raw.commits == 1
     assert raw.rollbacks == 0
     assert "gateway" in state.committed
-    assert len(handler.conversation) == 2
     writer.assert_not_called()
 
 
@@ -449,7 +460,7 @@ async def test_openclaw_update_gate_rejects_the_turn_without_side_effects(monkey
     state, raw = turn
     state.gate = gate
 
-    handler = await drive_turn(monkeypatch, state, onboarding=onboarding)
+    await drive_turn(monkeypatch, state, onboarding=onboarding)
     await background_tasks.drain_background_tasks(grace_seconds=0)
 
     assert not state.pending
@@ -457,7 +468,6 @@ async def test_openclaw_update_gate_rejects_the_turn_without_side_effects(monkey
     assert not state.wake.is_set()
     assert raw.commits == 0
     assert raw.rollbacks == int(not onboarding)
-    assert len(handler.conversation) == 1
     assert len(state.frames) == 1
     assert state.frames[0]["type"] == "turn_rejected"
     assert state.frames[0]["reason"] == gate.code
@@ -471,7 +481,7 @@ async def test_quota_rejection_rolls_back_and_keeps_socket_open(monkeypatch, tur
     state, raw = turn
     state.charge_allowed = False
 
-    handler = await drive_turn(monkeypatch, state)
+    await drive_turn(monkeypatch, state)
 
     assert not state.committed
     assert not state.pending
@@ -479,7 +489,6 @@ async def test_quota_rejection_rolls_back_and_keeps_socket_open(monkeypatch, tur
     assert raw.rollbacks == 1
     assert state.frames[0]["reason"] == "quota_exceeded"
     assert len(state.frames) == 1
-    assert len(handler.conversation) == 1
 
 
 async def test_agent_daily_limit_rejection_rolls_back_the_user_charge_and_keeps_socket_open(monkeypatch, turn):
@@ -490,7 +499,7 @@ async def test_agent_daily_limit_rejection_rolls_back_the_user_charge_and_keeps_
     )
     monkeypatch.setattr(chat_submissions, "charge_agent_daily_message", AsyncMock(side_effect=refusal))
 
-    handler = await drive_turn(monkeypatch, state)
+    await drive_turn(monkeypatch, state)
 
     assert not state.committed
     assert not state.pending
@@ -498,7 +507,6 @@ async def test_agent_daily_limit_rejection_rolls_back_the_user_charge_and_keeps_
     assert state.frames[0]["reason"] == "quota_exceeded"
     assert state.frames[0]["content"] == refusal.message
     assert len(state.frames) == 1
-    assert len(handler.conversation) == 1
 
 
 async def test_workspace_disk_rejection_rolls_back_the_turn_and_keeps_socket_open(monkeypatch, turn):
@@ -509,7 +517,7 @@ async def test_workspace_disk_rejection_rolls_back_the_turn_and_keeps_socket_ope
     monkeypatch.setattr(chat_submissions, "ensure_workspace_within_quota", ensure)
     monkeypatch.setattr(chat_submissions, "charge_agent_daily_message", daily_charge)
 
-    handler = await drive_turn(monkeypatch, state)
+    await drive_turn(monkeypatch, state)
 
     ensure.assert_awaited_once_with(state.agent)
     daily_charge.assert_not_awaited()
@@ -519,22 +527,20 @@ async def test_workspace_disk_rejection_rolls_back_the_turn_and_keeps_socket_ope
     assert state.frames[0]["reason"] == "quota_exceeded"
     assert state.frames[0]["content"] == refusal.message
     assert len(state.frames) == 1
-    assert len(handler.conversation) == 1
 
 
 async def test_expiry_rejection_precedes_preparation_and_reservation(monkeypatch, turn):
     state, raw = turn
     monkeypatch.setattr(chat_submissions, "check_agent_expired", AsyncMock(side_effect=AgentExpired("Agent")))
 
-    handler = await drive_turn(monkeypatch, state)
+    await drive_turn(monkeypatch, state)
 
     assert raw.commits == 0
     assert raw.rollbacks == 1
-    assert not state.prepared_history
+    assert not state.prepared_contents
     assert not state.committed
     assert state.frames[0]["reason"] == "agent_expired"
     assert len(state.frames) == 1
-    assert len(handler.conversation) == 1
 
 
 @pytest.mark.parametrize("already_onboarded", [False, True])
@@ -549,7 +555,6 @@ async def test_onboarding_duplicate_never_charges_or_enqueues(monkeypatch, turn,
     assert not state.pending
     assert not state.wake.is_set()
     assert state.frames == [{"type": "onboarded", "agent_id": str(handler.agent_id)}]
-    assert len(handler.conversation) == 1
 
 
 async def test_onboarding_refusal_under_the_lock_escapes_with_the_callers_canonical_session(monkeypatch, turn):
@@ -592,3 +597,49 @@ async def test_exemption_uses_reauthorized_principal_not_previous_handler_user(m
 
     assert state.committed == ["chat", "gateway"]
     assert [frame["type"] for frame in state.frames] == ["turn_accepted", "status"]
+
+
+async def test_socket_over_its_submission_rate_is_rejected_without_closing_or_persisting(monkeypatch, turn):
+    state, raw = turn
+    monkeypatch.setattr(get_settings(), "CHAT_SUBMISSIONS_PER_WINDOW", 1)
+    monkeypatch.setattr(ws_api, "_submission_clock", lambda: 100.0)
+    second, third = str(uuid4()), "not-a-uuid"
+    frames: list[dict[str, object]] = [
+        {"content": "first", "client_submission_id": state.submission_id},
+        {"content": "second", "client_submission_id": second},
+        {"content": "third", "client_submission_id": third},
+    ]
+
+    await drive_turn(monkeypatch, state, payloads=frames)
+
+    assert [frame["type"] for frame in state.frames] == ["turn_accepted", "status", "turn_rejected", "turn_rejected"]
+    assert state.frames[2] == {
+        "type": "turn_rejected",
+        "reason": "rate_limited",
+        "client_submission_id": second,
+        "content": state.frames[2]["content"],
+    }
+    assert state.frames[3]["reason"] == "invalid_submission_id"
+    assert state.committed == ["chat", "charge", "gateway"]
+    assert len(state.messages) == 1
+    assert raw.commits == 1
+    assert "websocket.close" not in [frame.get("type") for frame in state.frames]
+
+
+@pytest.mark.parametrize("count", [2, 3, 4], ids=["under", "at", "over"])
+def test_submission_window_admits_up_to_its_limit(count):
+    window = SubmissionWindow(3, 10.0, lambda: 0.0)
+
+    assert [window.admit() for _ in range(count)] == [True] * min(count, 3) + [False] * max(count - 3, 0)
+
+
+def test_submission_window_recovers_when_the_oldest_admitted_submission_leaves_it():
+    now = [0.0]
+    window = SubmissionWindow(3, 10.0, lambda: now[0])
+    assert [window.admit() for _ in range(4)] == [True, True, True, False]
+    now[0] = 9.9
+
+    assert window.admit() is False
+
+    now[0] = 10.0
+    assert window.admit() is True

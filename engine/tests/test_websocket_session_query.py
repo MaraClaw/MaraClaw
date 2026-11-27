@@ -7,13 +7,14 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import WebSocket
 from starlette.types import Message
-from tests.realtime_pipeline_fixtures import HashPipeline
+from tests.realtime_pipeline_fixtures import PresencePipeline
 
 from app.api import websocket
 from app.core import access_cache
 from app.records.chat import ChatSessionRecord
 from app.services import chat_tickets
 from app.services.realtime_runtime import chat_authorization, router as realtime
+from app.services.realtime_runtime.contracts import encode_session_member
 
 
 async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
@@ -33,22 +34,47 @@ async def test_resolve_chat_session_excludes_group_sessions(monkeypatch):
 
 
 class MemoryPresence:
-    def __init__(self, agent_id: str, records: dict[str, dict[str, str]]) -> None:
+    """The presence records of one agent as Redis holds them: the agent set, the connection hashes, the session index
+    and the ACL version, with every command or pipeline execution counted as one round trip in ``calls``."""
+
+    def __init__(self, agent_id: str, records: dict[str, dict[str, str]], acl_version: str | None = None) -> None:
         self.members: dict[str, set[str]] = {f"realtime:ws:agent:{agent_id}": set(records)}
         self.hashes: dict[str, dict[str, str]] = {
             f"realtime:ws:conn:{connection_id}": record for connection_id, record in records.items()
         }
+        self.sessions: dict[str, list[str]] = {}
+        for connection_id, record in records.items():
+            index = f"realtime:ws:session:{agent_id}:{record.get('session_id', '')}"
+            self.sessions.setdefault(index, []).append(encode_session_member(connection_id, record))
+        self.acl_key = f"aclver:{agent_id}"
+        self.acl_version = acl_version
+        self.acl_reads = 0
         self.published: list[tuple[str, str]] = []
+        self.calls: list[str] = []
+
+    def _executed(self, commands: list[str]) -> None:
+        self.calls.append("pipeline " + " ".join(commands))
 
     async def smembers(self, key: str) -> set[str]:
+        self.calls.append("SMEMBERS")
         return self.members.get(key, set())
 
     async def hgetall(self, key: str) -> dict[str, str]:
         return self.hashes.get(key, {})
 
-    def pipeline(self, transaction: bool = True) -> HashPipeline:
+    async def zrangebyscore(self, key: str, minimum: str, maximum: str) -> list[str]:
+        _ = (minimum, maximum)
+        return self.sessions.get(key, [])
+
+    async def get(self, key: str) -> str | None:
+        if key != self.acl_key:
+            return None
+        self.acl_reads += 1
+        return self.acl_version
+
+    def pipeline(self, transaction: bool = True) -> PresencePipeline:
         _ = transaction
-        return HashPipeline(self.hgetall)
+        return PresencePipeline(self, self._executed)
 
     async def publish(self, channel: str, payload: str) -> int:
         self.published.append((channel, payload))

@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { test } from 'node:test';
 import type { TestContext } from 'node:test';
+import { diagnosticSchema } from '../src/diagnostics.js';
 import { notifyText, socketIdentity } from '../src/input.js';
+import { workerLimits } from '../src/limits.js';
 import { Runtime } from '../src/runtime.js';
-import { ControlledTransport, ParentStore, command, jid, settle, token } from './support.js';
+import { ControlledTransport, ParentStore, child, command, jid, settle, token } from './support.js';
 import type { BaileysEventMap } from 'baileys';
 
 test('socket identity rejects a LID without an authoritative PN', () => {
@@ -189,4 +193,38 @@ test('a closing socket revokes intake and marks pending sends uncertain before t
   assert.equal(frames('message'), 1);
   assert.equal(store.businessFrames.filter(frame => frame.type === 'send_result').at(-1)?.['outcome'], 'uncertain');
   store.peer.close();
+});
+
+test('the parent heap ceiling becomes the worker old-generation limit and unrelated arguments are ignored', () => {
+  assert.deepEqual(workerLimits([]), {});
+  assert.deepEqual(workerLimits(['--worker-heap-mb=512']), { maxOldGenerationSizeMb: 512 });
+  assert.deepEqual(workerLimits(['dist/src/bridge.js', '--worker-heap-mb=64', '--other']), { maxOldGenerationSizeMb: 64 });
+});
+
+for (const given of ['--worker-heap-mb=', '--worker-heap-mb=0', '--worker-heap-mb=-1', '--worker-heap-mb=1e3', '--worker-heap-mb=512MB', '--worker-heap-mb=100000']) {
+  test(`a malformed heap ceiling ${given} is refused instead of widening the worker`, () => {
+    assert.throws(() => workerLimits([given]), RangeError);
+  });
+}
+
+test('a worker that outgrows its heap ceiling ends only its bridge with a failing status after a failure diagnostic', { timeout: 20_000 }, async t => {
+  // Given the real bridge supervisor over a worker that allocates until it is out of memory under a 32 MiB ceiling.
+  const bridge = spawn(process.execPath, [new URL('./oom-bridge.js', import.meta.url).pathname, '--worker-heap-mb=32'],
+    { stdio: ['pipe', 'pipe', 'ignore'] });
+  t.after(() => { bridge.kill('SIGKILL'); });
+  let stdout = '';
+  bridge.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
+  const closed = once(bridge, 'close');
+  // When the parent initializes it and the worker runs out of memory.
+  bridge.stdin.write(JSON.stringify({ type: 'init', id: 'init', token, creds: null, lease_ms: 120_000 }) + '\n');
+  // Then the bridge exits non-zero on its own, which the parent reads as a transient child death, never a clean exit.
+  assert.deepEqual(await closed, [1, null]);
+  const frames = stdout.split('\n').filter(line => line !== '').map(line => child.parse(JSON.parse(line)));
+  const failure = frames.find(frame => frame['stage'] === 'worker_exit');
+  assert.ok(failure);
+  assert.equal(failure.type, 'diagnostic');
+  assert.equal(failure.token, token);
+  assert.equal(failure['event'], 'failure');
+  const { id: _id, token: _token, ...payload } = failure;
+  diagnosticSchema.parse(payload);
 });

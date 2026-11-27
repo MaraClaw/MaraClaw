@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from app.core.client_address import get_client_ip
 from app.core.security import get_current_user
 from app.records.capacity_order import CapacityOrderStatus
 from app.records.user import UserRecord
@@ -22,10 +23,6 @@ from app.services.capacity_payment_settings import (
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-
-def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client is not None else None
 
 
 def _settings_out(settings: PaymentSettings | None) -> CapacityPaymentSettingsOut:
@@ -68,7 +65,7 @@ async def get_review_capacity_order(order_id: UUID, user: UserRecord = Depends(g
 async def decide_capacity_order(
     order_id: UUID, data: CapacityDecisionRequest, request: Request, user: UserRecord = Depends(get_current_user)
 ) -> CapacityOrderOut:
-    view = await decide(user.id, order_id, data.action, data.note, client_ip=_client_ip(request))
+    view = await decide(user.id, order_id, data.action, data.note, client_ip=await get_client_ip(request))
     return CapacityOrderOut.from_record(view.order, view.tenant_name)
 
 
@@ -82,4 +79,4 @@ async def put_capacity_payment_settings(
     data: CapacityPaymentSettingsRequest, request: Request, user: UserRecord = Depends(get_current_user)
 ) -> CapacityPaymentSettingsOut:
     settings = PaymentSettings(data.bank_name, data.account_number, data.branch_name, data.usd_vnd_rate)
-    return _settings_out(await update_payment_settings(user.id, settings, client_ip=_client_ip(request)))
+    return _settings_out(await update_payment_settings(user.id, settings, client_ip=await get_client_ip(request)))

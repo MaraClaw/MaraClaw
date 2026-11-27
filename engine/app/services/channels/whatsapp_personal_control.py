@@ -120,7 +120,7 @@ async def start(agent_id: UUID, actor_id: UUID, expected: UUID | None, *, relink
             "owner_id=EXCLUDED.owner_id,tenant_id=EXCLUDED.tenant_id,auth_epoch=EXCLUDED.auth_epoch, "
             "generation=EXCLUDED.generation,attempt_id=EXCLUDED.attempt_id,expires_at=EXCLUDED.expires_at, "
             "state='pending',desired=TRUE,purge_requested=FALSE,qr_value=NULL,qr_expires_at=NULL,error_code=NULL, "
-            "activated_at=NULL,revision=whatsapp_personal_connections.revision+1, "
+            "activated_at=NULL,revision=whatsapp_personal_connections.revision+1,updated_at=now(), "
             "account_id=CASE WHEN %(resume)s THEN whatsapp_personal_connections.account_id ELSE NULL END, "
             "pn_jid=CASE WHEN %(resume)s THEN whatsapp_personal_connections.pn_jid ELSE NULL END, "
             "lid_jid=CASE WHEN %(resume)s THEN whatsapp_personal_connections.lid_jid ELSE NULL END",

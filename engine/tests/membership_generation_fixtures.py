@@ -1,21 +1,37 @@
-"""Doubles for the membership generation: a pinned SQL read and a recorder for UserDAO writes."""
+"""Doubles for the revocation generations: pinned SQL reads and a recorder for UserDAO statements."""
 
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, Self
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 
+from app.dao.identity_dao import identity_dao
+from app.dao.projection_contracts import UserGenerationsProjection
 from app.dao.user_dao import user_dao
 from app.db import session as session_module
 from app.records.user import UserRecord
 
 
 def pin_membership_generation(monkeypatch: pytest.MonkeyPatch, value: int | None = 0) -> AsyncMock:
-    """Make the membership read return ``value`` (0 matches tokens minted by the same fixture)."""
+    """Make the membership read return ``value`` (0 matches tokens minted by the same fixture).
+
+    The one-statement generation read answers from this pin and from whatever ``identity_dao.get_auth_generation``
+    returns when it runs, so a test pins the two counters the way it always has.
+    """
     read = AsyncMock(return_value=value)
     monkeypatch.setattr(user_dao, "get_membership_generation", read)
+
+    async def generations(user_id: UUID, identity_id: UUID) -> UserGenerationsProjection | None:
+        auth_generation = await identity_dao.get_auth_generation(identity_id)
+        membership_generation = await user_dao.get_membership_generation(user_id)
+        if auth_generation is None or membership_generation is None:
+            return None
+        return {"auth_generation": auth_generation, "membership_generation": membership_generation}
+
+    monkeypatch.setattr(user_dao, "get_generations", generations)
     return read
 
 
@@ -43,6 +59,8 @@ class _Cursor:
             return {"id": params["id"]}
         if query.startswith("SELECT membership_generation"):
             return {"membership_generation": self._parent.generation}
+        if query.startswith("SELECT i.auth_generation, u.membership_generation"):
+            return {"auth_generation": self._parent.auth_generation, "membership_generation": self._parent.generation}
         if query.startswith("SELECT tenant_id FROM users"):
             return {"tenant_id": user.tenant_id}
         is_active = user.is_active
@@ -69,6 +87,7 @@ class RecordingUserConnection:
     def __init__(self, user: UserRecord) -> None:
         self.user = user
         self.generation = 0
+        self.auth_generation = 0
         self.executed: list[tuple[str, Mapping[str, object]]] = []
 
     def cursor(self) -> _Cursor:

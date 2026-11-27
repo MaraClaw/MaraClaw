@@ -12,7 +12,14 @@ from app.core.outbound_policy import OutboundPolicyError
 from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat_attachment import ChatAttachment
-from app.services.channels.media_limits import MediaBudget, MediaTooLargeError, read_capped, too_large_note
+from app.services.channels.media_limits import (
+    MediaBudget,
+    MediaDeadlineError,
+    MediaTooLargeError,
+    deadline_note,
+    read_capped,
+    too_large_note,
+)
 from app.services.channels.submissions import ChannelEvent
 from app.services.storage import store_agent_upload
 
@@ -35,9 +42,10 @@ async def enrich_media(config: ChannelConfigRecord, event: ChannelEvent, media: 
     if re.fullmatch(r"v[0-9]+\.[0-9]+", version) is None:
         raise HTTPException(503, "WhatsApp API version is invalid")
     headers = {"Authorization": f"Bearer {config.app_secret or ''}"}
-    budget = MediaBudget()
+    budget = MediaBudget.for_acknowledgement()
     try:
         async with (
+            budget.window(),
             public_http_client(timeout=30, origin="https://graph.facebook.com") as client,
             client.stream(
                 "GET",
@@ -46,7 +54,7 @@ async def enrich_media(config: ChannelConfigRecord, event: ChannelEvent, media: 
                 params={"phone_number_id": config.app_id or ""},
             ) as response,
         ):
-            metadata = json_loads_object(await read_capped(response, 64 * 1024))
+            metadata = json_loads_object(await read_capped(response, 64 * 1024, budget))
         url = httpx.URL(json_as_str_or(metadata.get("url")))
         if (
             url.scheme != "https"
@@ -57,16 +65,19 @@ async def enrich_media(config: ChannelConfigRecord, event: ChannelEvent, media: 
         ):
             raise OutboundPolicyError("Untrusted WhatsApp media destination")
         limit = budget.limit_for(filename)
-        async with public_http_client(timeout=60, origin="https://lookaside.fbsbx.com") as client:
+        async with budget.window(), public_http_client(timeout=60, origin="https://lookaside.fbsbx.com") as client:
             request = client.build_request("GET", "https://lookaside.fbsbx.com/[redacted]", headers=headers)
             request.url = _MediaURL(url)
             response = await client.send(request, stream=True, follow_redirects=False)
             try:
-                data = await read_capped(response, limit)
+                data = await read_capped(response, limit, budget)
             finally:
                 await response.aclose()
+        budget.check()
     except MediaTooLargeError as exc:
         return event, f"{event.text}\n{too_large_note(filename, exc.limit)}".strip()
+    except MediaDeadlineError:
+        return event, f"{event.text}\n{deadline_note(filename)}".strip()
     except httpx.HTTPError:
         raise HTTPException(503, "WhatsApp media download failed") from None
     _, path, _ = await store_agent_upload(

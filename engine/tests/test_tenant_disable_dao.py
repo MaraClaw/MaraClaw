@@ -133,7 +133,11 @@ async def test_disable_triggers_and_schedules_scope_to_tenant(monkeypatch):
     await agent_trigger_dao.disable_for_tenant(tenant_id)
     await agent_schedule_dao.disable_for_tenant(tenant_id)
     trigger_sql = raw.executed[0][0]
-    schedule_sql = raw.executed[1][0]
+    settle_sql = raw.executed[1][0]
+    schedule_sql = raw.executed[2][0]
+    # The disable settles the pending executions of the triggers it just disabled, in the same session.
+    assert settle_sql.lstrip().startswith("UPDATE trigger_executions")
+    assert "status = 'pending'" in settle_sql
     assert "FROM agents WHERE tenant_id = %(tenant_id)s" in trigger_sql
     assert "SET is_enabled = FALSE, self_disabled = FALSE" in trigger_sql
     assert "WHERE (is_enabled IS TRUE OR self_disabled IS TRUE) AND agent_id IN (" in trigger_sql

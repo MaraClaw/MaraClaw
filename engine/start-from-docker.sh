@@ -225,7 +225,7 @@ RUN_ARGS=(
 # Host `docker` is often macOS Mach-O and cannot run in the Linux engine.
 # Mount a Linux CLI so pywhales works even on an older engine image.
 # The default matches the Dockerfile's dockercli stage.
-DOCKER_CLI_IMAGE="${DOCKER_CLI_IMAGE:-docker:29.10.0-cli}"
+DOCKER_CLI_IMAGE="${DOCKER_CLI_IMAGE:-docker:29.10.1-cli}"
 # One cached binary per image: a new tag is fetched instead of reusing an older CLI.
 DOCKER_CLI_HOST="$DATA_DIR/.bin/$(printf '%s' "$DOCKER_CLI_IMAGE" | tr -c 'A-Za-z0-9._-' '_')"
 if [ ! -x "$DOCKER_CLI_HOST" ]; then

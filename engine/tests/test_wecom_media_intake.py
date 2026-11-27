@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -14,6 +15,7 @@ from wecom_aibot_sdk import WSClient
 from app.api import wecom
 from app.core.outbound_policy import OutboundPolicyError
 from app.services import wecom_stream
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import submissions, wecom_media
 from app.services.storage_runtime import facade
 from im_webhook_fixtures import AGENT_ID, channel_config, webhook_client
@@ -221,3 +223,116 @@ async def test_stream_media_untrusted_origin_is_rejected_before_storage(intake, 
     with pytest.raises(OutboundPolicyError):
         await wecom_media.accept_wecom_media(native, config, (media,))
     accept.assert_not_awaited()
+
+
+@pytest.fixture
+def text_accept(monkeypatch):
+    accept = AsyncMock()
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    return accept
+
+
+def message_xml(kind, msg_id=""):
+    ids = f"<MsgId>{msg_id}</MsgId>" if msg_id else ""
+    body = "<Content>hello</Content>" if kind == "text" else "<MediaId>media-1</MediaId>"
+    return f"<xml><MsgType>{kind}</MsgType>{ids}<FromUserName>sender</FromUserName>{body}</xml>"
+
+
+@pytest.mark.parametrize("kind", ["text", "image", "file", "video"])
+async def test_callback_message_without_msgid_is_refused_before_acceptance_or_download(intake, text_accept, kind):
+    config, wire, replay, accept, _ = intake
+    async with webhook_client(wecom.router) as client:
+        response = await post_xml(client, config, message_xml(kind))
+    assert response.status_code == 400
+    assert wire.requests == []
+    for refused in (replay, accept, text_accept):
+        refused.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kind", ["text", "image"])
+async def test_callback_from_an_unlinked_sender_is_acknowledged_without_acceptance(intake, text_accept, kind):
+    config, wire, replay, accept, _ = intake
+    unlinked = ChannelUserResolutionError("Link your channel identity in the web application.")
+    text_accept.side_effect = replay.side_effect = unlinked
+    async with webhook_client(wecom.router) as client:
+        response = await post_xml(client, config, message_xml(kind, "native-1"))
+    assert (response.status_code, response.content) == (200, b"success")
+    (text_accept if kind == "text" else replay).assert_awaited_once()
+    assert wire.requests == []
+    accept.assert_not_awaited()
+
+
+def kf_text(msg_id, sender="customer"):
+    message = {
+        "origin": 3,
+        "msgtype": "text",
+        "external_userid": sender,
+        "open_kfid": "kf-account",
+        "text": {"content": "hello"},
+    }
+    return {**message, "msgid": msg_id} if msg_id else message
+
+
+def kf_image(msg_id, media_id):
+    item = {"media_id": media_id} if media_id else {}
+    return {
+        "origin": 3,
+        "msgtype": "image",
+        "msgid": msg_id,
+        "external_userid": "customer",
+        "open_kfid": "kf-account",
+        "image": item,
+    }
+
+
+async def post_kf_page(intake, monkeypatch, page):
+    config, wire, *_, respond = intake
+    wire.sync = page
+    original = httpx.AsyncClient
+    async with webhook_client(wecom.router) as client:
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(respond), **kw))
+        monkeypatch.setattr(wecom, "get_wecom_access_token", AsyncMock(return_value={"access_token": "provider-token"}))
+        return await post_xml(
+            client, config, "<xml><MsgType>event</MsgType><Event>kf_msg_or_event</Event><Token>cursor</Token></xml>"
+        )
+
+
+def accepted_ids(accept):
+    return [json.loads(call.args[0].event_key)[2] for call in accept.await_args_list]
+
+
+async def test_kf_page_skips_messages_it_cannot_accept_and_keeps_going(intake, text_accept, monkeypatch):
+    _, wire, _, accept, _ = intake
+
+    async def accept_text(event, **_):
+        if event.sender_id == "stranger":
+            raise ChannelUserResolutionError("Link your channel identity in the web application.")
+
+    text_accept.side_effect = accept_text
+    page = [
+        kf_text("kf-good-1"),
+        kf_text(""),
+        kf_image("kf-no-media-id", ""),
+        kf_text("kf-unlinked", sender="stranger"),
+        kf_image("kf-good-2", "kf-media"),
+    ]
+    response = await post_kf_page(intake, monkeypatch, page)
+    assert (response.status_code, response.content) == (200, b"success")
+    assert accepted_ids(text_accept) == ["kf-good-1", "kf-unlinked"]
+    assert accepted_ids(accept) == ["kf-good-2"]
+    assert len(wire.requests) == 2
+
+
+@pytest.mark.parametrize("error", [RuntimeError("database unavailable"), HTTPException(403, "revoked")])
+async def test_kf_page_acceptance_failure_still_fails_the_callback_and_stops_the_page(
+    intake, text_accept, monkeypatch, error
+):
+    async def accept_text(event, **_):
+        if event.sender_id == "flaky":
+            raise error
+
+    text_accept.side_effect = accept_text
+    page = [kf_text("kf-1"), kf_text("kf-2", sender="flaky"), kf_text("kf-3")]
+    response = await post_kf_page(intake, monkeypatch, page)
+    assert response.status_code == 503
+    assert accepted_ids(text_accept) == ["kf-1", "kf-2"]

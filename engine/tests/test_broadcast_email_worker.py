@@ -13,9 +13,10 @@ from psycopg import OperationalError
 
 from app.db.errors import DbError
 from app.records.broadcast_email import BroadcastEmailRecord
-from app.runtime.tasks import OwnedTasks
+from app.runtime.tasks import OwnedTasks, RestartPolicy
 from app.services import broadcast_email_worker as worker, system_email_service as email
 from progress_fakes import FakeClock, Pacer
+from worker_progress_fixtures import Pacing
 
 NOW = datetime(2026, 10, 23, tzinfo=UTC)
 
@@ -426,3 +427,66 @@ async def test_batch_timeout_stays_fatal_and_does_not_beat(monkeypatch: pytest.M
     assert len(dao.claims) == 1
     assert not tasks.ready()
     await tasks.stop()
+
+
+async def test_wait_for_abandoned_sends_returns_at_once_when_no_send_thread_runs() -> None:
+    await asyncio.wait_for(email.wait_for_abandoned_sends(), 2)
+
+
+async def test_restart_waits_for_the_abandoned_send_thread_before_the_new_loop_claims(
+    monkeypatch: pytest.MonkeyPatch, dao: DeliveryDAO
+) -> None:
+    # Given a batch whose SMTP thread outlives the batch deadline that ends the first incarnation.
+    sending, hook_entered = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    dao.rows = [claim()]
+    deadlines: list[CancelScope] = []
+
+    @contextmanager
+    def controlled_timeout(_seconds: int) -> Generator[None]:
+        with fail_after(float("inf")) as scope:
+            deadlines.append(scope)
+            yield
+
+    async def resolve(_tenant_id: UUID) -> email.SystemEmailConfig:
+        return email.SystemEmailConfig("from@example.com", "MaraClaw", "smtp.example.com", 465, "u", "s", True, 15)
+
+    def smtp(**_kwargs: object) -> None:
+        _ = loop.call_soon_threadsafe(sending.set)
+        _ = release.wait(timeout=5)
+
+    async def settle_leftovers() -> None:
+        hook_entered.set()
+        await email.wait_for_abandoned_sends()
+
+    poll, pacing = Pacer(), Pacing()
+    monkeypatch.setattr(email, "resolve_email_config_async", resolve)
+    monkeypatch.setattr(email, "send_smtp_email", smtp)
+    monkeypatch.setattr(worker, "fail_after", controlled_timeout)
+    monkeypatch.setattr(worker, "sleep", poll.sleep)
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    tasks.start_supervised(
+        "broadcast_email",
+        worker.start_broadcast_email_worker,
+        progress_budget_seconds=worker.PROGRESS_BUDGET_SECONDS,
+        policy=RestartPolicy(3, 30.0, settle_leftovers),
+    )
+    try:
+        # When the batch deadline passes while the thread is still sending.
+        await asyncio.wait_for(sending.wait(), 2)
+        deadlines[0].deadline = 0
+        assert await pacing.next_wait() == 1.0
+        pacing.release()
+        await asyncio.wait_for(hook_entered.wait(), 2)
+        # Then the new incarnation does not claim while the old thread runs, and starts once it has ended.
+        assert len(dao.claims) == 1
+        assert not tasks.ready()
+        release.set()
+        await poll.parked()
+        assert len(dao.claims) == 2
+        assert tasks.restarts == {"broadcast_email": 1}
+        assert tasks.ready()
+    finally:
+        release.set()
+        await tasks.stop()

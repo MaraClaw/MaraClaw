@@ -1,7 +1,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 
 import type { ClawbookPost } from '@/lib/clawbook-api'
-import { canViewClawbook } from '@/lib/types/auth'
+import { canViewClawbook } from '@/lib/types/auth-guards'
 import { clawbookCommentsOptions, clawbookPostsOptions } from './clawbook-options'
 import { useAuth } from './use-auth'
 

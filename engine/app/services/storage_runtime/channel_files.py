@@ -2,11 +2,13 @@
 
 import hashlib
 import os
+import shutil
 import stat
 from collections.abc import Generator
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO, Final
 from uuid import uuid4
 
 from app.records.channel_media import StoredFile
@@ -14,6 +16,7 @@ from app.services.openclaw_transcript import _open_contained
 from app.services.storage_runtime.base import StorageReadLimitExceededError
 
 _DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_COPY_CHUNK_BYTES: Final = 1024 * 1024
 
 
 class GuestFileChangedError(OSError):
@@ -139,7 +142,7 @@ def publish_guest_file(root: Path, file: StoredFile, data: bytes) -> None:
 def write_guest_file(
     root: Path,
     relative: str,
-    data: bytes,
+    data: bytes | BinaryIO,
     *,
     expected: GuestStamp | None = None,
     require_absent: bool = False,
@@ -147,6 +150,7 @@ def write_guest_file(
 ) -> GuestStamp:
     """Atomically create or replace a guest file and return the stamp of what was written.
 
+    `data` is bytes or a readable stream, which is copied in bounded chunks from its current position and left open.
     Missing parent directories are created. A symlink or directory on the path is refused without being touched.
     An existing destination keeps its permission bits; a new file gets exactly `mode` when one is given (set on the
     descriptor, so the umask does not mask it), else 0o644 less the umask. With `expected`, the destination must
@@ -161,7 +165,10 @@ def write_guest_file(
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=directory)
         try:
             with os.fdopen(fd, "wb") as stream:
-                stream.write(data)
+                if isinstance(data, bytes):
+                    _ = stream.write(data)
+                else:
+                    shutil.copyfileobj(data, stream, _COPY_CHUNK_BYTES)
                 stream.flush()
                 os.fsync(stream.fileno())
                 try:

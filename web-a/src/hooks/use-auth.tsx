@@ -1,4 +1,3 @@
-import { QueryClientProvider } from '@tanstack/react-query'
 import {
   createContext,
   useCallback,
@@ -11,11 +10,14 @@ import {
 } from 'react'
 
 import { adminSession } from '@/lib/admin-session'
-import { fetchCurrentUser, loginRequest } from '@/lib/auth-api'
 import { listenForTokenChanges } from '@/lib/auth-storage'
 import { createAuthSession, type AuthSnapshot } from '@/lib/auth-session'
-import { isAdminUser, userMustChangePassword } from '@/lib/types/auth'
-import { createSessionQueryScope, ownQueryClient } from './session-query-client'
+import { retryingImport } from '@/lib/retrying-import'
+import { isAdminUser, userMustChangePassword } from '@/lib/types/auth-guards'
+
+// The auth client and its response schemas (zod, generated contracts) stay out of the entry chunk: they download when a
+// stored session is checked or an admin signs in. A failed download fails that check or sign-in like a failed request.
+const loadAuthApi = retryingImport(() => import('@/lib/auth-api'))
 
 type AuthContextValue = ReturnType<typeof createAuthSession> & AuthSnapshot & {
   readonly token: string | null
@@ -26,22 +28,17 @@ type AuthContextValue = ReturnType<typeof createAuthSession> & AuthSnapshot & {
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [auth] = useState(() => createAuthSession(adminSession, { fetchCurrentUser, loginRequest }))
+  const [auth] = useState(() => createAuthSession(adminSession, {
+    fetchCurrentUser: async (token, signal) => (await loadAuthApi()).fetchCurrentUser(token, signal),
+    loginRequest: async (input, signal) => (await loadAuthApi()).loginRequest(input, signal),
+  }))
   const snapshot = useSyncExternalStore(auth.subscribe, auth.getSnapshot, auth.getSnapshot)
-  const { client: queryClient } = useMemo(
-    () => createSessionQueryScope(snapshot.owner), [snapshot.owner],
-  )
 
   useEffect(() => {
     const disconnect = auth.connect()
     const unlisten = listenForTokenChanges(window, () => { adminSession.reconcile() })
     return () => { unlisten(); disconnect() }
   }, [auth])
-
-  useEffect(
-    () => ownQueryClient(adminSession, snapshot.owner, queryClient),
-    [snapshot.owner, queryClient],
-  )
 
   const value = useMemo<AuthContextValue>(() => ({
     ...auth,
@@ -51,13 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     mustChangePassword: userMustChangePassword(snapshot.user),
   }), [auth, snapshot])
 
-  return (
-    <AuthContext.Provider value={value}>
-      <QueryClientProvider key={snapshot.owner.generation} client={queryClient}>
-        {children}
-      </QueryClientProvider>
-    </AuthContext.Provider>
-  )
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {

@@ -2,7 +2,8 @@ import { z } from 'zod'
 
 import { apiRequest } from './http.ts'
 import { OwnershipTransferRequestSchema, OwnershipTransferResponseSchema } from './engine-contracts.generated.ts'
-import { isPlatformAdminUser, type UserOut } from './types/auth.ts'
+import type { UserOut } from './types/auth.ts'
+import { isPlatformAdminUser } from './types/auth-guards.ts'
 import { getUserDetail, isEndUserRole, listUsersPage, type AdminUser } from './users-api.ts'
 
 export const agentTransferSchema = OwnershipTransferRequestSchema.extend({

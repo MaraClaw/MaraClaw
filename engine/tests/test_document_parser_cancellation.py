@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from threading import BoundedSemaphore, Event
+from threading import Event
 from typing import override
 
 import pytest
 
+from app.core.thread_slots import ThreadSlots
 from app.services.document_parser import DocumentParseError, runtime
 
 
@@ -51,8 +52,8 @@ class ControlledProcess:
         self.cleaning.set()
 
 
-def bind_process(monkeypatch: pytest.MonkeyPatch, process: ControlledProcess) -> BoundedSemaphore:
-    permits = BoundedSemaphore(1)
+def bind_process(monkeypatch: pytest.MonkeyPatch, process: ControlledProcess) -> ThreadSlots:
+    permits = ThreadSlots(1)
 
     class Context:
         def Process(self, **kwargs: object) -> ControlledProcess:  # noqa: N802

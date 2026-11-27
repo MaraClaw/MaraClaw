@@ -262,6 +262,9 @@ class _Cursor:
     async def fetchone(self) -> dict[str, object] | None:
         return {"id": self.raw.executed[-1][1]["trigger_id"]} if self.raw.found else None
 
+    async def fetchall(self) -> list[dict[str, object]]:
+        return []
+
 
 class _Raw:
     def __init__(self, *, found: bool = True) -> None:
@@ -284,7 +287,9 @@ async def test_merge_user_config_runs_in_sql_and_resets_the_baseline_on_source_c
         session_module._conn_ctx.reset(token)
 
     assert merged is True
-    [(sql, params)] = raw.executed
+    [(sql, params), (reschedule, _)] = raw.executed
+    # The edit reschedules the trigger from its merged row
+    assert reschedule.startswith("SELECT t.id")
     # The merge is evaluated against the row's current config, never a Python-side copy
     assert "SET config = CASE WHEN type = 'poll' AND ( config->'url' IS DISTINCT FROM" in sql
     assert "(config || %(user_config)s::jsonb)->'url'" in sql

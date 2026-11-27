@@ -5,6 +5,7 @@ import re
 import socket
 import uuid
 from functools import lru_cache
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Annotated, ClassVar, Final, Literal
 from urllib.parse import unquote, urlsplit
@@ -18,10 +19,21 @@ from app.services.sandbox.config import SandboxConfig, SandboxType
 MAX_RETENTION_DAYS: Final = 36500
 MIN_TRIGGER_EXECUTION_RETENTION_DAYS: Final = 7
 MIN_GATEWAY_MESSAGE_RETENTION_DAYS: Final = 7
+MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS: Final = 7
 # A container stop sends SIGTERM, waits its stop timeout, then SIGKILLs. Fargate allows a stopTimeout of at most 120 s,
 # and the stop timeout must cover the uvicorn window, the cleanup budget and this margin for interpreter exit.
 FARGATE_MAX_STOP_TIMEOUT_SECONDS: Final = 120
 SHUTDOWN_KILL_MARGIN_SECONDS: Final = 10
+# Processes that each hold one Pub/Sub connection for their whole lifetime: the realtime subscriber and the gateway
+# report wake listener. The Pub/Sub pool holds at least twice as many connections, so a resubscribe can open its new
+# connection before the old one is closed.
+REDIS_LONG_LIVED_SUBSCRIBERS: Final = 2
+# A chat frame is JSON text: a code point takes at most 4 UTF-8 bytes (a quote or newline escapes to 2), so the three
+# text limits times 4, plus room for the other fields (ten attachment references of up to 1024 + 255 characters
+# each, the submission id, the model id and the keys), bound every frame a limit-abiding client sends. The default
+# START_COMMAND in entrypoint.sh passes the sum to uvicorn as --ws-max-size.
+CHAT_FRAME_BYTES_PER_CHARACTER: Final = 4
+CHAT_FRAME_ENVELOPE_BYTES: Final = 64 * 1024
 
 
 def _running_in_container() -> bool:
@@ -102,6 +114,10 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "text"
     LOG_QUEUE_SIZE: int = 8192
     LOG_COLOR: bool = True
+    # Bearer token of the Prometheus scrape route GET /api/metrics; the route exists only while it is set (404 when empty).
+    METRICS_TOKEN: str = ""
+    # Seconds between event-loop lag samples. At most 60 so one sample always fits the sampler's 300 s progress budget.
+    EVENT_LOOP_LAG_INTERVAL_SECONDS: float = Field(default=1.0, ge=0.1, le=60)
     SECRET_KEY: str = "change-me-in-production"  # noqa: S105
     API_PREFIX: str = "/api"
 
@@ -111,16 +127,30 @@ class Settings(BaseSettings):
     DATABASE_POOL_MIN_SIZE: int = 2
     DATABASE_POOL_MAX_SIZE: int = 30
     DATABASE_POOL_TIMEOUT: float = 30.0
+    # Requests allowed to queue for a pooled connection; the next one fails fast with a 503 (0 = unbounded queue).
+    DATABASE_POOL_MAX_WAITING: int = Field(default=60, ge=0, le=100000)
     # Recycle idle / long-lived sockets before Aiven (or a LB) silently drops them.
     DATABASE_POOL_MAX_IDLE: float = 600.0
     DATABASE_POOL_MAX_LIFETIME: float = 1800.0
     # Session limits applied to every pooled connection of both pools (milliseconds; 0 disables a limit).
     DATABASE_STATEMENT_TIMEOUT_MS: int = Field(default=30000, ge=0, le=2147483647)
     DATABASE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS: int = Field(default=60000, ge=0, le=2147483647)
+    # Row-lock wait allowed to a request-bound connection only (milliseconds; 0 disables); workers never see it.
+    DATABASE_REQUEST_LOCK_TIMEOUT_MS: int = Field(default=5000, ge=0, le=2147483647)
     # The durable pool is sized on its own; it no longer inherits DATABASE_POOL_MAX_SIZE.
     DATABASE_DURABLE_POOL_MAX_SIZE: int = Field(default=4, ge=1, le=1000)
     # Days to keep chat_history_changes journal rows; 0 keeps them forever.
     CHAT_HISTORY_RETENTION_DAYS: int = Field(default=30, ge=0)
+    # Largest chat submission text, in characters (Unicode code points): content, display_content and file_name. A longer
+    # one is refused whole, never truncated.
+    CHAT_CONTENT_MAX_CHARS: int = Field(default=200_000, ge=1)
+    CHAT_DISPLAY_CONTENT_MAX_CHARS: int = Field(default=200_000, ge=1)
+    CHAT_FILE_NAME_MAX_CHARS: int = Field(default=255, ge=1)
+    # Chat sockets one user may hold at once across every engine process (counted from Redis presence).
+    CHAT_SOCKETS_PER_USER: int = Field(default=20, ge=1)
+    # Submissions one chat socket may send per window; the window lives in the handling process's memory.
+    CHAT_SUBMISSIONS_PER_WINDOW: int = Field(default=10, ge=1)
+    CHAT_SUBMISSION_WINDOW_SECONDS: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     # Days to keep agent_activity_logs rows, counted from created_at; 0 keeps them forever.
     ACTIVITY_LOG_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
     # Days to keep completed/failed trigger_executions rows, counted from finished_at; 0 keeps them forever.
@@ -154,15 +184,51 @@ class Settings(BaseSettings):
             )
         return value
 
+    # Days to keep notifications, counted from created_at; 0 keeps them forever.
+    NOTIFICATION_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+    # Days to keep done tasks with their logs, counted from completed_at (updated_at when it was never stamped);
+    # 0 keeps them forever. Tasks that are not done are never deleted.
+    TASK_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+    # Days to keep channel_event_receipts (provider event dedup records and their media descriptors and burst
+    # outcomes), counted from created_at; 0 keeps them forever.
+    CHANNEL_EVENT_RECEIPT_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+
+    @field_validator("CHANNEL_EVENT_RECEIPT_RETENTION_DAYS")
+    @classmethod
+    def validate_channel_event_receipt_retention(cls, value: int) -> int:
+        # A receipt is what makes a provider retry of the same event a duplicate; deleting it inside the provider's
+        # retry window would let the event run twice.
+        if 0 < value < MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS:
+            raise ValueError(
+                f"CHANNEL_EVENT_RECEIPT_RETENTION_DAYS must be 0 (keep everything) or at least "
+                f"{MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS}: a shorter window lets a provider retry run again"
+            )
+        return value
+
+    # Days to keep delivered or terminal gateway_report_deliveries, counted from delivered_at or terminal_at; 0 keeps
+    # them forever. A delivery still waiting to be sent is never deleted.
+    GATEWAY_REPORT_DELIVERY_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+    # Days to keep superseded workspace_file_revisions, counted from created_at; 0 keeps them forever. The newest
+    # revision of each file is never deleted.
+    WORKSPACE_REVISION_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_KEY_PREFIX: str = "mrc"
     REDIS_MAX_CONNECTIONS: int = 50
+    # How long a durable-pool command waits for a free connection before failing as pool overload (not as Redis down).
+    # Must stay below REDIS_SOCKET_TIMEOUT.
+    REDIS_COMMAND_WAIT_SECONDS: float = Field(default=1.0, gt=0)
+    # Dedicated pool of the long-lived Pub/Sub subscribers; the sum of all three pools is what one process may hold
+    # against the Redis/Valkey connection limit.
+    REDIS_PUBSUB_MAX_CONNECTIONS: int = Field(default=4, ge=2 * REDIS_LONG_LIVED_SUBSCRIBERS)
     REDIS_SOCKET_CONNECT_TIMEOUT: float = 2.0
     REDIS_SOCKET_TIMEOUT: float = 5.0
     REDIS_HEALTH_CHECK_INTERVAL: int = 30
     REDIS_CACHE_MAX_CONNECTIONS: int = 20
     REDIS_CACHE_SOCKET_TIMEOUT: float = 0.2
+    # Connect budget of the cache pool; must not exceed REDIS_CACHE_SOCKET_TIMEOUT, so a dead host costs one read budget.
+    REDIS_CACHE_CONNECT_TIMEOUT: float = Field(default=0.2, gt=0)
     REDIS_CACHE_WAIT_SECONDS: float = 0.2
     REDIS_CACHE_MAX_VALUE_BYTES: int = 65536
     INSTANCE_ID: str = _default_instance_id()
@@ -174,6 +240,40 @@ class Settings(BaseSettings):
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 60
     EMAIL_VERIFICATION_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     EMAIL_VERIFICATION_REQUIRED: bool = False  # Require email verification for login
+    # Raw bytes of attachments one send_email call may carry in total (about a third more once base64-encoded, so the
+    # default stays under the 25 MB cap common providers apply). A larger set refuses the whole message.
+    EMAIL_ATTACHMENTS_MAX_BYTES: int = Field(default=18 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
+    # Threads of the agent email lane: the IMAP and SMTP exchanges of read_emails, reply_email, send_email and the
+    # connection test, and the attachment reads, run there, apart from the event loop and every other thread pool.
+    # Each exchange holds one for at most a few socket timeouts, so a slow mail host cannot use more than this.
+    AGENT_EMAIL_LANE_THREADS: int = Field(default=8, ge=1, le=64)
+    # Threads of the system email lane: authentication, broadcast, admission and incident mail (the leased workers send
+    # up to 5 + 5 + 5 + 4 at once) and the invitation, reset, verification and SMTP-test sends of request handlers.
+    SYSTEM_EMAIL_LANE_THREADS: int = Field(default=32, ge=1, le=128)
+    # Public auth throttling: fixed windows in Redis, checked before any password check or email send.
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=300, ge=1)
+    # Attempts per window for one account (login, forgot-password, resend-verification each count separately).
+    AUTH_RATE_LIMIT_ACCOUNT_ATTEMPTS: int = Field(default=10, ge=1)
+    # Attempts per window for one client address; sized for an office sharing one NAT address.
+    AUTH_RATE_LIMIT_ADDRESS_ATTEMPTS: int = Field(default=300, ge=1)
+    # Chat and download ticket requests per window for one signed-in user.
+    TICKET_RATE_LIMIT_USER_ATTEMPTS: int = Field(default=60, ge=1)
+    # Password checks admitted at once (running plus queued) before new ones are refused with 503.
+    BCRYPT_MAX_PENDING_CHECKS: int = Field(default=32, ge=1)
+    # Peers (IPs or CIDRs) whose X-Forwarded-For is believed when resolving the client address. Empty trusts none.
+    TRUSTED_PROXIES: list[str] = []
+
+    @field_validator("TRUSTED_PROXIES")
+    @classmethod
+    def validate_trusted_proxies(cls, value: list[str]) -> list[str]:
+        entries = [entry.strip() for entry in value]
+        for entry in entries:
+            try:
+                _ = ip_network(entry, strict=False)
+            except ValueError as exc:
+                raise ValueError(f"TRUSTED_PROXIES entry {entry!r} is not an IP address or CIDR network") from exc
+        return entries
+
     # Genesis platform admin credentials are required when the account is missing.
     PLATFORM_ADMIN_EMAIL: str = ""
     PLATFORM_ADMIN_PASSWORD: str = ""
@@ -188,10 +288,17 @@ class Settings(BaseSettings):
     USER_SESSION_CACHE_TTL_SECONDS: int = 20
     # Redis TTL for tenant rows used on chat/timezone/catalog paths. 0 disables.
     TENANT_CACHE_TTL_SECONDS: int = 60
-    # Redis TTL for inbound channel event dedup. 0 uses process-local only.
-    CHANNEL_DEDUP_TTL_SECONDS: int = 86400
     # Most attachments the engine fetches from one native channel message; later ones are skipped with one notice.
     CHANNEL_MEDIA_MAX_ATTACHMENTS: int = Field(default=10, ge=1, le=10)
+    # Seconds a Slack, Telegram or WhatsApp Cloud webhook may spend starting fetches and stores for attachments before it
+    # answers; later files are skipped with a note, and a store already started finishes. Slack gives up after 3 s. The
+    # in-flight claim of an event outlives this by a margin.
+    CHANNEL_MEDIA_ACK_BUDGET_SECONDS: float = Field(default=2.0, gt=0, le=30)
+    # Gateway report relay: a failing delivery ends as failed once it has been attempted this many times or is this
+    # many hours old, and one tenant takes at most this many rows into a single claim batch.
+    GATEWAY_REPORT_MAX_ATTEMPTS: int = Field(default=30, ge=1)
+    GATEWAY_REPORT_MAX_AGE_HOURS: int = Field(default=24, ge=1)
+    GATEWAY_REPORT_TENANT_CLAIM_LIMIT: int = Field(default=5, ge=1)
     # Master switch for Feishu/WeCom/DingTalk token sharing. 0 disables.
     IM_TOKEN_CACHE_TTL_SECONDS: int = 1
 
@@ -209,7 +316,24 @@ class Settings(BaseSettings):
     S3_PREFIX: str = "agents"
     S3_PRESIGN_TTL_SECONDS: int = 3600
     S3_MAX_POOL_CONNECTIONS: int = 50
-    S3_WRITE_WORKERS: int = 32
+    # Threads the storage lane runs blocking S3 calls on; capped at S3_MAX_POOL_CONNECTIONS.
+    S3_THREAD_LANE_SIZE: int = Field(default=32, ge=1)
+    # Largest file the editor, the text and CSV previews and the enterprise knowledge base content read take into memory,
+    # and the most text one save may carry. A larger file answers 413 `file_too_large` and is downloaded instead.
+    WORKSPACE_FILE_CONTENT_MAX_BYTES: int = Field(default=1048576, gt=0, le=67108864)
+    # Largest HTML file a public /p/{short_id} page is served from, and the largest the publish tool and the publish
+    # route accept. A source that grew past it later answers 413 and counts no view.
+    PUBLISHED_PAGE_MAX_BYTES: int = Field(default=5_242_880, ge=1, le=67_108_864)
+
+    # Document conversion (the convert_* tools). Blocking work (openpyxl, python-docx, WeasyPrint, large file reads) runs
+    # on a lane of this many threads of its own, never on the event loop or the default executor.
+    DOCUMENT_CONVERSION_LANE_THREADS: int = Field(default=4, ge=1, le=64)
+    # Seconds one convert_* call may take, waiting for a lane thread included. A call that outlives it returns an error;
+    # its thread cannot be interrupted, so it keeps its lane slot until it ends.
+    DOCUMENT_CONVERSION_TIMEOUT_SECONDS: float = Field(default=120.0, gt=0, le=3600, allow_inf_nan=False)
+    # Chrome processes HTML-to-PDF and slide rendering may run at once, shared by both. A render that cannot get one
+    # within 30 s falls back to WeasyPrint (PDF) or the DOM conversion (PPTX).
+    DOCUMENT_CHROME_MAX_CONCURRENCY: int = Field(default=2, ge=1, le=16)
 
     # Process role
     PROCESS_ROLE: str = "all"
@@ -217,6 +341,22 @@ class Settings(BaseSettings):
     # UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN), then the lifespan cleanup runs within the budget.
     SHUTDOWN_HTTP_GRACE_SECONDS: int = Field(default=30, ge=1)
     SHUTDOWN_CLEANUP_BUDGET_SECONDS: int = Field(default=75, ge=1)
+    # Restarts a crashed auth/broadcast mail loop may use over the process lifetime; the next exit is final and
+    # fails /api/live so the orchestrator replaces the task. Delays double from 1 s up to the ceiling.
+    WORKER_LOOP_RESTART_BUDGET: int = Field(default=5, ge=0)
+    WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS: float = Field(default=30.0, gt=0)
+
+    @model_validator(mode="after")
+    def validate_redis_command_wait(self) -> Settings:
+        if self.REDIS_COMMAND_WAIT_SECONDS >= self.REDIS_SOCKET_TIMEOUT:
+            raise ValueError("REDIS_COMMAND_WAIT_SECONDS must be shorter than REDIS_SOCKET_TIMEOUT")
+        return self
+
+    @model_validator(mode="after")
+    def validate_redis_cache_connect(self) -> Settings:
+        if self.REDIS_CACHE_CONNECT_TIMEOUT > self.REDIS_CACHE_SOCKET_TIMEOUT:
+            raise ValueError("REDIS_CACHE_CONNECT_TIMEOUT must not exceed REDIS_CACHE_SOCKET_TIMEOUT")
+        return self
 
     @model_validator(mode="after")
     def validate_shutdown_window(self) -> Settings:
@@ -267,6 +407,10 @@ class Settings(BaseSettings):
     OPENCLAW_GUEST_LOG_MAX_FILE: int = Field(default=3, ge=1, le=100)
     # Deadline per Docker CLI launch of the guest-management client; 0 leaves launches unbounded.
     OPENCLAW_DOCKER_CLI_TIMEOUT_SECONDS: float = Field(default=120.0, ge=0, le=3600, allow_inf_nan=False)
+    # Docker CLI calls that run at once per event loop, and how many calls of each priority (interactive start and stop,
+    # background sweeps) may wait for a thread before the next one is refused as busy.
+    DOCKER_LANE_THREADS: int = Field(default=16, ge=1, le=256)
+    DOCKER_LANE_QUEUE_LIMIT: int = Field(default=256, ge=0, le=100000)
     # Guest image pulls (ordinary starts and upgrades) get this deadline instead of the per-launch one.
     OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
 
@@ -287,11 +431,17 @@ class Settings(BaseSettings):
     OPENCLAW_ENGINE_BASE_URL: str = "http://maraclaw-engine:8000"
     # Seconds between passes of the worker that measures each tier-governed agent's workspace disk usage.
     AGENT_WORKSPACE_QUOTA_INTERVAL_SECONDS: float = Field(default=600.0, ge=30, le=86400, allow_inf_nan=False)
+    # How many agents that worker measures at once. Each in-flight measurement holds one directory-walk thread and may
+    # run one Docker layer read, so this also bounds the walk threads and the Docker lane share a pass takes.
+    AGENT_WORKSPACE_QUOTA_CONCURRENCY: int = Field(default=4, ge=1, le=32)
     # With S3 storage, a worker mirrors each guest's user files (workspace/, memory/, skills/ ...) with the agent's
     # managed storage both ways. Local storage is the guest directory itself, so the mirror is idle there.
     WORKSPACE_MIRROR_ENABLED: bool = True
     # Seconds between passes of the workspace mirror worker.
     WORKSPACE_MIRROR_INTERVAL_SECONDS: float = Field(default=60.0, ge=10, le=3600, allow_inf_nan=False)
+    # How many agents the workspace mirror worker mirrors at once, never two of the same organization. Each in-flight
+    # agent holds one transfer buffer, so this also bounds the mirror's memory.
+    WORKSPACE_MIRROR_CONCURRENCY: int = Field(default=4, ge=1, le=32)
     # Lifetime of a guest-minted share link for one workspace file (POST /api/gateway/file-links).
     FILE_SHARE_LINK_TTL_SECONDS: int = Field(default=900, ge=60, le=86400)
     # Seconds between passes of the worker that samples each tier-governed agent's guest memory, CPU and managed
@@ -309,11 +459,24 @@ class Settings(BaseSettings):
     WHATSAPP_PERSONAL_BURST_PENDING_BYTES: int = Field(default=65536, gt=0, le=268435456)
     WHATSAPP_PERSONAL_BURST_BODY_BYTES: int = Field(default=16384, gt=0, le=268435456)
     WHATSAPP_PERSONAL_BUSY_NOTICE_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0, le=86400, allow_inf_nan=False)
+    # Personal WhatsApp bridge fleet. MAX_RUNNING_CHILDREN is a fleet-wide ceiling: a claim counts the unexpired 30 s
+    # leases of every engine process under a database lock and is refused at the ceiling, so replicas share it (a dead
+    # process stops counting once its leases expire). At most MAX_STARTS_PER_POLL waiting connections (longest waiting
+    # first) start per engine process on each one-second supervisor poll.
+    # WORKER_HEAP_MB is the V8 old-generation ceiling in MiB each bridge gives its Baileys worker; a session that
+    # outgrows it ends only its own bridge, which restarts through the durable retry budget.
+    WHATSAPP_PERSONAL_MAX_RUNNING_CHILDREN: int = Field(default=200, ge=1, le=5000)
+    WHATSAPP_PERSONAL_MAX_STARTS_PER_POLL: int = Field(default=5, ge=1, le=100)
+    WHATSAPP_PERSONAL_WORKER_HEAP_MB: int = Field(default=512, ge=64, le=8192)
 
     # Optional typing pulses for current authorized busy private Zalo peers.
     ZALO_PERSONAL_TYPING_ENABLED: bool = False
     # Operator-selected seconds between keepalives; the SDK server interval's units are undocumented.
     ZALO_PERSONAL_KEEPALIVE_INTERVAL_SECONDS: int = Field(default=300, ge=60, le=1800)
+    # Personal Zalo bridge fleet, with the same meaning as the WhatsApp settings above (its ceiling counts Zalo bridges).
+    ZALO_PERSONAL_MAX_RUNNING_CHILDREN: int = Field(default=200, ge=1, le=5000)
+    ZALO_PERSONAL_MAX_STARTS_PER_POLL: int = Field(default=5, ge=1, le=100)
+    ZALO_PERSONAL_WORKER_HEAP_MB: int = Field(default=512, ge=64, le=8192)
     ZALO_PERSONAL_MEDIA_ALLOWED_HOSTS: list[
         Annotated[
             str,
@@ -376,6 +539,11 @@ class Settings(BaseSettings):
             ) from None
         return value
 
+    # LLM provider health: consecutive retryable failures that open a model's circuit, and the seconds it stays open
+    # before a single probe request may close it again. In-process per worker; see app/services/llm/provider_health.py.
+    LLM_PROVIDER_FAILURE_THRESHOLD: int = Field(default=5, ge=1, le=1000)
+    LLM_PROVIDER_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0, le=3600, allow_inf_nan=False)
+
     # Feishu OAuth
     FEISHU_APP_ID: str = ""
     FEISHU_APP_SECRET: str = ""
@@ -431,6 +599,11 @@ class Settings(BaseSettings):
     SANDBOX_MAX_CONCURRENT_EXECUTIONS: int = Field(default=8, ge=1)
     # Seconds an execute_code call may wait for a free slot before it is refused.
     SANDBOX_EXECUTION_QUEUE_WAIT_SECONDS: float = Field(default=10.0, ge=0)
+
+    def chat_frame_max_bytes(self) -> int:
+        """Largest websocket message the default START_COMMAND lets uvicorn buffer: the text limits plus the envelope."""
+        characters = self.CHAT_CONTENT_MAX_CHARS + self.CHAT_DISPLAY_CONTENT_MAX_CHARS + self.CHAT_FILE_NAME_MAX_CHARS
+        return characters * CHAT_FRAME_BYTES_PER_CHARACTER + CHAT_FRAME_ENVELOPE_BYTES
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_file=[".env", "../.env"],

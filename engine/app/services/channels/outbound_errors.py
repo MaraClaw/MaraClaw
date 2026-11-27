@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from math import isfinite
-from typing import override
+from typing import Final, override
 
 import httpx
 
@@ -24,6 +24,21 @@ class ProviderDeliveryError(RuntimeError):
 
 class ProviderPayloadRejectedError(ProviderDeliveryError):
     pass
+
+
+class ProviderPermanentError(ProviderDeliveryError):
+    """The provider says the destination is gone; no later attempt can succeed."""
+
+
+_PERMANENT_CODES: Final = {OutboundProvider.SLACK: frozenset({"channel_not_found", "is_archived"})}
+_DISCORD_UNKNOWN_CHANNEL: Final = 10003
+
+
+def delivery_error(provider: OutboundProvider, code: str, retry_at: datetime | None = None) -> ProviderDeliveryError:
+    error_type = (
+        ProviderPermanentError if code in _PERMANENT_CODES.get(provider, frozenset()) else ProviderDeliveryError
+    )
+    return error_type(provider, code, retry_at)
 
 
 def provider_deadline(response: httpx.Response, now: datetime) -> datetime | None:
@@ -62,6 +77,10 @@ def response_body(response: httpx.Response, provider: OutboundProvider) -> JsonO
             body = json_object_from_response(response)
             if body.get("code") == 50035 and bool(json_object_from(body.get("errors")).get("content")):
                 raise ProviderPayloadRejectedError(provider, "invalid_content")
+        if provider == OutboundProvider.DISCORD and response.status_code == 404:
+            with suppress(ValueError):
+                if json_object_from_response(response).get("code") == _DISCORD_UNKNOWN_CHANNEL:
+                    raise ProviderPermanentError(provider, "unknown_channel")
         response.raise_for_status()
     body = json_object_from_response(response)
     if provider == OutboundProvider.SLACK and body.get("error") in {"msg_too_long", "no_text"}:

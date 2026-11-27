@@ -17,6 +17,7 @@ from app.core.domain.agents import AgentStatus
 from app.core.domain.users import UserRole
 from app.dao.agent_lifecycle_projection_dao import AgentLifecycleProjections
 from app.records.agent import AgentRecord
+from app.records.agent_workspace_usage import AgentWorkspaceUsageRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.services import admin_companies as cursors, admin_company_runtime as runtime
@@ -202,3 +203,52 @@ async def test_unknown_company_returns_404_without_agent_or_docker_reads(client,
     assert response.status_code == 404
     inventory[1]["company_page"].assert_not_awaited()
     inventory[2].assert_not_called()
+
+
+async def test_workspace_projects_measurement_state_with_nullable_times(client, inventory):
+    agents, reads, _inspection = inventory
+    measured, failed, requested = (datetime(2026, 11, 15, hour, tzinfo=UTC) for hour in (3, 4, 5))
+    reads["many"].return_value = AgentLifecycleProjections(
+        workspaces={
+            agents[0].id: AgentWorkspaceUsageRecord(
+                agents[0].id,
+                100,
+                20,
+                1000,
+                measured_at=measured,
+                walk_failed_at=failed,
+                remeasure_requested_at=requested,
+            ),
+            agents[1].id: AgentWorkspaceUsageRecord(agents[1].id, 0, 0, 1000, walk_failed_at=failed),
+            agents[2].id: AgentWorkspaceUsageRecord(agents[2].id, 10, 0, 1000, measured_at=measured),
+        }
+    )
+    response = await client.get(_PATH, headers=_HEADERS)
+    assert response.status_code == 200
+    assert [item["workspace"] for item in response.json()["items"]] == [
+        {
+            "used_bytes": 120,
+            "limit_bytes": 1000,
+            "measured_at": "2026-11-15T03:00:00Z",
+            "over_since": None,
+            "walk_failed_at": "2026-11-15T04:00:00Z",
+            "remeasure_requested_at": "2026-11-15T05:00:00Z",
+        },
+        {
+            "used_bytes": 0,
+            "limit_bytes": 1000,
+            "measured_at": None,
+            "over_since": None,
+            "walk_failed_at": "2026-11-15T04:00:00Z",
+            "remeasure_requested_at": None,
+        },
+        {
+            "used_bytes": 10,
+            "limit_bytes": 1000,
+            "measured_at": "2026-11-15T03:00:00Z",
+            "over_since": None,
+            "walk_failed_at": None,
+            "remeasure_requested_at": None,
+        },
+        None,
+    ]

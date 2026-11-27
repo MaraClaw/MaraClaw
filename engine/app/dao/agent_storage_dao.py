@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from app.core.json_types import int_from_row, str_from_row, uuid_from_row, uuid_from_row_opt
@@ -63,6 +63,71 @@ class AgentStorageDAO:
             {"agent": agent_id, "key": object_key},
         )
         return StorageObjectRecord.from_row(row) if row is not None else None
+
+    async def get_objects(
+        self, db: DbConnection, agent_id: UUID, object_keys: Sequence[str]
+    ) -> dict[str, StorageObjectRecord]:
+        rows = await db.fetchall(
+            "SELECT * FROM agent_storage_objects WHERE agent_id = %(agent)s AND object_key = ANY(%(keys)s)",
+            {"agent": agent_id, "keys": list(object_keys)},
+        )
+        return {record.object_key: record for record in map(StorageObjectRecord.from_row, rows)}
+
+    async def upsert_objects(self, db: DbConnection, records: Sequence[StorageObjectRecord]) -> None:
+        """``upsert_object`` for many rows in one statement; every record must name the same agent."""
+        if not records:
+            return
+        await db.execute(
+            "INSERT INTO agent_storage_objects (agent_id, object_key, committed_bytes, reserved_bytes, operation_id, "
+            "operation_kind, outcome_unknown, expected_etag) SELECT %(agent)s, v.key, v.committed, v.reserved, %(op)s, "
+            "%(kind)s, false, v.etag FROM unnest(%(keys)s::text[], %(committed)s::bigint[], %(reserved)s::bigint[], "
+            "%(etags)s::text[]) AS v(key, committed, reserved, etag) ON CONFLICT (agent_id, object_key) DO UPDATE SET "
+            "committed_bytes = EXCLUDED.committed_bytes, reserved_bytes = EXCLUDED.reserved_bytes, "
+            "operation_id = EXCLUDED.operation_id, operation_kind = EXCLUDED.operation_kind, "
+            "outcome_unknown = EXCLUDED.outcome_unknown, expected_etag = EXCLUDED.expected_etag, updated_at = now()",
+            {
+                "agent": records[0].agent_id,
+                "op": records[0].operation_id,
+                "kind": records[0].operation_kind.value if records[0].operation_kind is not None else None,
+                "keys": [record.object_key for record in records],
+                "committed": [record.committed_bytes for record in records],
+                "reserved": [record.reserved_bytes for record in records],
+                "etags": [record.expected_etag for record in records],
+            },
+        )
+
+    async def settle_write_batch(
+        self, db: DbConnection, agent_id: UUID, operation_id: UUID, landed: Mapping[str, int], rejected: Sequence[str]
+    ) -> int:
+        """Close the batch's pending write rows and return how much the usage total changes.
+
+        A landed key commits its size and a rejected one returns to the bytes it had before; a row left at zero bytes is
+        removed. Rows of the operation named in neither are left pending.
+        """
+        rows = await db.fetchall(
+            "SELECT * FROM agent_storage_objects WHERE agent_id = %(agent)s AND operation_id = %(op)s "
+            "AND object_key = ANY(%(keys)s)",
+            {"agent": agent_id, "op": operation_id, "keys": [*landed, *rejected]},
+        )
+        final: dict[str, int] = {}
+        delta = 0
+        for record in map(StorageObjectRecord.from_row, rows):
+            final[record.object_key] = landed.get(record.object_key, record.committed_bytes)
+            delta += final[record.object_key] - record.charged_bytes
+        await db.execute(
+            "DELETE FROM agent_storage_objects WHERE agent_id = %(agent)s AND operation_id = %(op)s "
+            "AND object_key = ANY(%(keys)s)",
+            {"agent": agent_id, "op": operation_id, "keys": [key for key, size in final.items() if size == 0]},
+        )
+        kept = {key: size for key, size in final.items() if size > 0}
+        await db.execute(
+            "UPDATE agent_storage_objects AS o SET committed_bytes = v.size, reserved_bytes = 0, operation_id = NULL, "
+            "operation_kind = NULL, outcome_unknown = false, expected_etag = NULL, updated_at = now() "
+            "FROM unnest(%(keys)s::text[], %(sizes)s::bigint[]) AS v(key, size) "
+            "WHERE o.agent_id = %(agent)s AND o.operation_id = %(op)s AND o.object_key = v.key",
+            {"agent": agent_id, "op": operation_id, "keys": list(kept), "sizes": list(kept.values())},
+        )
+        return delta
 
     async def upsert_object(self, db: DbConnection, record: StorageObjectRecord) -> None:
         await db.execute(

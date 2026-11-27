@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 from app.core.json_types import (
     datetime_from_row,
     int_from_row,
+    str_from_row_opt,
     uuid_from_row,
     uuid_from_row_opt,
 )
@@ -27,6 +28,9 @@ type TerminalReason = Literal[
     "payload_rejected",
     "whatsapp_window_unavailable",
     "whatsapp_window_expired",
+    "provider_permanent_error",
+    "attempts_exhausted",
+    "age_exhausted",
 ]
 _destination_kind = TypeAdapter(DestinationKind)
 _terminal_reason = TypeAdapter(TerminalReason)
@@ -46,6 +50,8 @@ class GatewayReportDeliveryRecord:
     delivered_at: datetime | None = None
     terminal_reason: TerminalReason | None = None
     terminal_at: datetime | None = None
+    failure_detail: str | None = None
+    created_at: datetime | None = None
     im_plan: OutboundPlan | None = None
     next_chunk: int = 0
 
@@ -66,6 +72,8 @@ class GatewayReportDeliveryRecord:
             delivered_at=datetime_from_row(row.get("delivered_at")),
             terminal_reason=_terminal_reason.validate_python(terminal_reason) if terminal_reason is not None else None,
             terminal_at=datetime_from_row(row.get("terminal_at")),
+            failure_detail=str_from_row_opt(row.get("failure_detail")),
+            created_at=datetime_from_row(row.get("created_at")),
             im_plan=OutboundPlan.model_validate(im_plan) if im_plan is not None else None,
             next_chunk=int_from_row(row.get("next_chunk")),
         )

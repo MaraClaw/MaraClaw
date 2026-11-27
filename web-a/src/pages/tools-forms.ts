@@ -1,7 +1,8 @@
 import { z } from 'zod'
 
 import type { JsonObject, ToolCreateInput, ToolUpdateInput, listTools } from '../lib/tools-api.ts'
-import { isPlatformAdminUser, type UserOut } from '../lib/types/auth.ts'
+import type { UserOut } from '../lib/types/auth.ts'
+import { isPlatformAdminUser } from '../lib/types/auth-guards.ts'
 
 export type CatalogTool = Awaited<ReturnType<typeof listTools>>[number]
 

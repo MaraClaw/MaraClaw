@@ -4,6 +4,7 @@ import { pendingTransfer } from '../tests/transfer-review-fixtures.ts'
 import { organizationAdmission } from '../tests/organization-admission-fixtures.ts'
 import { capacityPaymentSettingsRequestSchema, capacityPaymentSettingsSchema, type CapacityOrder } from '../src/lib/capacity-api.ts'
 import { organizationAdmissionDecisionSchema } from '../src/lib/organization-admissions-api.ts'
+import type { CompanyRuntimePageOut } from '../src/lib/engine-contracts.generated.ts'
 
 export type Actor = 'platform_admin' | 'genesis_platform_admin' | 'org_admin' | 'member' | 'forced' | 'anonymous'
 export const paymentAliases = [
@@ -48,6 +49,7 @@ export function syntheticState(actor: Actor = 'platform_admin', theme: 'light' |
     admission: organizationAdmission,
     capacityQueue: new Map<string, CapacityQueuePage>(),
     capacityQueueRequests: [] as { status: string | null; cursor: string | null; offset: string | null; limit: string | null }[],
+    runtime: null as CompanyRuntimePageOut | null,
     paymentSettings: capacityPaymentSettingsSchema.parse({
       configured: true, bank_name: 'Example Bank', account_number: '0123456789',
       branch_name: 'District 1 Branch', usd_vnd_rate: 25000,
@@ -78,6 +80,8 @@ export async function installSyntheticApi(context: BrowserContext, baseURL: stri
     else if (method === 'GET' && path === '/api/notifications/unread-count') body = { unread_count: 0 }
     else if (method === 'GET' && path === '/api/organization-plans') body = { plans: [] }
     else if (method === 'GET' && path === '/api/admin/companies/page') body = { items: state.companies, next_cursor: null }
+    else if (method === 'GET' && path === `/api/admin/companies/${company.id}/stats`) body = company
+    else if (method === 'GET' && state.runtime && path === `/api/admin/companies/${state.runtime.company_id}/runtime`) body = state.runtime
     else if (method === 'POST' && path === '/api/admin/companies') {
       if (state.holdCreate) await state.createGate.promise
       status = state.createStatus

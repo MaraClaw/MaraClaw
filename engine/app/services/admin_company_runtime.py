@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from typing import Final
 from uuid import UUID
 
-from anyio import to_thread
 from fastapi import HTTPException
 
 from app.dao.agent_lifecycle_projection_dao import CompanyRuntimePageQuery, agent_lifecycle_projection_dao
@@ -22,6 +21,7 @@ from app.services.admin_companies import MAX_PAGE_SIZE, decode_runtime_cursor, e
 from app.services.agent_manager import agent_manager
 from app.services.agent_resource_pressure_docker import GuestInspection, inspect_guests
 from app.services.agent_work_eligibility import AgentWorkPolicyContext, policy_blocking_codes
+from app.services.docker_capacity import DockerBusyError, DockerPriority, run_docker
 
 INVENTORY_INSPECT_TIMEOUT_SECONDS: Final = 5.0
 
@@ -58,6 +58,8 @@ async def company_runtime_page(company_id: UUID, cursor: str | None, limit: int)
                         limit_bytes=workspace.limit_bytes,
                         measured_at=workspace.measured_at,
                         over_since=workspace.over_since,
+                        walk_failed_at=workspace.walk_failed_at,
+                        remeasure_requested_at=workspace.remeasure_requested_at,
                     )
                     if workspace is not None
                     else None,
@@ -79,13 +81,23 @@ async def company_runtime_page(company_id: UUID, cursor: str | None, limit: int)
         )
     )
     docker = agent_manager.docker_client
-    inspections = (
-        await to_thread.run_sync(inspect_guests, docker, references, INVENTORY_INSPECT_TIMEOUT_SECONDS)
-        if references and docker is not None
-        else None
-        if references
-        else {}
-    )
+    inspections: dict[str, GuestInspection] | None = {}
+    if references:
+        try:
+            inspections = (
+                await run_docker(
+                    inspect_guests,
+                    docker,
+                    references,
+                    INVENTORY_INSPECT_TIMEOUT_SECONDS,
+                    priority=DockerPriority.BACKGROUND,
+                )
+                if docker is not None
+                else None
+            )
+        except DockerBusyError:
+            # An observation the busy lane cannot serve is unavailable, like one Docker cannot answer.
+            inspections = None
     return CompanyRuntimePageOut(
         company_id=company_id,
         as_of=as_of,

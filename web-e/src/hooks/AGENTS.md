@@ -6,14 +6,14 @@ Scope: auth/theme/translation context lifetimes, session-fenced query adapters, 
 
 ### Providers
 
-- `auth-provider.tsx`: `AuthProvider`, external auth-store subscription and context action wiring.
+- `auth-provider.tsx`: `AuthProvider`, external auth-store subscription and context action wiring. It imports `lib/auth-api.ts` on demand (`retryingImport`), so the stored-session check and `login` wait for that chunk; a failed download fails the check like a failed request.
 - `theme-provider.tsx`: `ThemeProvider`, stored/system theme resolution and document updates.
 - `translation-provider.tsx`: `TranslationProvider`, persisted language, HTML `lang`, translation callbacks and locale-aware date/number formatting.
 
 ### Query-option factories
 
 - `notification-options.ts`: `notificationKeys`, `notificationListOptions`, `notificationUnreadOptions` and mutation options for read, read-all, archive and restore, plus selected read/unread/archive/restore variants.
-- `openclaw-update-options.ts`: `agentUpdateKey`, `upgradeMutationKey`, `agentUpdateOptions`, `upgradeOpenClawOptions`; update polling, upgrade mutation and related invalidation.
+- `openclaw-update-options.ts`: `agentUpdateKey`, `upgradeMutationKey`, `updateDetailKey`, `agentUpdateOptions`, `updateDetailOptions`, `upgradeOpenClawOptions`; per-agent and notice-detail update polling, upgrade mutation and related invalidation.
 - `agent-lifecycle-options.ts`, `agent-setup-options.ts`: lifecycle and setup keys, polling query options, optional-MCP and setup retry mutations.
 - `agent-skills-options.ts`: `installedAgentSkillsOptions`; installed skills for chat mentions.
 - `onboarding-options.ts`: `assistantOnboardingOptions`; `startOnboarding`, `createAgent` (`POST /api/agents/`) and `completeOnboarding` as one scoped mutation taking the `AgentCreate` body; no synchronous start outcome.
@@ -46,24 +46,25 @@ Scope: auth/theme/translation context lifetimes, session-fenced query adapters, 
 - Workspace mutation wrappers also fence `mutate` and `mutateAsync`.
   Infinite-query wrappers fence manual next-page, previous-page and refetch actions as well as the query function.
 - Notification lists start without a cursor, request 50 rows and advance only with the returned next cursor.
-  Only `notificationUnreadOptions` sets the 30,000 ms polling interval; category belongs in both query keys.
+  Only `notificationUnreadOptions` polls (every 30,000 ms through `queryPollInterval`, focus refetch `'always'` so a poll stopped while hidden restarts); category belongs in both query keys.
 - Every notification mutation factory, single or selected, uses mutation scope `notifications-read`.
   Success cancels the `notifications` prefix and trims cached traversals to their first page before invalidating every category with `refetchType: 'all'`.
 - `use-notification-selection.ts` scopes selected loaded rows to the current owner/view/category and caps selection at 200. Selection identity fences late read completions; context identity fences load-more completions.
-- `useAdmissionAccess` keys on `['company-admissions','workspace-access', tenantId]`, never retries, and refetches every 30,000 ms only while a pending admission exists. `workspaceAllowed` needs an organization and a successful `false`, so missing-organization, loading and error states do not open the workspace.
+- `useAdmissionAccess` uses `admissionAccessOptions` (`lib/admission-access.ts`): key `['company-admissions','workspace-access', tenantId]`, never retries, and polls every 30,000 ms through `queryPollInterval` only while a pending admission exists (focus refetches only then). `workspaceAllowed` needs an organization and a successful `false`, so missing-organization, loading and error states do not open the workspace.
 - `useInvitationLink` reads `#code=` (256 chars max) or router state `invitationCode` once, then replaces the URL to clear both. `useInvitationPreview` aborts on edit or unmount and drops completions from a retired owner.
 - `useJoinedWorkspace`: a pending result is a no-op; an approved admission calls `switchTenant` for its target; an immediate join uses its own token. Then `refreshReplacement`, a success toast and `/app`.
 - `useTransferFunnel` loads the quote under an abort controller and owner check. `submit` stages a selection when `explicit_choice_required`, otherwise executes. Execution is single-flight and blocked unless `source_eligible` with no held admission or payment; a payment-review result stores `payment`, an admission result stores `admission` then enters.
 - `useChatHistory` reads the latest window and keeps merged pages under `chatHistoryKey`. `loadEarlier` is single-flight, aborts on target change, and a cursor that fails to advance surfaces as an error.
 - `useChatScroll` anchors on the first visible `[data-chat-entry]` across prepends and sticks to the bottom within 80 px. Earlier-page loading arms at `scrollTop` 160 or less and re-arms after scrolling past it; scope changes reset it.
 - Transcript row heights come from `ResizeObserver`; `lib/chat/transcript-window.ts` builds the viewport window. Pending, rejected and focused rows stay pinned; row/list registration and focus callbacks belong to `ChatTranscript`. Scope changes clear heights and focus along with the scroll snapshot.
-- Agent lifecycle polls every 1,500 ms while setup, start, upgrade (`pending`/`cutover`) or an optional MCP is active, otherwise 30,000 ms, in the background too. Setup polls 1,500 ms only while active. Both need `canManage` and an agent ID, use stale time 0 and never retry. A setup poll that leaves active, or a lifecycle poll whose `start.state` leaves `pending`, whose `runtime.recorded_status` changes, or whose `runtime.loss` appears, clears or changes `detected_at`, invalidates `['agent', id]` and `['agents']` through the shared `refreshAgent`, so an engine-queued first start updates the agent record without a reload. `useAgentExpiry` chunks timers to 2,147,483,647 ms and invalidates agent and lifecycle queries at expiry.
-- Update polling: 1,500 ms for `isActiveUpdate(run)`, otherwise 30,000 ms, including background polling.
+- Agent lifecycle polls every 1,500 ms while setup, start, upgrade (`pending`/`cutover`) or an optional MCP is active, otherwise 30,000 ms. Setup polls 1,500 ms only while active. Both need `canManage` and an agent ID, use stale time 0 and never retry. Every poll runs through `queryPollInterval` (`lib/poll-policy.ts`): it backs off after each consecutive failed read up to 60 s, waits at least the failed response's `Retry-After`, and stops while the page is hidden (no `refetchIntervalInBackground`). Focus and reconnect refetch at once, which also restarts an interval stopped while hidden; a poll without a stale query needs `refetchOnWindowFocus: 'always'`. A setup poll that leaves active, or a lifecycle poll whose `start.state` leaves `pending`, whose `runtime.recorded_status` changes, or whose `runtime.loss` appears, clears or changes `detected_at`, invalidates `['agent', id]` and `['agents']` through the shared `refreshAgent`, so an engine-queued first start updates the agent record without a reload. `useAgentExpiry` chunks timers to 2,147,483,647 ms and invalidates agent and lifecycle queries at expiry.
+- Update polling: 1,500 ms for `isActiveUpdate(run)`, otherwise 30,000 ms, through `queryPollInterval` like the lifecycle and setup polls. The notice detail page (`updateDetailOptions`) uses the same cadence while any of its agents has an active run, with focus refetch `'always'`.
   Query enabled only for a nonempty agent ID; stale time 0, always refetch on mount and refetch on focus.
   Newly observed terminal runs refresh agent/list/detail queries; upgrade success installs its run before invalidation.
 - Theme toggling chooses explicit light/dark opposite the resolved theme; it does not cycle back to system.
   Invalid stored values resolve to the system preference; media-listener cleanup removes the change handler.
 - Translation locale is `en` or `vi`, persisted in localStorage `maraclaw-language`; absent, invalid or unreadable storage defaults to `en`. Restricted storage still permits an in-memory switch. The provider updates `<html lang>` and formats with `en-US` / `vi-VN`; `lib/i18n/translation.ts` owns parsing, interpolation and storage, and `lib/i18n/catalog.ts` aggregates Vietnamese strings.
+- Vietnamese strings are their own chunk (`lib/i18n/catalog.ts`, imported only by `loadVietnamese()` in `lib/i18n/translation.ts`; everywhere else imports `TranslationKey`/`vietnamese` as types). Until `loadVietnamese()` resolves, `isTranslationKey` is false and `vi` lookups return the English key, so non-React callers and tests must `await loadVietnamese()` first. `TranslationProvider` renders nothing while a stored `vi` locale loads (no English flash); a failed load falls back to English for that page and keeps the stored `vi`. `setLocale('vi')` loads before re-rendering, keeps the current language on failure, and the latest switch wins. English visitors never request the chunk.
 
 ## Gotchas
 

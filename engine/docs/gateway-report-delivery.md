@@ -22,6 +22,11 @@ processes do not. Runtime cancels and drains the relay before closing PostgreSQL
 The relay has a 300-second readiness progress budget: it beats after each claim
 attempt, which first waits for a free delivery slot. A failed claim and the
 delivery tasks never beat.
+A claim batch takes due rows round-robin across tenants, each tenant's oldest first, and
+at most `GATEWAY_REPORT_TENANT_CLAIM_LIMIT` rows per tenant, so one tenant's backlog cannot
+crowd out another's replies. `FOR UPDATE SKIP LOCKED` stays: relays never wait on or
+double-claim a row, and a row another relay holds still counts toward its tenant's cap
+for that batch.
 
 `record_report` conceals the underlying model before `complete`: the result passes through
 `response_identity.response_guard`, so the stored result, assistant transcript, `done` event, IM chunks and agent
@@ -38,6 +43,8 @@ oldest first, skipping locked rows. The row, its deliveries, its reply binding a
 delayed-reply recovery still recognizes the run as native and still redacts the binding's model refs. A message with
 a delivery that is neither delivered nor terminal is never reclaimed, so every claim still reloads its result. A
 reclaimed row is listed with an empty content and no result.
+
+Delivery rows grow without bound too. `GATEWAY_REPORT_DELIVERY_RETENTION_DAYS` (default 0 keeps everything) lets the same worker delete, in batches of at most 5000, deliveries whose `delivered_at` or `terminal_at` is older than the window. A delivery that is still pending, leased or waiting to retry, is never deleted, and the gateway message it reported stays. Once its delivery rows are gone a message no longer shows which destination it was relayed to.
 
 PostgreSQL is the queue. Each batch claims at most 20 due intents using row locks
 and skip-locked selection. Claims increment attempts and issue a new token with a
@@ -96,10 +103,12 @@ advancements release the claim for the next chunk. Restart and later-chunk failu
 do not replay already checkpointed chunks. Public strict/best-effort send helpers
 remain separate from this durable relay transport.
 `channels/outbound_http.py` pools outbound HTTP connections per event loop and
-closes them at runtime shutdown. Feishu bearer tokens use `im_token_cache`; a
-token-invalid response drops the cache entry and retries once with the same
-provider request key. WeCom KF inbound `sync_msg` uses the existing WeCom token
-cache with the same single-refresh policy. These caches do not change delivery
+closes them at runtime shutdown. Feishu, Google Chat and Teams bearer tokens use
+`im_token_cache`; a token-invalid response (Feishu business codes, HTTP 401 for
+Google Chat and Teams) drops the cache entry and retries once, with the same
+provider request key (`uuid` for Feishu, `requestId` for Google Chat). WeCom KF
+inbound `sync_msg` uses the existing WeCom token cache with the same
+single-refresh policy. These caches do not change delivery
 fences or provider idempotency guarantees.
 The current session channel must still normalize to a registered inbound IM channel
 and have a nonblank external conversation ID. Web, agent, unknown and skill-only
@@ -131,16 +140,28 @@ and one bounded `terminal_reason`: `source_agent_unavailable`,
 `destination_tenant_changed`, `destination_relationship_changed` (agent sender or
 IM session ownership mismatch), or `destination_session_unavailable`. A separately
 typed, conclusive rejection of the immutable message payload records `payload_rejected`.
+A provider error that says the destination is gone (Slack `channel_not_found` and
+`is_archived`, Discord `Unknown Channel`, typed `ProviderPermanentError` in
+`channels/outbound_errors.py`) records `provider_permanent_error` on first sight.
+Any other failure retries until `GATEWAY_REPORT_MAX_ATTEMPTS` attempts or
+`GATEWAY_REPORT_MAX_AGE_HOURS` hours since `created_at`, then records
+`attempts_exhausted` or `age_exhausted`; the limits apply only to a failing attempt,
+never to one that delivers. `failure_detail` (at most 200 characters) holds the
+provider and its error code (`slack: channel_not_found`) or, for an unclassified
+failure, only the exception type name. Every terminal row, failed ones included, is
+eligible for the retention purge; a pending row never is.
 Terminal intents are not reclaimed, retried, revived or rerouted; their lease and
 token are cleared. Raw errors are never stored. These fields belong to the
 fresh-install schema baseline; no migration or upgrade path is provided.
 
 Missing source messages, incomplete/blank results and content changed during
 preparation remain retryable, as do unusable channels, blank external conversation
-IDs, missing configuration, credentials/authentication errors and unclassified
-provider failures. They remain recoverable even after 10,000 attempts. Identity
+IDs, missing configuration and credentials/authentication errors. Like unclassified
+provider failures they retry with jittered backoff (half to all of a 1 s to 300 s
+exponential step; a provider `Retry-After` may push a retry later) until the attempt or age
+limit above. Identity
 terminal decisions occur only before a provider attempt; an ambiguous send/checkpoint
 result retains at-least-once recovery. Operators can inspect `attempts`, `available_at`,
-`lease_expires_at`, `im_plan`, `next_chunk`, `delivered_at`, `terminal_reason` and
-`terminal_at` to distinguish retries, progress, active leases, acknowledged deliveries
+`lease_expires_at`, `im_plan`, `next_chunk`, `delivered_at`, `terminal_reason`,
+`failure_detail` and `terminal_at` to distinguish retries, progress, active leases, acknowledged deliveries
 and terminal outcomes. Do not expose these internal payloads as public diagnostics.

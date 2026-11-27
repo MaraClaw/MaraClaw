@@ -1,17 +1,22 @@
 """Async, local-only Chrome DevTools helpers for document conversion."""
 
 import asyncio
+import contextlib
 import json
 import os
+import signal
 import socket
 import sys
 import tempfile
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Protocol, Self
+from typing import Final, Protocol, Self
 from urllib.parse import urlparse
 
 import httpx
 
+from app.config import get_settings
 from app.core.json_types import (
     JsonObject,
     json_as_str,
@@ -19,7 +24,34 @@ from app.core.json_types import (
     json_object_from,
     json_object_from_response,
 )
+from app.core.thread_slots import ThreadSlots
+from app.services.document_conversion.conversion_lane import run_conversion
 from app.services.document_conversion.resource_policy import ResourcePolicy
+
+SLOT_WAIT_SECONDS: Final = 30.0
+TERMINATE_GRACE_SECONDS: Final = 2.0
+CHROME_SLOTS = ThreadSlots(get_settings().DOCUMENT_CHROME_MAX_CONCURRENCY)
+
+
+class ChromeBusyError(RuntimeError):
+    """Every Chrome slot stayed taken for the whole bounded wait."""
+
+
+@asynccontextmanager
+async def chrome_slot() -> AsyncGenerator[None]:
+    """Hold one of the `DOCUMENT_CHROME_MAX_CONCURRENCY` slots shared by HTML-to-PDF and slide rendering.
+
+    Take it before `launch_chrome` and keep it until `terminate_process` returned, so the cap counts live processes.
+    """
+    try:
+        async with asyncio.timeout(SLOT_WAIT_SECONDS):
+            await CHROME_SLOTS.acquire_async()
+    except TimeoutError as exc:
+        raise ChromeBusyError(f"No Chrome slot became free within {SLOT_WAIT_SECONDS:g}s") from exc
+    try:
+        yield
+    finally:
+        CHROME_SLOTS.release()
 
 
 def trusted_executable(candidate: str | Path | None) -> Path | None:
@@ -98,12 +130,13 @@ def chrome_environment(profile_path: str) -> dict[str, str]:
 
 
 async def launch_chrome(executable: Path, port: int, profile_path: str) -> asyncio.subprocess.Process:
-    """Start local headless Chrome with the fixed arguments and the allowlisted environment."""
+    """Start local headless Chrome, as leader of a new session and process group, with the allowlisted environment."""
     return await asyncio.create_subprocess_exec(
         *chrome_arguments(executable, port, profile_path),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         env=chrome_environment(profile_path),
+        start_new_session=True,
     )
 
 
@@ -270,21 +303,36 @@ class PolicedCdpSession:
         await self._connection.send(json.dumps(answer))
 
 
+def _signal_group(process: asyncio.subprocess.Process, sig: signal.Signals) -> None:
+    # No live member left: the group is gone (ESRCH), or on macOS holds only the unreaped leader (EPERM).
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(process.pid, sig)
+
+
 async def terminate_process(process: asyncio.subprocess.Process) -> None:
-    """Terminate a child process and wait for it before returning."""
-    if process.returncode is not None:
-        return
-    process.terminate()
+    """Stop a Chrome started by `launch_chrome` and every process it spawned, and wait for the leader.
+
+    The leader's process group gets SIGTERM, then SIGKILL once it exited or `TERMINATE_GRACE_SECONDS` passed, so
+    renderer and zygote children never outlive it. The kill also lands when the caller is cancelled while waiting.
+    """
     try:
-        _ = await asyncio.wait_for(process.wait(), timeout=2)
-    except TimeoutError:
-        process.kill()
-        _ = await process.wait()
+        if process.returncode is None:
+            _signal_group(process, signal.SIGTERM)
+            with contextlib.suppress(TimeoutError):
+                _ = await asyncio.wait_for(process.wait(), timeout=TERMINATE_GRACE_SECONDS)
+    finally:
+        _signal_group(process, signal.SIGKILL)
+    _ = await process.wait()
+
+
+def _unlink_all(paths: list[Path]) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
 
 
 async def cleanup_temporary_paths(paths: list[Path]) -> None:
     """Remove conversion artifacts after their consumer has finished."""
-    _ = await asyncio.gather(*(asyncio.to_thread(path.unlink, missing_ok=True) for path in paths))
+    await run_conversion(_unlink_all, paths)
 
 
 async def write_temporary_bytes(data: bytes, suffix: str) -> Path:
@@ -295,4 +343,4 @@ async def write_temporary_bytes(data: bytes, suffix: str) -> Path:
             _ = temporary_file.write(data)
             return Path(temporary_file.name)
 
-    return await asyncio.to_thread(write)
+    return await run_conversion(write)

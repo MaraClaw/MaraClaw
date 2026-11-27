@@ -352,7 +352,7 @@ async def test_metrics_inspect_runs_in_worker_thread_and_preserves_safe_diagnost
 
     monkeypatch.setattr(advanced, "connection_ctx", connection_ctx)
     app = FastAPI()
-    app.include_router(advanced.router, prefix="/api")
+    app.include_router(advanced.metrics_router, prefix="/api")
     app.dependency_overrides[advanced.get_current_user] = lambda: UserRecord(agent.creator_id)
     # When the existing HTTP status surface is requested.
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

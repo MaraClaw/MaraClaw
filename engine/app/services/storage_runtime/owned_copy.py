@@ -1,13 +1,12 @@
 """Owned temp copies made by a worker thread, with exactly one remover even when the awaiter is cancelled."""
 
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
+from functools import partial
 from pathlib import Path
 from tempfile import mkstemp
 from threading import Lock
-
-import anyio
 
 from app.services.storage_runtime.base import MaterializedFile
 from app.services.storage_runtime.bounded import BoundedReader
@@ -15,6 +14,7 @@ from app.services.storage_runtime.bounded import BoundedReader
 _COPY_CHUNK_BYTES = 64 * 1024
 
 type SourceOpener = Callable[[], AbstractContextManager[BoundedReader]]
+type CopyRunner = Callable[[Callable[[], Path]], Awaitable[Path]]
 
 
 class _TempHandoff:
@@ -55,11 +55,14 @@ def _copy(open_source: SourceOpener, suffix: str, handoff: _TempHandoff) -> Path
     return path
 
 
-async def materialize_copy(open_source: SourceOpener, suffix: str) -> MaterializedFile:
-    """Copy what `open_source` opens into a temp file made by the worker; the returned handle owns it."""
+async def materialize_copy(open_source: SourceOpener, suffix: str, run: CopyRunner) -> MaterializedFile:
+    """Copy what `open_source` opens into a temp file made by the worker `run` starts; the handle owns it.
+
+    `run` executes the copy on a worker thread and must let the awaiter abandon it when cancelled.
+    """
     handoff = _TempHandoff()
     try:
-        path = await anyio.to_thread.run_sync(_copy, open_source, suffix, handoff, abandon_on_cancel=True)
+        path = await run(partial(_copy, open_source, suffix, handoff))
     except BaseException:
         delivered = handoff.abandon()
         if delivered is not None:

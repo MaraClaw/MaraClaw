@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from tests.membership_generation_fixtures import pin_membership_generation
 from tests.oauth_state_fakes import install_state_redis
+from tests.rate_limit_fakes import install_limiter_redis
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
@@ -62,6 +63,7 @@ def member_auth_setup(monkeypatch: pytest.MonkeyPatch, *, count: int = 1) -> Mem
     ]
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
+    install_limiter_redis(monkeypatch)
     monkeypatch.setattr(auth.identity_dao, "get_by_login_identifier", AsyncMock(return_value=identity))
     monkeypatch.setattr(auth.identity_dao, "get_by_email", AsyncMock(return_value=identity))
     monkeypatch.setattr(auth.identity_dao, "get", AsyncMock(return_value=identity))

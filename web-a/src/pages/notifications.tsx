@@ -1,3 +1,4 @@
+import { useDistance } from '@/hooks/use-distance'
 import { useTranslation } from '@/hooks/use-translation'
 import { Archive, ArchiveRestore, ArrowRight, CheckCheck, Inbox, Mail } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -12,12 +13,13 @@ import { useNotificationUnreadCount, useNotifications } from '@/hooks/use-notifi
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { safeNotificationLink } from '@/lib/notification-links'
 import { type NotificationId, type NotificationView } from '@/lib/notifications-api'
-import { canReviewAgentDeletions, canReviewCapacityPayments } from '@/lib/types/auth'
+import { canReviewAgentDeletions, canReviewCapacityPayments } from '@/lib/types/auth-guards'
 
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'
 
 export function NotificationsPage() {
-  const { t, owned, date, distance, number } = useTranslation()
+  const { t, owned, date, number } = useTranslation()
+  const distance = useDistance()
   const { user } = useAuth()
   const [cursors, setCursors] = useState<readonly (string | null)[]>([null])
   const [view, setView] = useState<NotificationView>('active')

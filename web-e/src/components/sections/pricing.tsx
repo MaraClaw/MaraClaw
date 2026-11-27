@@ -1,13 +1,15 @@
 import { useTranslation } from '@/hooks/use-translation'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { RequestErrorToast } from '@/components/request-error-toast'
-import { OrganizationAdmissionForm } from '@/components/sections/organization-admission-form'
 import { Button } from '@/components/ui/button'
-import { fetchOrganizationPlans } from '@/lib/organization-admissions-api'
-import type { OrganizationPlan } from '@/lib/organization-admissions-api'
+import { fetchOrganizationPlans } from '@/lib/organization-plans-api'
+import type { OrganizationPlan } from '@/lib/organization-plans-api'
 import { authSession } from '@/lib/auth-session'
+
+// The form owns the phone-number metadata, so it loads as its own chunk after the plans arrive.
+const OrganizationAdmissionForm = lazy(() => import('@/components/sections/organization-admission-form').then((module) => ({ default: module.OrganizationAdmissionForm })))
 
 type Catalog =
   | { readonly status: 'loading' }
@@ -40,7 +42,9 @@ function PricingCatalog({ retry }: { readonly retry: () => void }) {
       </div>
       break
     case 'ready':
-      content = <OrganizationAdmissionForm plans={catalog.plans} />
+      content = <Suspense fallback={<p role="status" className="mt-10 text-center text-[17px] text-muted-foreground">{translate("Loading organization plans...")}</p>}>
+        <OrganizationAdmissionForm plans={catalog.plans} />
+      </Suspense>
       break
     default:
       catalog satisfies never

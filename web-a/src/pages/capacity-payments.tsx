@@ -12,13 +12,15 @@ import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { capacityKeys } from '@/hooks/capacity-options'
 import { useCapacityReviewOrders } from '@/hooks/use-capacity'
+import { useDistance } from '@/hooks/use-distance'
 import { useTranslation } from '@/hooks/use-translation'
 import { capacityOrderStatusSchema, type CapacityOrderStatus } from '@/lib/capacity-api'
 import { formatVnd } from '@/lib/capacity-format'
 import { ApiError } from '@/lib/http'
 
 export function CapacityPaymentsPanel() {
-  const { t, locale, date, distance, number } = useTranslation()
+  const { t, locale, date, number } = useTranslation()
+  const distance = useDistance()
   const filterId = useId()
   const client = useQueryClient()
   const [status, setStatus] = useState<CapacityOrderStatus>('submitted')

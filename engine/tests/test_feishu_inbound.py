@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import uuid
 from types import SimpleNamespace
@@ -12,9 +11,8 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.api import background_tasks, feishu as feishu_api
+from app.api import feishu as feishu_api
 from app.core.domain.channels import ChannelType
-from app.core.json_types import JsonObject
 from app.db import session as session_module
 from app.records.channel_config import ChannelConfigRecord
 from app.schemas.schemas import ChannelConfigCreate
@@ -22,9 +20,7 @@ from app.services.channels import binding, feishu_submissions, submissions
 from app.services.channels.media_limits import (
     READ_CHUNK_BYTES,
     MediaBudget,
-    MediaTooLargeError,
     too_large_note,
-    too_large_reply,
 )
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES
 from app.services.storage_runtime.quota_errors import StorageQuotaError
@@ -61,28 +57,10 @@ async def test_webhook_echoes_challenge(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_process_feishu_event_rechecks_config_despite_redis_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(feishu_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=True))
-    config = AsyncMock(return_value=None)
-    model = AsyncMock()
-    monkeypatch.setattr(feishu_api.channel_config_dao, "get_for_agent", config)
-    monkeypatch.setattr(feishu_api, "_load_agent_and_model", model)
-
-    result = await feishu_api.process_feishu_event(
-        AGENT_ID,
-        {"header": {"event_id": "evt-1", "event_type": "im.message.receive_v1"}},
-    )
-
-    assert result == {"code": 1, "msg": "Channel not found"}
-    config.assert_awaited_once()
-    model.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_process_feishu_event_missing_channel(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(feishu_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=False))
+    accept = AsyncMock()
     monkeypatch.setattr(feishu_api.channel_config_dao, "get_for_agent", AsyncMock(return_value=None))
-    monkeypatch.setattr(feishu_api, "_load_agent_and_model", AsyncMock(return_value=(None, None, None)))
+    monkeypatch.setattr(feishu_submissions, "accept_feishu_event", accept)
 
     result = await feishu_api.process_feishu_event(
         AGENT_ID,
@@ -90,96 +68,7 @@ async def test_process_feishu_event_missing_channel(monkeypatch: pytest.MonkeyPa
     )
 
     assert result == {"code": 1, "msg": "Channel not found"}
-
-
-@pytest.mark.asyncio
-async def test_process_text_group_message_uses_chat_and_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = SimpleNamespace(app_id="cli_app", app_secret="secret")
-    logs: list[str] = []
-    monkeypatch.setattr(feishu_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=False))
-    monkeypatch.setattr(feishu_api.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
-    monkeypatch.setattr(feishu_api, "_load_agent_and_model", AsyncMock(return_value=(None, None, None)))
-    monkeypatch.setattr(feishu_api.channel_inbound, "load_agent", AsyncMock(return_value=None))
-    monkeypatch.setattr(feishu_api.logger, "info", lambda msg, *args, **kwargs: logs.append(str(msg)))
-
-    result = await feishu_api.process_feishu_event(
-        AGENT_ID,
-        {
-            "header": {"event_id": "evt-3", "event_type": "im.message.receive_v1"},
-            "event": {
-                "message": {
-                    "message_type": "text",
-                    "chat_type": "group",
-                    "chat_id": "oc_group",
-                    "content": '{"text":"hi"}',
-                },
-                "sender": {"sender_id": {"open_id": "ou_open", "user_id": "ou_tenant_user"}},
-            },
-        },
-    )
-
-    assert result == {"code": 1, "msg": "Agent not found"}
-    assert any("chat_type=group" in line and "user_id_from_event='ou_tenant_user'" in line for line in logs)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("message_type", ["file", "image"])
-async def test_file_webhook_acks_blocked_work_and_logs_background_failure(monkeypatch, message_type):
-    # Given
-    monkeypatch.setattr(feishu_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=False))
-    monkeypatch.setattr(
-        feishu_api.channel_config_dao,
-        "get_for_agent",
-        AsyncMock(
-            return_value=SimpleNamespace(
-                app_id="app", app_secret="secret", verification_token="token", encrypt_key="", extra_config={}
-            ),
-        ),
-    )
-    monkeypatch.setattr(feishu_api, "_load_agent_and_model", AsyncMock(return_value=(None, None, None)))
-    payload = json.dumps(
-        {
-            "schema": "2.0",
-            "header": {"event_id": "file-event", "event_type": "im.message.receive_v1", "token": "token"},
-            "event": {"message": {"message_type": message_type}, "sender": {"sender_id": {"open_id": "user"}}},
-        }
-    ).encode()
-    signature = hashlib.sha256(b"123nonce" + payload).hexdigest().encode()
-    request = Request(
-        {
-            "type": "http",
-            "headers": [
-                (b"x-lark-request-timestamp", b"123"),
-                (b"x-lark-request-nonce", b"nonce"),
-                (b"x-lark-signature", signature),
-            ],
-        },
-        AsyncMock(return_value={"type": "http.request", "body": payload}),
-    )
-    started, release, observed = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    failure = RuntimeError("file processing failed")
-    logger = Mock()
-    logger.opt.return_value.error.side_effect = lambda _: observed.set()
-    monkeypatch.setattr(background_tasks, "logger", logger)
-
-    async def process(*args):
-        started.set()
-        await release.wait()
-        raise failure
-
-    monkeypatch.setattr(feishu_api, "_handle_feishu_file", process)
-    # When
-    try:
-        result = await asyncio.wait_for(feishu_api.feishu_event_webhook(AGENT_ID, request), 1)
-        await asyncio.wait_for(started.wait(), 1)
-        # Then
-        assert result == {"code": 0, "msg": "ok"}
-        assert not observed.is_set()
-    finally:
-        release.set()
-        await asyncio.wait_for(observed.wait(), 1)
-    logger.opt.assert_called_once_with(exception=failure)
-    logger.opt.return_value.error.assert_called_once_with("Background task failed: Feishu handle file")
+    accept.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -429,109 +318,6 @@ async def test_aborted_oversize_feishu_read_spends_the_event_so_the_next_image_i
     notes = [too_large_note(f"image_{POST_KEYS[0][-8:]}.jpg", 3 * READ_CHUNK_BYTES)]
     notes.append(too_large_note(f"image_{POST_KEYS[1][-8:]}.jpg", 0))
     assert persist.await_args.kwargs["content"].splitlines() == notes
-
-
-@pytest.fixture
-def legacy_feishu(monkeypatch):
-    """The Feishu handlers that run for events without a message id, with every resource request captured."""
-    store = AsyncMock(return_value=("key", "workspace/uploads/image.jpg", "path"))
-    send = AsyncMock(return_value={})
-    config = ChannelConfigRecord(id=uuid.uuid4(), agent_id=AGENT_ID, app_id="app", app_secret="secret")
-    monkeypatch.setattr(feishu_api, "store_agent_upload", store)
-    monkeypatch.setattr(feishu_api.feishu_service, "send_message", send)
-    monkeypatch.setattr(feishu_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=False))
-    monkeypatch.setattr(feishu_api.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
-    monkeypatch.setattr(feishu_api, "_load_agent_and_model", AsyncMock(return_value=(None, None, None)))
-    monkeypatch.setattr(feishu_api.channel_inbound, "load_agent", AsyncMock(return_value=None))
-    requested, messages = [], []
-
-    async def deliver(entry, resource, keys=(IMAGE_KEY,)):
-        def serve_file(request):
-            requested.append(request.url.path.rsplit("/", 1)[-1])
-            return resource(request)
-
-        serve_resource(monkeypatch, serve_file)
-        if entry == "file":
-            message: JsonObject = {"message_type": "image", "content": json.dumps({"image_key": keys[0]})}
-            return await feishu_api._handle_feishu_file(
-                AGENT_ID, config, message, "ou_open", "tenant-user", "p2p", "oc_chat"
-            )
-        images = [{"tag": "img", "image_key": key} for key in keys]
-        post = {"title": "", "content": [[{"tag": "text", "text": "hello"}, *images]]}
-        post_message: JsonObject = {
-            "message_type": "post",
-            "chat_type": "p2p",
-            "chat_id": "oc_chat",
-            "content": json.dumps(post),
-        }
-        messages.append(post_message)
-        event: JsonObject = {
-            "sender": {"sender_id": {"open_id": "ou_open", "user_id": "tenant-user"}},
-            "message": post_message,
-        }
-        body: JsonObject = {"header": {"event_id": "evt", "event_type": "im.message.receive_v1"}, "event": event}
-        return await feishu_api.process_feishu_event(AGENT_ID, body)
-
-    return SimpleNamespace(deliver=deliver, requested=requested, messages=messages, store=store, send=send)
-
-
-@pytest.mark.asyncio
-async def test_legacy_feishu_post_without_a_message_id_fetches_no_image_and_keeps_the_text(legacy_feishu, monkeypatch):
-    # Given: a post of three images and no message id, which the native path cannot accept
-    download = AsyncMock()
-    monkeypatch.setattr(feishu_api.feishu_service, "download_message_resource", download)
-    keys = [*POST_KEYS, "img_key_00000002"]
-    # When
-    result = await legacy_feishu.deliver("post", lambda _: httpx.Response(200, content=b"image-bytes"), keys)
-    # Then: no token or resource request and no write happened, and only the text reaches the text handler
-    download.assert_not_awaited()
-    assert legacy_feishu.requested == []
-    legacy_feishu.store.assert_not_awaited()
-    assert json.loads(legacy_feishu.messages[0]["content"]) == {"text": "hello"}
-    assert result == {"code": 1, "msg": "Agent not found"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["status_503", "read_timeout", "storage_quota"])
-async def test_legacy_feishu_file_handler_lets_transient_failures_propagate(legacy_feishu, failure):
-    # Given
-    def resource(request):
-        if failure == "read_timeout":
-            raise httpx.ReadTimeout("slow provider", request=request)
-        return httpx.Response(503 if failure == "status_503" else 200, content=b"image-bytes")
-
-    legacy_feishu.store.side_effect = StorageQuotaError("agent storage is full")
-    expected = {"status_503": httpx.HTTPStatusError, "read_timeout": httpx.ReadTimeout}.get(failure, StorageQuotaError)
-    # When / Then: the failure is not turned into the missing-permission tip
-    with pytest.raises(expected):
-        await legacy_feishu.deliver("file", resource)
-    legacy_feishu.send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_legacy_feishu_file_handler_still_explains_a_refused_download(legacy_feishu):
-    # Given: Feishu answers the download with 403
-    # When
-    await legacy_feishu.deliver("file", lambda _: httpx.Response(403))
-    # Then: the sender is pointed at the im:resource permission and nothing was stored
-    assert "im:resource" in json.loads(legacy_feishu.send.await_args_list[0].args[4])["text"]
-    legacy_feishu.store.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_legacy_feishu_file_handler_reports_oversize_instead_of_the_permission_tip(monkeypatch):
-    # Given: a legacy file event without a message id whose image is over the cap
-    download = AsyncMock(side_effect=MediaTooLargeError(IMAGE_UPLOAD_MAX_BYTES))
-    send = AsyncMock(return_value={})
-    monkeypatch.setattr(feishu_api.feishu_service, "download_message_resource", download)
-    monkeypatch.setattr(feishu_api.feishu_service, "send_message", send)
-    config = ChannelConfigRecord(id=uuid.uuid4(), agent_id=AGENT_ID, app_id="app", app_secret="secret")
-    message: JsonObject = {"message_type": "image", "content": json.dumps({"image_key": IMAGE_KEY})}
-    # When
-    await feishu_api._handle_feishu_file(AGENT_ID, config, message, "ou_open", "tenant-user", "p2p", "oc_chat")
-    # Then: the sender is told the size limit that applied to the download
-    assert download.await_args_list[0].kwargs["max_bytes"] == IMAGE_UPLOAD_MAX_BYTES
-    assert json.loads(send.await_args_list[0].args[4]) == {"text": too_large_reply(IMAGE_NAME, IMAGE_UPLOAD_MAX_BYTES)}
 
 
 @pytest.mark.asyncio

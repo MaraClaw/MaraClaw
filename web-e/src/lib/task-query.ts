@@ -3,6 +3,7 @@ import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryFuncti
 import type { SessionQueryScope } from '../hooks/session-query-scope.ts'
 import { getTask, listTaskLogPage, listTaskPage, type TaskOut, type TaskTarget } from './agent-work-api.ts'
 import type { TaskLogPage, TaskPage } from './engine-contracts.generated.ts'
+import { queryPollInterval } from './poll-policy.ts'
 
 function compareTimestamp(left: string, right: string) {
   return Date.parse(left) - Date.parse(right) ||
@@ -57,7 +58,8 @@ export function doingTasksQuery(scope: SessionQueryScope, agentId: string) {
   })
   return { ...queryOptions({
     queryKey, queryFn,
-    refetchInterval: 4000,
+    refetchInterval: queryPollInterval(() => 4000),
+    refetchOnWindowFocus: 'always',
     retry: false,
   }), queryFn }
 }
@@ -93,13 +95,15 @@ export function taskLogTailQuery(scope: SessionQueryScope, target: TaskTarget | 
     if (!target || !window) throw new Error('Select a loaded task log page')
     return listTaskLogPage(target, { cursor: window.cursor, owner: scope.owner, signal })
   })
+  const tailing = target !== null && window?.status === 'doing'
   return { ...queryOptions<TaskLogPage, Error, TaskLogPage, typeof queryKey>({
     queryKey, queryFn,
     initialData: () => window?.page,
-    enabled: target !== null && window?.status === 'doing',
-    refetchInterval: target !== null && window?.status === 'doing' ? 4000 : false,
+    enabled: tailing,
+    refetchInterval: queryPollInterval(() => tailing ? 4000 : false),
     staleTime: Infinity,
-    refetchOnWindowFocus: false,
+    // Never stale, so only an explicit focus refetch restarts a poll that stopped while the page was hidden.
+    refetchOnWindowFocus: 'always',
     refetchOnReconnect: false,
     retry: false,
   }), queryFn }

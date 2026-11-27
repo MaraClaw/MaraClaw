@@ -6,8 +6,10 @@ SQL. Privilege fields are version-gated: writers INCR after commit.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Final
 from uuid import UUID
 
 from app.config import get_settings
@@ -25,11 +27,11 @@ from app.core.logging import logger
 from app.core.redis_cache import (
     bump_version,
     cache_delete,
-    cache_get_json,
     cache_key,
     cache_set_json,
     ensure_version,
     has_pending_snapshot_writes,
+    read_session_keys,
     read_version,
 )
 from app.core.row_memo import memo_drop, memo_drop_kind, memo_get, memo_set
@@ -37,6 +39,10 @@ from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
 _MEMO_KIND = "session_user"
+# Which identity each membership last had in this process, so a read can name the identity generation key without
+# first reading the snapshot. Only a hint: the snapshot's own identity must match it, otherwise the read is a miss.
+_IDENTITY_HINTS_MAX: Final = 10_000
+_identity_hints = OrderedDict[UUID, UUID]()
 
 
 def _ttl() -> int:
@@ -182,27 +188,59 @@ async def peek_identity_version(identity_id: UUID | None) -> str | None:
     return await ensure_version(identity_version_key(identity_id), ttl=_ttl() * 40)
 
 
+def _remember_identity(user_id: UUID, identity_id: UUID | None) -> None:
+    """Record the identity a membership has (forget the hint when it has none) and evict the oldest past the cap."""
+    if identity_id is None:
+        _ = _identity_hints.pop(user_id, None)
+        return
+    _identity_hints[user_id] = identity_id
+    _identity_hints.move_to_end(user_id)
+    while len(_identity_hints) > _IDENTITY_HINTS_MAX:
+        _ = _identity_hints.popitem(last=False)
+
+
+async def _identity_generation(
+    user_id: UUID, identity_id: UUID, hint: UUID | None, hinted_generation: str | None
+) -> str | None:
+    """The live generation of the identity a current snapshot names, or None when it cannot be vouched for.
+
+    Without a hint the generation is read now, after the user generation, in a second round trip. A hint that named
+    another identity read the wrong key, so that read is a miss and the hint is corrected for the next one.
+    """
+    if hint is None:
+        read = await read_version(identity_version_key(identity_id))
+        return read.value if read is not None else None
+    if hint != identity_id:
+        _remember_identity(user_id, identity_id)
+        return None
+    return hinted_generation
+
+
 async def get_cached_user(user_id: UUID) -> UserRecord | None:
     memo = memo_get(_MEMO_KIND, user_id)
     if isinstance(memo, UserRecord):
         return memo
     if _ttl() <= 0 or has_pending_snapshot_writes():
         return None
-    cached: object = await cache_get_json(_sess_key(user_id))
-    if not is_json_object(cached):
+    hint = _identity_hints.get(user_id)
+    keys = await read_session_keys(
+        _sess_key(user_id), user_version_key(user_id), None if hint is None else identity_version_key(hint)
+    )
+    if keys is None or not is_json_object(keys.snapshot):
         return None
+    cached = keys.snapshot
     user = _from_snapshot(cached)
     if user is None or user.id != user_id:
         return None
     if user.identity_id != (user.identity.id if user.identity else None):
         return None
-    user_ver = await read_version(user_version_key(user_id))
-    if user_ver is None or user_ver.value is None or cached.get("u_ver") != user_ver.value:
+    if keys.user_version is None or cached.get("u_ver") != keys.user_version:
         return None
     if user.identity_id is not None:
-        ident_ver = await read_version(identity_version_key(user.identity_id))
-        if ident_ver is None or ident_ver.value is None or cached.get("i_ver") != ident_ver.value:
+        identity_version = await _identity_generation(user_id, user.identity_id, hint, keys.identity_version)
+        if identity_version is None or cached.get("i_ver") != identity_version:
             return None
+    _remember_identity(user_id, user.identity_id)
     memo_set(_MEMO_KIND, user_id, user)
     logger.debug("session_cache hit")
     return user
@@ -214,9 +252,10 @@ async def set_cached_user(
     observed: SessionCacheObservation | None = None,
 ) -> None:
     memo_set(_MEMO_KIND, user.id, user)
-    if _ttl() <= 0 or has_pending_snapshot_writes() or observed is None:
+    if _ttl() <= 0 or has_pending_snapshot_writes():
         return
-    if user.identity_id != observed.identity_id:
+    _remember_identity(user.id, user.identity_id)
+    if observed is None or user.identity_id != observed.identity_id:
         return
     user_ver = await read_version(user_version_key(user.id))
     if user_ver is None or user_ver.value is None or user_ver.value != observed.user_version:

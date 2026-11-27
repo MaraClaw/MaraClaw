@@ -1,10 +1,17 @@
 import { queryOptions, type QueryFunctionContext } from '@tanstack/react-query'
 
 import { getAgentLifecycle, retryAgentMCP, type AgentLifecycle, type OptionalMCP } from '../lib/agent-lifecycle-api.ts'
+import { queryPollInterval } from '../lib/poll-policy.ts'
 import { refreshAgent } from './agent-setup-options.ts'
 import type { SessionQueryScope } from './session-query-scope.ts'
 
 export function agentLifecycleKey(agentId: string) { return ['agent-lifecycle', agentId] as const }
+
+function lifecycleCadence(lifecycle: AgentLifecycle | undefined) {
+  return lifecycle?.setup.setup_pending || lifecycle?.start?.state === 'pending' ||
+    lifecycle?.upgrade.run?.state === 'pending' || lifecycle?.upgrade.run?.state === 'cutover' ||
+    lifecycle?.optional_mcp.some((item) => item.state === 'pending' || item.state === 'running') ? 1500 : 30_000
+}
 
 export function agentLifecycleOptions(scope: SessionQueryScope, agentId: string, canManage: boolean) {
   const queryFn = async ({ signal }: QueryFunctionContext<ReturnType<typeof agentLifecycleKey>>) => {
@@ -22,10 +29,7 @@ export function agentLifecycleOptions(scope: SessionQueryScope, agentId: string,
     queryKey: agentLifecycleKey(agentId), queryFn,
     enabled: canManage && Boolean(agentId), staleTime: 0, retry: false,
     refetchOnMount: 'always', refetchOnWindowFocus: true, refetchOnReconnect: 'always',
-    refetchInterval: (query) => query.state.data?.setup.setup_pending || query.state.data?.start?.state === 'pending' ||
-      query.state.data?.upgrade.run?.state === 'pending' || query.state.data?.upgrade.run?.state === 'cutover' ||
-      query.state.data?.optional_mcp.some((item) => item.state === 'pending' || item.state === 'running') ? 1500 : 30_000,
-    refetchIntervalInBackground: true,
+    refetchInterval: queryPollInterval(lifecycleCadence),
   }), queryFn }
 }
 

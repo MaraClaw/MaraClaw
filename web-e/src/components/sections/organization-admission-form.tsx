@@ -19,7 +19,8 @@ import {
   organizationQuoteFormSchema,
   requestOrganizationQuote,
 } from '@/lib/organization-admissions-api'
-import type { OrganizationPlan, OrganizationQuoteRequest } from '@/lib/organization-admissions-api'
+import type { OrganizationQuoteRequest } from '@/lib/organization-admissions-api'
+import type { OrganizationPlan } from '@/lib/organization-plans-api'
 import { storeOrganizationQuote } from '@/lib/organization-quote-storage'
 
 type Failure = { readonly message: string; readonly inline: boolean }

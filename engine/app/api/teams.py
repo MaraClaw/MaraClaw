@@ -1,12 +1,14 @@
 """Microsoft Teams Bot Channel API routes."""
 
+import hashlib
+import importlib
 import json
 import os
 import time
 import uuid
 from datetime import UTC, datetime
 from functools import partial
-from typing import TypedDict
+from typing import Protocol, TypedDict, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -31,6 +33,7 @@ from app.records.user import UserRecord
 from app.schemas.channel_response_contracts import WebhookUrlResponse
 from app.schemas.content_response_catalog import OkAcknowledgement
 from app.schemas.schemas import ChannelConfigOut
+from app.services import im_token_cache
 from app.services.channels.config import get_channel_config_metadata
 from app.services.channels.redact import channel_config_out
 from app.services.channels.teams_auth import (
@@ -49,11 +52,6 @@ TEAMS_MSG_LIMIT = 28000  # Teams message char limit (approx 28KB)
 DEFAULT_CONTEXT_WINDOW_SIZE = 100
 
 
-class TeamsAccessToken(TypedDict):
-    access_token: str
-    expires_at: float
-
-
 class TeamsChannelPayload(TypedDict, total=False):
     app_id: str
     app_secret: str
@@ -61,8 +59,22 @@ class TeamsChannelPayload(TypedDict, total=False):
     use_managed_identity: bool
 
 
-# In-memory cache for OAuth tokens
-_teams_tokens: dict[str, TeamsAccessToken] = {}  # agent_id -> {access_token, expires_at}
+_BOT_FRAMEWORK_SCOPE = "https://api.botframework.com/.default"
+
+
+class _AzureToken(Protocol):
+    token: object
+    expires_on: object
+
+
+class _AzureCredential(Protocol):
+    async def get_token(self, scope: str) -> _AzureToken: ...
+
+    async def close(self) -> object: ...
+
+
+class _AzureIdentityAio(Protocol):
+    DefaultAzureCredential: type[_AzureCredential]
 
 
 def _extra_config(config: ChannelConfigRecord) -> JsonObject:
@@ -112,121 +124,138 @@ def _provider_error_code(response: httpx.Response) -> str:
     return code if code in _KNOWN_ERROR_CODES else "other"
 
 
+def _uses_managed_identity(config: ChannelConfigRecord) -> bool:
+    return bool(_extra_config(config).get("use_managed_identity", False))
+
+
+def _tenant_id(config: ChannelConfigRecord) -> str:
+    tenant_raw = _extra_config(config).get("tenant_id")
+    if isinstance(tenant_raw, str) and tenant_raw:
+        return tenant_raw
+    return os.environ.get("TEAMS_TENANT_ID") or "common"
+
+
+def _teams_token_key(config: ChannelConfigRecord) -> im_token_cache.ImTokenKey:
+    """One cache entry per bot app and tenant; a client secret is held only as a digest, a managed identity has none."""
+    app_id, tenant_id = config.app_id or "", _tenant_id(config)
+    if _uses_managed_identity(config):
+        return im_token_cache.ImTokenKey("teams_managed_identity", app_id, tenant_id)
+    secret_digest = hashlib.sha256((config.app_secret or "").encode()).hexdigest()
+    return im_token_cache.ImTokenKey("teams", app_id, f"{tenant_id}\0{secret_digest}")
+
+
+async def _drop_rejected_teams_token(config: ChannelConfigRecord, rejected: str) -> None:
+    """Drop the cached token Teams rejected, unless a fresher one has replaced it."""
+    await im_token_cache.drop_rejected_im_token(_teams_token_key(config), rejected)
+
+
 async def _get_teams_access_token(config: ChannelConfigRecord) -> str | None:
-    """Get or refresh Microsoft Teams access token.
+    """Get the shared cached Microsoft Teams access token, minting one on a miss.
 
     Supports:
     - Client credentials (app_id + app_secret) - default
     - Managed Identity (when use_managed_identity is True in extra_config)
     """
+    if _uses_managed_identity(config):
+        return await _managed_identity_token(config)
+    return await _client_credentials_token(config)
+
+
+async def _managed_identity_token(config: ChannelConfigRecord) -> str | None:
     agent_id = str(config.agent_id)
-    cached = _teams_tokens.get(agent_id)
-    if cached and cached["expires_at"] > time.time() + 60:
-        logger.debug(f"Teams: Using cached access token for agent {agent_id}")
-        return cached["access_token"]
 
-    extra = _extra_config(config)
-    use_managed_identity = bool(extra.get("use_managed_identity", False))
+    async def mint() -> im_token_cache.MintedToken:
+        return await _mint_managed_identity_token(agent_id)
 
-    if use_managed_identity:
-        try:
-            from typing import Protocol, cast
+    try:
+        token = await im_token_cache.get_or_mint_im_token(_teams_token_key(config), mint)
+    except ImportError:
+        logger.error("Teams: azure-identity package not installed. Install it with: pip install azure-identity")
+        return None
+    except Exception as e:
+        logger.error(
+            "Teams: managed identity token request failed agent={} kind=identity error_type={}",
+            agent_id,
+            type(e).__name__,
+        )
+        return None
+    if not token:
+        logger.error("Teams: managed identity token request failed agent={} kind=malformed_response", agent_id)
+        return None
+    return token
 
-            class _AzureToken(Protocol):
-                token: object
-                expires_on: object
 
-            class _AzureCredential(Protocol):
-                async def get_token(self, scope: str) -> _AzureToken: ...
+async def _mint_managed_identity_token(agent_id: str) -> im_token_cache.MintedToken:
+    azure_identity = cast("_AzureIdentityAio", importlib.import_module("azure.identity.aio"))
+    credential = azure_identity.DefaultAzureCredential()
+    try:
+        token = await credential.get_token(_BOT_FRAMEWORK_SCOPE)
+        access_token_raw: object = token.token
+        expires_on_raw: object = token.expires_on
+    finally:
+        _ = await credential.close()
+    if not isinstance(access_token_raw, str) or not isinstance(expires_on_raw, (int, float)):
+        return im_token_cache.MintedToken("")
+    logger.info(
+        "Teams: Successfully obtained access token via managed identity for agent {}, expires at {}",
+        agent_id,
+        expires_on_raw,
+    )
+    return im_token_cache.MintedToken(access_token_raw, max(int(expires_on_raw - time.time()), 1))
 
-                async def close(self) -> object: ...
 
-            class _AzureIdentityAio(Protocol):
-                DefaultAzureCredential: type[_AzureCredential]
-
-            import importlib
-
-            azure_identity = cast("_AzureIdentityAio", importlib.import_module("azure.identity.aio"))
-            credential = azure_identity.DefaultAzureCredential()
-            scope = "https://api.botframework.com/.default"
-            token = await credential.get_token(scope)
-            access_token_raw: object = token.token
-            expires_on_raw: object = token.expires_on
-            if not isinstance(access_token_raw, str) or not isinstance(expires_on_raw, (int, float)):
-                logger.error("Teams: managed identity token request failed agent={} kind=malformed_response", agent_id)
-                return None
-
-            _teams_tokens[agent_id] = {
-                "access_token": access_token_raw,
-                "expires_at": float(expires_on_raw),
-            }
-            logger.info(
-                f"Teams: Successfully obtained access token via managed identity for agent {agent_id}, expires at {expires_on_raw}"
-            )
-            _ = await credential.close()
-            return access_token_raw
-        except ImportError:
-            logger.error("Teams: azure-identity package not installed. Install it with: pip install azure-identity")
-            return None
-        except Exception as e:
-            logger.error(
-                "Teams: managed identity token request failed agent={} kind=identity error_type={}",
-                agent_id,
-                type(e).__name__,
-            )
-            return None
-
+async def _client_credentials_token(config: ChannelConfigRecord) -> str | None:
+    agent_id = str(config.agent_id)
     app_id = config.app_id
     app_secret = config.app_secret
     if app_id in (None, "") or app_secret in (None, ""):
         logger.error(f"Teams: Missing app_id or app_secret for agent {agent_id}")
         return None
 
-    tenant_raw = extra.get("tenant_id")
-    if isinstance(tenant_raw, str) and tenant_raw:
-        tenant_id = tenant_raw
-    else:
-        tenant_id = os.environ.get("TEAMS_TENANT_ID") or "common"
-    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    token_url = f"https://login.microsoftonline.com/{_tenant_id(config)}/oauth2/v2.0/token"
     data = {
         "client_id": app_id,
         "client_secret": app_secret,
         "grant_type": "client_credentials",
-        "scope": "https://api.botframework.com/.default",
+        "scope": _BOT_FRAMEWORK_SCOPE,
     }
-    try:
+
+    async def mint() -> im_token_cache.MintedToken:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(token_url, data=data)
+        if resp.status_code != 200:
+            raise im_token_cache.ImTokenRefusedError(resp)
+        try:
+            token_data = json_object_from_response(resp)
+        except ValueError:
+            token_data = {}
+        access_token = token_data.get("access_token")
+        expires_in = token_data.get("expires_in")
+        if not isinstance(access_token, str) or not isinstance(expires_in, (int, float)):
+            return im_token_cache.MintedToken("")
+        logger.info("Teams: Successfully obtained access token for agent {}, expires in {}s", agent_id, expires_in)
+        return im_token_cache.MintedToken(access_token, max(int(expires_in), 1))
+
+    try:
+        token = await im_token_cache.get_or_mint_im_token(_teams_token_key(config), mint)
+    except im_token_cache.ImTokenRefusedError as refused:
+        logger.error(
+            "Teams: OAuth token request failed agent={} kind=http_status status={} error_code={}",
+            agent_id,
+            refused.response.status_code,
+            _provider_error_code(refused.response),
+        )
+        return None
     except Exception as e:
         kind = "transport" if isinstance(e, httpx.HTTPError) else "unexpected"
         logger.error(
             "Teams: OAuth token request failed agent={} kind={} error_type={}", agent_id, kind, type(e).__name__
         )
         return None
-    if resp.status_code != 200:
-        logger.error(
-            "Teams: OAuth token request failed agent={} kind=http_status status={} error_code={}",
-            agent_id,
-            resp.status_code,
-            _provider_error_code(resp),
-        )
-        return None
-    try:
-        token_data = json_object_from_response(resp)
-    except ValueError:
-        token_data = {}
-    access_token = token_data.get("access_token")
-    expires_in = token_data.get("expires_in")
-    if not isinstance(access_token, str) or not isinstance(expires_in, (int, float)):
+    if not token:
         logger.error("Teams: OAuth token request failed agent={} kind=malformed_response", agent_id)
         return None
-
-    _teams_tokens[agent_id] = {
-        "access_token": access_token,
-        "expires_at": time.time() + float(expires_in),
-    }
-    logger.info(f"Teams: Successfully obtained access token for agent {agent_id}, expires in {expires_in}s")
-    return access_token
+    return token
 
 
 async def _send_teams_message(
@@ -258,11 +287,40 @@ async def _send_teams_message(
             chunk_activity = {**activity, "text": chunk}
             if i > 0:
                 chunk_activity.pop("replyToId", None)
-            await _send_teams_message_single_chunk(
-                access_token, service_url, conversation_id, chunk_activity, strict=strict
+            access_token = await _send_activity_renewing_token(
+                config, access_token, service_url, conversation_id, chunk_activity, strict=strict
             )
     else:
+        _ = await _send_activity_renewing_token(
+            config, access_token, service_url, conversation_id, activity, strict=strict
+        )
+
+
+async def _send_activity_renewing_token(
+    config: ChannelConfigRecord,
+    access_token: str,
+    service_url: str,
+    conversation_id: str,
+    activity: JsonObject,
+    *,
+    strict: bool,
+) -> str:
+    """Send one activity; a 401 drops the rejected token and retries once with a fresh one.
+
+    Returns the token that delivered the activity, so later chunks reuse it.
+    """
+    try:
         await _send_teams_message_single_chunk(access_token, service_url, conversation_id, activity, strict=strict)
+    except httpx.HTTPStatusError as rejected:
+        if rejected.response.status_code != 401:
+            raise
+        await _drop_rejected_teams_token(config, access_token)
+        renewed = await _get_teams_access_token(config)
+        if renewed in (None, ""):
+            raise ValueError("No access token available") from rejected
+        access_token = renewed
+        await _send_teams_message_single_chunk(access_token, service_url, conversation_id, activity, strict=strict)
+    return access_token
 
 
 async def _send_teams_message_single_chunk(

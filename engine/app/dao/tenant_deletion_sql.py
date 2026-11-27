@@ -4,10 +4,8 @@ _AUTHORS = (
     "(author_type = 'agent' AND author_id IN (" + _AGENTS + ")) OR "
     "(author_type = 'human' AND author_id IN (" + _USERS + "))"
 )
-_PARTICIPANTS = (
-    "SELECT id FROM participants WHERE "
-    "(type = 'agent' AND ref_id IN (" + _AGENTS + ")) OR (type = 'user' AND ref_id IN (" + _USERS + "))"
-)
+_AGENT_PARTICIPANTS = "SELECT id FROM participants WHERE type = 'agent' AND ref_id IN (" + _AGENTS + ")"
+_USER_PARTICIPANTS = "SELECT id FROM participants WHERE type = 'user' AND ref_id IN (" + _USERS + ")"
 _POSTS = "SELECT id FROM clawbook_posts WHERE tenant_id = %(tid)s OR " + _AUTHORS
 _TASKS = (
     "SELECT id FROM tasks WHERE agent_id IN (" + _AGENTS + ") OR created_by IN (" + _USERS + ") "
@@ -19,7 +17,8 @@ TENANT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     "DELETE FROM clawbook_likes WHERE " + _AUTHORS + " OR post_id IN (" + _POSTS + ")",
     "DELETE FROM clawbook_posts WHERE tenant_id = %(tid)s OR " + _AUTHORS,
     "DELETE FROM sso_scan_sessions WHERE tenant_id = %(tid)s OR user_id IN (" + _USERS + ")",
-    "DELETE FROM approval_requests WHERE agent_id IN (" + _AGENTS + ") OR resolved_by IN (" + _USERS + ")",
+    "DELETE FROM approval_requests WHERE agent_id IN (" + _AGENTS + ")",
+    "DELETE FROM approval_requests WHERE resolved_by IN (" + _USERS + ")",
     "DELETE FROM notifications WHERE agent_id IN (" + _AGENTS + ") OR user_id IN (" + _USERS + ")",
     "DELETE FROM agent_agent_relationships WHERE agent_id IN ("
     + _AGENTS
@@ -38,42 +37,34 @@ TENANT_DELETE_CLEANUP_SQL: tuple[str, ...] = (
     + ")",
     "DELETE FROM task_logs WHERE task_id IN (" + _TASKS + ")",
     "DELETE FROM tasks WHERE id IN (" + _TASKS + ")",
-    "DELETE FROM chat_messages WHERE agent_id IN ("
-    + _AGENTS
-    + ") OR user_id IN ("
-    + _USERS
-    + ") OR participant_id IN ("
-    + _PARTICIPANTS
-    + ")",
-    "DELETE FROM chat_sessions WHERE agent_id IN ("
-    + _AGENTS
-    + ") OR peer_agent_id IN ("
-    + _AGENTS
-    + ") OR user_id IN ("
-    + _USERS
-    + ") OR participant_id IN ("
-    + _PARTICIPANTS
-    + ")",
-    "DELETE FROM participants WHERE id IN (" + _PARTICIPANTS + ")",
+    # One statement per OR branch, so each runs on its own index; together they delete the rows the OR did.
+    "DELETE FROM chat_messages WHERE agent_id IN (" + _AGENTS + ")",
+    "DELETE FROM chat_messages WHERE user_id IN (" + _USERS + ")",
+    "DELETE FROM chat_messages WHERE participant_id IN (" + _AGENT_PARTICIPANTS + ")",
+    "DELETE FROM chat_messages WHERE participant_id IN (" + _USER_PARTICIPANTS + ")",
+    "DELETE FROM chat_sessions WHERE agent_id IN (" + _AGENTS + ")",
+    "DELETE FROM chat_sessions WHERE peer_agent_id IN (" + _AGENTS + ")",
+    "DELETE FROM chat_sessions WHERE user_id IN (" + _USERS + ")",
+    "DELETE FROM chat_sessions WHERE participant_id IN (" + _AGENT_PARTICIPANTS + ")",
+    "DELETE FROM chat_sessions WHERE participant_id IN (" + _USER_PARTICIPANTS + ")",
+    "DELETE FROM participants WHERE id IN (" + _AGENT_PARTICIPANTS + ")",
+    "DELETE FROM participants WHERE id IN (" + _USER_PARTICIPANTS + ")",
     "DELETE FROM agent_schedules WHERE agent_id IN (" + _AGENTS + ") OR created_by IN (" + _USERS + ")",
     "DELETE FROM agent_triggers WHERE agent_id IN (" + _AGENTS + ")",
     "DELETE FROM channel_configs WHERE agent_id IN (" + _AGENTS + ")",
     "DELETE FROM agent_permissions WHERE agent_id IN (" + _AGENTS + ")",
     "DELETE FROM agent_credentials WHERE agent_id IN (" + _AGENTS + ")",
     "DELETE FROM agent_activity_logs WHERE agent_id IN (" + _AGENTS + ")",
-    "DELETE FROM gateway_messages WHERE agent_id IN ("
-    + _AGENTS
-    + ") OR sender_agent_id IN ("
-    + _AGENTS
-    + ") OR sender_user_id IN ("
-    + _USERS
-    + ")",
+    "DELETE FROM gateway_messages WHERE agent_id IN (" + _AGENTS + ")",
+    "DELETE FROM gateway_messages WHERE sender_agent_id IN (" + _AGENTS + ")",
+    "DELETE FROM gateway_messages WHERE sender_user_id IN (" + _USERS + ")",
     "DELETE FROM published_pages WHERE tenant_id = %(tid)s OR agent_id IN ("
     + _AGENTS
     + ") OR user_id IN ("
     + _USERS
     + ")",
-    "DELETE FROM audit_logs WHERE agent_id IN (" + _AGENTS + ") OR user_id IN (" + _USERS + ")",
+    "DELETE FROM audit_logs WHERE agent_id IN (" + _AGENTS + ")",
+    "DELETE FROM audit_logs WHERE user_id IN (" + _USERS + ")",
     "DELETE FROM agent_tools WHERE agent_id IN (" + _AGENTS + ")",
     "DELETE FROM workspace_edit_locks WHERE agent_id IN (" + _AGENTS + ") OR user_id IN (" + _USERS + ")",
     "DELETE FROM daily_token_usage WHERE tenant_id = %(tid)s OR agent_id IN (" + _AGENTS + ")",

@@ -1,4 +1,5 @@
 import { ApiError } from './http.ts'
+import { startPollLoop, type PollLoopEnvironment } from './poll-loop.ts'
 import type { PersonalCommand, PersonalStatus } from './whatsapp-api.ts'
 
 type SessionStatus = Omit<PersonalStatus, 'error_code'> & { readonly error_code: string | null }
@@ -17,6 +18,8 @@ type PersonalClock = {
   readonly now: () => number
   readonly later: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>
   readonly cancel: (timer: ReturnType<typeof setTimeout>) => void
+  // The status poll's timers and page visibility; the browser's when absent.
+  readonly poll?: PollLoopEnvironment
 }
 const browserClock: PersonalClock = { now: Date.now, later: (callback, delay) => setTimeout(callback, delay), cancel: (timer) => clearTimeout(timer) }
 
@@ -26,7 +29,7 @@ export function createPersonalSession<Status extends SessionStatus>(transport: P
   let active = false
   let epoch = 0
   let request: AbortController | undefined
-  let poll: ReturnType<typeof setTimeout> | undefined
+  let stopPolling: (() => void) | undefined
   let expiry: ReturnType<typeof setTimeout> | undefined
   const listeners = new Set<() => void>()
   const retiredGenerations = new Set<string>()
@@ -39,9 +42,9 @@ export function createPersonalSession<Status extends SessionStatus>(transport: P
   const current = (token: number) => active && transport.current() && token === epoch
   function clearWork() {
     request?.abort()
-    if (poll !== undefined) clock.cancel(poll)
+    stopPolling?.()
     if (expiry !== undefined) clock.cancel(expiry)
-    request = undefined; poll = undefined; expiry = undefined
+    request = undefined; stopPolling = undefined; expiry = undefined
   }
   function begin() { epoch += 1; clearWork(); return epoch }
   function accept(incoming: Status, replace: boolean): boolean {
@@ -88,15 +91,16 @@ export function createPersonalSession<Status extends SessionStatus>(transport: P
     }
     return true
   }
+  // A state that can still change is re-read every 2 s through the shared poll loop, which idles while the page is
+  // hidden. A failed read ends the poll (`fail`) until the member refreshes.
   function schedule(token: number) {
-    if (!current(token) || view.error || !view.status) return
-    switch (view.status.state) {
-      case 'pending': case 'qr': case 'connected': case 'reconnecting': case 'paused': case 'disconnecting':
-        poll = clock.later(() => { void read(token) }, 2000)
-        return
-      case 'expired': case 'disconnected': case 'failed': return
-      default: return assertNever(view.status.state)
+    if (token !== epoch) return
+    if (current(token) && !view.error && view.status && polls(view.status.state)) {
+      stopPolling ??= startPollLoop({ cadence: 2000, tick: () => read(token) }, clock.poll)
+      return
     }
+    stopPolling?.()
+    stopPolling = undefined
   }
   function fail(error: unknown, token: number) {
     if (!current(token)) return
@@ -110,14 +114,14 @@ export function createPersonalSession<Status extends SessionStatus>(transport: P
     publish({ status: null, loading: false, busy: false, error: message })
   }
   async function read(token: number) {
-    if (!current(token)) return
-    request = new AbortController()
-    try {
-      const status = await transport.read(AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]))
-      if (!current(token)) return
-      if (!accept(status, false) && !view.status) publish({ status: null, loading: false, busy: false, error: 'Connection status is outdated. Refresh status to check the current connection.' })
-      schedule(token)
-    } catch (error) { fail(error, token) }
+    if (current(token)) {
+      request = new AbortController()
+      try {
+        const status = await transport.read(AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]))
+        if (current(token) && !accept(status, false) && !view.status) publish({ status: null, loading: false, busy: false, error: 'Connection status is outdated. Refresh status to check the current connection.' })
+      } catch (error) { fail(error, token); return }
+    }
+    schedule(token)
   }
   async function change(command: PersonalCommand) {
     if (!active || !transport.current() || view.busy || view.loading || view.error) return
@@ -141,6 +145,14 @@ export function createPersonalSession<Status extends SessionStatus>(transport: P
     refresh() { if (!active || !transport.current()) return; const token = begin(); publish({ status: null, loading: true, busy: false, error: null }); void read(token) },
     change,
     stop() { active = false; begin(); publish({ status: null, loading: true, busy: false, error: null }); watermark = null; qrDeadline = null; qrIdentity = null; retiredGenerations.clear(); retiredAttempts.clear(); invalidatedQrAttempts.clear() },
+  }
+}
+
+function polls(state: PersonalStatus['state']): boolean {
+  switch (state) {
+    case 'pending': case 'qr': case 'connected': case 'reconnecting': case 'paused': case 'disconnecting': return true
+    case 'expired': case 'disconnected': case 'failed': return false
+    default: return assertNever(state)
   }
 }
 

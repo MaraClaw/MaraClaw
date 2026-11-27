@@ -1,13 +1,12 @@
 import importlib
 import inspect
 import uuid
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from app.services import agent_tools
-from app.services.agent_tool_exec import channel_context, channel_messaging, dispatcher, registry
+from app.services.agent_tool_exec import channel_messaging, dispatcher, registry
 
 
 def test_okr_daily_collection_uses_platform_messaging_owner():
@@ -138,27 +137,6 @@ async def test_dispatcher_routes_messages_and_files_through_registered_handlers(
         assert workspaces == []
 
 
-async def test_channel_file_uses_the_facade_context_callback(tmp_path: Path):
-    channel_files = importlib.import_module("app.services.agent_tool_exec.channel_files")
-    source = tmp_path / "report.txt"
-    source.write_text("report", encoding="utf-8")
-    calls = []
-
-    async def sender(path, message=""):
-        calls.append((path, message))
-
-    token = channel_context.channel_file_sender.set(sender)
-    try:
-        result = await channel_files._send_channel_file(
-            uuid.uuid4(), tmp_path, {"file_path": "report.txt", "message": "ready"}
-        )
-    finally:
-        channel_context.channel_file_sender.reset(token)
-
-    assert result == "File 'report.txt' sent to user via channel."
-    assert calls == [(source, "ready")]
-
-
 async def test_feishu_attendees_keep_order_and_one_lookup_per_value_without_output(monkeypatch):
     support = importlib.import_module("app.services.agent_tool_exec.feishu_calendar_support")
     calls = []
@@ -174,22 +152,17 @@ async def test_feishu_attendees_keep_order_and_one_lookup_per_value_without_outp
     facade = SimpleNamespace(
         _feishu_user_search=search,
         _feishu_resolve_open_id=resolve,
-        channel_feishu_sender_open_id=channel_context.channel_feishu_sender_open_id,
         logger=SimpleNamespace(warning=lambda *_args: None),
     )
     monkeypatch.setattr(support, "agent_tools", facade)
-    token = channel_context.channel_feishu_sender_open_id.set("ou_sender")
-    try:
-        open_ids, display = await support._calendar_attendees(
-            uuid.uuid4(),
-            {"attendee_names": ["Alice"], "attendee_emails": ["extra@example.test"]},
-            "token",
-            "owner@example.test",
-        )
-    finally:
-        channel_context.channel_feishu_sender_open_id.reset(token)
+    open_ids, display = await support._calendar_attendees(
+        uuid.uuid4(),
+        {"attendee_names": ["Alice"], "attendee_emails": ["extra@example.test"]},
+        "token",
+        "owner@example.test",
+    )
 
-    assert open_ids == ["ou_alice", "ou_extra", "ou_owner", "ou_sender"]
+    assert open_ids == ["ou_alice", "ou_extra", "ou_owner"]
     assert display == ["Alice", "extra@example.test", "owner@example.test"]
     assert calls == [("name", "Alice"), ("email", "extra@example.test"), ("email", "owner@example.test")]
     assert "on_output" not in inspect.getsource(support._calendar_attendees)

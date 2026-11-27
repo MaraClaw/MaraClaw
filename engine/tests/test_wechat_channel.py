@@ -1,5 +1,4 @@
 import asyncio
-import json
 import uuid
 from collections.abc import Sequence
 from unittest.mock import AsyncMock, Mock
@@ -7,20 +6,21 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from tests.im_webhook_fixtures import channel_config
 
+from app.dao.chat_dao import chat_message_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
 from app.runtime import connectors
 from app.services import wechat_channel, wechat_message_processor
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import binding, submissions
-from app.services.llm.types import OpenAIMessage
 from app.services.openclaw_routing import PreparedOpenClawMessage
 from worker_progress_fixtures import WorkerHTTP, worker_http
 
 __all__ = ["worker_http"]
 
 
-async def test_accept_wechat_event_converts_prior_tool_history_before_persisting_new_user(
+async def test_accept_wechat_event_prepares_and_persists_without_reading_prior_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent = AgentRecord(id=uuid.uuid4(), name="agent", creator_id=uuid.uuid4(), tenant_id=uuid.uuid4())
@@ -36,41 +36,8 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
         conversation_id="wechat_chat-1",
         text="Please check.",
     )
-    tool_id = uuid.UUID(int=2)
-    history_rows = [
-        ChatMessageRecord(
-            id=uuid.uuid4(),
-            agent_id=agent.id,
-            user_id=sender.id,
-            conversation_id=str(transcript.id),
-            role="user",
-            content="What is the status?",
-        ),
-        ChatMessageRecord(
-            id=tool_id,
-            agent_id=agent.id,
-            user_id=sender.id,
-            conversation_id=str(transcript.id),
-            role="tool_call",
-            content='{"name":"search_docs","args":{"query":"status"},"result":"found status"}',
-        ),
-    ]
-    expected_history: list[OpenAIMessage] = [
-        {"role": "user", "content": "What is the status?"},
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": f"call_{tool_id}",
-                    "type": "function",
-                    "function": {"name": "search_docs", "arguments": json.dumps({"query": "status"})},
-                }
-            ],
-        },
-        {"role": "tool", "tool_call_id": f"call_{tool_id}", "content": "found status"},
-    ]
     prepared = PreparedOpenClawMessage(agent, event.text, "primary", None, "channel-test")
-    list_recent = AsyncMock(return_value=history_rows)
+    list_recent = AsyncMock()
     prepare = AsyncMock(return_value=prepared)
     insert_message = AsyncMock(
         return_value=ChatMessageRecord(
@@ -84,7 +51,6 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
     )
     enqueue = AsyncMock()
     order = Mock()
-    order.attach_mock(list_recent, "history")
     order.attach_mock(prepare, "prepare")
     order.attach_mock(insert_message, "persist")
     order.attach_mock(enqueue, "enqueue")
@@ -105,8 +71,8 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
         AsyncMock(return_value=binding.ChannelConversation(transcript, reply)),
     )
     monkeypatch.setattr(submissions.chat_session_dao, "lock_for_agent", AsyncMock(return_value=transcript))
-    monkeypatch.setattr(submissions.chat_message_dao, "list_recent", list_recent)
-    monkeypatch.setattr(submissions.chat_message_dao, "insert_message", insert_message)
+    monkeypatch.setattr(chat_message_dao, "list_recent", list_recent)
+    monkeypatch.setattr(chat_message_dao, "insert_message", insert_message)
     monkeypatch.setattr(submissions.chat_session_dao, "get", AsyncMock(return_value=transcript))
     monkeypatch.setattr(submissions.chat_session_dao, "update", AsyncMock())
     monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
@@ -115,8 +81,8 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
     result = await submissions.accept_channel_event(event)
 
     assert result == submissions.AcceptedChannelEvent(replayed=False)
-    list_recent.assert_awaited_once_with(agent_id=agent.id, conversation_id=str(transcript.id), limit=8)
-    prepare.assert_awaited_once_with(agent=agent, content="Please check.", history=expected_history)
+    list_recent.assert_not_awaited()
+    prepare.assert_awaited_once_with(agent=agent, content="Please check.")
     insert_message.assert_awaited_once_with(
         agent_id=agent.id,
         user_id=sender.id,
@@ -133,7 +99,7 @@ async def test_accept_wechat_event_converts_prior_tool_history_before_persisting
         reply_session_id=reply.id,
         deduplicate=False,
     )
-    assert [entry[0] for entry in order.mock_calls] == ["history", "prepare", "persist", "enqueue"]
+    assert [entry[0] for entry in order.mock_calls] == ["prepare", "persist", "enqueue"]
 
 
 async def test_process_wechat_message_remembers_context_before_accepting_native_identity_and_text(
@@ -435,6 +401,84 @@ async def test_a_poll_whose_messages_fail_to_process_does_not_reset_the_backoff(
     await manager._run_client(uuid.uuid4())
     # Then the delays escalate instead of restarting after every completed fetch.
     assert delays == [3, 6, 12]
+
+
+def wechat_text(message_id: str, sender: str) -> dict[str, object]:
+    return {
+        "message_id": message_id,
+        "from_user_id": sender,
+        "session_id": f"chat-{sender}",
+        "context_token": "context-token",
+        "item_list": [{"type": 1, "text_item": {"text": "Please check."}}],
+    }
+
+
+async def test_a_poll_batch_skips_a_message_without_an_id_and_an_unlinked_sender_and_stores_the_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a batch of a message without an ID, one from an unlinked sender and a good one.
+    batch: dict[str, object] = {
+        "get_updates_buf": "next",
+        "msgs": [wechat_text("", "idless-user"), wechat_text("m-1", "unlinked-user"), wechat_text("m-2", "good-user")],
+    }
+    manager, _ = poll_manager(monkeypatch, [batch])
+    delays = record_retry_waits(monkeypatch)
+    agent_id = uuid.uuid4()
+    update, remember = AsyncMock(), AsyncMock()
+    accept = AsyncMock(return_value=submissions.AcceptedChannelEvent(replayed=False))
+
+    async def replay(event: submissions.ChannelEvent) -> bool:
+        if event.sender_id == "unlinked-user":
+            raise ChannelUserResolutionError("Link your channel identity in the web application.")
+        return False
+
+    monkeypatch.setattr(manager, "_update_extra", update)
+    monkeypatch.setattr(wechat_channel, "remember_wechat_context", remember)
+    monkeypatch.setattr(submissions, "is_channel_event_replay", replay)
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    # When the poller handles the batch and polls once more.
+    await manager._run_client(agent_id)
+    # Then only the good message was remembered and accepted, no poll error backed the poller off, and the cursor moved
+    # past the whole batch before the next poll.
+    accept.assert_awaited_once()
+    assert accept.await_args is not None
+    assert accept.await_args.args[0].sender_id == "good-user"
+    remember.assert_awaited_once()
+    assert remember.await_args is not None
+    assert remember.await_args.kwargs["from_user_id"] == "good-user"
+    assert delays == []
+    assert [entry.args for entry in update.await_args_list] == [
+        (agent_id, {"get_updates_buf": "next"}),
+        (agent_id, {"get_updates_buf": "", "session_expired": True}),
+    ]
+
+
+async def test_a_transient_failure_after_a_skipped_message_keeps_the_cursor_until_the_retry_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a batch of a message without an ID and a good one whose first acceptance meets a storage outage.
+    batch: dict[str, object] = {
+        "get_updates_buf": "next",
+        "msgs": [wechat_text("", "idless-user"), wechat_text("m-1", "good-user")],
+    }
+    manager, _ = poll_manager(monkeypatch, [batch, batch])
+    delays = record_retry_waits(monkeypatch)
+    update = AsyncMock()
+    accept = AsyncMock(side_effect=[OSError("storage unavailable"), submissions.AcceptedChannelEvent(replayed=False)])
+    order = Mock()
+    order.attach_mock(accept, "accept")
+    order.attach_mock(update, "cursor")
+    monkeypatch.setattr(manager, "_update_extra", update)
+    monkeypatch.setattr(wechat_channel, "remember_wechat_context", AsyncMock())
+    monkeypatch.setattr(submissions, "is_channel_event_replay", AsyncMock(return_value=False))
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    agent_id = uuid.uuid4()
+    # When the poller retries the batch.
+    await manager._run_client(agent_id)
+    # Then the failed poll stored no cursor and waited once, and the cursor moved only after the retry's acceptance.
+    assert len(delays) == 1
+    assert [entry[0] for entry in order.mock_calls] == ["accept", "accept", "cursor", "cursor"]
+    assert update.await_args_list[0].args == (agent_id, {"get_updates_buf": "next"})
 
 
 async def test_cancellation_during_a_poll_error_wait_ends_the_poller_at_once(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -18,7 +18,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 |---------|-------|
 | Boot / theme | `index.html` prevents theme FOUC; `src/main.tsx`: `StrictMode` > `ThemeProvider` > `App` |
 | App composition | `src/App.tsx`: `TranslationProvider` > `RootErrorBoundary` (reloads on Try again) > `AuthProvider` wraps `AppRouter` + `Toaster` |
-| Session / Query lifetime | `src/hooks/AGENTS.md`: `AuthProvider` owns the session-generation-keyed `QueryClientProvider`, not `App`; query-option factories and session-fenced mutations |
+| Session / Query lifetime | `src/hooks/AGENTS.md`: `SessionQueryProvider` owns the session-generation-keyed `QueryClientProvider` inside the lazy `SessionShell`, not `AuthProvider` or `App`; query-option factories and session-fenced mutations |
 | Paths / access gates | `src/routes/AGENTS.md`: `AppRouter`, `ProtectedRoute`, role gates, `TransferReviewRoute` |
 | Screen composition / queries | `src/pages/AGENTS.md`: auth, companies, users/departments, invitations, review queues, models, search, tools |
 | Shared UI / domain components | `src/components/AGENTS.md` (+ `layout/`, `ui/`): primitives, shells, nav eligibility, brand, users widgets |
@@ -34,7 +34,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - `mustChangePassword` is true when the token response, `user` or `identity` flag says so. `ProtectedRoute` redirects to `/settings`; Settings stays open until cleared and legacy `/account` redirects there. After `PUT /api/auth/me/password`, call `refreshReplacement` with the captured owner and replacement access token.
 - Only an authenticated 401 expires the session (see `src/lib/AGENTS.md`). A 403, including `must_change_password`, is a plain `ApiError` and keeps the token.
 - Companies (including `/companies/:companyId/runtimes`), Search, OpenClaw updates and Upgrade signals require `PlatformAdminRoute`; their top-level nav entries use `platformAdminOnly`. Users + Models + Tools allow both admin roles. Search analytics stays `/search-engine?tab=analytics`.
-- Narrower gates live in `src/lib/types/auth.ts` and `transfer-review-access.ts`: non-PA org admin for Broadcast/Invitations, genesis OA for member Admissions, active own-org admin for Agent deletions and Clawbook, active PA for Payments. Organization admissions and payment settings require an active genesis PA; `/organization-admissions` redirects under its own guard to `/payments?tab=admissions`. Route guards and any matching nav entries must share predicates.
+- Narrower gates live in `src/lib/types/auth-guards.ts` and `transfer-review-access.ts`: non-PA org admin for Broadcast/Invitations, genesis OA for member Admissions, active own-org admin for Agent deletions and Clawbook, active PA for Payments. Organization admissions and payment settings require an active genesis PA; `/organization-admissions` redirects under its own guard to `/payments?tab=admissions`. Route guards and any matching nav entries must share predicates.
 - Capacity route/query gates are documented in `src/routes/AGENTS.md` and `src/hooks/AGENTS.md`. PAs read a company's capacity with `?tenant_id=` and never buy. Payment settings is a separate `/payments?tab=settings` tab; `/settings` retains profile, SMTP, transfer policy and password controls.
 - Org admins stay own-tenant; platform admins may pass `tenant_id`. Only these admin roles configure company LLM pools; members never write keys.
 - Theme storage: `maraclaw-admin-theme`. Never reuse `web-e` keys `maraclaw-theme` or `maraclaw-enduser-token`.
@@ -45,6 +45,7 @@ Engine owns APIs; `web-e` owns marketing and member auth/chat. Do not put those 
 - Tailwind v4 is CSS-first (`src/index.css`), not a Tailwind config file. Lint with Oxlint; no ESLint/Prettier config.
 - Page data uses TanStack Query; forms use RHF + Zod. New routed screens need a page and route; add nav only for a navigation destination. Detail pages such as capacity orders and company runtimes have no separate nav entry. Shared component rules live in the components guide.
 - HTTP belongs in `src/lib/*-api.ts`, not raw `fetch` in pages/components or REST handlers in Vite.
+- The entry chunk holds the providers, router, session store, `ProtectedRoute` and the route error boundary. Pages, the shell with its session Query scope and motion, the Vietnamese catalog and the auth client (with zod and the generated schemas) load through `retryingLazy`/`retryingImport`. CI caps the entry and its modulepreloads with `bundle-budget.json` (`../.github/scripts/check-bundle-budget.mjs`); `tests/entry-imports.test.ts` fails when zod, react-query, framer-motion, date-fns, tailwind-merge, the auth client or the shell become static imports of `main.tsx`.
 - `src/lib/engine-contracts.generated.ts` is generated from `../engine/contracts/api-contract.json`; never hand-edit. Regenerate after engine contract changes.
 - Public `VITE_*` only; never ship `PLATFORM_ADMIN_*`. No hardcoded API hosts or `VITE_API_BASE_URL=http://0.0.0.0:8000`.
 - Keep Disable/Enable visible when `can_disable` is false (MaraClaw + KABERs).
@@ -70,7 +71,7 @@ docker run --rm --network maraclaw_network -p 8080:8080 maraclaw-web-a
 ```
 
 `contracts:generate` / `contracts:check` run `../engine/scripts/contract_codegen/generate.mjs` against `../engine/contracts/api-contract.json` into `src/lib/engine-contracts.generated.ts` (`--check` never writes).
-`npm test` = `tsc -p tsconfig.tests.json && node --test tests/*.test.ts`: Node runner over `*.test.ts` only. `npm run test:e2e` typechecks and runs the selected portable Playwright specs in `e2e/` for company validation/submission, payment alias navigation and admin access, across phone/desktop and light/dark. It requires an already installed Chromium (optional `CHROMIUM_EXECUTABLE`); it never installs one. No npm script runs `tests/*.browser.mjs` (standalone browser QA, harnesses, fixtures); see `tests/AGENTS.md` and README browser usage.
+`npm test` = `tsc -p tsconfig.tests.json && node --test tests/*.test.ts`: Node runner over `*.test.ts` only. `npm run test:e2e` typechecks and runs the selected portable Playwright specs in `e2e/` for company validation/submission, payment alias navigation, admin access and the company runtime workspace measurement status, across phone/desktop and light/dark. It requires an already installed Chromium (optional `CHROMIUM_EXECUTABLE`); it never installs one. No npm script runs `tests/*.browser.mjs` (standalone browser QA, harnesses, fixtures); see `tests/AGENTS.md` and README browser usage.
 `../.github/workflows/frontend-ci.yml` (web-a + web-e matrix): contract check, lint, `tsc -b`, tests, build, Docker build.
 Its separate `admin-browser` job installs Playwright Chromium/system dependencies and runs the selected admin gate, uploading failure traces/screenshots/HTML reports. The existing four-shard web-e browser job is independent.
 

@@ -18,6 +18,7 @@ from app.services.agent_setup_lock import (
     drain_on_cancel,
     setup_workspace_lock,
 )
+from app.services.docker_capacity import DockerBusyError, background_docker
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,20 +72,29 @@ async def stop_containers(agents: Sequence[AgentRecord]) -> None:
                     await _stop_and_persist_missing_container(current, current.container_id)
             except WorkspaceLockTimeoutError:
                 logger.info("Skipping agent {} container stop this pass: workspace lock is busy", agent.id)
+            except DockerBusyError:
+                logger.info("Skipping the rest of the container stops this pass: the Docker lane is busy")
+                return
             except Exception as exc:
                 logger.warning("Agent container stop failed for agent {}: {}", agent.id, type(exc).__name__)
 
 
+async def _stop_in_background(agents: Sequence[AgentRecord]) -> None:
+    with background_docker():
+        await stop_containers(agents)
+
+
 def schedule_container_stops(agents: Sequence[AgentRecord]) -> None:
     if agents:
-        schedule_background_task(stop_containers(agents), description="stop disabled agent containers")
+        schedule_background_task(_stop_in_background(agents), description="stop disabled agent containers")
 
 
 async def reconcile_stopped_containers(now: datetime) -> None:
     from app.services.company_transfer_cleanup import reconcile_transfer_cleanup
 
-    await reconcile_transfer_cleanup()
-    await reconcile_deletion_cleanup()
-    agents = await agent_dao.prepare_container_stops(now)
-    await stop_containers(agents)
-    await sweep_orphan_containers(now)
+    with background_docker():
+        await reconcile_transfer_cleanup()
+        await reconcile_deletion_cleanup()
+        agents = await agent_dao.prepare_container_stops(now)
+        await stop_containers(agents)
+        await sweep_orphan_containers(now)

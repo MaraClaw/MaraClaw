@@ -1,8 +1,10 @@
 import asyncio
 import re
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import override
@@ -10,9 +12,17 @@ from typing import override
 import pytest
 from pydantic import BaseModel
 
+from app.config import get_settings
 from app.core.domain.focus import FocusKind, FocusStatus
-from app.services import agent_tools, workspace_collaboration, workspace_locking
-from app.services.agent_tool_exec import _agent_tool_exec_storage as storage, workspace, workspace_read
+from app.core.events import RedisPoolOverloadError
+from app.dao.agent_dao import agent_dao
+from app.services import activity_logger, agent_tools, workspace_collaboration, workspace_locking
+from app.services.agent_tool_exec import (
+    _agent_tool_exec_storage as storage,
+    workspace,
+    workspace_read,
+    workspace_read_window,
+)
 from app.services.agent_tool_exec._agent_tool_exec_storage import list_files as storage_list_files
 from app.services.agent_tool_exec.registry import (
     ToolArguments,
@@ -24,6 +34,7 @@ from app.services.agent_tool_exec.registry import (
 from app.services.focus_service import SerializedFocusItem
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
+    CopyRequest,
     StorageBackend,
     StorageEntry,
     StoragePage,
@@ -35,6 +46,11 @@ from app.services.storage_runtime.base import (
 )
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
+from app.services.workspace_locking import (
+    WorkspaceLockLostError,
+    check_workspace_lock,
+    workspace_locks as real_workspace_locks,
+)
 
 
 @pytest.mark.parametrize("source", ["local", "storage", "enterprise"])
@@ -122,11 +138,15 @@ class MemoryStorageBackend(StorageBackend):
                 continue
             rest = existing.removeprefix(prefix)
             name, _, tail = rest.partition("/")
+            version = "" if tail else str(self.versions.get(existing, 0))
             entries[name] = StorageEntry(
                 name=name,
                 key=f"{prefix}{name}",
                 is_dir=bool(tail),
                 size=0 if tail else len(data),
+                version_id=version,
+                etag=version,
+                content_hash=version,
             )
         return sorted(entries.values(), key=lambda entry: (not entry.is_dir, entry.name))
 
@@ -597,86 +617,36 @@ async def test_storage_focus_callbacks_use_focus_service_owners(monkeypatch) -> 
     ]
 
 
-def test_local_workspace_read_helpers_preserve_listing_and_pagination(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "agent"
-    notes = workspace / "workspace" / "notes.md"
-    notes.parent.mkdir(parents=True)
-    notes.write_text("first\nsecond\n", encoding="utf-8")
-    (workspace / ".hidden").write_text("hidden", encoding="utf-8")
-    (tmp_path / "enterprise_info_tenant-a").mkdir()
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+@pytest.mark.asyncio
+async def test_storage_listing_adds_the_enterprise_folder_at_the_root_and_skips_hidden_entries(monkeypatch):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/notes.md": b"first\n", f"{agent_id}/.hidden": b"hidden"})
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: storage)
 
-    # When
-    listing = agent_tools._list_files(workspace, "", tenant_id="tenant-a")
-    read = agent_tools._read_file(workspace, "workspace/notes.md", offset=1, limit=1)
-    empty = workspace / "empty.md"
-    empty.write_text("", encoding="utf-8")
-    empty_read = agent_tools._read_file(workspace, "empty.md")
+    listing = await agent_tools._storage_list_dir(agent_id, "", tenant_id="tenant-a")
 
-    # Then
-    assert "📁 enterprise_info/ (shared company info)" in listing
-    assert ".hidden" not in listing
-    assert read == "📄 workspace/notes.md (lines 2-2 of 2)\n     2\tsecond"
-    assert empty_read == "Offset 0 exceeds file length (0 lines total)"
-
-
-def test_local_workspace_search_and_find_preserve_filters_and_results(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "agent"
-    docs = workspace / "workspace"
-    docs.mkdir(parents=True)
-    (docs / "notes.md").write_text("Needle\n", encoding="utf-8")
-    (docs / "ignored.png").write_bytes(b"binary")
-    (docs / "large.txt").write_bytes(b"x" * 1025)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-
-    # When
-    search = agent_tools._search_files(workspace, "needle", path="workspace", file_pattern="*.md", ignore_case=True)
-    found = agent_tools._find_files(workspace, "*.txt", path="workspace")
-    missing = agent_tools._find_files(workspace, "*.csv", path="workspace")
-
-    # Then
-    assert search == "🔍 Found 1+ match(es) in 1 file(s) for pattern 'needle':\nworkspace/notes.md:1: Needle"
-    assert found == "📂 Found 1 item(s) (0 dirs, 1 files) matching '*.txt':\n📄 workspace/large.txt (1KB)"
-    assert missing == "No files matching pattern: *.csv"
-
-
-def test_local_workspace_mutations_preserve_protections_errors_and_success(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "agent"
-    workspace.mkdir()
-    target = workspace / "workspace" / "notes.md"
-    target.parent.mkdir()
-    target.write_text("one\none\n", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-
-    # When
-    protected_write = agent_tools._write_file(workspace, "tasks.json", "ignored")
-    protected_enterprise = agent_tools._write_file(workspace, "enterprise_info/report.md", "ignored")
-    write = agent_tools._write_file(workspace, "workspace/new.md", "hello")
-    ambiguous_edit = agent_tools._edit_file(workspace, "workspace/notes.md", "one", "two")
-    edit = agent_tools._edit_file(workspace, "workspace/notes.md", "one", "two", replace_all=True)
-    protected_delete = agent_tools._delete_file(workspace, "soul.md")
-    protected_tasks_delete = agent_tools._delete_file(workspace, "tasks.json")
-    delete = agent_tools._delete_file(workspace, "workspace/new.md")
-
-    # Then
-    assert protected_write == "tasks.json is a legacy read-only snapshot. Use the task APIs/UI to manage tasks."
     assert (
-        protected_enterprise
-        == "enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."
+        listing
+        == "📂 root: 2 folder(s), 0 file(s)\n  📁 enterprise_info/ (shared company info)\n  📁 workspace/ (1 items)"
     )
-    assert write == "✅ Written to workspace/new.md (5 chars)"
-    assert (
-        ambiguous_edit
-        == "❌ 'old_string' appears 2 times in workspace/notes.md. Use replace_all=true or provide more context to make the match unique."
-    )
-    assert edit == "✅ Replaced 2 occurrence(s) in workspace/notes.md"
-    assert target.read_text(encoding="utf-8") == "two\ntwo\n"
-    assert protected_delete == "soul.md cannot be deleted (protected)"
-    assert protected_tasks_delete == "tasks.json cannot be deleted (protected)"
-    assert delete == "✅ Deleted workspace/new.md"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("write_file", {"path": "enterprise_info/report.md", "content": "ignored"}),
+        ("edit_file", {"path": "enterprise_info/report.md", "old_string": "a", "new_string": "b"}),
+        ("delete_file", {"path": "enterprise_info/report.md"}),
+        ("move_file", {"source_path": "workspace/a.md", "destination_path": "enterprise_info/a.md"}),
+        ("move_file", {"source_path": "enterprise_info/a.md", "destination_path": "workspace/a.md"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_workspace_mutation_refuses_enterprise_info_paths_without_io(tool_name, arguments):
+    result = await workspace._execute_workspace_mutation(tool_name, arguments, agent_id=uuid.uuid4(), session_id=None)
+
+    assert result.startswith("❌")
+    assert "enterprise_info" in result
 
 
 @pytest.mark.asyncio
@@ -690,6 +660,15 @@ async def test_workspace_mutation_rejects_tasks_snapshot_move_without_io():
 
     # Then
     assert result == "❌ tasks.json cannot be moved (protected)"
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [("../other/secret.md", "other/secret.md"), ("a/../../b.md", "b.md"), ("/abs/x.md", "abs/x.md"), ("..", "")],
+)
+def test_storage_mutations_keep_every_path_inside_the_agent_tree(path, expected):
+    # write, edit and delete address `{agent_id}/{normalized}`, so a path that climbs can only land under the agent
+    assert workspace_collaboration.normalize_workspace_path(path) == expected
 
 
 def test_workspace_path_resolvers_reject_sibling_prefix_escape(monkeypatch, tmp_path):
@@ -708,59 +687,6 @@ def test_workspace_path_resolvers_reject_sibling_prefix_escape(monkeypatch, tmp_
         agent_tools._resolve_tool_target_path(workspace, "nested/../../workspace-escape/secret.md")
 
 
-def test_local_workspace_helpers_reject_sibling_prefix_escape(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "workspace"
-    sibling_workspace = tmp_path / "workspace-escape"
-    workspace.mkdir()
-    sibling_workspace.mkdir()
-    secret = sibling_workspace / "secret.md"
-    secret.write_text("secret", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    escape_path = "../workspace-escape"
-
-    # When
-    listing = agent_tools._list_files(workspace, escape_path)
-    search = agent_tools._search_files(workspace, "secret", path=escape_path)
-    found = agent_tools._find_files(workspace, "*.md", path=escape_path)
-    write = agent_tools._write_file(workspace, f"{escape_path}/written.md", "escaped")
-    delete = agent_tools._delete_file(workspace, f"{escape_path}/secret.md")
-    edit = agent_tools._edit_file(workspace, f"{escape_path}/secret.md", "secret", "edited")
-
-    # Then
-    assert listing == "Access denied for this path"
-    assert search == "Access denied for this path"
-    assert found == "Access denied for this path"
-    assert write == "Access denied for this path"
-    assert delete == "Access denied for this path"
-    assert edit == "Access denied for this path"
-    assert secret.read_text(encoding="utf-8") == "secret"
-    assert not (sibling_workspace / "written.md").exists()
-
-
-def test_local_workspace_helpers_reject_enterprise_sibling_prefix_escape(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "workspace"
-    enterprise_root = tmp_path / "enterprise_info_tenant-a"
-    sibling_enterprise_root = tmp_path / "enterprise_info_tenant-a-escape"
-    workspace.mkdir()
-    enterprise_root.mkdir()
-    sibling_enterprise_root.mkdir()
-    (sibling_enterprise_root / "secret.md").write_text("secret", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    escape_path = "enterprise_info/../enterprise_info_tenant-a-escape"
-
-    # When
-    listing = agent_tools._list_files(workspace, escape_path, tenant_id="tenant-a")
-    search = agent_tools._search_files(workspace, "secret", path=escape_path, tenant_id="tenant-a")
-    found = agent_tools._find_files(workspace, "*.md", path=escape_path, tenant_id="tenant-a")
-
-    # Then
-    assert listing == "Access denied for this path"
-    assert search == "Access denied for this path"
-    assert found == "Access denied for this path"
-
-
 def test_workspace_helpers_allow_nested_paths_within_root(monkeypatch, tmp_path):
     # Given
     workspace = tmp_path / "workspace"
@@ -772,14 +698,10 @@ def test_workspace_helpers_allow_nested_paths_within_root(monkeypatch, tmp_path)
     # When
     source = agent_tools._resolve_tool_source_path(workspace, "nested/../nested/notes.md")
     target = agent_tools._resolve_tool_target_path(workspace, "nested/draft.md")
-    listing = agent_tools._list_files(workspace, "nested")
-    search = agent_tools._search_files(workspace, "needle", path="nested")
 
     # Then
     assert source == nested_file
     assert target == workspace / "nested" / "draft.md"
-    assert listing == "📂 nested: 0 folder(s), 1 file(s)\n  📄 notes.md (6B)"
-    assert search == "🔍 Found 1+ match(es) in 1 file(s) for pattern 'needle':\nnested/notes.md:1: needle"
 
 
 @pytest.mark.asyncio
@@ -1079,30 +1001,6 @@ def _build_symlink_fixture(tmp_path: Path) -> tuple[Path, Path]:
     return workspace, sibling
 
 
-def _forbid_outside_access(monkeypatch: pytest.MonkeyPatch, outside: Path) -> None:
-    """Fail the test when content, size or children of anything under ``outside`` are read."""
-    read_text, iterdir, stat = Path.read_text, Path.iterdir, Path.stat
-
-    def is_outside(path: Path) -> bool:
-        return path.resolve().is_relative_to(outside.resolve())
-
-    def guarded_read_text(self: Path, *args, **kwargs):
-        assert not is_outside(self), f"read content of {self}"
-        return read_text(self, *args, **kwargs)
-
-    def guarded_iterdir(self: Path):
-        assert not is_outside(self), f"listed children of {self}"
-        return iterdir(self)
-
-    def guarded_stat(self: Path, *args, **kwargs):
-        assert not is_outside(self), f"stat of {self}"
-        return stat(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", guarded_read_text)
-    monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
-    monkeypatch.setattr(Path, "stat", guarded_stat)
-
-
 def test_source_path_fallback_rejects_symlink_sibling_resolving_outside_root(monkeypatch, tmp_path):
     # Given: "secretnote.md" does not exist, so the normalized-name fallback matches "secret note.md" -> outside file
     workspace, sibling = _build_symlink_fixture(tmp_path)
@@ -1113,7 +1011,6 @@ def test_source_path_fallback_rejects_symlink_sibling_resolving_outside_root(mon
     # When / Then
     with pytest.raises(ValueError, match="Access denied for this path"):
         agent_tools._resolve_tool_source_path(workspace, "workspace/secretnote.md")
-    assert agent_tools._read_file(workspace, "workspace/secretnote.md") == "Access denied for this path"
 
 
 def test_source_path_fallback_keeps_symlink_sibling_resolving_inside_root(monkeypatch, tmp_path):
@@ -1123,10 +1020,8 @@ def test_source_path_fallback_keeps_symlink_sibling_resolving_inside_root(monkey
     monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
 
     source = agent_tools._resolve_tool_source_path(workspace, "workspace/mynotes.md")
-    read = agent_tools._read_file(workspace, "workspace/mynotes.md")
 
     assert source == (docs / "notes.md").resolve()
-    assert "needle inside" in read
 
 
 def test_source_path_fallback_prefers_inside_match_over_escaping_match(monkeypatch, tmp_path):
@@ -1139,82 +1034,22 @@ def test_source_path_fallback_prefers_inside_match_over_escaping_match(monkeypat
     assert agent_tools._resolve_tool_source_path(workspace, "workspace/a  b.md") == (docs / "ab.MD").resolve()
 
 
-def test_local_search_skips_entries_resolving_outside_root_without_reading_them(monkeypatch, tmp_path):
-    workspace, sibling = _build_symlink_fixture(tmp_path)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    _forbid_outside_access(monkeypatch, sibling)
+@pytest.mark.asyncio
+async def test_storage_listing_of_a_local_workspace_never_shows_links_planted_to_another_agent(monkeypatch, tmp_path):
+    agent_id, other_id = uuid.uuid4(), uuid.uuid4()
+    root = tmp_path / "storage"
+    docs = root / str(agent_id) / "workspace"
+    (docs / "real-dir").mkdir(parents=True)
+    (docs / "notes.md").write_text("inside\n", encoding="utf-8")
+    (root / str(other_id)).mkdir()
+    (root / str(other_id) / "secret.md").write_text("outside\n", encoding="utf-8")
+    (docs / "leak-file.md").symlink_to(root / str(other_id) / "secret.md")
+    (docs / "leak-dir").symlink_to(root / str(other_id), target_is_directory=True)
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: LocalStorageBackend(str(root)))
 
-    through_directory_link = agent_tools._search_files(workspace, "needle", path="workspace", file_pattern="*/*.md")
-    everything = agent_tools._search_files(workspace, "needle", path="workspace")
+    listing = await agent_tools._storage_list_dir(agent_id, "workspace")
 
-    assert "outside" not in through_directory_link
-    assert "outside" not in everything
-    assert "workspace/notes.md:1: needle inside" in everything
-    assert "workspace/inside-file.md:1: needle inside" in everything
-    assert "workspace/real-dir/child.md:1: needle child" in everything
-    assert "workspace/inside-dir/child.md:1: needle child" in through_directory_link
-    # notes.md, inside-file.md, real-dir/child.md; the two outside links are not even counted as searched
-    assert everything.startswith("🔍 Found 3+ match(es) in 3 file(s)")
-
-
-def test_local_find_skips_entries_resolving_outside_root_without_statting_them(monkeypatch, tmp_path):
-    workspace, sibling = _build_symlink_fixture(tmp_path)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    _forbid_outside_access(monkeypatch, sibling)
-
-    everything = agent_tools._find_files(workspace, "*", path="workspace")
-    through_directory_link = agent_tools._find_files(workspace, "outside-dir/*", path="workspace")
-    only_outside = agent_tools._find_files(workspace, "outside-*", path="workspace")
-
-    assert "outside" not in everything
-    assert "📄 workspace/inside-file.md (14B)" in everything
-    assert "📁 workspace/inside-dir/" in everything
-    assert everything.startswith("📂 Found 4 item(s) (2 dirs, 2 files) matching '*':")
-    assert through_directory_link == "No files matching pattern: outside-dir/*"
-    assert only_outside == "No files matching pattern: outside-*"
-
-
-def test_local_listing_skips_entries_resolving_outside_root_without_reading_them(monkeypatch, tmp_path):
-    workspace, sibling = _build_symlink_fixture(tmp_path)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    _forbid_outside_access(monkeypatch, sibling)
-
-    listing = agent_tools._list_files(workspace, "workspace")
-
-    assert "outside" not in listing
-    assert listing == (
-        "📂 workspace: 2 folder(s), 2 file(s)\n"
-        "  📁 inside-dir/ (1 items)\n"
-        "  📄 inside-file.md (14B)\n"
-        "  📄 notes.md (14B)\n"
-        "  📁 real-dir/ (1 items)"
-    )
-
-
-def test_enterprise_root_search_find_and_listing_skip_symlinks_to_other_tenant(monkeypatch, tmp_path):
-    workspace = tmp_path / "agent"
-    workspace.mkdir()
-    enterprise = tmp_path / "enterprise_info_tenant-a"
-    other_tenant = tmp_path / "enterprise_info_tenant-a-other"
-    enterprise.mkdir()
-    other_tenant.mkdir()
-    (other_tenant / "payroll.md").write_text("needle payroll\n", encoding="utf-8")
-    (enterprise / "handbook.md").write_text("needle handbook\n", encoding="utf-8")
-    (enterprise / "handbook-link.md").symlink_to(enterprise / "handbook.md")
-    (enterprise / "payroll-link.md").symlink_to(other_tenant / "payroll.md")
-    (enterprise / "other-tenant").symlink_to(other_tenant, target_is_directory=True)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    _forbid_outside_access(monkeypatch, other_tenant)
-
-    listing = agent_tools._list_files(workspace, "enterprise_info", tenant_id="tenant-a")
-    search = agent_tools._search_files(workspace, "needle", path="enterprise_info", tenant_id="tenant-a")
-    found = agent_tools._find_files(workspace, "*", path="enterprise_info", tenant_id="tenant-a")
-
-    assert "payroll" not in listing + search + found
-    assert "other-tenant" not in listing + search + found
-    assert listing == "📂 enterprise_info: 0 folder(s), 2 file(s)\n  📄 handbook-link.md (16B)\n  📄 handbook.md (16B)"
-    assert search.startswith("🔍 Found 2+ match(es) in 2 file(s)")
-    assert found.startswith("📂 Found 2 item(s) (0 dirs, 2 files) matching '*':")
+    assert listing == "📂 workspace: 1 folder(s), 1 file(s)\n  📁 real-dir/ (0 items)\n  📄 notes.md (7B)"
 
 
 class CountingStorageBackend(MemoryStorageBackend):
@@ -1327,12 +1162,18 @@ def _search_metadata(result: str) -> _SearchMetadata:
     return _SearchMetadata.model_validate_json(result.rsplit("\nSearch page: ", 1)[1])
 
 
-async def _registered_search(agent_id: uuid.UUID, arguments: ToolArguments, tenant: str | None = "tenant-a") -> str:
-    handler = resolve("search_files")
+async def _registered_tool(
+    name: str, agent_id: uuid.UUID, arguments: ToolArguments, tenant: str | None = "tenant-a"
+) -> str:
+    handler = resolve(name)
     assert handler is not None
     with use_execution_context(ToolExecutionContext(tenant_id=tenant, workspace_root=agent_tools.WORKSPACE_ROOT)):
-        result = handler(arguments=arguments, agent_id=agent_id, user_id=agent_id, session_id="search", on_output=None)
+        result = handler(arguments=arguments, agent_id=agent_id, user_id=agent_id, session_id=name, on_output=None)
         return result if isinstance(result, str) else await result
+
+
+async def _registered_search(agent_id: uuid.UUID, arguments: ToolArguments, tenant: str | None = "tenant-a") -> str:
+    return await _registered_tool("search_files", agent_id, arguments, tenant)
 
 
 class _SearchStorage(MemoryStorageBackend):
@@ -2029,3 +1870,904 @@ async def test_registered_search_spill_or_cursor_loss_fails_explicitly(
 
     assert result.startswith("Invalid search_files cursor:")
     assert "Search page:" not in result
+
+
+class LockRedis:
+    """Just the commands the workspace lock sends, with an expiry that never runs out by itself."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.expiry: dict[str, int] = {}
+        self.renewals = 0
+        self.renewed = asyncio.Event()
+        self.overloaded = False
+
+    async def set(self, key: str, value: str, *, ex: int, nx: bool) -> bool | None:
+        if nx and key in self.values:
+            return None
+        self.values[key], self.expiry[key] = value, ex
+        return True
+
+    async def eval(self, script: str, _count: int, key: str, token: str, *args: int) -> int:
+        mine = self.values.get(key) == token
+        if "'expire'" in script:
+            self.renewals += 1
+            self.renewed.set()
+            if self.overloaded:
+                raise RedisPoolOverloadError("busy")
+            if mine:
+                self.expiry[key] = args[0]
+            self.renewed.set()
+            return int(mine)
+        if mine:
+            del self.values[key]
+        return int(mine)
+
+    async def renewal_done(self) -> None:
+        await asyncio.wait_for(self.renewed.wait(), 10)
+        self.renewed.clear()
+
+
+class TickClock:
+    """A lock clock that only moves when the test says so: each sleep waits for a tick and advances by it."""
+
+    def __init__(self) -> None:
+        self.ticks: asyncio.Queue[float] = asyncio.Queue()
+        self.time = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.time
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.time += await self.ticks.get()
+
+
+@pytest.fixture
+def lock_redis(monkeypatch: pytest.MonkeyPatch) -> LockRedis:
+    redis = LockRedis()
+
+    async def get_redis() -> LockRedis:
+        return redis
+
+    monkeypatch.setattr(workspace_locking, "get_redis", get_redis)
+    return redis
+
+
+def lock_key(agent_id: uuid.UUID, path: str) -> str:
+    return f"workspace-lock:{agent_id}:{path}"
+
+
+async def test_a_workspace_lock_renews_while_its_body_runs_and_stops_when_it_ends(lock_redis: LockRedis):
+    agent_id, clock = uuid.uuid4(), TickClock()
+    key = lock_key(agent_id, "workspace/dir")
+
+    async with real_workspace_locks(agent_id, ["workspace/dir"], ttl_seconds=60, clock=clock):
+        for _ in range(2):
+            lock_redis.expiry[key] = 5
+            await clock.ticks.put(20)
+            await lock_redis.renewal_done()
+            assert lock_redis.expiry[key] == 60
+        check_workspace_lock()
+    await clock.ticks.put(20)
+    await asyncio.sleep(0)
+
+    assert (lock_redis.renewals, clock.sleeps[:2], key in lock_redis.values) == (2, [20.0, 20.0], False)
+
+
+async def test_a_renewal_that_finds_another_owner_marks_the_lock_lost_and_keeps_the_new_owners_lock(
+    lock_redis: LockRedis,
+):
+    agent_id, clock = uuid.uuid4(), TickClock()
+    key = lock_key(agent_id, "workspace/dir")
+
+    async with real_workspace_locks(agent_id, ["workspace/dir"], clock=clock):
+        check_workspace_lock()
+        lock_redis.values[key] = "someone else"
+        await clock.ticks.put(20)
+        await lock_redis.renewal_done()
+        with pytest.raises(WorkspaceLockLostError):
+            check_workspace_lock()
+
+    assert lock_redis.values[key] == "someone else"
+    check_workspace_lock()
+
+
+async def test_a_busy_redis_pool_is_survived_until_a_whole_ttl_passes_without_a_renewal(lock_redis: LockRedis):
+    agent_id, clock = uuid.uuid4(), TickClock()
+
+    async with real_workspace_locks(agent_id, ["workspace/dir"], ttl_seconds=60, clock=clock):
+        lock_redis.overloaded = True
+        await clock.ticks.put(20)
+        await lock_redis.renewal_done()
+        check_workspace_lock()
+        lock_redis.overloaded = False
+        await clock.ticks.put(20)
+        await lock_redis.renewal_done()
+        check_workspace_lock()
+        lock_redis.overloaded = True
+        for _ in range(2):
+            await clock.ticks.put(30)
+            await lock_redis.renewal_done()
+        with pytest.raises(WorkspaceLockLostError):
+            check_workspace_lock()
+
+
+async def test_a_held_workspace_path_is_still_reported_as_busy(lock_redis: LockRedis):
+    agent_id = uuid.uuid4()
+    lock_redis.values[lock_key(agent_id, "workspace/dir")] = "someone else"
+
+    with pytest.raises(RuntimeError, match="Workspace lock busy: workspace/dir"):
+        async with real_workspace_locks(agent_id, ["workspace/dir"]):
+            pytest.fail("the body must not run without the lock")
+
+
+class EditingStorage(MemoryStorageBackend):
+    """Edits one file after the folder was listed, just before the chosen batch call is sent."""
+
+    def __init__(self, files: dict[str, bytes], edited: str, before: str):
+        super().__init__(files)
+        self.edited, self.before, self.calls = edited, before, 0
+
+    async def _edit(self, call: str) -> None:
+        if call == self.before and not self.calls:
+            await self.write_bytes(self.edited, b"edited by someone else")
+        self.calls += call == self.before
+
+    @override
+    async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+        await self._edit("delete")
+        return await super().delete_batch_if_match(versions)
+
+    @override
+    async def copy_batch_if_match(self, copies: Sequence[CopyRequest]) -> dict[str, ConditionalWriteResult]:
+        await self._edit("copy")
+        return await super().copy_batch_if_match(copies)
+
+
+@pytest.fixture
+def revisions(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    written: list[tuple[str, str]] = []
+
+    async def record(*, path: str, operation: str, **_rest: object) -> None:
+        written.append((path, operation))
+
+    monkeypatch.setattr(workspace_collaboration, "record_revision", record)
+    return written
+
+
+async def test_a_folder_delete_leaves_a_file_edited_after_the_listing_and_names_it(
+    monkeypatch, unused_db_session, revisions
+):
+    agent_id = uuid.uuid4()
+    folder = f"{agent_id}/workspace/dir"
+    storage = EditingStorage(
+        {f"{folder}/a.txt": b"a", f"{folder}/b.txt": b"b", f"{folder}/sub/c.txt": b"c"}, f"{folder}/b.txt", "delete"
+    )
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.delete_workspace_file(
+        agent_id=agent_id, path="workspace/dir", actor_type="user", actor_id=agent_id, enforce_human_lock=False
+    )
+
+    assert (result.ok, result.rejected_paths) == (False, ["workspace/dir/b.txt"])
+    assert "workspace/dir/b.txt" in result.message
+    assert storage.files == {f"{folder}/b.txt": b"edited by someone else"}
+    assert sorted(revisions) == [("workspace/dir/a.txt", "delete"), ("workspace/dir/sub/c.txt", "delete")]
+
+
+@pytest.mark.parametrize("before", ["copy", "delete"])
+async def test_a_folder_move_keeps_a_file_edited_after_the_listing_at_its_source(
+    monkeypatch, unused_db_session, revisions, before
+):
+    agent_id = uuid.uuid4()
+    source = f"{agent_id}/workspace/src"
+    storage = EditingStorage(
+        {f"{source}/a.txt": b"a", f"{source}/b.txt": b"b", f"{source}/sub/c.txt": b"c"}, f"{source}/b.txt", before
+    )
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.move_workspace_path(
+        agent_id=agent_id,
+        source_path="workspace/src",
+        destination_path="workspace/dst",
+        actor_type="user",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert (result.ok, result.rejected_paths) == (False, ["workspace/src/b.txt"])
+    assert storage.files[f"{source}/b.txt"] == b"edited by someone else"
+    assert {key for key in storage.files if key.startswith(source)} == {f"{source}/b.txt"}
+    moved = {key.removeprefix(f"{agent_id}/") for key in storage.files if "/dst/" in key} - {"workspace/dst/b.txt"}
+    assert moved == {"workspace/dst/a.txt", "workspace/dst/sub/c.txt"}
+    assert sorted(revisions) == [
+        ("workspace/dst/a.txt", "move_destination"),
+        ("workspace/dst/sub/c.txt", "move_destination"),
+        ("workspace/src/a.txt", "move_source"),
+        ("workspace/src/sub/c.txt", "move_source"),
+    ]
+
+
+async def test_a_folder_delete_stops_when_a_renewal_finds_the_lock_taken(
+    monkeypatch, unused_db_session, revisions, lock_redis: LockRedis
+):
+    agent_id, clock = uuid.uuid4(), TickClock()
+    folder = f"{agent_id}/workspace/dir"
+
+    class StealsTheLock(MemoryStorageBackend):
+        @override
+        async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+            results = await super().delete_batch_if_match(versions)
+            lock_redis.values[lock_key(agent_id, "workspace/dir")] = "someone else"
+            await clock.ticks.put(20)
+            await lock_redis.renewal_done()
+            return results
+
+    storage = StealsTheLock({f"{folder}/f{index:04d}.txt": b"x" for index in range(1500)})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+    monkeypatch.setattr(workspace_collaboration, "workspace_locks", partial(real_workspace_locks, clock=clock))
+
+    result = await workspace_collaboration.delete_workspace_file(
+        agent_id=agent_id, path="workspace/dir", actor_type="user", actor_id=agent_id, enforce_human_lock=False
+    )
+
+    assert result.ok is False
+    assert "lock lost" in result.message
+    assert len(storage.files) == 500
+    assert len(revisions) == 1000
+
+
+@pytest.fixture
+def captured_revisions(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    captured: list[dict[str, object]] = []
+
+    async def record(**kwargs: object) -> None:
+        captured.append(kwargs)
+
+    monkeypatch.setattr(workspace_collaboration, "record_revision", record)
+    return captured
+
+
+REVISION_LIMIT = workspace_collaboration.MAX_REVISION_TEXT_BYTES
+# (file name, size, text kept): at the limit the text is stored, one byte over or for a binary type it is left out.
+REVISION_CASES = [
+    ("log.txt", REVISION_LIMIT, True),
+    ("log.txt", REVISION_LIMIT + 1, False),
+    ("image.png", 8, False),
+]
+
+
+@pytest.mark.parametrize(("name", "size", "kept"), REVISION_CASES)
+async def test_a_write_captures_the_previous_text_only_within_the_revision_limit(
+    monkeypatch, captured_revisions, name, size, kept
+):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/{name}": b"x" * size})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.write_workspace_file(
+        agent_id=agent_id,
+        path=f"workspace/{name}",
+        content="new",
+        actor_type="agent",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert result.ok is True
+    [revision] = captured_revisions
+    assert (revision["before_content"], revision["content_omitted"]) == ("x" * size if kept else None, not kept)
+    assert revision["after_content"] == "new"
+
+
+@pytest.mark.parametrize(("name", "size", "kept"), REVISION_CASES)
+async def test_a_delete_captures_the_previous_text_only_within_the_revision_limit(
+    monkeypatch, captured_revisions, name, size, kept
+):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/{name}": b"x" * size})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.delete_workspace_file(
+        agent_id=agent_id,
+        path=f"workspace/{name}",
+        actor_type="user",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert result.ok is True
+    [revision] = captured_revisions
+    assert (revision["before_content"], revision["content_omitted"]) == ("x" * size if kept else None, not kept)
+
+
+@pytest.mark.parametrize(("name", "size", "kept"), REVISION_CASES)
+async def test_a_move_captures_source_and_destination_text_only_within_the_revision_limit(
+    monkeypatch, captured_revisions, name, size, kept
+):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/{name}": b"x" * size})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    result = await workspace_collaboration.move_workspace_path(
+        agent_id=agent_id,
+        source_path=f"workspace/{name}",
+        destination_path=f"workspace/moved-{name}",
+        actor_type="user",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert result.ok is True
+    source, destination = captured_revisions
+    assert (source["operation"], source["before_content"], source["content_omitted"]) == (
+        "move_source",
+        "x" * size if kept else None,
+        not kept,
+    )
+    assert (destination["operation"], destination["after_content"], destination["content_omitted"]) == (
+        "move_destination",
+        "x" * size if kept else None,
+        not kept,
+    )
+
+
+async def test_a_new_file_and_a_missing_destination_are_not_marked_omitted(monkeypatch, captured_revisions):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/a.txt": b"small"})
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: storage)
+
+    await workspace_collaboration.write_workspace_file(
+        agent_id=agent_id,
+        path="workspace/new.txt",
+        content="fresh",
+        actor_type="agent",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+    await workspace_collaboration.move_workspace_path(
+        agent_id=agent_id,
+        source_path="workspace/a.txt",
+        destination_path="workspace/b.txt",
+        actor_type="user",
+        actor_id=agent_id,
+        enforce_human_lock=False,
+    )
+
+    assert [(rev["operation"], rev["content_omitted"]) for rev in captured_revisions] == [
+        ("write", False),
+        ("move_source", False),
+        ("move_destination", False),
+    ]
+    assert captured_revisions[0]["before_content"] is None
+
+
+# read_file and edit_file read through bounded ranges and never take a whole object into memory.
+NOTES = "workspace/notes.md"
+CHUNK = 64
+
+
+class _RecordedReads(MemoryStorageBackend):
+    """Records every bounded read as (max_bytes, offset, bytes returned) and refuses whole-object reads."""
+
+    def __init__(self):
+        super().__init__()
+        self.reads: list[tuple[int, int | None, int]] = []
+
+    @override
+    async def read_bytes(self, key: str) -> bytes:
+        raise AssertionError("a tool must never read a whole object")
+
+    @override
+    async def read_text(self, key: str, encoding: str = "utf-8", errors: str = "replace") -> str:
+        raise AssertionError("a tool must never read a whole object")
+
+    @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        data = await super().read_bytes_bounded(key, max_bytes, offset=offset)
+        self.reads.append((max_bytes, offset, len(data)))
+        return data
+
+
+async def _registered_read(agent_id: uuid.UUID, **arguments: ToolArgumentValue) -> str:
+    return await _registered_tool("read_file", agent_id, {"path": NOTES, **arguments})
+
+
+async def _stored_notes(search_backend: tuple[uuid.UUID, StorageBackend], data: bytes) -> uuid.UUID:
+    agent_id, backend = search_backend
+    await backend.write_bytes(f"{agent_id}/{NOTES}", data)
+    return agent_id
+
+
+def _row_texts(result: str) -> list[str]:
+    """The text of each numbered row of a read_file result, without its header and footer."""
+    body = result.split("\n", 1)[1].split("\n\n... [")[0]
+    return [row.partition("\t")[2] for row in body.split("\n")] if body else []
+
+
+SMALL = b"one\ntwo\nthree\nfour\nfive\n"
+SMALL_ROWS = "     1\tone\n     2\ttwo\n     3\tthree\n     4\tfour\n     5\tfive"
+
+
+@pytest.mark.parametrize(
+    ("data", "arguments", "expected"),
+    [
+        (SMALL, {}, f"📄 {NOTES} (lines 1-5 of 5)\n{SMALL_ROWS}"),
+        (
+            SMALL,
+            {"offset": 1, "limit": 2},
+            f"📄 {NOTES} (lines 2-3 of 5)\n     2\ttwo\n     3\tthree\n\n... [2 more lines not shown, lines 4-5]",
+        ),
+        (SMALL, {"offset": 4, "limit": 10}, f"📄 {NOTES} (lines 5-5 of 5)\n     5\tfive"),
+        (SMALL, {"offset": 5}, "Offset 5 exceeds file length (5 lines total)"),
+        (SMALL, {"offset": 90, "limit": 3}, "Offset 90 exceeds file length (5 lines total)"),
+        (
+            SMALL,
+            {"offset": -3, "limit": 1},
+            f"📄 {NOTES} (lines 1-1 of 5)\n     1\tone\n\n... [4 more lines not shown, lines 2-5]",
+        ),
+        (b"", {}, f"📄 {NOTES} (lines 0-0 of 0)\n"),
+        (b"", {"offset": 7}, f"📄 {NOTES} (lines 0-0 of 0)\n"),
+        (b"no newline", {}, f"📄 {NOTES} (lines 1-1 of 1)\n     1\tno newline"),
+        (
+            b"a\r\nb\rc\x0cd\xe2\x80\xa8e\xff",
+            {},
+            f"📄 {NOTES} (lines 1-5 of 5)\n     1\ta\n     2\tb\n     3\tc\n     4\td\n     5\te\ufffd",
+        ),
+    ],
+)
+async def test_registered_read_file_keeps_the_output_of_a_whole_read(search_backend, data, arguments, expected):
+    agent_id = await _stored_notes(search_backend, data)
+
+    assert await _registered_read(agent_id, **arguments) == expected
+
+
+@pytest.mark.parametrize("boundary", ["utf8", "crlf", "lone_cr", "unicode", "invalid_utf8", "eof"])
+async def test_registered_read_file_chunk_boundaries_keep_decode_and_line_semantics(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch, boundary: str
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", CHUNK)
+    prefix = b"x" * (CHUNK - 1)
+    data, expected = {
+        "utf8": (prefix + "中needle\nlast".encode(), [prefix.decode() + "中needle", "last"]),
+        "crlf": (prefix + b"\r\nneedle", [prefix.decode(), "needle"]),
+        "lone_cr": (prefix + b"\rneedle", [prefix.decode(), "needle"]),
+        "unicode": (prefix + "\u2028needle".encode(), [prefix.decode(), "needle"]),
+        "invalid_utf8": (prefix + b"\xe4\xffneedle\nneedle", [prefix.decode() + "\ufffd\ufffdneedle", "needle"]),
+        "eof": (prefix + b"x", [prefix.decode() + "x"]),
+    }[boundary]
+    agent_id = await _stored_notes(search_backend, data)
+
+    result = await _registered_read(agent_id)
+
+    assert result.split("\n", 1)[0] == f"📄 {NOTES} (lines 1-{len(expected)} of {len(expected)})"
+    assert _row_texts(result) == expected
+
+
+MESSY = "é中😀\r\nplain\x85two\u2028\r\n\r\n\x0b\x1c\x1d\x1e\x0cend".encode() + b"\xff\xe4\xb8"
+
+
+@pytest.mark.parametrize("chunk", range(1, 14))
+async def test_registered_read_file_does_not_depend_on_the_chunk_size(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch, chunk: int
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", chunk)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", 4 * chunk)
+    agent_id = await _stored_notes(search_backend, MESSY)
+    lines = MESSY.decode(errors="replace").splitlines()
+
+    result = await _registered_read(agent_id)
+
+    assert result.split("\n", 1)[0] == f"📄 {NOTES} (lines 1-{len(lines)} of {len(lines)})"
+    assert _row_texts(result) == lines
+
+
+async def test_registered_read_file_stops_reading_once_a_later_line_exists_and_pages_on(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", CHUNK)
+    lines = [f"line {number:03}" for number in range(1, 101)]
+    agent_id = await _stored_notes(search_backend, "".join(f"{line}\n" for line in lines).encode())
+    _, backend = search_backend
+    original = backend.read_bytes_bounded
+    offsets: list[int | None] = []
+
+    async def record_range(key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        offsets.append(offset)
+        return await original(key, max_bytes, offset=offset)
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", record_range)
+
+    first = await _registered_read(agent_id, limit=2)
+
+    assert first == (
+        f"📄 {NOTES} (lines 1-2; more lines follow)\n     1\tline 001\n     2\tline 002"
+        "\n\n... [more lines not shown; continue with offset=2]"
+    )
+    assert offsets == [0]
+    collected: list[str] = []
+    offset = 0
+    pages = 0
+    while True:
+        page = await _registered_read(agent_id, offset=offset, limit=7)
+        collected.extend(_row_texts(page))
+        pages += 1
+        continuation = re.search(r"continue with offset=(\d+)\]$", page)
+        if continuation is None:
+            break
+        offset = int(continuation.group(1))
+    assert collected == lines
+    assert pages == 15
+    assert page.split("\n", 1)[0] == f"📄 {NOTES} (lines 99-100 of 100)"
+
+
+async def test_registered_read_file_reaches_a_deep_offset_and_a_past_end_offset_in_bounded_ranges(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", CHUNK)
+    lines = [f"line {number:03}" for number in range(1, 101)]
+    data = "".join(f"{line}\n" for line in lines).encode()
+    agent_id = await _stored_notes(search_backend, data)
+    _, backend = search_backend
+    original = backend.read_bytes_bounded
+    ranges: list[tuple[int, int | None, int]] = []
+
+    async def record_range(key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        chunk = await original(key, max_bytes, offset=offset)
+        ranges.append((max_bytes, offset, len(chunk)))
+        return chunk
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", record_range)
+
+    deep = await _registered_read(agent_id, offset=90, limit=3)
+    assert deep == (
+        f"📄 {NOTES} (lines 91-93; more lines follow)\n    91\tline 091\n    92\tline 092\n    93\tline 093"
+        "\n\n... [more lines not shown; continue with offset=93]"
+    )
+    assert [offset for _, offset, _ in ranges] == list(range(0, 833, CHUNK))
+
+    ranges.clear()
+    past_end = await _registered_read(agent_id, offset=500)
+    assert past_end == "Offset 500 exceeds file length (100 lines total)"
+    assert [offset for _, offset, _ in ranges] == list(range(0, len(data) + 1, CHUNK))
+    assert {max_bytes for max_bytes, _, _ in ranges} == {CHUNK}
+    assert max(size for _, _, size in ranges) == CHUNK
+    assert ranges[-1][2] < CHUNK
+
+
+async def test_registered_read_file_truncates_a_long_line_across_chunks_and_still_finds_the_next(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", 4)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", 4)
+    monkeypatch.setattr(workspace_read_window, "MAX_LINE_CHARS", 10)
+    agent_id = await _stored_notes(search_backend, ("0123456789" + "abcdefghijklmnopqrstuvwxyz\r\nshort\n").encode())
+
+    result = await _registered_read(agent_id)
+
+    assert result == (
+        f"📄 {NOTES} (lines 1-2 of 2)\n     1\t0123456789... [line truncated: 26 more characters]\n     2\tshort"
+    )
+    assert await _registered_read(agent_id, offset=1) == f"📄 {NOTES} (lines 2-2 of 2)\n     2\tshort"
+
+
+@pytest.mark.parametrize(
+    ("budget", "kept"),
+    [(30, 2), (15, 1), (5, 1)],
+    ids=["two_rows_fit", "one_row_fits", "first_row_always_kept"],
+)
+@pytest.mark.parametrize("chunk", [workspace_read.READ_CHUNK_BYTES, 16], ids=["whole_file_in_chunk", "early_stop"])
+async def test_registered_read_file_closes_the_window_at_the_output_budget(
+    search_backend: tuple[uuid.UUID, StorageBackend],
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int,
+    kept: int,
+    chunk: int,
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", chunk)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", chunk)
+    monkeypatch.setattr(workspace_read_window, "MAX_WINDOW_CHARS", budget)
+    agent_id = await _stored_notes(search_backend, b"".join(f"line {number:02}\n".encode() for number in range(1, 11)))
+
+    result = await _registered_read(agent_id, limit=1_000_000)
+
+    rows = "\n".join(f"{number:6}\tline {number:02}" for number in range(1, kept + 1))
+    if chunk == 16:
+        expected = f"📄 {NOTES} (lines 1-{kept}; more lines follow)\n{rows}\n\n... [more lines not shown; continue with offset={kept}]"
+    else:
+        expected = (
+            f"📄 {NOTES} (lines 1-{kept} of 10)\n{rows}\n\n... [{10 - kept} more lines not shown, lines {kept + 1}-10]"
+        )
+    assert result == expected
+
+
+async def test_registered_read_file_issues_only_chunk_sized_ranged_reads_on_a_large_single_line(monkeypatch):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", 1024)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", 1024)
+    agent_id = uuid.uuid4()
+    backend = _RecordedReads()
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    await backend.write_bytes(f"{agent_id}/{NOTES}", b"x" * 40_000 + b"\nsecond\n")
+
+    result = await _registered_read(agent_id)
+
+    omitted = 40_000 - workspace_read_window.MAX_LINE_CHARS
+    assert result == (
+        f"📄 {NOTES} (lines 1-2 of 2)\n     1\t{'x' * workspace_read_window.MAX_LINE_CHARS}"
+        f"... [line truncated: {omitted} more characters]\n     2\tsecond"
+    )
+    assert [offset for _, offset, _ in backend.reads] == list(range(0, 40_008, 1024))
+    assert {max_bytes for max_bytes, _, _ in backend.reads} == {1024}
+    assert max(size for _, _, size in backend.reads) == 1024
+    assert backend.reads[-1][2] == 40_008 % 1024
+
+
+@pytest.mark.parametrize(
+    ("arguments", "reads", "expected"),
+    [
+        (
+            {"offset": 3, "limit": 1},
+            [(4, 0, 4), (8, 4, 8), (16, 12, 16), (16, 28, 16)],
+            (
+                f"📄 {NOTES} (lines 4-4; more lines follow)\n     4\tline 04"
+                "\n\n... [more lines not shown; continue with offset=4]"
+            ),
+        ),
+        (
+            {},
+            [(4, 0, 4), (8, 4, 8), (16, 12, 16), (16, 28, 16), (16, 44, 16), (16, 60, 12)],
+            f"📄 {NOTES} (lines 1-9 of 9)\n" + "\n".join(f"{number:6}\tline {number:02}" for number in range(1, 10)),
+        ),
+    ],
+    ids=["early_stop", "read_to_eof"],
+)
+async def test_registered_read_file_doubles_the_read_size_up_to_the_cap(monkeypatch, arguments, reads, expected):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", 4)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", 16)
+    agent_id = uuid.uuid4()
+    backend = _RecordedReads()
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    await backend.write_bytes(
+        f"{agent_id}/{NOTES}", b"".join(f"line {number:02}\n".encode() for number in range(1, 10))
+    )
+
+    result = await _registered_read(agent_id, **arguments)
+
+    assert result == expected
+    assert backend.reads == reads
+
+
+EDIT_LIMIT = 64
+EDIT_KEY = "workspace/a.md"
+
+
+def _use_edit_storage(monkeypatch: pytest.MonkeyPatch, backend: StorageBackend) -> None:
+    async def no_lock(**_arguments: object) -> None:
+        return None
+
+    monkeypatch.setattr(workspace, "get_storage_backend", lambda: backend)
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: backend)
+    monkeypatch.setattr(workspace_collaboration, "get_active_lock", no_lock)
+    monkeypatch.setattr(get_settings(), "WORKSPACE_FILE_CONTENT_MAX_BYTES", EDIT_LIMIT)
+
+
+@pytest.fixture(params=["local", "object"])
+def edit_backend(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    captured_revisions: list[dict[str, object]],
+) -> tuple[uuid.UUID, StorageBackend]:
+    backend = LocalStorageBackend(str(tmp_path)) if request.param == "local" else _RecordedReads()
+    _use_edit_storage(monkeypatch, backend)
+    return uuid.uuid4(), backend
+
+
+async def _registered_edit(agent_id: uuid.UUID, old: str, new: str, **arguments: ToolArgumentValue) -> str:
+    return await _registered_tool(
+        "edit_file", agent_id, {"path": EDIT_KEY, "old_string": old, "new_string": new, **arguments}
+    )
+
+
+@pytest.mark.parametrize("size", [EDIT_LIMIT - 1, EDIT_LIMIT, EDIT_LIMIT + 1])
+async def test_registered_edit_file_refuses_a_file_over_the_workspace_content_limit(edit_backend, size):
+    agent_id, backend = edit_backend
+    key = f"{agent_id}/{EDIT_KEY}"
+    original = b"old" + b"x" * (size - 3)
+    await backend.write_bytes(key, original)
+
+    result = await _registered_edit(agent_id, "old", "new")
+
+    if size <= EDIT_LIMIT:
+        assert result == f"✅ Replaced 1 occurrence(s) in {EDIT_KEY}"
+        assert await backend.read_bytes_bounded(key, EDIT_LIMIT) == b"new" + b"x" * (size - 3)
+    else:
+        assert result.startswith(f"❌ {EDIT_KEY} is larger than the {EDIT_LIMIT}-byte limit")
+        assert "write_file" in result
+        assert await backend.read_bytes_bounded(key, EDIT_LIMIT + 1) == original
+
+
+@pytest.mark.parametrize(
+    "original",
+    [b"old \xff tail", b"\xffold", b"old \xe4\xb8", b"caf\xe9 old"],
+    ids=["byte_inside", "leading_byte", "truncated_character_at_end", "latin1"],
+)
+async def test_registered_edit_file_refuses_invalid_utf8_and_leaves_the_file_untouched(
+    edit_backend, captured_revisions, original
+):
+    agent_id, backend = edit_backend
+    key = f"{agent_id}/{EDIT_KEY}"
+    await backend.write_bytes(key, original)
+
+    result = await _registered_edit(agent_id, "old", "new")
+
+    assert result.startswith(f"❌ {EDIT_KEY} is not valid UTF-8")
+    assert "write_file" in result
+    assert await backend.read_bytes_bounded(key, EDIT_LIMIT) == original
+    assert captured_revisions == []
+
+
+async def test_registered_edit_file_keeps_valid_text_exactly_as_it_was(edit_backend, captured_revisions):
+    agent_id, backend = edit_backend
+    key = f"{agent_id}/{EDIT_KEY}"
+    await backend.write_bytes(key, "\ufeffa\r\nb é\r\nb é\r\nlast".encode())
+
+    result = await _registered_edit(agent_id, "b é", "c", replace_all=True)
+
+    assert result == f"✅ Replaced 2 occurrence(s) in {EDIT_KEY}"
+    assert await backend.read_bytes_bounded(key, EDIT_LIMIT) == "\ufeffa\r\nc\r\nc\r\nlast".encode()
+    assert [(revision["operation"], revision["after_content"]) for revision in captured_revisions] == [
+        ("edit", "\ufeffa\r\nc\r\nc\r\nlast")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("old", "expected_start"),
+    [
+        ("absent", f"❌ 'old_string' not found in {EDIT_KEY}."),
+        ("twice", f"❌ 'old_string' appears 2 times in {EDIT_KEY}."),
+    ],
+)
+async def test_registered_edit_file_keeps_its_not_found_and_ambiguous_replies(edit_backend, old, expected_start):
+    agent_id, backend = edit_backend
+    key = f"{agent_id}/{EDIT_KEY}"
+    await backend.write_bytes(key, b"twice twice")
+
+    result = await _registered_edit(agent_id, old, "new")
+
+    assert result.startswith(expected_start)
+    assert await backend.read_bytes_bounded(key, EDIT_LIMIT) == b"twice twice"
+
+
+async def test_registered_edit_file_reads_one_range_of_at_most_the_limit_and_never_a_whole_object(
+    monkeypatch, captured_revisions
+):
+    agent_id = uuid.uuid4()
+    backend = _RecordedReads()
+    _use_edit_storage(monkeypatch, backend)
+    key = f"{agent_id}/{EDIT_KEY}"
+    await backend.write_bytes(key, b"old")
+
+    assert await _registered_edit(agent_id, "old", "new") == f"✅ Replaced 1 occurrence(s) in {EDIT_KEY}"
+
+    tool_read, *_revision_reads = backend.reads
+    assert tool_read == (EDIT_LIMIT, None, 3)
+    assert [revision["operation"] for revision in captured_revisions] == ["edit"]
+
+
+WORKSPACE_SEED = {"soul.md": b"# soul", "tasks.json": b"[]", "workspace/a.md": b"keep"}
+
+
+@dataclass(frozen=True, slots=True)
+class AgentFiles:
+    """An agent whose workspace holds WORKSPACE_SEED, and one way the engine runs a tool call for it."""
+
+    agent_id: uuid.UUID
+    backend: StorageBackend
+    run: Callable[[str, ToolArguments], Awaitable[str]]
+
+    async def stored(self) -> dict[str, bytes | None]:
+        keys = {name: f"{self.agent_id}/{name}" for name in WORKSPACE_SEED}
+        return {
+            name: await self.backend.read_bytes_bounded(key, EDIT_LIMIT) if await self.backend.exists(key) else None
+            for name, key in keys.items()
+        }
+
+
+@pytest.fixture(params=["execute_tool", "execute_tool_direct"])
+async def agent_files(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, edit_backend, tmp_path):
+    agent_id, backend = edit_backend
+    for name, data in WORKSPACE_SEED.items():
+        await backend.write_bytes(f"{agent_id}/{name}", data)
+
+    async def tenant_lookup(_agent_id: uuid.UUID) -> str:
+        return "tenant-a"
+
+    async def no_agent(_agent_id: uuid.UUID) -> None:
+        return None
+
+    async def no_activity(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
+    monkeypatch.setattr(agent_tools, "_agent_workspace_root", lambda _agent_id: tmp_path)
+    monkeypatch.setattr(agent_dao, "get", no_agent)  # the autonomy gate lets an agent it cannot load through
+    monkeypatch.setattr(activity_logger, "log_activity", no_activity)
+
+    async def run(tool_name: str, arguments: ToolArguments) -> str:
+        if request.param == "execute_tool":
+            return await agent_tools.execute_tool(tool_name, arguments, agent_id=agent_id, user_id=agent_id)
+        return await agent_tools._execute_tool_direct(tool_name, arguments, agent_id)
+
+    return AgentFiles(agent_id, backend, run)
+
+
+@pytest.mark.parametrize(
+    ("path", "protected"),
+    [
+        ("soul.md", "soul.md"),
+        ("/soul.md", "soul.md"),
+        ("./soul.md", "soul.md"),
+        ("a/../soul.md", "soul.md"),
+        ("soul.md/", "soul.md"),
+        ("tasks.json", "tasks.json"),
+        ("./tasks.json", "tasks.json"),
+        ("workspace/../tasks.json", "tasks.json"),
+    ],
+)
+async def test_agent_delete_file_refuses_soul_md_and_tasks_json_on_the_normalised_path(agent_files, path, protected):
+    result = await agent_files.run("delete_file", {"path": path})
+
+    assert result == f"❌ {protected} cannot be deleted (protected)"
+    assert await agent_files.stored() == WORKSPACE_SEED
+
+
+@pytest.mark.parametrize("path", ["", ".", "/", "workspace/.."])
+async def test_agent_delete_file_refuses_the_workspace_root_and_keeps_every_file(agent_files, path):
+    result = await agent_files.run("delete_file", {"path": path})
+
+    assert result.startswith("❌")
+    assert await agent_files.stored() == WORKSPACE_SEED
+
+
+async def test_agent_delete_file_still_deletes_other_files(agent_files):
+    result = await agent_files.run("delete_file", {"path": "workspace/a.md"})
+
+    assert result == "✅ Deleted workspace/a.md"
+    assert await agent_files.stored() == {**WORKSPACE_SEED, "workspace/a.md": None}
+
+
+@pytest.mark.parametrize("path", ["tasks.json", "/tasks.json", "./tasks.json", "a/../tasks.json"])
+async def test_agent_write_and_edit_file_refuse_the_tasks_json_snapshot(agent_files, captured_revisions, path):
+    written = await agent_files.run("write_file", {"path": path, "content": '[{"title": "x"}]'})
+    edited = await agent_files.run("edit_file", {"path": path, "old_string": "[]", "new_string": '[{"title": "x"}]'})
+
+    for result in (written, edited):
+        assert result.startswith("❌")
+        assert "tasks.json" in result
+    assert await agent_files.stored() == WORKSPACE_SEED
+    assert captured_revisions == []
+
+
+@pytest.mark.parametrize("path", ["soul.md", "/soul.md"])
+async def test_agent_write_and_edit_file_still_change_soul_md(agent_files, path):
+    written = await agent_files.run("write_file", {"path": path, "content": "# new soul"})
+    edited = await agent_files.run("edit_file", {"path": path, "old_string": "new", "new_string": "newer"})
+
+    assert written == "✅ Written to soul.md (10 chars)"
+    assert edited == "✅ Replaced 1 occurrence(s) in soul.md"
+    assert (await agent_files.stored())["soul.md"] == b"# newer soul"
+
+
+@pytest.mark.parametrize("path", ["/soul.md", "./tasks.json", "a/../soul.md"])
+async def test_agent_move_file_refuses_soul_md_and_tasks_json_on_the_normalised_path(agent_files, path):
+    result = await agent_files.run("move_file", {"source_path": path, "destination_path": "workspace/moved.md"})
+
+    assert result.startswith("❌")
+    assert "cannot be moved (protected)" in result
+    assert await agent_files.stored() == WORKSPACE_SEED

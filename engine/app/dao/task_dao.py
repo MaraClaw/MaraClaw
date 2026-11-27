@@ -301,6 +301,31 @@ class TaskDAO(BaseDAO[TaskRecord]):
             )
             return TaskRecord.from_row(row) if row is not None else None
 
+    async def purge_finished_before(self, *, finished_before: datetime, limit: int) -> int:
+        """Delete up to ``limit`` done tasks finished before ``finished_before``, with their logs, and return how many.
+
+        A task finishes at ``completed_at``, or at ``updated_at`` when it was marked done without one. Pending and
+        doing tasks stay however old, and rows another transaction holds are skipped, never waited on. The status
+        and expression are written exactly like the partial index ``ix_tasks_done_finished_at``. The logs go in the
+        same statement as their tasks, so no batch leaves a log behind or a task without its history. The picked
+        rows are deleted by ``ctid`` (a TID scan), which the statement's own row locks keep in place.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH expired AS (
+                    SELECT ctid, id FROM tasks
+                    WHERE status = 'done' AND COALESCE(completed_at, updated_at) < %(cutoff)s
+                    ORDER BY COALESCE(completed_at, updated_at) LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ), logs AS (
+                    DELETE FROM task_logs WHERE task_id IN (SELECT id FROM expired)
+                ) DELETE FROM tasks WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING id
+                """,
+                {"cutoff": finished_before, "limit": limit},
+            )
+            return len(rows)
+
 
 @final
 class TaskLogDAO(BaseDAO[TaskLogRecord]):

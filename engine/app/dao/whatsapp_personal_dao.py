@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from app.config import get_settings
+from app.dao.personal_bridge_fleet import admit
 from app.dao.personal_burst_lifecycle import cancel_open_for_agent
-from app.dao.whatsapp_personal_runtime_dao import runtime_for
+from app.dao.whatsapp_personal_runtime_dao import runtime_for, startable_since
 from app.db.session import connection_ctx
 from app.records.whatsapp_personal import PersonalConnection
 
@@ -17,29 +19,34 @@ async def get_personal(agent_id: UUID, *, lock: bool = False) -> PersonalConnect
 
 
 async def candidates() -> list[PersonalConnection]:
+    """Unclaimed desired connections past their retry gate, longest waiting first, from one joined read."""
     async with connection_ctx() as db:
-        rows = await db.fetchall("SELECT * FROM whatsapp_personal_connections WHERE desired AND claim_token IS NULL")
-        now = datetime.now(UTC)
-        due: list[PersonalConnection] = []
-        for row in rows:
-            candidate = PersonalConnection.from_row(row)
-            runtime = await runtime_for(candidate.config_id)
-            if runtime.retry_at is None or runtime.retry_at <= now:
-                due.append(candidate)
-        return due
+        rows = await db.fetchall(
+            "SELECT c.*,cc.extra_config FROM whatsapp_personal_connections c "
+            "LEFT JOIN channel_configs cc ON cc.id=c.config_id WHERE c.desired AND c.claim_token IS NULL "
+            "ORDER BY c.created_at,c.config_id"
+        )
+    now = datetime.now(UTC)
+    waiting = [(since, row) for row in rows if (since := startable_since(row, now)) is not None]
+    waiting.sort(key=lambda entry: entry[0])
+    return [PersonalConnection.from_row(row) for _, row in waiting]
 
 
 async def claim(config_id: UUID) -> PersonalConnection | None:
+    """Lease one connection, or ``None`` when it is declined. Raises ``FleetFullError`` at the fleet ceiling."""
     async with connection_ctx() as db:
-        # Lock the connection, then re-check the durable retry gate, so a concurrent interruption is never bypassed.
+        # Lock the connection without waiting, so a row held elsewhere is declined and never queues the poll loop, then
+        # re-check the durable retry gate, so a concurrent interruption is never bypassed.
         locked = await db.fetchval(
-            "SELECT TRUE FROM whatsapp_personal_connections WHERE config_id=%(id)s FOR UPDATE", {"id": config_id}
+            "SELECT TRUE FROM whatsapp_personal_connections WHERE config_id=%(id)s FOR UPDATE SKIP LOCKED",
+            {"id": config_id},
         )
         if not locked:
             return None
         runtime = await runtime_for(config_id, lock=True)
         if runtime.retry_at is not None and runtime.retry_at > datetime.now(UTC):
             return None
+        await admit(db, "whatsapp", get_settings().WHATSAPP_PERSONAL_MAX_RUNNING_CHILDREN)
         row = await db.fetchone(
             "UPDATE whatsapp_personal_connections SET claim_token=%(token)s,lease_until=now()+interval '30 seconds' "
             "WHERE config_id=%(id)s AND desired AND claim_token IS NULL "
@@ -108,7 +115,8 @@ async def reaped(connection: PersonalConnection) -> bool:
             "attempt_id=CASE WHEN desired AND purge_requested THEN %(attempt)s ELSE attempt_id END, "
             "activated_at=CASE WHEN purge_requested THEN NULL ELSE activated_at END, "
             "expires_at=CASE WHEN desired AND purge_requested THEN now()+interval '120 seconds' ELSE expires_at END, "
-            "purge_requested=FALSE,revision=revision+1 WHERE config_id=%(id)s AND claim_token=%(claim)s RETURNING TRUE",
+            "purge_requested=FALSE,revision=revision+1,updated_at=now() "
+            "WHERE config_id=%(id)s AND claim_token=%(claim)s RETURNING TRUE",
             {"id": connection.config_id, "claim": connection.claim_token, "epoch": uuid4(), "attempt": uuid4()},
         )
         if changed:

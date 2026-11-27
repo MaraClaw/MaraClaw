@@ -1,11 +1,12 @@
 # UI primitives
 
-Scope: 12 source files, including styled controls, composition primitives and the select-options helper.
+Scope: 13 source files, including styled controls, composition primitives and the select-options helper.
 
 ## Files
 
 - `back-button.tsx`: `BackButton` action and `BackLink` route control, with accessible labels and tooltips.
 - `badge.tsx`: status and variant badge rendering.
+- `button-variants.ts`: `buttonVariants` (cva); no `cn` import, so entry-chunk screens can use it without tailwind-merge.
 - `button.tsx`: variant-sized buttons and child-element composition.
 - `card.tsx`: card container, header, title, description, content and footer.
 - `input.tsx`: styled native input.
@@ -21,7 +22,7 @@ Scope: 12 source files, including styled controls, composition primitives and th
 
 1. Styled controls merge classes with `cn` from `@/lib/utils` (`twMerge(clsx(inputs))`).
    `select-options.ts` is a behavior helper and has no `cn` import.
-2. `Button` uses `buttonVariants`; variant and size both default to `default`.
+2. `Button` uses `buttonVariants` and merges it through `cn`. A plain `<button data-slot="button" className={buttonVariants()}>` renders the same classes for every variant except `link` and sizes `sm`/`lg`, where tailwind-merge drops a conflicting base class; use `Button` for those.  variant and size both default to `default`.
    `asChild` selects Radix `Slot`; otherwise renders a native `button`.
 3. `Badge` renders a native `span`; `badgeVariants` defaults to `default`.
    `CardTitle` renders `h3`; retain the primitives' `data-slot` attributes.

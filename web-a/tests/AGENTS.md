@@ -18,7 +18,7 @@ npm test
 ## What CI runs
 
 - `../../.github/workflows/frontend-ci.yml`, `web-a` matrix entry: `contracts:check`, then Unit tests (`npm test`) on Node `26.13.1`.
-- The separate `admin-browser` job runs `npm run test:e2e` for company validation/submission, payment aliases and admin access. Legacy standalone browser QA files remain outside CI; browser evidence from those files does not imply CI execution.
+- The separate `admin-browser` job runs `npm run test:e2e` for company validation/submission, payment aliases, admin access and the company runtime measurement status. Legacy standalone browser QA files remain outside CI; browser evidence from those files does not imply CI execution.
 
 ## Conventions
 
@@ -31,6 +31,7 @@ npm test
   - `roster-export-fixtures.ts`: owned session and download-document doubles for roster export.
   - `company-deletion-authorization-fixture.tsx`: browser-only React mounting fixture.
 - Ownership tests (`http-ownership`, `mutation-ownership`, `query-ownership`, `session-*`, `*-session`) pin the session contracts: a retired owner's success, failure or 401 has no effect; a current 401 clears credentials and notifies auth. Extend them when touching `src/lib/session-policy.ts`, `http.ts` or `src/hooks/session-*`.
+- `entry-imports.test.ts` walks the static imports of `src/main.tsx` and fails when zod, react-query, framer-motion, date-fns, tailwind-merge, the auth client or the shell enter the entry chunk.
 - Review/transfer/deletion query tests assert that disabled gates send no request and that decisions are guarded before any POST.
 - The `.browser.mjs` suffix does not mean runnable. Read the header and imports first:
   - Executable entrypoints run scenarios at top level and have a header or README usage.

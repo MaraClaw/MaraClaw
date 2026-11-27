@@ -5,9 +5,12 @@ from uuid import uuid4
 import anyio
 import pytest
 
+from app.config import get_settings
 from app.records.agent import AgentRecord
 from app.records.gateway_report_delivery import TerminalReason
+from app.records.outbound_plan import OutboundProvider
 from app.services import gateway_report_relay as relay
+from app.services.channels.outbound_errors import ProviderDeliveryError, ProviderPermanentError
 from app.services.channels.whatsapp_window import WhatsAppReplyWindowError
 from gateway_report_relay_fakes import RelayStore
 
@@ -186,12 +189,12 @@ async def test_terminal_write_losing_lease_is_not_committed(store: RelayStore) -
 
 @pytest.mark.parametrize(("kind", "boundary"), [("agent", "preparation"), ("agent", "lock"), ("im", "lock")])
 @pytest.mark.parametrize("error", [ValueError("config"), RuntimeError("config"), OSError("locked"), TimeoutError()])
-async def test_transient_failure_recovers_without_attempt_ceiling(
+async def test_transient_failure_recovers_on_the_last_attempt_below_the_ceiling(
     store: RelayStore, kind: str, boundary: str, error: Exception
 ) -> None:
     # Given
     row = store.intent(kind)
-    row.attempts = 10000
+    row.attempts = get_settings().GATEWAY_REPORT_MAX_ATTEMPTS - 2
 
     def fail() -> None:
         raise error
@@ -266,3 +269,106 @@ async def test_im_identity_change_after_provider_attempt_is_not_terminal(
     assert store.sends == ["authoritative"]
     assert store.rows[row.id].delivered_at == store.now
     assert store.rows[row.id].terminal_at is None
+
+
+@pytest.mark.parametrize(
+    ("provider", "code"),
+    [(OutboundProvider.SLACK, "channel_not_found"), (OutboundProvider.SLACK, "is_archived")],
+)
+async def test_permanent_provider_error_fails_on_first_sight_with_its_reason(
+    store: RelayStore, provider: OutboundProvider, code: str
+) -> None:
+    # Given a provider that says the destination is gone
+    row = store.intent("im")
+    store.send_error = ProviderPermanentError(provider, code)
+    # When
+    first = await relay.relay_batch(store.clock)
+    again = await relay.relay_batch(store.clock)
+    # Then the delivery is failed once, keeps the provider's reason and is never claimed again
+    stored = store.rows[row.id]
+    assert (first, again) == (1, 0)
+    assert stored.attempts == 1
+    assert stored.terminal_reason == "provider_permanent_error"
+    assert stored.failure_detail == f"{provider}: {code}"
+    assert stored.terminal_at == store.now
+    assert stored.delivered_at is None
+    assert store.sends == []
+
+
+async def test_transient_provider_error_keeps_retrying_and_honors_retry_after(store: RelayStore) -> None:
+    # Given a provider error that is not permanent and asks for a delay longer than our own
+    row = store.intent("im")
+    store.send_error = ProviderDeliveryError(OutboundProvider.SLACK, "ratelimited", store.now + timedelta(seconds=900))
+    # When
+    await relay.relay_batch(store.clock)
+    # Then
+    stored = store.rows[row.id]
+    assert stored.terminal_at is None
+    assert stored.failure_detail is None
+    assert stored.available_at == store.now + timedelta(seconds=900)
+
+
+@pytest.mark.parametrize(("jitter", "seconds"), [(0.0, 150), (1.0, 300)])
+async def test_retry_delay_is_jittered_and_never_passes_the_ceiling(
+    store: RelayStore, jitter: float, seconds: int
+) -> None:
+    # Given a delivery deep into its backoff and an injected random source
+    row = store.intent("im")
+    row.attempts = get_settings().GATEWAY_REPORT_MAX_ATTEMPTS - 2
+    store.send_error = OSError("provider")
+    store.jitter = jitter
+    # When
+    await relay.relay_batch(store.clock)
+    # Then
+    assert store.rows[row.id].available_at == store.now + timedelta(seconds=seconds)
+
+
+async def test_attempt_limit_marks_the_failing_delivery_failed_without_storing_the_raw_error(
+    store: RelayStore,
+) -> None:
+    # Given a delivery whose next claim is its last allowed attempt
+    row = store.intent("im")
+    row.attempts = get_settings().GATEWAY_REPORT_MAX_ATTEMPTS - 1
+    store.send_error = OSError("secret-token in provider body")
+    # When
+    await relay.relay_batch(store.clock)
+    # Then
+    stored = store.rows[row.id]
+    assert stored.attempts == get_settings().GATEWAY_REPORT_MAX_ATTEMPTS
+    assert stored.terminal_reason == "attempts_exhausted"
+    assert stored.failure_detail == "OSError"
+    assert stored.terminal_at == store.now
+
+
+async def test_age_limit_marks_the_failing_delivery_failed(store: RelayStore) -> None:
+    # Given a delivery that has been failing for the whole age window
+    row = store.intent("im")
+    row.created_at = store.now - timedelta(hours=get_settings().GATEWAY_REPORT_MAX_AGE_HOURS)
+    store.send_error = ProviderDeliveryError(OutboundProvider.SLACK, "ratelimited")
+    # When
+    await relay.relay_batch(store.clock)
+    # Then
+    stored = store.rows[row.id]
+    assert stored.terminal_reason == "age_exhausted"
+    assert stored.failure_detail == "slack: ratelimited"
+
+
+async def test_a_delivery_that_succeeds_on_its_last_attempt_is_delivered(store: RelayStore) -> None:
+    # Given
+    row = store.intent("im")
+    row.attempts = get_settings().GATEWAY_REPORT_MAX_ATTEMPTS - 1
+    row.created_at = store.now - timedelta(hours=get_settings().GATEWAY_REPORT_MAX_AGE_HOURS + 1)
+    # When
+    await relay.relay_batch(store.clock)
+    # Then limits apply to failures only
+    assert store.rows[row.id].delivered_at == store.now
+    assert store.rows[row.id].terminal_at is None
+
+
+async def test_each_claim_batch_carries_the_per_tenant_cap(store: RelayStore) -> None:
+    # Given
+    store.intent("im")
+    # When
+    await relay.relay_batch(store.clock)
+    # Then
+    assert store.claim_calls == [get_settings().GATEWAY_REPORT_TENANT_CLAIM_LIMIT]

@@ -5,7 +5,9 @@ import { InfiniteQueryObserver, QueryClient } from '@tanstack/react-query'
 import { createSessionQueryScope, RetiredWorkspaceError } from '../src/hooks/session-query-scope.ts'
 import { authSession } from '../src/lib/auth-session.ts'
 import { listTaskLogPage, listTaskPage, type TaskOut } from '../src/lib/agent-work-api.ts'
+import { ApiError } from '../src/lib/http.ts'
 import { doingTasksQuery, mergeTasks, retainTaskLogTail, taskHistoryQuery, taskLogsQuery, taskLogTailQuery } from '../src/lib/task-query.ts'
+import { assertBackedOff, focusRefetch, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
 
 const agentId = '00000000-0000-4000-8000-000000000001'
 const task: TaskOut = {
@@ -79,7 +81,7 @@ test('load more retains history through an error while repeated doing refreshes 
   assert.equal(requests.filter((path) => path.endsWith(task.id)).length, 1)
   assert.deepEqual(requests.filter((path) => path.includes('/page?') && !path.includes('status_filter')), historicalRequests)
   assert.equal(observer.getCurrentResult().data?.pages.length, 2)
-  assert.equal(doingOptions.refetchInterval, 4000)
+  assert.equal(pollInterval(client, doingOptions), 4000)
   assert.equal(historyOptions.refetchInterval, undefined)
 })
 
@@ -139,10 +141,10 @@ test('only an opened doing task polls logs; terminal and pending reads retain lo
   const done = taskLogTailQuery(scope, target, { ...window, status: 'done' })
   assert.equal(closed.enabled, false)
   assert.equal(closed.refetchInterval, undefined)
-  assert.equal(pending.refetchInterval, false)
-  assert.equal(polling.refetchInterval, 4000)
+  assert.equal(pollInterval(client, pending), false)
+  assert.equal(pollInterval(client, polling), 4000)
   assert.equal(running.refetchInterval, undefined)
-  assert.equal(done.refetchInterval, false)
+  assert.equal(pollInterval(client, done), false)
   const observer = new InfiniteQueryObserver(client, running)
   const unsubscribe = observer.subscribe(() => {})
   context.after(() => { unsubscribe(); client.clear() })
@@ -189,3 +191,89 @@ for (const endpoint of ['history', 'doing', 'logs'] as const) {
     await assert.rejects(scope.run(() => Promise.resolve()), RetiredWorkspaceError)
   })
 }
+
+test('doing tasks poll every 4 s while healthy and refetch on focus so a hidden page resumes', (context) => {
+  const client = new QueryClient()
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  context.after(() => client.clear())
+  const page = pageVisibility(context, 'hidden')
+  const options = doingTasksQuery(scope, agentId)
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 4000)
+  assert.equal(options.refetchOnWindowFocus, 'always')
+})
+
+test('an outage backs the doing-tasks poll off with every failed read and the first success restores 4 s', async (context) => {
+  const client = new QueryClient()
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  context.after(() => client.clear())
+  let healthy = false
+  context.mock.method(globalThis, 'fetch', async () => healthy ? Response.json({ items: [], next_cursor: null }) : throttled(503))
+  const options = doingTasksQuery(scope, agentId)
+  assert.equal(pollInterval(client, options), 4000)
+  for (const ceiling of [8000, 16_000, 32_000, 60_000, 60_000]) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), ceiling)
+  }
+  healthy = true
+  await client.fetchQuery(options)
+  assert.equal(pollInterval(client, options), 4000)
+})
+
+test('a Retry-After on the failed doing-tasks read holds the poll back for that long', async (context) => {
+  const client = new QueryClient()
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  context.after(() => client.clear())
+  context.mock.method(globalThis, 'fetch', async () => throttled(429, '30'))
+  const options = doingTasksQuery(scope, agentId)
+  assert.equal(pollInterval(client, options), 4000)
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 30_000)
+  assert.equal(pollInterval(client, options), 30_000)
+})
+
+const tailTarget = { agentId, taskId: task.id }
+const tailWindow = { cursor, page: { items: [log], next_cursor: null }, status: 'doing' as const }
+
+test('an opened doing task tails its logs every 4 s only in the foreground and resumes on focus', (context) => {
+  const client = new QueryClient()
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  context.after(() => client.clear())
+  const page = pageVisibility(context, 'hidden')
+  const options = taskLogTailQuery(scope, tailTarget, tailWindow)
+  assert.equal(pollInterval(client, options), false)
+  page.show()
+  assert.equal(pollInterval(client, options), 4000)
+  assert.equal(focusRefetch(client, options), 'always')
+  assert.equal(options.enabled, true)
+  assert.equal(taskLogTailQuery(scope, tailTarget, { ...tailWindow, status: 'done' }).enabled, false)
+})
+
+test('an outage backs the log tail off with every failed read and the first success restores 4 s', async (context) => {
+  const client = new QueryClient()
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  context.after(() => client.clear())
+  let healthy = false
+  context.mock.method(globalThis, 'fetch', async () => healthy ? Response.json({ items: [log], next_cursor: null }) : throttled(503))
+  // The tail is never stale, so each read is forced rather than served from its initial page.
+  const options = { ...taskLogTailQuery(scope, tailTarget, tailWindow), staleTime: 0 }
+  assert.equal(pollInterval(client, options), 4000)
+  for (const ceiling of [8000, 16_000, 32_000, 60_000, 60_000]) {
+    await assert.rejects(client.fetchQuery(options), ApiError)
+    assertBackedOff(pollInterval(client, options), ceiling)
+  }
+  healthy = true
+  await client.fetchQuery(options)
+  assert.equal(pollInterval(client, options), 4000)
+})
+
+test('a Retry-After on the failed log tail read holds the poll back for that long', async (context) => {
+  const client = new QueryClient()
+  const scope = createSessionQueryScope(authSession, authSession.capture(), client)
+  context.after(() => client.clear())
+  context.mock.method(globalThis, 'fetch', async () => throttled(503, '45'))
+  const options = { ...taskLogTailQuery(scope, tailTarget, tailWindow), staleTime: 0 }
+  assert.equal(pollInterval(client, options), 4000)
+  await assert.rejects(client.fetchQuery(options), (error: unknown) => error instanceof ApiError && error.retryAfterMs === 45_000)
+  assert.equal(pollInterval(client, options), 45_000)
+})

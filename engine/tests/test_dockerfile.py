@@ -13,13 +13,13 @@ APPROVED_DIRECT_PINS: Final = (
     "tini=0.19.0-3+b8",
     "curl=8.14.1-2+deb13u7",
     "bubblewrap=0.12.0-1~deb13u1",
-    "chromium=156.0.8078.79-1~deb13u1",
+    "chromium=156.0.8078.108-1~deb13u1",
 )
 REGRESSION_CASES: Final = (
     ("ARG TINI_VERSION=0.19.0-3+b8", "ARG TINI_VERSION=0.19.0-3+b7", "stale tini pin"),
     ("curl=8.14.1-2+deb13u7", "curl=8.14.1-2+deb13u5", "stale curl pin"),
     ("bubblewrap=0.12.0-1~deb13u1", "bubblewrap=0.11.0-2+deb13u1", "stale bubblewrap pin"),
-    ("chromium=156.0.8078.79-1~deb13u1", "chromium=156.0.8078.47-1~deb13u1", "stale Chromium pin"),
+    ("chromium=156.0.8078.108-1~deb13u1", "chromium=156.0.8078.79-1~deb13u1", "stale Chromium pin"),
     ("curl=8.14.1-2+deb13u7", "", "missing curl direct entry"),
     ("curl=8.14.1-2+deb13u7", "curl", "unpinned curl direct entry"),
     (
@@ -28,8 +28,8 @@ REGRESSION_CASES: Final = (
         "duplicate curl direct entry",
     ),
     (
-        "chromium=156.0.8078.79-1~deb13u1",
-        "chromium=156.0.8078.79-1",
+        "chromium=156.0.8078.108-1~deb13u1",
+        "chromium=156.0.8078.108-1",
         "non-security Chromium replacement",
     ),
 )
@@ -59,7 +59,7 @@ def _production_direct_pins(source: str) -> tuple[str, ...]:
 
 def test_production_dockerfile_includes_linux_docker_cli() -> None:
     content = DOCKERFILE.read_text(encoding="utf-8")
-    assert "FROM docker:29.10.0-cli AS dockercli" in content
+    assert "FROM docker:29.10.1-cli AS dockercli" in content
     assert "COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker" in content
 
 
@@ -125,7 +125,7 @@ def _dependency_run(source: str) -> str:
 
 def _assert_locked_dependencies(source: str) -> None:
     deps, _, production = source.partition(PRODUCTION_STAGE)
-    assert "libc6-dev=2.41-12+deb13u4" in deps
+    assert "libc6-dev=2.41-12+deb13u5" in deps
     copies = [shlex.split(line) for line in deps.splitlines() if line.startswith("COPY ")]
     assert ["COPY", "pyproject.toml", "uv.lock", "./"] in copies
     run = _dependency_run(source)
@@ -231,7 +231,7 @@ def test_dependencies_are_locked_system_installs() -> None:
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
-        ("libc6-dev=2.41-12+deb13u4", ""),
+        ("libc6-dev=2.41-12+deb13u5", ""),
         ("COPY pyproject.toml uv.lock ./", "COPY pyproject.toml ./"),
         ("--locked", "--frozen"),
         ("--system", ""),
@@ -297,3 +297,21 @@ def test_context_rejects_unsafe_policy_additions(pattern: str) -> None:
     # When / Then
     with pytest.raises(AssertionError):
         _assert_context_policy(f"{source}\n{pattern}\n")
+
+
+def _healthcheck(source: str) -> str:
+    instruction = source.partition("\nHEALTHCHECK ")[2].partition("\n\n")[0]
+    return " ".join(line.strip().removesuffix("\\").strip() for line in instruction.splitlines())
+
+
+def test_healthcheck_targets_liveness_with_a_start_period_covering_startup() -> None:
+    # Given the production healthcheck instruction.
+    healthcheck = _healthcheck(DOCKERFILE.read_text(encoding="utf-8"))
+    options = {name: int(value) for name, value in re.findall(r"--([a-z-]+)=(\d+)s?", healthcheck)}
+    # Then it probes the liveness route, never the dependency-bound routes.
+    assert "curl -f http://localhost:8000/api/live" in healthcheck
+    assert "/api/ready" not in healthcheck
+    assert "/api/health" not in healthcheck
+    # And failures during connector setup are not counted: the start period outlasts the retries window.
+    assert options["start-period"] >= 60
+    assert options["timeout"] < options["interval"]

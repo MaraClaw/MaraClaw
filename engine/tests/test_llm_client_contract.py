@@ -1,10 +1,28 @@
+import asyncio
+from collections.abc import Iterator
 from dataclasses import fields, is_dataclass
 from importlib import import_module
-from typing import Final
+from types import SimpleNamespace
+from typing import Any, Final
+from uuid import UUID
 
+import httpx
+import pydantic
 import pytest
+from tests.llm_retry_fakes import FakeClock, health_model, install_provider_health, trip
 
-from app.services.llm import base, factory, providers, registry, types, utils
+from app.config import Settings
+from app.services.llm import base, caller, factory, provider_health, providers, registry, types, utils
+from app.services.llm.failover import FailoverErrorType, classify_error
+from app.services.llm.provider_health import (
+    Admission,
+    ProviderHealth,
+    ProviderUnavailableError,
+    ensure_available,
+    guarded,
+    model_key,
+)
+from app.services.llm.retry_policy import LLMHTTPError
 
 PACKAGE_EXPORTS: Final = (
     "call_llm",
@@ -328,3 +346,328 @@ def test_registered_custom_provider_uses_explicit_endpoint() -> None:
     assert custom.base_url == "https://gateway.example/v42"
     assert custom.supports_tool_choice is True
     assert custom.supports_cache_control is False
+
+
+KEY: Final = UUID(int=7)
+OTHER_KEY: Final = UUID(int=8)
+
+
+@pytest.fixture
+def circuit() -> tuple[ProviderHealth, FakeClock]:
+    clock = FakeClock()
+    return ProviderHealth(failure_threshold=3, cooldown=30.0, clock=clock), clock
+
+
+def _open_circuit(tracker: ProviderHealth, key: UUID = KEY) -> None:
+    for _ in range(3):
+        _ = tracker.failed(key, Admission.CALL)
+
+
+@pytest.mark.parametrize("status", [429, 500, 501, 502, 503, 504, 529, 599])
+def test_rate_limit_and_server_statuses_are_retryable_whatever_the_body_says(status: int) -> None:
+    assert classify_error(LLMHTTPError(status, "bad request: invalid schema, unauthorized")) is (
+        FailoverErrorType.RETRYABLE
+    )
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 409, 413, 422])
+def test_other_client_statuses_are_never_retryable_whatever_the_body_says(status: int) -> None:
+    body = "request timeout: rate limit hit, connection reset, 503 service unavailable"
+    assert classify_error(LLMHTTPError(status, body)) is FailoverErrorType.NON_RETRYABLE
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("[LLM Error] HTTP 400: request timeout", FailoverErrorType.RETRYABLE),
+        ("[LLM Error] HTTP 401: unauthorized", FailoverErrorType.NON_RETRYABLE),
+        ("Connection failed after 3 attempts: boom", FailoverErrorType.RETRYABLE),
+        ("API error: rate limit exceeded", FailoverErrorType.RETRYABLE),
+        ("API error: invalid request schema", FailoverErrorType.NON_RETRYABLE),
+        ("something odd happened", FailoverErrorType.UNKNOWN),
+    ],
+)
+def test_errors_without_a_status_keep_their_message_classification(message: str, expected: FailoverErrorType) -> None:
+    assert classify_error(Exception(message)) is expected
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (httpx.ReadTimeout(""), FailoverErrorType.RETRYABLE),
+        (httpx.PoolTimeout(""), FailoverErrorType.RETRYABLE),
+        (TimeoutError(), FailoverErrorType.RETRYABLE),
+        (ValueError(""), FailoverErrorType.UNKNOWN),
+        (httpx.ReadTimeout("invalid request schema"), FailoverErrorType.NON_RETRYABLE),
+    ],
+)
+def test_a_typed_timeout_without_text_is_retryable_but_the_message_still_comes_first(
+    error: Exception, expected: FailoverErrorType
+) -> None:
+    assert classify_error(error) is expected
+
+
+def test_circuit_opens_after_the_threshold_of_consecutive_failures(circuit: tuple[ProviderHealth, FakeClock]) -> None:
+    tracker, _clock = circuit
+    assert [tracker.failed(KEY, Admission.CALL) for _ in range(3)] == [False, False, True]
+    assert tracker.refusing(KEY)
+    assert tracker.admit(KEY) is None
+    assert tracker.admit(OTHER_KEY) is Admission.CALL
+
+
+def test_a_success_resets_the_failure_streak(circuit: tuple[ProviderHealth, FakeClock]) -> None:
+    tracker, _clock = circuit
+    assert [tracker.failed(KEY, Admission.CALL) for _ in range(2)] == [False, False]
+    assert tracker.succeeded(KEY, Admission.CALL) is False
+    assert [tracker.failed(KEY, Admission.CALL) for _ in range(2)] == [False, False]
+    assert not tracker.refusing(KEY)
+
+
+def test_exactly_one_probe_is_admitted_after_the_cooldown(circuit: tuple[ProviderHealth, FakeClock]) -> None:
+    # Given an open circuit.
+    tracker, clock = circuit
+    _open_circuit(tracker)
+    clock.advance(29.99)
+    assert tracker.admit(KEY) is None
+    assert tracker.retry_in(KEY) == pytest.approx(0.01)
+    # When the cooldown ends, the first caller becomes the probe and nobody else is let through.
+    clock.advance(0.01)
+    assert not tracker.refusing(KEY)
+    assert tracker.admit(KEY) is Admission.PROBE
+    assert tracker.refusing(KEY)
+    assert [tracker.admit(KEY) for _ in range(3)] == [None, None, None]
+
+
+def test_a_successful_probe_closes_the_circuit(circuit: tuple[ProviderHealth, FakeClock]) -> None:
+    tracker, clock = circuit
+    _open_circuit(tracker)
+    clock.advance(30)
+    probe = tracker.admit(KEY)
+    assert probe is Admission.PROBE
+    assert tracker.succeeded(KEY, probe) is True
+    assert [tracker.admit(KEY) for _ in range(3)] == [Admission.CALL] * 3
+    assert tracker.retry_in(KEY) == 0
+    assert [tracker.failed(KEY, Admission.CALL) for _ in range(3)] == [False, False, True]
+
+
+def test_a_failed_probe_reopens_the_circuit_for_another_cooldown(circuit: tuple[ProviderHealth, FakeClock]) -> None:
+    tracker, clock = circuit
+    _open_circuit(tracker)
+    clock.advance(30)
+    probe = tracker.admit(KEY)
+    assert probe is Admission.PROBE
+    clock.advance(4)
+    assert tracker.failed(KEY, probe) is True
+    assert tracker.admit(KEY) is None
+    assert tracker.retry_in(KEY) == pytest.approx(30)
+    clock.advance(30)
+    assert tracker.admit(KEY) is Admission.PROBE
+
+
+def test_an_abandoned_probe_hands_the_slot_to_the_next_caller(circuit: tuple[ProviderHealth, FakeClock]) -> None:
+    tracker, clock = circuit
+    _open_circuit(tracker)
+    clock.advance(30)
+    probe = tracker.admit(KEY)
+    assert probe is Admission.PROBE
+    assert tracker.admit(KEY) is None
+    tracker.abandoned(KEY, probe)
+    assert tracker.admit(KEY) is Admission.PROBE
+
+
+def test_calls_admitted_before_the_circuit_opened_do_not_move_it(circuit: tuple[ProviderHealth, FakeClock]) -> None:
+    # Given a circuit that opened while earlier calls were still in flight.
+    tracker, clock = circuit
+    _open_circuit(tracker)
+    clock.advance(30)
+    probe = tracker.admit(KEY)
+    assert probe is Admission.PROBE
+    # When those stragglers finish, neither their failure nor their success decides the probe.
+    assert tracker.failed(KEY, Admission.CALL) is False
+    assert tracker.succeeded(KEY, Admission.CALL) is False
+    assert tracker.refusing(KEY)
+    assert tracker.succeeded(KEY, probe) is True
+
+
+def test_every_model_has_its_own_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
+    tracker, _clock = install_provider_health(monkeypatch)
+    sick, well = health_model("sick"), health_model("well")
+    trip(tracker, sick)
+    with pytest.raises(ProviderUnavailableError):
+        ensure_available(sick)
+    ensure_available(well)
+    assert provider_health.is_unavailable(sick)
+    assert not provider_health.is_unavailable(well)
+
+
+async def _answer() -> str:
+    return "answer"
+
+
+def _fails_with(error: BaseException):
+    async def call() -> str:
+        raise error
+
+    return call
+
+
+@pytest.mark.parametrize(
+    "error",
+    [LLMHTTPError(429, "slow down"), LLMHTTPError(503, "busy"), RuntimeError("503 unavailable"), httpx.ReadTimeout("")],
+    ids=["429", "503", "message-503", "typed-timeout"],
+)
+async def test_retryable_failures_open_the_circuit_and_a_refused_call_never_reaches_the_provider(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    # Given a model whose provider fails with a retryable error.
+    _tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    model = health_model()
+    for _ in range(2):
+        with pytest.raises(type(error)):
+            _ = await guarded(model, _fails_with(error))
+    reached: list[str] = []
+
+    async def call() -> str:
+        reached.append("called")
+        return "answer"
+
+    # When the next call is made, it is refused before the provider and says why, so the failover reads it as retryable.
+    with pytest.raises(ProviderUnavailableError) as refused:
+        _ = await guarded(model, call)
+    assert reached == []
+    assert str(refused.value) == "LLM provider is unavailable after repeated failures; try again in 30 s"
+    assert caller.is_retryable_error(f"[LLM Error] {refused.value}")
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 422])
+async def test_client_errors_never_open_the_circuit_and_prove_the_provider_is_up(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    # Given a streak one failure short of the threshold, then 4xx answers whose bodies talk about timeouts.
+    tracker, _clock = install_provider_health(monkeypatch, threshold=3)
+    model = health_model()
+    key = model_key(model)
+    assert key is not None
+    rejected = LLMHTTPError(status, "request timeout; rate limit; connection reset")
+    for _ in range(2):
+        with pytest.raises(LLMHTTPError):
+            _ = await guarded(model, _fails_with(LLMHTTPError(503, "busy")))
+    # When more of them arrive, each is an answer: the streak is reset and the circuit stays closed.
+    for _ in range(10):
+        with pytest.raises(LLMHTTPError):
+            _ = await guarded(model, _fails_with(rejected))
+    with pytest.raises(LLMHTTPError):
+        _ = await guarded(model, _fails_with(LLMHTTPError(503, "busy")))
+    assert not tracker.refusing(key)
+    assert await guarded(model, _answer) == "answer"
+
+
+async def test_an_error_that_says_nothing_about_the_provider_neither_counts_nor_resets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracker, _clock = install_provider_health(monkeypatch, threshold=2)
+    model = health_model()
+    key = model_key(model)
+    assert key is not None
+    with pytest.raises(LLMHTTPError):
+        _ = await guarded(model, _fails_with(LLMHTTPError(503, "busy")))
+    for _ in range(5):
+        with pytest.raises(ValueError, match="bug"):
+            _ = await guarded(model, _fails_with(ValueError("bug")))
+    assert not tracker.refusing(key)
+    with pytest.raises(LLMHTTPError):
+        _ = await guarded(model, _fails_with(LLMHTTPError(503, "busy")))
+    assert tracker.refusing(key)
+
+
+async def test_the_probe_decides_and_a_cancelled_probe_frees_the_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given an open circuit past its cooldown, and a probe parked on the provider.
+    tracker, clock = install_provider_health(monkeypatch, threshold=2)
+    model = health_model()
+    trip(tracker, model, failures=2)
+    clock.advance(30)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def parked() -> str:
+        entered.set()
+        await release.wait()
+        return "answer"
+
+    probe = asyncio.create_task(guarded(model, parked))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    # When another call arrives meanwhile, it is refused and the probe slot stays taken.
+    with pytest.raises(ProviderUnavailableError, match="try again shortly"):
+        _ = await guarded(model, _answer)
+    # Then cancelling the probe proves nothing: the next caller becomes the probe and its answer closes the circuit.
+    _ = probe.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        _ = await probe
+    assert await guarded(model, _answer) == "answer"
+    assert not provider_health.is_unavailable(model)
+    assert await guarded(model, _answer) == "answer"
+
+
+async def test_a_failed_probe_reopens_and_a_peek_does_not_take_the_probe_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    tracker, clock = install_provider_health(monkeypatch, threshold=2)
+    model = health_model()
+    key = model_key(model)
+    assert key is not None
+    trip(tracker, model, failures=2)
+    clock.advance(30)
+    ensure_available(model)
+    ensure_available(model)
+    with pytest.raises(LLMHTTPError):
+        _ = await guarded(model, _fails_with(LLMHTTPError(500, "still down")))
+    assert tracker.refusing(key)
+    with pytest.raises(ProviderUnavailableError, match="try again in 30 s"):
+        ensure_available(model)
+
+
+async def test_a_model_without_a_row_id_is_not_tracked(monkeypatch: pytest.MonkeyPatch) -> None:
+    _tracker, _clock = install_provider_health(monkeypatch, threshold=1)
+    untracked: Any = SimpleNamespace(id="not-a-uuid", provider="openai", model="m")
+    assert model_key(untracked) is None
+    for _ in range(3):
+        with pytest.raises(LLMHTTPError):
+            _ = await guarded(untracked, _fails_with(LLMHTTPError(503, "busy")))
+    assert not provider_health.is_unavailable(untracked)
+
+
+@pytest.fixture
+def fresh_health() -> Iterator[None]:
+    provider_health.reset_provider_health()
+    yield
+    provider_health.reset_provider_health()
+
+
+def test_provider_health_settings_default_to_a_handful_of_failures_and_a_short_cooldown() -> None:
+    settings = Settings()
+    assert (settings.LLM_PROVIDER_FAILURE_THRESHOLD, settings.LLM_PROVIDER_COOLDOWN_SECONDS) == (5, 30.0)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"LLM_PROVIDER_FAILURE_THRESHOLD": 0},
+        {"LLM_PROVIDER_COOLDOWN_SECONDS": 0},
+        {"LLM_PROVIDER_COOLDOWN_SECONDS": float("nan")},
+        {"LLM_PROVIDER_COOLDOWN_SECONDS": float("inf")},
+    ],
+)
+def test_provider_health_settings_reject_values_that_would_disable_or_wedge_the_circuit(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        _ = Settings.model_validate(overrides)
+
+
+@pytest.mark.usefixtures("fresh_health")
+def test_the_process_tracker_is_sized_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    configured = Settings(LLM_PROVIDER_FAILURE_THRESHOLD=2, LLM_PROVIDER_COOLDOWN_SECONDS=12.0)
+    monkeypatch.setattr(provider_health, "get_settings", lambda: configured)
+    tracker = provider_health.health_tracker()
+    assert tracker is provider_health.health_tracker()
+    assert [tracker.failed(KEY, Admission.CALL) for _ in range(2)] == [False, True]
+    assert 0 < tracker.retry_in(KEY) <= 12.0
+    provider_health.reset_provider_health()
+    assert provider_health.health_tracker() is not tracker

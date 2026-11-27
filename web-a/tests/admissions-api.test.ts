@@ -8,7 +8,7 @@ import {
 import { ApiError } from '../src/lib/http.ts'
 import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import { NotificationKind, notificationSchema } from '../src/lib/notifications-api.ts'
-import { canReviewAdmissions } from '../src/lib/types/auth.ts'
+import { canReviewAdmissions } from '../src/lib/types/auth-guards.ts'
 import { approvedAdmission, pendingAdmission } from './admission-fixtures.ts'
 import { adminUser } from './helpers.ts'
 

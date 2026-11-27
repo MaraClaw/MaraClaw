@@ -7,18 +7,8 @@ import {
   OrganizationAdmissionAcknowledgmentSchema,
   OrganizationAdmissionQuoteRequestSchema,
   OrganizationAdmissionQuoteSchema,
-  OrganizationPlansResponseSchema,
 } from './engine-contracts.generated.ts'
-import type {
-  OrganizationAdmissionQuote as EngineOrganizationQuote,
-  OrganizationPlan as EngineOrganizationPlan,
-} from './engine-contracts.generated.ts'
-
-const catalogSchema = OrganizationPlansResponseSchema.extend({
-  plans: OrganizationPlansResponseSchema.shape.plans.length(3)
-    .refine((plans) => new Set(plans.map((plan) => plan.id)).size === 3)
-    .readonly(),
-})
+import type { OrganizationAdmissionQuote as EngineOrganizationQuote } from './engine-contracts.generated.ts'
 
 const organizationQuoteFields = {
   organization_name: z.string().trim().min(1, 'Enter your organization name.').max(200, 'Enter an organization name with at most 200 characters.'),
@@ -40,7 +30,6 @@ export const organizationQuoteFormSchema = OrganizationAdmissionQuoteRequestSche
   return { ...values, phone }
 })
 
-export type OrganizationPlan = Readonly<EngineOrganizationPlan>
 export type OrganizationQuote = Readonly<EngineOrganizationQuote>
 export type OrganizationQuoteRequest = z.infer<typeof organizationQuoteRequestSchema>
 
@@ -51,12 +40,6 @@ export function organizationRefusalCode(error: unknown): string | null {
   if (!(error instanceof ApiError)) return null
   const refusal = refusalSchema.safeParse(error.detail)
   return refusal.success ? refusal.data.code : null
-}
-
-export function fetchOrganizationPlans(signal?: AbortSignal) {
-  return apiRequest('/api/organization-plans', {
-    token: null, ...(signal === undefined ? {} : { signal }), schema: catalogSchema,
-  })
 }
 
 /** Prices the request on the server and stores nothing. */

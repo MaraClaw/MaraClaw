@@ -4,12 +4,13 @@ from binascii import Error as Base64Error
 from datetime import datetime
 from typing import ClassVar, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.api.admin_audit_dependencies import require_admin_audit_role
+from app.core.client_address import get_client_ip
 from app.core.domain.agents import AgentStatus
 from app.core.domain.users import MAX_USERS_PAGE_SIZE, UserRole
 from app.core.json_types import json_as_str, object_mapping_from
@@ -46,13 +47,6 @@ from app.services.tenant_provisioning import AdminEmailTakenError
 from app.services.user_page_filters import UserPageEligibility, user_page_digest, user_page_filter
 from app.services.user_roster_response import RosterDownloadResponse
 from app.services.user_roster_tickets import UserRosterExportOut, company_roster_tenant
-
-
-async def get_client_ip(request: Request) -> str | None:
-    if request.client is None:
-        return None
-    return request.client.host
-
 
 router = APIRouter(prefix="/users", tags=["users"])
 export_router = APIRouter(prefix="/users", tags=["users"])

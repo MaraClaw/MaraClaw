@@ -1,11 +1,12 @@
 """Per-agent workspace disk soft quota: measurement, policy, refusal mapping and enforcement points, with fakes."""
 
+import asyncio
 import os
 import subprocess
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -267,7 +268,32 @@ class World:
             measured_at=started,
             over_since=(previous.over_since if previous and previous.over_since else started) if over else None,
             notified_at=previous.notified_at if over and previous else None,
+            walk_failed_at=_outlives(previous.walk_failed_at if previous else None, started),
+            remeasure_requested_at=_outlives(previous.remeasure_requested_at if previous else None, started),
         )
+        self.rows[agent_id] = row
+        return row
+
+    async def record_walk_failure(
+        self, agent_id: UUID, *, limit_bytes: int, started: datetime
+    ) -> AgentWorkspaceUsageRecord | None:
+        previous = self.rows.get(agent_id)
+        if previous is None:
+            row = AgentWorkspaceUsageRecord(agent_id, 0, 0, limit_bytes, walk_failed_at=started)
+        else:
+            superseded = previous.measured_at is not None and previous.measured_at > started
+            repeated = previous.walk_failed_at is not None and previous.walk_failed_at >= started
+            if superseded or repeated:
+                return None
+            row = replace(previous, walk_failed_at=started)
+        self.rows[agent_id] = row
+        return row
+
+    async def request_remeasure(self, agent_id: UUID, *, requested: datetime) -> AgentWorkspaceUsageRecord | None:
+        previous = self.rows.get(agent_id)
+        if previous is None or (previous.remeasure_requested_at or requested) > requested:
+            return None
+        row = replace(previous, remeasure_requested_at=requested)
         self.rows[agent_id] = row
         return row
 
@@ -283,6 +309,11 @@ class World:
 
     async def get(self, record_id: UUID) -> AgentWorkspaceUsageRecord | None:
         return self.rows.get(record_id)
+
+
+def _outlives(mark: datetime | None, started: datetime) -> datetime | None:
+    """A failed-walk or re-measure mark survives a stored measurement that started before it."""
+    return mark if mark is not None and mark > started else None
 
 
 @pytest.fixture
@@ -312,6 +343,8 @@ def world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> World:
 
     dao = quota.agent_workspace_usage_dao
     monkeypatch.setattr(dao, "record_measurement", state.record_measurement)
+    monkeypatch.setattr(dao, "record_walk_failure", state.record_walk_failure)
+    monkeypatch.setattr(dao, "request_remeasure", state.request_remeasure)
     monkeypatch.setattr(dao, "claim_notification", state.claim_notification)
     monkeypatch.setattr(dao, "delete", state.delete)
     monkeypatch.setattr(dao, "get", state.get)
@@ -520,6 +553,24 @@ async def test_after_docker_stops_answering_the_rest_of_the_pass_keeps_stored_la
     assert layers.unavailable
     assert [world.rows[agent.id].layer_bytes for agent in (first, second, third)] == [0, GIB // 2, GIB // 2]
     assert len(warnings) == 1
+
+
+async def test_agents_measured_at_once_share_the_layer_read_state_and_later_agents_skip_after_it_fails(
+    world: World, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(quota, "logger", SimpleNamespace(warning=lambda *args: None))
+    wave = [_agent(container="c1"), _agent(container="c2")]
+    later = _agent(container="c3")
+    world.dir_bytes, world.layer_error = GIB, quota.LayerReadUnavailableError("TimeoutExpired")
+    layers = quota.LayerReads()
+
+    await asyncio.gather(*(quota.measure_agent(agent, layers) for agent in wave))
+    await quota.measure_agent(later, layers)
+
+    assert layers.unavailable
+    assert 1 <= len(world.inspects) <= 2
+    assert "c3" not in world.inspects
+    assert world.rows[later.id].layer_bytes == 0
 
 
 async def test_the_layer_read_skip_ends_with_the_pass(world: World):
@@ -820,30 +871,48 @@ async def test_a_failed_re_measure_after_recreation_never_raises(world: World, m
 
 
 @pytest.mark.parametrize("stored", [True, False], ids=["stored-row", "no-row"])
-async def test_a_walk_that_passes_its_deadline_records_nothing(
+async def test_a_walk_that_passes_its_deadline_is_recorded_on_the_row_and_is_not_a_measurement(
     world: World, monkeypatch: pytest.MonkeyPatch, stored: bool
 ):
     # Given a walk that ran out of time after counting more than the allowance.
     warnings: list[tuple[object, ...]] = []
     monkeypatch.setattr(quota, "logger", SimpleNamespace(warning=lambda *args: warnings.append(args)))
+    monkeypatch.setattr(quota, "datetime", Clock(LATER))
     record = AsyncMock()
     monkeypatch.setattr(quota.agent_workspace_usage_dao, "record_measurement", record)
     agent = _agent()
-    previous = AgentWorkspaceUsageRecord(agent.id, GIB, GIB // 2, PRO_LIMIT)
+    previous = AgentWorkspaceUsageRecord(agent.id, GIB, GIB // 2, PRO_LIMIT, measured_at=EARLIER)
     if stored:
         world.rows[agent.id] = previous
     world.dir_bytes = 4 * GIB
     world.walk_error = quota.WorkspaceMeasurementTimeoutError("deadline")
     # When the agent is measured.
     await quota.measure_agent(agent)
-    # Then no size, usage row, pressure sample, alert or layer read came of it, and the stored row is as it was.
+    # Then no size, pressure sample, alert or layer read came of it, and the failed attempt is the row's only change.
     record.assert_not_awaited()
-    assert world.rows == ({agent.id: previous} if stored else {})
+    placeholder = AgentWorkspaceUsageRecord(agent.id, 0, 0, PRO_LIMIT, walk_failed_at=LATER)
+    assert world.rows == {agent.id: replace(previous, walk_failed_at=LATER) if stored else placeholder}
     assert world.pressure == []
     assert world.inspects == []
     world.notify.assert_not_awaited()
     assert len(warnings) == 1
     assert agent.id in warnings[0]
+
+
+async def test_a_failed_walk_neither_lifts_nor_creates_a_block(world: World):
+    blocked, free = _agent(), _agent()
+    world.rows[blocked.id] = _over(blocked)
+    over_since = world.rows[blocked.id].over_since
+    world.walk_error = quota.WorkspaceMeasurementTimeoutError("deadline")
+
+    await quota.measure_agent(blocked)
+    await quota.measure_agent(free)
+
+    with pytest.raises(WorkspaceDiskQuotaExceeded):
+        await quota.ensure_workspace_within_quota(blocked)
+    await quota.ensure_workspace_within_quota(free)
+    assert (world.rows[blocked.id].dir_bytes, world.rows[blocked.id].over_since) == (4 * GIB, over_since)
+    assert world.rows[free.id].over_since is None
 
 
 async def test_a_re_measure_whose_walk_passes_its_deadline_never_raises_and_keeps_the_block(world: World):
@@ -855,9 +924,145 @@ async def test_a_re_measure_whose_walk_passes_its_deadline_never_raises_and_keep
     await quota.remeasure_after_recreation(agent)
     await quota.refresh_workspace_usage_after_delete(agent)
 
-    assert world.rows == {agent.id: blocked}
+    row = world.rows[agent.id]
+    assert (row.dir_bytes, row.layer_bytes, row.over_since) == (blocked.dir_bytes, 0, blocked.over_since)
+    assert row.walk_failed_at is not None
     assert world.pressure == []
     world.notify.assert_not_awaited()
+    with pytest.raises(WorkspaceDiskQuotaExceeded):
+        await quota.ensure_workspace_within_quota(agent)
+
+
+@dataclass
+class Parked:
+    """A measurement that cannot finish inside a request's wait: it starts, then waits until it is cancelled."""
+
+    started: int = 0
+    cancelled: int = 0
+
+    async def measure(self, _agent: AgentRecord, layers: object = None) -> None:
+        self.started += 1
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+
+
+def _park(monkeypatch: pytest.MonkeyPatch) -> Parked:
+    """Replace the measurement with a parked one and give requests no time to wait for it."""
+    parked = Parked()
+    monkeypatch.setattr(quota, "measure_agent", parked.measure)
+    monkeypatch.setattr(quota, "REQUEST_WAIT_SECONDS", 0.0)
+    return parked
+
+
+async def test_a_re_measure_inside_the_request_wait_lifts_the_block_and_asks_the_worker_for_nothing(world: World):
+    agent = _agent()
+    world.rows[agent.id] = _over(agent)
+    world.dir_bytes = GIB
+
+    await quota.refresh_workspace_usage_after_delete(agent)
+
+    row = world.rows[agent.id]
+    assert (row.over_since, row.remeasure_requested_at) == (None, None)
+    await quota.ensure_workspace_within_quota(agent)
+
+
+@pytest.mark.parametrize("entry", ["delete", "recreation"])
+async def test_a_re_measure_that_outlasts_the_request_wait_is_cancelled_and_left_to_the_worker(
+    world: World, monkeypatch: pytest.MonkeyPatch, entry: str
+):
+    # Given a blocked agent whose measurement cannot finish while the request waits.
+    parked = _park(monkeypatch)
+    monkeypatch.setattr(quota, "datetime", Clock(LATER))
+    agent = _agent()
+    blocked = _over(agent)
+    world.rows[agent.id] = blocked
+    # When the delete (or the start that recreated its guest) asks for a re-measure.
+    if entry == "delete":
+        await quota.refresh_workspace_usage_after_delete(agent)
+    else:
+        await quota.remeasure_after_recreation(agent)
+    # Then the measurement was stopped, the agent is marked for the worker, and the block stands untouched.
+    assert (parked.started, parked.cancelled) == (1, 1)
+    assert world.rows[agent.id] == replace(blocked, remeasure_requested_at=LATER)
+    with pytest.raises(WorkspaceDiskQuotaExceeded):
+        await quota.ensure_workspace_within_quota(agent)
+
+
+async def test_a_request_during_an_earlier_hand_off_renews_the_ask_instead_of_walking_again(
+    world: World, monkeypatch: pytest.MonkeyPatch
+):
+    # Given an earlier request handed this agent over a minute ago, so its cancelled walk may still be scanning.
+    parked = _park(monkeypatch)
+    renewed = EARLIER + timedelta(seconds=61)
+    monkeypatch.setattr(quota, "datetime", Clock(EARLIER + timedelta(seconds=60), renewed))
+    agent = _agent()
+    blocked = replace(_over(agent), remeasure_requested_at=EARLIER)
+    world.rows[agent.id] = blocked
+    # When another delete asks for a re-measure.
+    await quota.refresh_workspace_usage_after_delete(agent)
+    # Then no second walk starts and the ask is renewed, so the worker's measurement starts after this delete.
+    assert parked.started == 0
+    assert world.rows[agent.id] == replace(blocked, remeasure_requested_at=renewed)
+
+
+async def test_a_request_after_the_earlier_walk_could_have_ended_measures_again_and_clears_the_ask(
+    world: World, monkeypatch: pytest.MonkeyPatch
+):
+    started = EARLIER + timedelta(seconds=quota.WALK_DEADLINE_SECONDS)
+    monkeypatch.setattr(quota, "datetime", Clock(started, started + timedelta(seconds=1)))
+    agent = _agent()
+    world.rows[agent.id] = replace(_over(agent), remeasure_requested_at=EARLIER)
+    world.dir_bytes = GIB
+
+    await quota.refresh_workspace_usage_after_delete(agent)
+
+    row = world.rows[agent.id]
+    assert (row.over_since, row.remeasure_requested_at) == (None, None)
+    assert row.measured_at == started + timedelta(seconds=1)
+
+
+async def test_a_hand_off_that_cannot_be_stored_never_raises(world: World, monkeypatch: pytest.MonkeyPatch):
+    _ = _park(monkeypatch)
+    monkeypatch.setattr(
+        quota.agent_workspace_usage_dao, "request_remeasure", AsyncMock(side_effect=OSError("database down"))
+    )
+    agent = _agent()
+    world.rows[agent.id] = _over(agent)
+
+    await quota.refresh_workspace_usage_after_delete(agent)
+    await quota.remeasure_after_recreation(agent)
+
+
+async def test_concurrent_measurements_of_one_agent_keep_the_later_start_and_alert_and_sample_once_per_store(
+    world: World, monkeypatch: pytest.MonkeyPatch
+):
+    # Given two measurements of one over-quota agent in flight at once, the second started later.
+    monkeypatch.setattr(quota, "datetime", Clock(EARLIER, LATER))
+    stored: list[bool] = []
+    record = world.record_measurement
+
+    async def counting(
+        agent_id: UUID, *, dir_bytes: int, layer_bytes: int, limit_bytes: int, started: datetime
+    ) -> AgentWorkspaceUsageRecord | None:
+        row = await record(
+            agent_id, dir_bytes=dir_bytes, layer_bytes=layer_bytes, limit_bytes=limit_bytes, started=started
+        )
+        stored.append(row is not None)
+        return row
+
+    monkeypatch.setattr(quota.agent_workspace_usage_dao, "record_measurement", counting)
+    agent = _agent()
+    world.dir_bytes = 4 * GIB
+    # When they land in whichever order their walks finish.
+    await asyncio.gather(quota.measure_agent(agent), quota.measure_agent(agent))
+    # Then the later start is what is stored, each stored measurement fed the episodes once, and one alert went out.
+    assert world.rows[agent.id].measured_at == LATER
+    assert sum(stored) >= 1
+    assert len(world.pressure) == sum(stored)
+    world.notify.assert_awaited_once()
 
 
 async def test_the_quota_handler_is_registered_and_answers_507_with_the_allowance():

@@ -4,6 +4,7 @@ import { test, type TestContext } from 'node:test'
 import { ApiError } from '../src/lib/http.ts'
 import { createPersonalSession } from '../src/lib/whatsapp-personal-session.ts'
 import type { PersonalStatus } from '../src/lib/whatsapp-api.ts'
+import { signal } from './socket-fixture.ts'
 
 const generation = '11111111-1111-4111-8111-111111111111'
 const attempt = '22222222-2222-4222-8222-222222222222'
@@ -15,20 +16,25 @@ function harness(t: TestContext) {
   const reads: { readonly result: ReturnType<typeof Promise.withResolvers<PersonalStatus>>; readonly signal: AbortSignal }[] = []
   const changes: { readonly result: ReturnType<typeof Promise.withResolvers<PersonalStatus>>; readonly signal: AbortSignal }[] = []
   const timers = new Map<ReturnType<typeof setTimeout>, { readonly callback: () => void; readonly delay: number }>()
+  const visibility = signal(true)
   let now = Date.parse('2030-01-01T00:00:00Z')
   let current = true
+  const later = (callback: () => void, delay: number) => { const timer = setTimeout(() => {}, 100000); timers.set(timer, { callback, delay }); return timer }
+  const cancel = (timer: ReturnType<typeof setTimeout>) => { clearTimeout(timer); timers.delete(timer) }
   const session = createPersonalSession({
     current: () => current,
     read: (signal) => { const result = Promise.withResolvers<PersonalStatus>(); reads.push({ result, signal }); return result.promise },
     change: (_command, signal) => { const result = Promise.withResolvers<PersonalStatus>(); changes.push({ result, signal }); return result.promise },
   }, {
-    now: () => now,
-    later: (callback, delay) => { const timer = setTimeout(() => {}, 100000); timers.set(timer, { callback, delay }); return timer },
-    cancel: (timer) => { clearTimeout(timer); timers.delete(timer) },
+    now: () => now, later, cancel,
+    poll: {
+      hidden: () => !visibility.current(), random: () => 1, onVisible: visibility.subscribe,
+      schedule: (callback, delay) => { const timer = later(callback, delay); return () => cancel(timer) },
+    },
   })
   t.after(() => { session.stop(); for (const timer of timers.keys()) clearTimeout(timer) })
   const settle = async () => { await Promise.resolve(); await Promise.resolve() }
-  return { session, reads, changes, settle, retire: () => { current = false }, rewind: (milliseconds: number) => { now -= milliseconds }, fire(delay: number) { for (const [timer, task] of timers) if (task.delay === delay) { timers.delete(timer); clearTimeout(timer); now += delay; task.callback(); break } } }
+  return { session, reads, changes, settle, visibility, polling: () => [...timers.values()].some((task) => task.delay === 2000), retire: () => { current = false }, rewind: (milliseconds: number) => { now -= milliseconds }, fire(delay: number) { for (const [timer, task] of timers) if (task.delay === delay) { timers.delete(timer); clearTimeout(timer); now += delay; task.callback(); break } } }
 }
 
 test('fresh start installs a QR only in the local view and connected status removes it', async (t) => {
@@ -208,4 +214,33 @@ test('refresh cannot restore an attempt retired by a conflicting mutation', asyn
   const change = h.session.change({ kind: 'relink', generation }); h.changes[0]?.result.reject(new ApiError(409, 'synthetic')); await change
   h.session.refresh(); h.reads[1]?.result.resolve(qr); await h.settle()
   assert.equal(h.session.getSnapshot().status?.qr ?? null, null)
+})
+
+test('a connected status is not polled while the page is hidden and is read at once when it is visible again', async (t) => {
+  // Given: a connected account is re-read every 2 s.
+  const connected: PersonalStatus = { ...qr, state: 'connected', qr: null, account_hint: '••42' }
+  const h = harness(t); h.session.start(); h.reads[0]?.result.resolve(connected); await h.settle()
+  assert.equal(h.polling(), true)
+  // When: the page is hidden as the next read falls due.
+  h.visibility.set(false); h.fire(2000)
+  // Then: nothing is read or re-armed until the page is visible, which reads at once and resumes the cadence.
+  assert.equal(h.reads.length, 1)
+  assert.equal(h.polling(), false)
+  h.visibility.set(true)
+  assert.equal(h.reads.length, 2)
+  h.reads[1]?.result.resolve({ ...connected, revision: 2 }); await h.settle()
+  assert.equal(h.session.getSnapshot().status?.revision, 2)
+  assert.equal(h.polling(), true)
+})
+
+test('a failed status read ends the poll until the member refreshes', async (t) => {
+  // Given
+  const h = harness(t); h.session.start(); h.reads[0]?.result.resolve({ ...qr, state: 'connected', qr: null }); await h.settle()
+  // When
+  h.fire(2000); h.reads[1]?.result.reject(new ApiError(503, 'synthetic', undefined, 20_000)); await h.settle()
+  // Then
+  assert.ok(h.session.getSnapshot().error)
+  assert.equal(h.polling(), false)
+  h.session.refresh()
+  assert.equal(h.reads.length, 3)
 })

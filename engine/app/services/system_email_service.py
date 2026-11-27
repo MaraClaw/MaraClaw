@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import smtplib
+import threading
+from collections.abc import Callable
 from contextvars import Context
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -14,12 +16,12 @@ from functools import partial
 from typing import Literal, TypedDict
 from uuid import UUID
 
-import anyio
-
+from app.config import get_settings
 from app.core.email import send_smtp_email
 from app.core.json_types import json_as_str, json_object_from
 from app.core.logging import get_logger
 from app.core.outbound_policy import OutboundPolicyError
+from app.core.thread_lanes import ThreadLane
 from app.services.email_config import (
     SystemEmailConfig,
     resolve_email_config_async,
@@ -39,9 +41,13 @@ __all__ = [
     "send_company_invitation_email",
     "send_password_reset_email",
     "send_system_email",
+    "send_with_config",
+    "wait_for_abandoned_sends",
 ]
 
 logger = get_logger(__name__)
+
+SYSTEM_EMAIL_LANE = ThreadLane(get_settings().SYSTEM_EMAIL_LANE_THREADS, name="system-email-lane")
 
 
 class EmailTemplate(TypedDict):
@@ -58,6 +64,57 @@ class EmailAttemptOutcome:
 
     kind: Literal["sent", "not_configured", "permanent", "transient"]
     error: str | None = None
+
+
+class _SendThreads:
+    """SMTP sends running on threads, including ones whose cancelled caller abandoned them."""
+
+    def __init__(self) -> None:
+        self._lock: threading.Lock = threading.Lock()
+        self._running: int = 0
+        self._idle: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
+
+    def run(self, send: Callable[[], None]) -> None:
+        """Run ``send`` on the current worker thread, counted until it returns."""
+        with self._lock:
+            self._running += 1
+        try:
+            send()
+        finally:
+            with self._lock:
+                self._running -= 1
+                waiters = [] if self._running else self._idle
+                self._idle = [] if waiters else self._idle
+            for loop, idle in waiters:
+                _ = loop.call_soon_threadsafe(_resolve, idle)
+
+    async def wait_idle(self) -> None:
+        loop = asyncio.get_running_loop()
+        idle = loop.create_future()
+        entry = (loop, idle)
+        with self._lock:
+            if not self._running:
+                return
+            self._idle.append(entry)
+        try:
+            await idle
+        finally:
+            with self._lock:
+                if entry in self._idle:
+                    self._idle.remove(entry)
+
+
+def _resolve(idle: asyncio.Future[None]) -> None:
+    if not idle.done():
+        idle.set_result(None)
+
+
+_SENDS = _SendThreads()
+
+
+async def wait_for_abandoned_sends() -> None:
+    """Return once no ``attempt_email`` SMTP thread is running; each ends within its SMTP timeout."""
+    await _SENDS.wait_idle()
 
 
 async def attempt_email(
@@ -81,7 +138,7 @@ async def attempt_email(
         message_id=message_id,
     )
     try:
-        await anyio.to_thread.run_sync(partial(Context().run, send), abandon_on_cancel=True)
+        await SYSTEM_EMAIL_LANE.run(partial(Context().run, partial(_SENDS.run, send)), abandon_on_cancel=True)
     except smtplib.SMTPRecipientsRefused as exc:
         codes = [code for code, _message in exc.recipients.values()]
         permanent = bool(codes) and all(500 <= code < 600 for code in codes)
@@ -110,7 +167,17 @@ async def send_system_email(to: str, subject: str, body: str, *, tenant_id: UUID
         logger.warning("System email not configured, skipped sending to {recipient}", recipient=to)
         return
 
-    await asyncio.to_thread(_send_email_with_config_sync, config, to, subject, body)
+    await send_with_config(config, to, subject, body)
+
+
+async def send_with_config(config: SystemEmailConfig, to: str, subject: str, body: str) -> None:
+    """Send one plain-text message with `config` on the system email lane, never on a shared thread pool.
+
+    A cancelled caller leaves at once and the send finishes on its thread, which keeps its lane slot until it ends.
+    """
+    await SYSTEM_EMAIL_LANE.run(
+        partial(_send_email_with_config_sync, config, to, subject, body), abandon_on_cancel=True
+    )
 
 
 def _send_email_with_config_sync(

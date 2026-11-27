@@ -4,10 +4,11 @@ from datetime import timedelta
 import pytest
 from fastapi import HTTPException
 
+from app.api import files as files_api
 from app.core import security
-from file_preview_fixtures import preview_context
+from file_preview_fixtures import CONTENT_LIMIT, content_context, preview_context
 
-__all__ = ["preview_context"]
+__all__ = ["content_context", "preview_context"]
 
 
 async def test_metadata_returns_exact_local_version_when_file_exists(preview_context):
@@ -203,3 +204,15 @@ async def test_enterprise_alias_is_tenant_scoped_when_existing_download_policy_a
     # Then
     assert response.status_code == 200
     assert response.content == b"current company"
+
+
+async def test_content_read_at_the_limit_keeps_the_storage_version_token(content_context):
+    # Given a text file exactly at the content limit
+    ctx = content_context
+    key = f"{ctx.agent_id}/workspace/log.txt"
+    await ctx.storage.write_bytes(key, b"x" * CONTENT_LIMIT)
+    # When
+    result = await files_api.read_file(agent_id=ctx.agent_id, path="workspace/log.txt", current_user=ctx.user)
+    # Then the body is whole and the token is the one the conditional save sends back
+    assert result.content == "x" * CONTENT_LIMIT
+    assert result.version_token == (await ctx.storage.get_version(key)).token

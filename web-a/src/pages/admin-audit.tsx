@@ -16,7 +16,7 @@ import { useTranslation } from '@/hooks/use-translation'
 import { ADMIN_AUDIT_DEFAULT_LIMIT, type AdminAuditPageScope } from '@/lib/admin-audit-api'
 import { adminAuditWindowSchema } from '@/lib/admin-audit-window'
 import { ApiError } from '@/lib/http'
-import { isPlatformAdminUser } from '@/lib/types/auth'
+import { isPlatformAdminUser } from '@/lib/types/auth-guards'
 
 const filterId = z.string().trim().pipe(z.union([z.literal(''), z.uuid('Enter a valid UUID or leave this blank.')]))
 const filterSchema = adminAuditWindowSchema.safeExtend({ action: z.string().trim(), target_type: z.string(), tenant_id: filterId, actor_id: filterId })

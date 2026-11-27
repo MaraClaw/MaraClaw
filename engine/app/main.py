@@ -7,8 +7,8 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from psycopg.errors import QueryCanceled
-from psycopg_pool import PoolTimeout
+from psycopg.errors import LockNotAvailable, QueryCanceled
+from psycopg_pool import PoolTimeout, TooManyRequests
 from starlette.routing import Route
 
 from app.config import get_settings
@@ -23,6 +23,7 @@ from app.schemas.schemas import HealthResponse
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError
 from app.services.agent_workspace_quota import WorkspaceDiskQuotaExceeded
 from app.services.company_capacity import CompanyAccountLimitReachedError
+from app.services.docker_capacity import DockerBusyError
 from app.services.openclaw_update_gate import OpenClawUpdateGateError
 from app.services.platform_service import PublicBaseUrlNotConfiguredError
 from app.services.storage_runtime.quota_errors import StorageQuotaError
@@ -60,6 +61,15 @@ async def agent_workspace_busy(_request: Request, _exc: WorkspaceLockTimeoutErro
     )
 
 
+@app.exception_handler(DockerBusyError)
+async def docker_busy(_request: Request, exc: DockerBusyError) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": {"code": "docker_busy", "message": "Docker is busy. Please retry shortly."}},
+        headers={"Retry-After": str(exc.retry_after_seconds)},
+    )
+
+
 @app.exception_handler(StorageQuotaError)
 async def storage_quota(_request: Request, exc: StorageQuotaError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
@@ -77,7 +87,9 @@ async def company_account_limit(_request: Request, exc: CompanyAccountLimitReach
 
 @app.exception_handler(DbError)
 @app.exception_handler(PoolTimeout)
+@app.exception_handler(TooManyRequests)
 @app.exception_handler(QueryCanceled)
+@app.exception_handler(LockNotAvailable)
 async def database_overload(_request: Request, exc: Exception) -> JSONResponse:
     overload = overload_error(exc)
     if overload is None:
@@ -122,7 +134,7 @@ from app.api.admin_resource_pressure import (
 )
 from app.api.admin_search_analytics import router as admin_search_analytics_router
 from app.api.admin_tavily import router as admin_tavily_router
-from app.api.advanced import router as advanced_router
+from app.api.advanced import metrics_router as advanced_metrics_router, router as advanced_router
 from app.api.agent_credentials import router as credentials_router
 from app.api.agent_deletion_requests import router as agent_deletion_requests_router
 from app.api.agent_lifecycle import router as agent_lifecycle_router
@@ -131,7 +143,7 @@ from app.api.agent_ownership_transfers import router as agent_ownership_transfer
 from app.api.agent_setup import router as agent_setup_router
 from app.api.agent_setup_mcp import router as agent_setup_mcp_router
 from app.api.agentbay_control import router as agentbay_control_router
-from app.api.agents import router as agents_router
+from app.api.agents import router as agents_router, runtime_router as agents_runtime_router
 from app.api.atlassian import router as atlassian_router
 from app.api.auth import router as auth_router
 from app.api.capacity import router as capacity_router
@@ -157,6 +169,7 @@ from app.api.google_chat import router as google_chat_router
 from app.api.google_workspace import router as google_workspace_router
 from app.api.member_auth import router as member_auth_router
 from app.api.messages import router as messages_router
+from app.api.metrics import build_metrics_router
 from app.api.notification import router as notification_router
 from app.api.okr import regeneration_router as okr_regeneration_router, router as okr_router
 from app.api.onboarding import router as onboarding_router
@@ -164,7 +177,11 @@ from app.api.openclaw_updates import router as openclaw_updates_router
 from app.api.organization import router as org_router
 from app.api.organization_admission_evidence import router as organization_admission_evidence_router
 from app.api.organization_admissions import router as organization_admissions_router
-from app.api.pages import public_router as pages_public_router, router as pages_router
+from app.api.pages import (
+    public_router as pages_public_router,
+    publish_router as pages_publish_router,
+    router as pages_router,
+)
 from app.api.relationships import router as relationships_router
 from app.api.schedules import router as schedules_router
 from app.api.skills import router as skills_router
@@ -175,7 +192,7 @@ from app.api.tavily_proxy import router as tavily_proxy_router
 from app.api.teams import router as teams_router
 from app.api.telegram import router as telegram_router
 from app.api.tenant_email import router as tenant_email_router
-from app.api.tenants import router as tenants_router
+from app.api.tenants import logo_router as tenants_logo_router, router as tenants_router
 from app.api.tools import probe_router as tools_probe_router, router as tools_router
 from app.api.triggers import router as triggers_router
 from app.api.upload import router as upload_router
@@ -187,11 +204,13 @@ from app.api.wecom import router as wecom_router
 from app.api.whatsapp import router as whatsapp_router
 from app.api.zalo_personal import router as zalo_personal_router
 
-# Preserve the short-CRUD connection boundary; long I/O and WS routes remain unbound.
+# Preserve the short-CRUD connection boundary; long I/O and WS routes remain unbound. Routes that call Docker, a CLI or
+# S3 live in a second router of their module (or an unbound module) so no pooled connection waits on that work.
 _CRUD_DB = [Depends(bind_crud_connection)]
 app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(member_auth_router, prefix=settings.API_PREFIX)
 app.include_router(agents_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(agents_runtime_router, prefix=settings.API_PREFIX)
 app.include_router(agent_lifecycle_router)
 app.include_router(agent_mcp_router)
 app.include_router(agent_setup_router)
@@ -210,11 +229,13 @@ app.include_router(org_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB
 app.include_router(enterprise_router, prefix=settings.API_PREFIX)
 app.include_router(tenant_email_router, prefix=settings.API_PREFIX)
 app.include_router(advanced_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(advanced_metrics_router, prefix=settings.API_PREFIX)
 app.include_router(upload_router, prefix=settings.API_PREFIX)
 app.include_router(relationships_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(activity_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(messages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(tenants_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(tenants_logo_router, prefix=settings.API_PREFIX)
 app.include_router(company_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(organization_admissions_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(organization_admission_evidence_router, prefix=settings.API_PREFIX)
@@ -259,16 +280,19 @@ app.include_router(admin_resource_pressure_router, prefix=settings.API_PREFIX, d
 app.include_router(admin_resource_pressure_export_router, prefix=settings.API_PREFIX)
 app.include_router(tavily_proxy_router)
 app.include_router(pages_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(pages_publish_router, prefix=settings.API_PREFIX)
 app.include_router(pages_public_router)
 app.include_router(file_shares_public_router)
 # Public, root-mounted at the path of CHATGPT_OAUTH_REDIRECT_URI as read here (restart to change); none when empty.
 app.include_router(build_chatgpt_oauth_callback_router())
 app.include_router(credentials_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
 app.include_router(agentbay_control_router, prefix=settings.API_PREFIX)
-app.include_router(gogcli_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+app.include_router(gogcli_router, prefix=settings.API_PREFIX)
 app.include_router(okr_router, dependencies=_CRUD_DB)
 app.include_router(okr_regeneration_router)
 app.include_router(onboarding_router, prefix=settings.API_PREFIX, dependencies=_CRUD_DB)
+if settings.METRICS_TOKEN:
+    app.include_router(build_metrics_router(settings.METRICS_TOKEN))
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["health"])

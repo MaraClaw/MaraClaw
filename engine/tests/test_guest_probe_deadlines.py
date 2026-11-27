@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -16,9 +17,9 @@ from pywhales import DockerClient, client_config
 from pywhales.components.container import cli_wrapper as container_cli
 
 from app.services import guest_readiness, openclaw_update_executor
-from app.services.docker_capacity import docker_capacity, shutdown_docker_capacity
+from app.services.docker_capacity import docker_capacity, run_docker, shutdown_docker_capacity
 from app.services.guest_admission import GuestStartPreflightError, GuestStartStoppedError
-from app.services.guest_probe import probe_guest
+from app.services.guest_probe import ProbeChild, probe_guest
 from app.services.openclaw_update_docker import UpgradeDocker
 from test_guest_start_safety import BlockedProbe, env
 from test_openclaw_update_executor import Harness
@@ -356,22 +357,29 @@ def test_probe_preserves_real_client_prefix_and_environment(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("upgrade", [False, True])
-def test_probe_timeout_kills_and_reaps_real_cli(tmp_path, upgrade):
+def test_probe_timeout_kills_and_reaps_real_cli(tmp_path, monkeypatch, upgrade):
     # Given a controlled executable sleeps much longer than the host probe budget.
     executable = tmp_path / "sleeping-docker"
-    pid_file = tmp_path / "probe.pid"
-    executable.write_text(
-        f"#!{sys.executable}\nimport os, pathlib, time\n"
-        f"pathlib.Path({json.dumps(str(pid_file))}).write_text(str(os.getpid()))\ntime.sleep(60)\n",
-        encoding="utf-8",
-    )
+    executable.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(60)\n", encoding="utf-8")
     executable.chmod(0o700)
+    # The pid comes from the spawn itself: under load the deadline can kill the interpreter before it runs any code.
+    spawned: list[int] = []
+    spawn = ProbeChild.spawn
+
+    def recording_spawn(child: ProbeChild, command: list[str]) -> subprocess.Popen[bytes] | None:
+        process = spawn(child, command)
+        if process is not None:
+            spawned.append(process.pid)
+        return process
+
+    monkeypatch.setattr(ProbeChild, "spawn", recording_spawn)
     # When the real read-only helper times it out.
     client = DockerClient(client_call=[str(executable)])
     result = UpgradeDocker(client).ready("owned-guest", 1.0) if upgrade else probe_guest(client, "owned-guest", 1.0)
-    # Then the timeout is failure and the direct child has already been waited for, not left a zombie.
+    # Then the timeout is failure and the one child it spawned has already been waited for, not left a zombie.
     assert result is False
-    assert_reaped(int(pid_file.read_text(encoding="utf-8")))
+    assert len(spawned) == 1
+    assert_reaped(spawned[0])
 
 
 def assert_reaped(pid: int) -> None:
@@ -494,3 +502,60 @@ async def test_ended_readiness_kills_and_reaps_the_probe_cli(tmp_path, monkeypat
             os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
     # Then the probe's lane thread killed and reaped the CLI long before its 60-second timeout.
     assert_reaped(pids[0])
+
+
+async def test_stop_queued_behind_probing_starts_gets_a_slot_within_one_probe_attempt(monkeypatch):
+    # Given a two-slot lane whose slots run the first probe attempt of two starts, each blocked on an Event.
+    docker_capacity().limit = 2
+    token = anyio.lowlevel.current_token()
+    attempts, order = 0, []
+    both_probing, stopped, interval = anyio.Event(), anyio.Event(), anyio.Event()
+    release, lock = threading.Event(), threading.Lock()
+
+    def probe(_client, _reference, _timeout, _child):
+        nonlocal attempts
+        with lock:
+            attempts += 1
+            blocking = attempts <= 2
+            order.append("probe")
+            if attempts == 2:
+                anyio.from_thread.run_sync(both_probing.set, token=token)
+        if blocking:
+            _ = release.wait(10)
+        return not blocking
+
+    def stop():
+        order.append("stop")
+        anyio.from_thread.run_sync(stopped.set, token=token)
+
+    async def wait_between_attempts(_delay):
+        await interval.wait()
+
+    monkeypatch.setattr(guest_readiness, "probe_guest", probe)
+    monkeypatch.setattr(
+        guest_readiness, "observe_guest", lambda _client, _reference, restarts, _until: (restarts, None)
+    )
+    monkeypatch.setattr(guest_readiness, "sleep", wait_between_attempts)
+    results = []
+
+    async def start():
+        results.append(await guest_readiness.guest_ready(DockerClient(), "guest"))
+
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as group:
+                group.start_soon(start)
+                group.start_soon(start)
+                await both_probing.wait()
+                # When a user's stop queues behind them and the first attempts end unready.
+                group.start_soon(run_docker, stop)
+                await anyio.lowlevel.checkpoint()
+                release.set()
+                # Then the stop runs before either start's next attempt: each attempt held a slot only while it ran.
+                await stopped.wait()
+                assert order == ["probe", "probe", "stop"]
+                interval.set()
+    finally:
+        release.set()
+        shutdown_docker_capacity()
+    assert results == [True, True]

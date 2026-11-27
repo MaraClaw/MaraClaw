@@ -5,7 +5,7 @@ export const runtimePage = {
   items: [{
     agent_id: agentId, name: 'Synthetic Agent', creator_id: companyId, recorded_status: 'stopped',
     recorded_container_id: 'a'.repeat(64), runtime_loss: null, start: null, upgrade_in_progress: false,
-    workspace: { used_bytes: 0, limit_bytes: 1024 ** 3, measured_at: '2026-11-15T03:00:00Z', over_since: null },
+    workspace: { used_bytes: 0, limit_bytes: 1024 ** 3, measured_at: '2026-11-15T03:00:00Z', over_since: null, walk_failed_at: null, remeasure_requested_at: null },
     blocking_codes: [], observation: { state: 'observed', container_status: 'exited', running: false,
       started_at: '2026-11-15T02:00:00Z', finished_at: '2026-11-15T03:00:00Z', exit_code: 0,
       restart_count_since_last_start: 0, oom_killed_since_last_start: false },

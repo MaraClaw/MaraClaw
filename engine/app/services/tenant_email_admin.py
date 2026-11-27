@@ -3,10 +3,8 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from functools import partial
 from uuid import UUID
 
-import anyio
 from fastapi import HTTPException
 
 from app.core.acl_locks import lock_tenants, lock_user
@@ -132,7 +130,7 @@ async def delete_config(actor: UserRecord, selected: UUID | None) -> None:
 
 
 async def test_config(actor: UserRecord, selected: UUID | None) -> None:
-    from app.services.system_email_service import _send_email_with_config_sync
+    from app.services.system_email_service import send_with_config
 
     tenant_id = own_tenant(actor, selected)
     async with locked_actor(actor, tenant_id) as (fresh, _tenant):
@@ -154,12 +152,4 @@ async def test_config(actor: UserRecord, selected: UUID | None) -> None:
             tenant_id=tenant_id,
             changes={},
         )
-    await anyio.to_thread.run_sync(
-        partial(
-            _send_email_with_config_sync,
-            config,
-            recipient,
-            "MaraClaw SMTP test",
-            "Your saved SMTP configuration works.",
-        )
-    )
+    await send_with_config(config, recipient, "MaraClaw SMTP test", "Your saved SMTP configuration works.")

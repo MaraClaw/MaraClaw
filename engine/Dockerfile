@@ -1,7 +1,7 @@
 # ─── Backend Dockerfile (Optimized) ─────────────────────
 # Multi-stage: deps → production
 # Linux docker CLI for pywhales (host binaries are the wrong OS).
-FROM docker:29.10.0-cli AS dockercli
+FROM docker:29.10.1-cli AS dockercli
 
 FROM node:26.13.1-trixie-slim AS whatsapp
 WORKDIR /bridge
@@ -29,7 +29,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         gcc=4:14.2.0-1 \
-        libc6-dev=2.41-12+deb13u4 \
+        libc6-dev=2.41-12+deb13u5 \
         libpq-dev=17.12-0+deb13u1 \
         libcairo2=1.18.4-1+b1 \
         libpango-1.0-0=1.56.3-1 \
@@ -78,7 +78,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         fonts-wqy-microhei=0.2.0-beta-4 \
         fonts-wqy-zenhei=0.9.45-8 \
         fonts-noto-cjk=1:20240730+repack1-1 \
-        chromium=156.0.8078.79-1~deb13u1 && \
+        chromium=156.0.8078.108-1~deb13u1 && \
     fc-cache -f && \
     rm -rf /var/lib/apt/lists/*
 
@@ -117,8 +117,11 @@ RUN chmod +x /app/entrypoint.sh && \
 # at runtime. The entrypoint script will drop privileges to 'maraclaw' after fixing permissions.
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+# /api/live never touches the database pool and fails only after a required worker loop used up its
+# restarts (or when the event loop is hung); /api/health and /api/ready keep their own meaning. The start
+# period covers lifespan startup (pool, bootstrap, connector setup), during which uvicorn is not listening.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8000/api/live || exit 1
 
 EXPOSE 8000
 # entrypoint.sh runs `schema bootstrap (bootstrap_db)` then `uvicorn`

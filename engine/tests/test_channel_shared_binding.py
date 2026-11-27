@@ -3,9 +3,11 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock
 
+import psycopg
 import pytest
 from fastapi import HTTPException
 
+from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.chat_attachment import ChatAttachment
@@ -14,8 +16,8 @@ from app.records.org import OrgMemberRecord
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
 from app.records.user import UserRecord
-from app.services.channel_user_service import ChannelUserResolutionError
-from app.services.channels import binding, inbound
+from app.services.channel_user_service import ChannelUserResolutionError, ChannelUserService
+from app.services.channels import binding
 
 
 def canonical_session(agent: AgentRecord, user: UserRecord) -> ChatSessionRecord:
@@ -145,78 +147,50 @@ async def test_denied_direct_sender_cannot_open_a_canonical_session(context, mon
     binding.ensure_canonical_session.assert_not_awaited()
 
 
-async def test_unbound_external_sender_never_uses_creator_or_lazy_identity(context, monkeypatch):
-    # Given
+@pytest.mark.parametrize(
+    ("channel_type", "external_user_id", "extra_info"),
+    [
+        ("slack", "unknown", {}),
+        ("feishu", None, {"open_id": "ou_open_123"}),
+        ("wechat", "wx_user_123", {"external_id": "wx_user_123"}),
+    ],
+)
+async def test_unbound_external_sender_never_uses_creator_or_lazy_identity(
+    context, monkeypatch, channel_type, external_user_id, extra_info
+):
+    # Given a sender with no linked member, and every write that could register an identity, user or member for it
     agent, _, _ = context
     monkeypatch.setattr(binding.channel_user_service, "_find_org_member", AsyncMock(return_value=None))
-    lazy_resolver = AsyncMock()
-    monkeypatch.setattr(binding.channel_user_service, "resolve_channel_user", lazy_resolver)
+    creators = [AsyncMock() for _ in range(5)]
+    writes = [
+        (identity_dao, "create"),
+        (identity_dao, "create_identity"),
+        (user_dao, "create"),
+        (org_member_dao, "create"),
+        (identity_provider_dao, "create"),
+    ]
+    for (dao, name), creator in zip(writes, creators, strict=True):
+        monkeypatch.setattr(dao, name, creator)
     # When / Then
     with pytest.raises(ChannelUserResolutionError):
-        await inbound.resolve_sender_user(agent=agent, channel_type="slack", external_user_id="unknown")
-    lazy_resolver.assert_not_awaited()
+        await binding.resolve_bound_sender(
+            agent=agent, channel_type=channel_type, external_user_id=external_user_id, extra_info=extra_info
+        )
+    for creator in creators:
+        creator.assert_not_awaited()
     assert isinstance(binding.ensure_canonical_session, AsyncMock)
     binding.ensure_canonical_session.assert_not_awaited()
 
 
-async def test_generate_reply_preserves_explicit_provider_route(context, monkeypatch):
-    # Given
-    agent, user, canonical = context
-    route_id = uuid.uuid4()
-    enqueue = AsyncMock()
-    monkeypatch.setattr("app.services.openclaw_routing.enqueue_openclaw_message", enqueue)
-    # When
-    await inbound.generate_channel_reply(
-        agent_id=agent.id,
-        user_text="hello",
-        history=[],
-        user_id=user.id,
-        session_id=str(canonical.id),
-        reply_session_id=route_id,
-        agent_model=agent,
-    )
-    # Then
-    assert enqueue.await_args is not None
-    assert enqueue.await_args.kwargs["conversation_id"] == str(canonical.id)
-    assert enqueue.await_args.kwargs["reply_session_id"] == route_id
-
-
-async def test_enqueue_failure_rolls_back_channel_user_message(context, monkeypatch):
-    # Given
-    from contextlib import asynccontextmanager
-
-    agent, user, canonical = context
-    writes = []
-
-    @asynccontextmanager
-    async def transaction():
-        try:
-            yield
-        except RuntimeError:
-            writes.clear()
-            raise
-
-    async def persist(**kwargs):
-        writes.append(kwargs)
-
-    monkeypatch.setattr(inbound, "optional_connection_ctx", transaction)
-    monkeypatch.setattr(inbound, "persist_channel_user_message", persist)
-    monkeypatch.setattr(
-        "app.services.openclaw_routing.enqueue_openclaw_message", AsyncMock(side_effect=RuntimeError("queue failed"))
-    )
-    # When / Then
-    with pytest.raises(RuntimeError, match="queue failed"):
-        await inbound.generate_channel_reply(
-            agent_id=agent.id,
-            user_text="with runtime markers",
-            history=[],
-            user_id=user.id,
-            session_id=str(canonical.id),
-            reply_session_id=uuid.uuid4(),
-            agent_model=agent,
-            user_message_content="visible attachment message",
-        )
-    assert writes == []
+async def test_a_failed_member_lookup_raises_instead_of_reading_as_an_unlinked_sender(context, monkeypatch):
+    # Given the member lookup itself fails, as it does when the database is unreachable
+    agent, _, _ = context
+    monkeypatch.setattr(binding.channel_user_service, "_find_org_member", ChannelUserService()._find_org_member)
+    lost = psycopg.OperationalError("connection lost")
+    monkeypatch.setattr(org_member_dao, "find_active_by_any_ids", AsyncMock(side_effect=lost))
+    # When / Then the failure reaches the delivery, which fails so the provider retries, instead of being acknowledged
+    with pytest.raises(psycopg.OperationalError):
+        await binding.resolve_bound_sender(agent=agent, channel_type="slack", external_user_id="U123", extra_info={})
 
 
 @pytest.fixture

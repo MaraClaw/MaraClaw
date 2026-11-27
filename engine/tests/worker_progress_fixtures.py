@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -38,6 +38,8 @@ WORKER_BUDGETED_LOOPS: Final = frozenset(
     }
 )
 CONNECTOR_BUDGETED_LOOPS: Final = frozenset({"whatsapp_personal", "zalo_personal", "transfer_cleanup"})
+# The loop every serving process (api, worker or connector role) runs, whatever else its roles add.
+PROCESS_BUDGETED_LOOPS: Final = frozenset({"event_loop_lag"})
 
 
 @dataclass(slots=True)
@@ -54,12 +56,57 @@ class Pacing:
         await self.go.get()
 
     async def paused(self) -> None:
-        _ = await asyncio.wait_for(self.entered.get(), 2)
+        _ = await self.next_wait()
+
+    async def next_wait(self) -> float:
+        """Wait until a sleep parks and return the seconds it asked for."""
+        return await asyncio.wait_for(self.entered.get(), 2)
+
+    def release(self) -> None:
+        """Let the parked sleep return without waiting for the next one."""
+        self.go.put_nowait(None)
 
     async def step(self, seconds: float = 100.0) -> None:
         self.now += seconds
         self.go.put_nowait(None)
         await self.paused()
+
+
+class Incarnations:
+    """Scripted incarnations of a supervised loop; ``self`` is the coroutine factory.
+
+    Each call to the factory makes a fresh coroutine that takes the next outcome: an exception is raised, ``"return"``
+    ends the loop normally, ``None`` (and any call past the script) parks until cancelled and signals ``parked``.
+    """
+
+    def __init__(self, *outcomes: BaseException | Literal["return"] | None) -> None:
+        self.outcomes: list[BaseException | Literal["return"] | None] = list(outcomes)
+        self.coroutines: list[Coroutine[object, object, None]] = []
+        self.tasks: list[asyncio.Task[object]] = []
+        self.previous_finished: list[bool] = []
+        self.parked: asyncio.Queue[None] = asyncio.Queue()
+
+    def __call__(self) -> Coroutine[object, object, None]:
+        self.previous_finished.append(all(task.done() for task in self.tasks))
+        coroutine = self._run()
+        self.coroutines.append(coroutine)
+        return coroutine
+
+    async def _run(self) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        self.tasks.append(task)
+        outcome = self.outcomes.pop(0) if self.outcomes else None
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if outcome == "return":
+            return
+        self.parked.put_nowait(None)
+        await asyncio.Event().wait()
+
+    async def running(self) -> None:
+        """Wait until an incarnation parks."""
+        _ = await asyncio.wait_for(self.parked.get(), 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +121,11 @@ class WorkerHTTP:
         """Run one loop coroutine as a required loop under ``budget_seconds`` on ``pacing.clock``."""
         self.runtime.tasks.start(name, loop, requirement="loop", progress_budget_seconds=budget_seconds)
         return self.runtime.tasks.required[name][0]
+
+    async def live(self, *, expected: bool) -> None:
+        response = await self.client.get("/api/live")
+        assert response.status_code == (200 if expected else 503)
+        assert response.json() == {"status": "alive" if expected else "failed"}
 
     async def ready(self, *, expected: bool) -> None:
         response = await self.client.get("/api/ready")
@@ -91,7 +143,7 @@ async def worker_http(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[WorkerHT
 
     pacing = Pacing()
     runtime = lifecycle.Runtime()
-    runtime.tasks = OwnedTasks(pacing.clock)
+    runtime.tasks = OwnedTasks(pacing.clock, pacing.wait)
     runtime.readiness = readiness.Readiness(runtime.tasks)
     runtime.readiness.roles = frozenset({"worker"})
     runtime.readiness.initialized = True

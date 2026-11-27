@@ -1,17 +1,30 @@
 """S3 backend whose every mutation under an agent prefix is charged to the agent's byte ledger first."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
+from itertools import batched
 from pathlib import Path
 from typing import assert_never, override
+from uuid import UUID
 
-import anyio
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from app.services.storage_runtime.base import ConditionalWriteResult, WriteCondition
-from app.services.storage_runtime.quota_conditional import conditional_delete, conditional_write
-from app.services.storage_runtime.quota_errors import ManagedKeyError, StorageKeyPendingError
+from app.services.storage_runtime.base import (
+    BATCH_KEY_LIMIT,
+    ConditionalWriteResult,
+    CopyRequest,
+    StorageVersion,
+    WriteCondition,
+)
+from app.services.storage_runtime.quota_conditional import ManagedWrite, conditional_delete, conditional_write
+from app.services.storage_runtime.quota_copy_batch import copy_managed_batch
+from app.services.storage_runtime.quota_delete_batch import delete_versions_batch
+from app.services.storage_runtime.quota_errors import (
+    ManagedKeyError,
+    StorageDeleteIncompleteError,
+    StorageKeyPendingError,
+)
 from app.services.storage_runtime.quota_keys import ManagedKey, parse_managed_key
 from app.services.storage_runtime.quota_ledger import (
     Admission,
@@ -26,7 +39,7 @@ from app.services.storage_runtime.quota_ledger import (
 from app.services.storage_runtime.quota_outcomes import Outcome, content_md5, failure_outcome
 from app.services.storage_runtime.quota_tree import delete_managed_tree
 from app.services.storage_runtime.s3 import S3StorageBackend
-from app.services.storage_runtime.upload_source import open_upload_source
+from app.services.storage_runtime.upload_source import UploadSource, open_upload_source
 from app.services.storage_runtime.utils import normalize_storage_key
 
 _PROVIDER_ERRORS = (BotoCoreError, ClientError, OSError)
@@ -98,7 +111,7 @@ class ManagedS3StorageBackend(S3StorageBackend):
         async with shielded():
             # Everything that can fail locally (open, size, hash) finishes before the reservation commits, so a
             # local failure never strands a charge. The handle stays open and is sent exactly as measured.
-            source = await anyio.to_thread.run_sync(partial(open_upload_source, path, with_md5=True))
+            source = await self.lane.run(partial(open_upload_source, path, with_md5=True))
             try:
                 admission = await reserve_write(managed, source.size, source.md5)
                 match admission:
@@ -142,7 +155,7 @@ class ManagedS3StorageBackend(S3StorageBackend):
 
     async def _admit_write(self, key: str, managed: ManagedKey, data: bytes) -> Admission:
         del key
-        etag = await anyio.to_thread.run_sync(content_md5, data)
+        etag = await self.lane.run(partial(content_md5, data))
         return await reserve_write(managed, len(data), etag)
 
     async def _admit_delete(self, key: str, managed: ManagedKey) -> Admission:
@@ -156,7 +169,39 @@ class ManagedS3StorageBackend(S3StorageBackend):
         managed = parse_managed_key(key)
         if managed is None:
             return await super().write_bytes_if_match(key, data, condition=condition, content_type=content_type)
-        return await conditional_write(self, managed, data, condition=condition, content_type=content_type)
+        write = ManagedWrite(
+            admit=lambda: self._admit_write(key, managed, data),
+            create=lambda claim, created: self._create(claim, created, data, content_type),
+            overwrite=lambda stored: S3StorageBackend.write_bytes(self, stored, data, content_type),
+        )
+        return await conditional_write(self, managed, write, condition=condition)
+
+    @override
+    async def write_source_if_match(
+        self,
+        key: str,
+        source: UploadSource,
+        *,
+        condition: WriteCondition | None = None,
+        content_type: str | None = None,
+    ) -> ConditionalWriteResult:
+        managed = parse_managed_key(key)
+        if managed is None:
+            return await super().write_source_if_match(key, source, condition=condition, content_type=content_type)
+
+        async def admit() -> Admission:
+            # Hashing finishes before the reservation commits, so a local failure never strands a charge.
+            md5 = await self.lane.run(partial(source.measured_md5, Path(key)))
+            return await reserve_write(managed, source.size, md5)
+
+        write = ManagedWrite(
+            admit=admit,
+            create=lambda claim, created: self._create_with(
+                claim, created, lambda: self.create_from_source(created, source, content_type)
+            ),
+            overwrite=lambda stored: self.put_source(stored, source, content_type),
+        )
+        return await conditional_write(self, managed, write, condition=condition)
 
     @override
     async def delete_if_match(self, key: str, *, condition: WriteCondition | None = None) -> ConditionalWriteResult:
@@ -164,6 +209,54 @@ class ManagedS3StorageBackend(S3StorageBackend):
         if managed is None:
             return await super().delete_if_match(key, condition=condition)
         return await conditional_delete(self, managed, condition=condition)
+
+    @override
+    async def delete_batch_if_match(self, versions: Sequence[StorageVersion]) -> dict[str, ConditionalWriteResult]:
+        """Two ledger transactions and one ``DeleteObjects`` per 1000 keys of an agent, never a claim per file.
+
+        Keys held by an unresolved write are left in place, a key whose ETag changed is refused by the provider and
+        left in place, and only confirmed deletes are refunded. Keys the provider did not answer for stay charged and
+        raise ``StorageDeleteIncompleteError`` once every batch has been sent.
+        """
+        results: dict[str, ConditionalWriteResult] = {}
+        by_agent: dict[UUID, list[tuple[StorageVersion, ManagedKey]]] = {}
+        unmanaged: list[StorageVersion] = []
+        for version in versions:
+            managed = parse_managed_key(version.key)
+            if managed is None:
+                unmanaged.append(version)
+            else:
+                by_agent.setdefault(managed.agent_id, []).append((version, managed))
+        if unmanaged:
+            results.update(await super().delete_batch_if_match(unmanaged))
+        unconfirmed = 0
+        for agent_id, entries in by_agent.items():
+            for chunk in batched(entries, BATCH_KEY_LIMIT, strict=False):
+                chunk_results, missing = await delete_versions_batch(self, agent_id, chunk)
+                results.update(chunk_results)
+                unconfirmed += missing
+        if unconfirmed:
+            raise StorageDeleteIncompleteError(unconfirmed)
+        return results
+
+    @override
+    async def copy_batch_if_match(self, copies: Sequence[CopyRequest]) -> dict[str, ConditionalWriteResult]:
+        """Server-side copies into an agent's prefix, charged by one ledger reservation per 1000 destinations."""
+        results: dict[str, ConditionalWriteResult] = {}
+        by_agent: dict[UUID, list[tuple[CopyRequest, ManagedKey]]] = {}
+        unmanaged: list[CopyRequest] = []
+        for copy in copies:
+            managed = parse_managed_key(copy.destination_key)
+            if managed is None:
+                unmanaged.append(copy)
+            else:
+                by_agent.setdefault(managed.agent_id, []).append((copy, managed))
+        if unmanaged:
+            results.update(await super().copy_batch_if_match(unmanaged))
+        for agent_id, entries in by_agent.items():
+            for chunk in batched(entries, BATCH_KEY_LIMIT, strict=False):
+                results.update(await copy_managed_batch(self, agent_id, chunk))
+        return results
 
     async def _call[T](self, reservation: Reservation, call: Callable[[], Awaitable[T]]) -> T:
         """The provider call; any failure is recorded against the reservation before it propagates."""

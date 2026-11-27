@@ -8,7 +8,6 @@ import httpx
 
 from app.core.json_types import JsonObject, json_as_str, json_as_str_or, json_object_from, json_object_from_response
 from app.services import agent_tools
-from app.services.agent_tool_exec.channel_context import channel_feishu_sender_open_id
 from app.services.agent_tool_exec.registry import ToolArguments, tool_arg_str, tool_arg_str_or
 
 _FW_COLON = "\uff1a"
@@ -104,9 +103,8 @@ async def _feishu_doc_create(agent_id: uuid.UUID, arguments: ToolArguments) -> s
             json_object_from(json_object_from(response.get("data")).get("document")).get("document_id")
         )
         doc_url = await agent_tools._get_feishu_tenant_doc_url(tenant_token, doc_token)
-        share_note = await _share_with_sender(agent_tools, tenant_token, doc_token)
         return (
-            f"✅ 文档创建成功{_FW_EXCLAMATION}{share_note}\n"
+            f"✅ 文档创建成功{_FW_EXCLAMATION}\n"
             f"标题{_FW_COLON}{title}\n"
             f"Token{_FW_COLON}{doc_token}\n"
             f"🔗 访问链接{_FW_COLON}{doc_url}\n"
@@ -151,27 +149,6 @@ async def _create_wiki_doc(
         f"🔗 访问链接{_FW_COLON}{doc_url}\n"
         f'下一步{_FW_COLON}调用 feishu_doc_append(document_token="{doc_token}", content="...") 写入正文内容。'
     )
-
-
-async def _share_with_sender(facade: object, tenant_token: str, doc_token: str) -> str:
-    del facade
-    try:
-        sender_open_id = channel_feishu_sender_open_id.get(None)
-        if sender_open_id in (None, "") or not doc_token:
-            return ""
-        async with _httpx_client(timeout=10) as client:
-            response = await client.post(
-                f"https://open.feishu.cn/open-apis/drive/v1/permissions/{doc_token}/members",
-                params={"type": "docx"},
-                json={"member_type": "openid", "member_id": sender_open_id, "perm": "full_access"},
-                headers={"Authorization": f"Bearer {tenant_token}"},
-            )
-        result = _response_mapping(response)
-        if result.get("code") == 0:
-            return "\n✅ 已自动为你开通访问权限。"
-        return f"\n⚠️ 自动授权失败{_FW_LEFT_PAREN}{result.get('code')}{_FW_RIGHT_PAREN}{_FW_COMMA}你可能需要手动在飞书前端搜索此文件。"
-    except Exception as error:
-        return f"\n⚠️ 自动授权异常: {error}"
 
 
 async def _feishu_doc_append(agent_id: uuid.UUID, arguments: ToolArguments) -> str:

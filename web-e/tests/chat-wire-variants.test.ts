@@ -41,3 +41,16 @@ test('correlated rejection wire payloads preserve a nullable notice identifier',
   assert.equal(result.success, true)
   if (result.success) assert.deepEqual(result.data, payload)
 })
+
+for (const reason of ['message_too_long', 'file_name_too_long', 'rate_limited'] as const) {
+  test(`${reason} rejection requires its submission identifier`, () => {
+    // Given
+    const payload = { type: 'turn_rejected', reason, content: 'Refused' }
+    // When
+    const correlated = inboundSchema.safeParse({ ...payload, client_submission_id: firstSubmission })
+    const anonymous = inboundSchema.safeParse(payload)
+    // Then
+    assert.equal(correlated.success, true)
+    assert.equal(anonymous.success, false)
+  })
+}

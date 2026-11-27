@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import email
+import email.message
 import importlib
 import sys
 import uuid
@@ -12,6 +14,8 @@ from app.core.json_types import JsonObject
 from app.services import agent_tools
 from app.services.agent_tool_exec import dispatcher, email_tools
 from app.services.agent_tool_exec.registry import ToolArguments
+from app.services.storage_runtime.local import LocalStorageBackend
+from smtp_capture_server import serve_smtp
 
 type EmailServiceCallValue = JsonObject | str | int | list[str] | Path | uuid.UUID | None
 type EmailServiceCall = dict[str, EmailServiceCallValue]
@@ -354,3 +358,89 @@ def test_importing_email_owner_does_not_import_email_service(monkeypatch: pytest
     importlib.reload(email_tools)
 
     assert "app.services.email_service" not in sys.modules
+
+
+@pytest.mark.asyncio
+async def test_handle_email_tool_delivers_a_workspace_file_through_the_real_service_and_smtp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given a file in the agent's stored workspace and a real SMTP server the agent's email tool is configured for
+    agent_id = uuid.uuid4()
+    storage = LocalStorageBackend(str(tmp_path / "agents"))
+    report = bytes(range(256)) * 400
+    await storage.write_bytes(f"{agent_id}/workspace/report.bin", report)
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: storage)
+    mail = tmp_path / "mail"
+    mail.mkdir()
+    with serve_smtp(mail) as server:
+
+        async def configured(_: uuid.UUID) -> JsonObject:
+            return {
+                "email_address": "agent@example.test",
+                "auth_code": "code",
+                "smtp_host": "127.0.0.1",
+                "smtp_port": server.port,
+                "smtp_ssl": False,
+            }
+
+        monkeypatch.setattr(email_tools, "_get_email_config", configured)
+
+        # When the model calls send_email with that file as an attachment
+        result = await email_tools._handle_email_tool(
+            "send_email",
+            agent_id,
+            tmp_path / str(agent_id),
+            {
+                "to": "to@example.test",
+                "subject": "Report",
+                "body": "See attached",
+                "attachments": ["workspace/report.bin"],
+            },
+        )
+
+        # Then the server received the message with the file's exact bytes
+        assert result == "\u2705 Email sent to to@example.test"
+        message = email.message_from_bytes(server.sessions.get(timeout=10).message_bytes())
+    parts = message.get_payload()
+    assert isinstance(parts, list)
+    _text, attached = parts
+    assert isinstance(attached, email.message.Message)
+    assert attached.get_filename() == "report.bin"
+    assert attached.get_payload(decode=True) == report
+
+
+@pytest.mark.asyncio
+async def test_handle_email_tool_returns_an_attachment_refusal_without_opening_a_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage = LocalStorageBackend(str(tmp_path / "agents"))
+    monkeypatch.setattr("app.services.storage.get_storage_backend", lambda: storage)
+    mail = tmp_path / "mail"
+    mail.mkdir()
+    with serve_smtp(mail) as server:
+
+        async def configured(_: uuid.UUID) -> JsonObject:
+            return {
+                "email_address": "agent@example.test",
+                "auth_code": "code",
+                "smtp_host": "127.0.0.1",
+                "smtp_port": server.port,
+                "smtp_ssl": False,
+            }
+
+        monkeypatch.setattr(email_tools, "_get_email_config", configured)
+
+        result = await email_tools._handle_email_tool(
+            "send_email",
+            uuid.uuid4(),
+            tmp_path,
+            {
+                "to": "to@example.test",
+                "subject": "Report",
+                "body": "See attached",
+                "attachments": ["workspace/gone.bin"],
+            },
+        )
+
+        assert result == "\u274c Attachment not found: workspace/gone.bin. Nothing was sent."
+        assert server.opened == []

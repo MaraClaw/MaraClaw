@@ -153,17 +153,27 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
             )
             return int_from_row(value)
 
-    async def delete_orphaned_payloads(self) -> int:
+    async def delete_orphaned_payloads(self, *, limit: int) -> int:
+        """Delete up to ``limit`` payloads whose event is neither pending nor exporting (or is gone), and count them.
+
+        Rows another transaction holds are skipped, never waited on.
+        """
         async with self.session() as db:
-            value = await db.fetchval(
-                "WITH removed AS ("
-                "DELETE FROM web_search_export_payloads p "
-                "WHERE NOT EXISTS ("
-                "SELECT 1 FROM web_search_events e WHERE e.id = p.event_id AND e.export_state IN ('pending', 'exporting')"
-                ") RETURNING 1"
-                ") SELECT count(*) FROM removed"
+            rows = await db.fetchall(
+                """
+                WITH orphaned AS (
+                    SELECT p.ctid FROM web_search_export_payloads AS p
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM web_search_events AS e
+                        WHERE e.id = p.event_id AND e.export_state IN ('pending', 'exporting')
+                    )
+                    LIMIT %(limit)s FOR UPDATE OF p SKIP LOCKED
+                ) DELETE FROM web_search_export_payloads WHERE ctid = ANY(ARRAY(SELECT ctid FROM orphaned))
+                  RETURNING event_id
+                """,
+                {"limit": limit},
             )
-            return int_from_row(value)
+            return len(rows)
 
     async def release_export(self, event_ids: list[UUID]) -> None:
         if not event_ids:
@@ -175,19 +185,44 @@ class WebSearchEventDAO(BaseDAO[WebSearchEventRecord]):
                 {"ids": event_ids},
             )
 
-    async def delete_older_than(self, cutoff: datetime) -> int:
+    async def delete_older_than(self, cutoff: datetime, *, limit: int) -> int:
+        """Delete up to ``limit`` events that occurred before ``cutoff``, oldest first, and return how many went.
+
+        The scan walks ``ix_web_search_events_occurred_tenant`` backwards. Rows another transaction holds are
+        skipped, never waited on.
+        """
         async with self.session() as db:
-            _ = await db.execute(
-                "DELETE FROM web_search_export_payloads WHERE created_at < %(cutoff)s",
-                {"cutoff": cutoff},
+            rows = await db.fetchall(
+                """
+                WITH expired AS (
+                    SELECT ctid FROM web_search_events
+                    WHERE occurred_at < %(cutoff)s
+                    ORDER BY occurred_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ) DELETE FROM web_search_events WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING id
+                """,
+                {"cutoff": cutoff, "limit": limit},
             )
-            value = await db.fetchval(
-                "WITH removed AS ("
-                "DELETE FROM web_search_events WHERE occurred_at < %(cutoff)s RETURNING 1"
-                ") SELECT count(*) FROM removed",
-                {"cutoff": cutoff},
+            return len(rows)
+
+    async def delete_payloads_older_than(self, cutoff: datetime, *, limit: int) -> int:
+        """Delete up to ``limit`` raw export payloads created before ``cutoff``, oldest first, and return how many.
+
+        Rows another transaction holds are skipped, never waited on.
+        """
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH expired AS (
+                    SELECT ctid FROM web_search_export_payloads
+                    WHERE created_at < %(cutoff)s
+                    ORDER BY created_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ) DELETE FROM web_search_export_payloads WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING event_id
+                """,
+                {"cutoff": cutoff, "limit": limit},
             )
-            return int_from_row(value)
+            return len(rows)
 
     async def export_status(self) -> SearchAnalyticsExportStatusProjection:
         async with self.session() as db:

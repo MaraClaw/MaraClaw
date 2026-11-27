@@ -4,9 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.records.agent import AgentRecord
-from app.records.identity import AuthProviderType
-from app.services.channel_user_service import ChannelUserResolutionError, ChannelUserService
+from app.records.org import OrgMemberRecord
+from app.services.channel_user_service import ChannelUserService, linked_platform_user
 from app.services.sso_service import sso_service
 
 
@@ -126,32 +125,6 @@ async def test_channel_user_service_uses_feishu_open_id_for_existing_member_look
 
 
 @pytest.mark.asyncio
-async def test_channel_user_service_rejects_feishu_open_id_only_lazy_registration():
-    service = ChannelUserService()
-    agent = AgentRecord(id=uuid.uuid4(), name="Feishu agent", creator_id=uuid.uuid4(), tenant_id=uuid.uuid4())
-    provider_id = uuid.uuid4()
-
-    service._ensure_provider = AsyncMock(
-        return_value=SimpleNamespace(
-            id=provider_id,
-            provider_type=AuthProviderType.FEISHU,
-            name="Feishu",
-            config={},
-            tenant_id=agent.tenant_id,
-        )
-    )
-    service._find_org_member = AsyncMock(return_value=None)
-
-    with pytest.raises(ChannelUserResolutionError):
-        await service.resolve_channel_user(
-            agent=agent,
-            channel_type="feishu",
-            external_user_id=None,
-            extra_info={"open_id": "ou_open_123"},
-        )
-
-
-@pytest.mark.asyncio
 async def test_channel_user_service_skips_dingtalk_lookup_when_ids_missing(monkeypatch):
     service = ChannelUserService()
     session = MagicMock()
@@ -193,50 +166,7 @@ async def test_channel_user_service_uses_wechat_external_id_for_existing_member_
 
 
 @pytest.mark.asyncio
-async def test_channel_user_service_creates_wechat_org_member_shell_for_lazy_registration():
-    service = ChannelUserService()
-    tenant_id = uuid.uuid4()
-    agent = AgentRecord(id=uuid.uuid4(), name="WeChat agent", creator_id=uuid.uuid4(), tenant_id=tenant_id)
-    provider = SimpleNamespace(
-        id=uuid.uuid4(),
-        provider_type=AuthProviderType.WECOM,
-        name="WeCom",
-        config={},
-        tenant_id=tenant_id,
-    )
-    created_user = SimpleNamespace(
-        id=uuid.uuid4(),
-        identity=SimpleNamespace(id=uuid.uuid4(), email="wechat@example.com"),
-        tenant_id=tenant_id,
-        display_name="WeChat user",
-        role="member",
-    )
-
-    service._ensure_provider = AsyncMock(return_value=provider)
-    service._find_org_member = AsyncMock(return_value=None)
-    service._create_channel_user = AsyncMock(return_value=created_user)
-    service._create_org_member_shell = AsyncMock()
-
-    user = await service.resolve_channel_user(
-        agent=agent,
-        channel_type="wechat",
-        external_user_id="wx_user_123",
-        extra_info={"external_id": "wx_user_123"},
-    )
-
-    assert user is created_user
-    service._create_org_member_shell.assert_awaited_once_with(
-        provider,
-        "wechat",
-        "wx_user_123",
-        {"external_id": "wx_user_123"},
-        linked_user_id=created_user.id,
-    )
-
-
-@pytest.mark.asyncio
-async def test_channel_user_service_serializes_tenant_id_for_sso_matches(monkeypatch):
-    service = ChannelUserService()
+async def test_linked_platform_user_serializes_tenant_id_for_sso_matches(monkeypatch):
     tenant_id = uuid.uuid4()
     matched_user = SimpleNamespace(
         id=uuid.uuid4(),
@@ -245,29 +175,19 @@ async def test_channel_user_service_serializes_tenant_id_for_sso_matches(monkeyp
         display_name="Alice",
         role="member",
     )
+    member = OrgMemberRecord(
+        id=uuid.uuid4(), name="Alice", email="alice@example.com", phone="15555550123", tenant_id=tenant_id
+    )
     email_match = AsyncMock(return_value=None)
     mobile_match = AsyncMock(return_value=matched_user)
     monkeypatch.setattr(sso_service, "match_user_by_email", email_match)
     monkeypatch.setattr(sso_service, "match_user_by_mobile", mobile_match)
-    service._ensure_provider = AsyncMock(
-        return_value=SimpleNamespace(
-            id=uuid.uuid4(),
-            provider_type=AuthProviderType.DINGTALK,
-            name="DingTalk",
-            config={},
-            tenant_id=tenant_id,
-        )
+    monkeypatch.setattr("app.services.channel_user_service.org_member_dao.update", AsyncMock())
+    monkeypatch.setattr(
+        "app.services.channel_user_service.user_dao.get_with_identity", AsyncMock(return_value=matched_user)
     )
-    service._find_org_member = AsyncMock(return_value=None)
-    service._find_existing_org_member_for_user = AsyncMock(return_value=None)
-    service._create_org_member_shell = AsyncMock()
 
-    user = await service.resolve_channel_user(
-        agent=AgentRecord(id=uuid.uuid4(), name="DingTalk agent", creator_id=uuid.uuid4(), tenant_id=tenant_id),
-        channel_type="dingtalk",
-        external_user_id="staff-1",
-        extra_info={"email": "alice@example.com", "mobile": "15555550123"},
-    )
+    user = await linked_platform_user(member, tenant_id)
 
     assert user is matched_user
     email_match.assert_awaited_once_with("alice@example.com", str(tenant_id))

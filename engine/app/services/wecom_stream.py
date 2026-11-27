@@ -22,6 +22,7 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import jittered_backoff
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels.stream_reconcile import StreamReconciler
 from app.services.channels.stream_source import (
     StreamSource,
@@ -235,6 +236,17 @@ class WeComStreamManager:
                     self._connected[agent_id] = False
                     await _persist_connected(source.config_id, False)
 
+            async def refuse_missing_sender(frame: _WeComFrame, body: JsonObject, kind: str) -> None:
+                logger.warning(
+                    f"[WeCom Stream] Missing sender id in {kind} payload for agent {agent_id}: "
+                    f"body_keys={list(body.keys())}"
+                )
+                await reply_stream(
+                    frame,
+                    generate_req_id("stream"),
+                    "Unable to identify the sender for this WeCom message.",
+                )
+
             # ── Message handler: text ──
             async def on_text(frame: _WeComFrame) -> None:
                 try:
@@ -251,16 +263,7 @@ class WeComStreamManager:
 
                     sender_id = _extract_wecom_sender_id(body)
                     if not sender_id:
-                        logger.warning(
-                            f"[WeCom Stream] Missing sender id in text payload for agent {agent_id}: "
-                            f"body_keys={list(body.keys())}"
-                        )
-                        stream_id = generate_req_id("stream")
-                        await reply_stream(
-                            frame,
-                            stream_id,
-                            "Unable to identify the sender for this WeCom message.",
-                        )
+                        await refuse_missing_sender(frame, body, "text")
                         return
 
                     chat_type = _extract_wecom_chat_type(body)
@@ -307,9 +310,13 @@ class WeComStreamManager:
 
             async def on_media(frame: _WeComFrame) -> None:
                 body = _json_object(getattr(frame, "body", None))
+                sender_id = _extract_wecom_sender_id(body)
+                if not sender_id:
+                    await refuse_missing_sender(frame, body, "media")
+                    return
                 reply_text = await _process_wecom_stream_message(
                     agent_id=agent_id,
-                    sender_id=_extract_wecom_sender_id(body),
+                    sender_id=sender_id,
                     user_text="",
                     chat_id=_extract_wecom_chat_id(body),
                     chat_type=_extract_wecom_chat_type(body),
@@ -504,7 +511,8 @@ async def _process_wecom_stream_message(
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
     if not message_id:
-        raise ValueError("WeCom message ID is required")
+        logger.warning("[WeCom Stream] Ignored a message without an ID for agent {}", agent_id)
+        return ""
     if source is None:
         raise RuntimeError("WeCom connection source is required")
     from app.services.channels.wecom_media import accept_wecom_media, stream_media
@@ -523,11 +531,14 @@ async def _process_wecom_stream_message(
         is_group=chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id),
         stream_source=source,
     )
-    if media:
-        config = await authorize_stream_source(source)
-        await accept_wecom_media(native, config, media)
-    else:
-        await accept_channel_event(native)
+    try:
+        if media:
+            config = await authorize_stream_source(source)
+            await accept_wecom_media(native, config, media)
+        else:
+            await accept_channel_event(native)
+    except ChannelUserResolutionError:
+        logger.info("[WeCom Stream] Ignored a message from a sender who is not a linked member of agent {}", agent_id)
     return ""
 
 

@@ -21,7 +21,7 @@ import { useInvitationLink } from '@/hooks/use-invitation-link'
 import { useInvitationPreview } from '@/hooks/use-invitation-preview'
 import { useTransferFunnel } from '@/hooks/use-transfer-funnel'
 import { formatMoney } from '@/lib/format-money'
-import { userMustChangePassword } from '@/lib/types/auth'
+import { userMustChangePassword } from '@/lib/types/auth-guards'
 
 const transferSchema = z.object({ password: z.string().min(1, 'Confirm your current password').max(128, 'Password is too long') })
 const highlights = [

@@ -37,6 +37,7 @@ from app.services.storage_runtime.channel_files import lstat_guest_path
 from app.services.storage_runtime.fallback import FallbackStorageBackend
 from app.services.storage_runtime.local import LocalStorageBackend
 from app.services.storage_runtime.quota_errors import (
+    StorageAccountingUnavailableError,
     StorageFileTooLargeError,
     StorageKeyPendingError,
     StorageQuotaExceededError,
@@ -117,6 +118,7 @@ class ReconcileReport:
     frozen: int = 0
     too_large: int = 0
     quota_exhausted: bool = False
+    accounting_unavailable: bool = False
     mass_delete_guarded: bool = False
     remote_missing_guarded: bool = False
     budget_exhausted: bool = False
@@ -124,7 +126,13 @@ class ReconcileReport:
     @property
     def changed(self) -> bool:
         moved = self.pushed + self.pulled + self.deleted_remote + self.deleted_local + self.conflicts + self.too_large
-        return moved > 0 or self.quota_exhausted or self.mass_delete_guarded or self.remote_missing_guarded
+        return (
+            moved > 0
+            or self.quota_exhausted
+            or self.accounting_unavailable
+            or self.mass_delete_guarded
+            or self.remote_missing_guarded
+        )
 
     @property
     def finished(self) -> bool:
@@ -265,7 +273,7 @@ async def _execute(
         if _monotonic() >= deadline:
             report.budget_exhausted = True
             return
-        if action in PUSHES and report.quota_exhausted:
+        if (action in PUSHES and report.quota_exhausted) or (action in STORE_WRITES and report.accounting_unavailable):
             continue
         work = PathWork(
             agent_id,
@@ -288,6 +296,12 @@ async def _execute(
             report.quota_exhausted = True
             logger.warning(f"Workspace mirror of agent {agent_id} reached the storage limit; uploads wait for room")
             continue
+        except StorageAccountingUnavailableError:
+            report.accounting_unavailable = True
+            logger.warning(
+                f"Workspace mirror of agent {agent_id} could not reach the storage ledger; writes retry next pass"
+            )
+            continue
         await ledger.apply(rel, done)
 
 
@@ -303,6 +317,9 @@ async def reconcile_agent(
 
     A PULL_ONLY pass restoring a directory whose generation never finished a pass raises unless it finishes now,
     so a start never boots a partly restored guest; the files it did pull keep their rows for the next try.
+
+    `budget_seconds` runs from this call, which the worker makes once the agent's slot is granted and its locks are held,
+    so time spent queued behind other agents never counts against it.
     """
     report = ReconcileReport()
     try:

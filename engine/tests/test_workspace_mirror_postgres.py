@@ -1,5 +1,6 @@
 """Workspace mirror passes against live PostgreSQL and the loopback S3 provider (``MARACLAW_TEST_POSTGRES_DSN``)."""
 
+import asyncio
 import itertools
 import os
 import shutil
@@ -10,6 +11,8 @@ import pytest
 
 from agent_deletion_fixtures import deletion_scenario
 from app.services import workspace_mirror
+from app.services.storage_runtime import quota_s3
+from app.services.storage_runtime.quota_errors import StorageAccountingUnavailableError
 from app.services.workspace_mirror import (
     MirrorBusyError,
     MirrorConflictError,
@@ -23,6 +26,7 @@ from app.services.workspace_mirror import (
 )
 from app.services.workspace_mirror_plan import conflict_path
 from managed_storage_fixtures import quota_world
+from s3_wire_server import Gate
 from workspace_mirror_fixtures import AGED_NS, HOUR_NS, SECOND_NS, Mirror, mirror, sha256_hex
 
 __all__ = ["deletion_scenario", "mirror", "quota_world"]
@@ -457,3 +461,51 @@ async def test_mirror_agent_skips_an_agent_whose_mirror_lock_is_held(mirror: Mir
         report = await mirror_agent(await mirror.agent())
 
     assert (report, mirror.stored("workspace/a.txt")) == (None, None)
+
+
+async def test_a_file_rewritten_during_its_upload_is_pushed_again_by_the_next_pass(mirror: Mirror):
+    rel = "workspace/a.txt"
+    _ = mirror.write(rel, b"first version")
+    gate = Gate()
+    mirror.world.s3.state.gates[mirror.key(rel)] = gate
+    task = asyncio.create_task(mirror.run())
+
+    assert await asyncio.to_thread(gate.arrived.wait, 10)
+    _ = mirror.write(rel, b"second version, longer", age_ns=AGED_NS // 2)
+    gate.release.set()
+    first = await asyncio.wait_for(task, 10)
+
+    entry = (await mirror.entries())[rel]
+    assert (first.pushed, mirror.stored(rel), entry.content_sha256) == (0, b"first version", None)
+    del mirror.world.s3.state.gates[mirror.key(rel)]
+
+    second = await mirror.run()
+
+    entry = (await mirror.entries())[rel]
+    assert (second.pushed, second.pulled, second.conflicts) == (1, 0, 0)
+    assert (mirror.stored(rel), entry.content_sha256) == (
+        b"second version, longer",
+        sha256_hex(b"second version, longer"),
+    )
+    await mirror.world.assert_ledger_consistent()
+
+
+async def test_an_unreachable_quota_ledger_is_a_retryable_outcome_never_a_quota_refusal(
+    mirror: Mirror, monkeypatch: pytest.MonkeyPatch
+):
+    _ = mirror.write("workspace/a.txt", b"alpha")
+    await mirror.put("workspace/r.txt", b"stored")
+
+    async def unreachable(*args: object) -> object:
+        raise StorageAccountingUnavailableError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(quota_s3, "reserve_write", unreachable)
+        report = await mirror.run()
+
+    assert (report.accounting_unavailable, report.quota_exhausted, report.pushed, report.pulled) == (True, False, 0, 1)
+    assert (mirror.stored("workspace/a.txt"), "workspace/a.txt" in await mirror.entries()) == (None, False)
+
+    retried = await mirror.run()
+
+    assert (retried.pushed, mirror.stored("workspace/a.txt")) == (1, b"alpha")

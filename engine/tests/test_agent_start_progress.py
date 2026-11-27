@@ -14,6 +14,7 @@ from app.records.agent import AgentRecord
 from app.records.agent_start import AgentStartOperation
 from app.runtime import lifecycle
 from app.services import agent_start_reconciler as module
+from app.services.docker_capacity import DockerBusyError, DockerPriority, docker_priority
 from app.services.guest_admission import GuestAdmissionError, GuestStartStoppedError
 from producer_admission_fixtures import producer_admission
 from worker_progress_fixtures import WorkerHTTP, worker_http
@@ -189,6 +190,47 @@ async def test_start_unexpected_scan_failure_backs_off_and_recovers(
     outstanding.side_effect = ValueError("another scan failure")
     pacing.go.put_nowait(None)
     assert await asyncio.wait_for(pacing.entered.get(), 2) == 1
+
+
+async def test_start_refused_by_a_busy_docker_lane_is_a_skipped_pass_that_stays_retryable(
+    monkeypatch: pytest.MonkeyPatch, worker_http: WorkerHTTP, start_operation: AgentStartOperation
+) -> None:
+    # Given a reconciler start the full Docker lane refuses.
+    fail, reported = AsyncMock(), Mock()
+    monkeypatch.setattr(module.agent_manager, "start_container", AsyncMock(side_effect=DockerBusyError()))
+    monkeypatch.setattr(module.start_store, "fail", fail)
+    monkeypatch.setattr(module, "report_exception", reported, raising=False)
+    monkeypatch.setattr(module, "sleep", worker_http.pacing.wait)
+    # When the reconcile loop runs it pass after pass.
+    task = worker_http.start_loop("start", module.agent_start_reconciler_loop(), budget_seconds=300)
+    await worker_http.pacing.paused()
+    for _ in range(4):
+        await worker_http.pacing.step()
+        # Then every pass is skipped without hurting the loop's progress, ...
+        await worker_http.ready(expected=True)
+    # ... the operation stays pending under a retryable capacity code, and nothing is reported as a fault.
+    assert not task.done()
+    assert start_operation.state == "pending"
+    assert {call.args[1] for call in fail.await_args_list} == {"capacity_exceeded"}
+    reported.assert_not_called()
+
+
+async def test_start_replay_runs_its_docker_calls_at_background_priority(
+    monkeypatch: pytest.MonkeyPatch, start_operation: AgentStartOperation
+) -> None:
+    # Given a replayed start whose Docker work notes the priority it was submitted at.
+    priorities: list[DockerPriority] = []
+
+    async def start(_agent: AgentRecord) -> None:
+        priorities.append(docker_priority.get())
+
+    monkeypatch.setattr(module.agent_manager, "start_container", start)
+    monkeypatch.setattr(module, "guest_published", AsyncMock())
+    # When the reconciler replays it.
+    await module.reconcile_agent_start(start_operation)
+    # Then the replay took the lane at background priority, so a user's stop or start goes first.
+    assert priorities == [DockerPriority.BACKGROUND]
+    assert docker_priority.get() is DockerPriority.INTERACTIVE
 
 
 @pytest.mark.parametrize("reason", ["cancelled", "ineligible"])

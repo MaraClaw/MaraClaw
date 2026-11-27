@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-import { isPlatformAdminUser } from '../src/lib/types/auth.ts'
+import { isPlatformAdminUser } from '../src/lib/types/auth-guards.ts'
 import { adminUser } from './helpers.ts'
 
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')

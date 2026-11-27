@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import TypeAdapter, ValidationError
 from tests.membership_generation_fixtures import pin_membership_generation
 from tests.oauth_state_fakes import install_state_redis, sign_in_state
+from tests.rate_limit_fakes import install_limiter_redis
 from tests.transaction_pool_fakes import CountingPool
 
 from app.api import auth
@@ -615,3 +616,8 @@ def test_remaining_dictionary_contracts_require_complete_non_null_fields(
 ) -> None:
     with pytest.raises(ValidationError):
         TypeAdapter[object](contract).validate_python(fields)
+
+
+@pytest.fixture(autouse=True)
+def limiter_redis(monkeypatch):
+    return install_limiter_redis(monkeypatch)

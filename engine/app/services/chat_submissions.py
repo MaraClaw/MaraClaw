@@ -2,23 +2,23 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import ClassVar, Literal, final
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.config import get_settings
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord
 from app.records.chat_attachment import ChatAttachment
 from app.records.user import UserRecord
+from app.schemas.chat_wire import ChatRejectionReason
 from app.services.agent_message_quota import charge_agent_daily_message
 from app.services.agent_workspace_quota import ensure_workspace_within_quota
 from app.services.chat_session_access import can_access_chat_session
-from app.services.llm.types import OpenAIMessage
-from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message, prepare_openclaw_message
 from app.services.quota_guard import charge_conversation_quota, check_agent_expired
 from app.services.shared_chat import (
@@ -48,6 +48,16 @@ class ChatSubmission(BaseModel):
         version = "v2:" if self.attachments else "v1:"
         return version + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    def require_within_limits(self) -> None:
+        """Raise ``SubmissionTooLongError`` when a text field exceeds its limit, before any lock, write or dispatch."""
+        settings = get_settings()
+        if len(self.content) > settings.CHAT_CONTENT_MAX_CHARS:
+            raise SubmissionTooLongError(ChatRejectionReason.MESSAGE_TOO_LONG, settings.CHAT_CONTENT_MAX_CHARS)
+        if len(self.display_content) > settings.CHAT_DISPLAY_CONTENT_MAX_CHARS:
+            raise SubmissionTooLongError(ChatRejectionReason.MESSAGE_TOO_LONG, settings.CHAT_DISPLAY_CONTENT_MAX_CHARS)
+        if len(self.file_name) > settings.CHAT_FILE_NAME_MAX_CHARS:
+            raise SubmissionTooLongError(ChatRejectionReason.FILE_NAME_TOO_LONG, settings.CHAT_FILE_NAME_MAX_CHARS)
+
     def saved_content(self) -> str:
         text = self.content if "[image_data:" in self.content else self.display_content or self.content
         return f"[file:{self.file_name}]\n{text}" if self.file_name else text
@@ -55,6 +65,18 @@ class ChatSubmission(BaseModel):
 
 class SubmissionConflictError(Exception):
     pass
+
+
+@final
+class SubmissionTooLongError(Exception):
+    """A text field is over its configured limit; the submission is refused whole and never truncated."""
+
+    def __init__(
+        self, reason: Literal[ChatRejectionReason.MESSAGE_TOO_LONG, ChatRejectionReason.FILE_NAME_TOO_LONG], limit: int
+    ):
+        super().__init__(reason)
+        self.reason = reason
+        self.limit = limit
 
 
 class InvalidChatAttachmentsError(Exception):
@@ -81,8 +103,8 @@ async def accept_submission(
     user: UserRecord,
     agent: AgentRecord,
     session_id: UUID,
-    history: list[OpenAIMessage],
 ) -> AcceptedSubmission:
+    submission.require_within_limits()
     candidate = ChatMessageRecord(
         id=uuid4(),
         user_id=user.id,
@@ -118,17 +140,13 @@ async def accept_submission(
             if not attachments_available:
                 raise InvalidChatAttachmentsError
             await check_agent_expired(agent.id, mark=False)
-            current_history = history
-            # Another tab of the owner may have added turns this socket's history has not seen.
-            if canonical:
-                current_history = convert_chat_messages_to_llm_format(
-                    list(
-                        await chat_message_dao.list_recent(
-                            agent_id=agent.id, conversation_id=str(session.id), limit=agent.context_window_size or 100
-                        )
-                    )
-                )
-            prepared = await prepare_openclaw_message(agent=agent, content=submission.content, history=current_history)
+            prepared = await prepare_openclaw_message(agent=agent, content=submission.content)
+            # Probe before the reservation below, which would itself make the conversation non-empty.
+            first_message = session.title.startswith(
+                "Session "
+            ) and not await chat_message_dao.conversation_has_messages(
+                agent_id=agent.id, conversation_id=str(session.id)
+            )
             reserved = await chat_message_dao.reserve_submission(candidate)
             if reserved is None:
                 existing = await chat_message_dao.find_submission(candidate)
@@ -143,7 +161,7 @@ async def accept_submission(
             if submission.file_name and not title:
                 title = f"📎 {submission.file_name}"
             updates: dict[str, object] = {"last_message_at": datetime.now(UTC)}
-            if not current_history and session.title.startswith("Session "):
+            if first_message:
                 updates["title"] = title[:40] if title else submission.content[:40]
             _ = await chat_session_dao.update(db_obj=session, obj_in=updates)
             _ = await enqueue_prepared_openclaw_message(

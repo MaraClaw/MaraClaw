@@ -6,14 +6,14 @@ MaraClaw connects digital employees to external chat products through **agent-sc
 `channel_configs` rows. Each connector owns inbound delivery (webhook, stream, or
 gateway) and optional proactive send via `send_channel_message`.
 
-Shared package: **`app/services/channels/`** (types, config CRUD, inbound helpers,
+Shared package: **`app/services/channels/`** (types, config CRUD,
 transactional submissions, redaction, Google Chat transport).
 
 ## Inbound Acceptance
 
 Provider-native message/event IDs identify inbound submissions in
-`channel_event_receipts`, scoped by channel configuration and provider. Redis/local
-dedupe caches are not the acceptance authority. Receipts survive transcript deletion
+`channel_event_receipts`, scoped by channel configuration and provider. Redis claims and
+other cache hints are not the acceptance authority. Receipts survive transcript deletion
 and remain for the lifetime of the channel configuration.
 
 `channels/submissions.py` rechecks configuration, sender identity, company status,
@@ -41,12 +41,119 @@ content each carry one skipped-files notice, and text after the cutoff, includin
 interleaved with images in a rich post, is kept. The receipt fingerprint still covers
 every original attachment ID, so a retry that changes only a skipped attachment conflicts
 with the durable receipt. Personal Zalo, Telegram and WhatsApp media keep their own limits.
-The Slack fallback for events with neither `ts` nor `event_id` applies the same count and notice; a Feishu
-post without a message id has no retrievable images, so its text is processed with no media work.
+
+`CHANNEL_MEDIA_ACK_BUDGET_SECONDS` (above 0 up to 30, default 2) bounds the wall-clock time a Slack,
+Telegram or WhatsApp Cloud webhook spends starting fetches and stores for its attachments before it answers; Slack
+gives up after 3 seconds. Once it passes, no further file is requested and no further store starts: a fetch in
+progress is abandoned (a host that sends nothing is cut off too), and the transcript and model content carry one
+note for each file left out, next to the oversize and skipped-files notes. A store that started before the deadline
+runs to completion and its file is attached normally, with no note, because storage cannot interrupt a write a
+worker thread has begun and cancelling the call would leave a file in the workspace that no message refers to. The
+answer can therefore overrun the budget by one store, which is limited by the storage client's timeouts (the S3
+client uses a 5 second connect and a 30 second read timeout per attempt; the local backend writes to disk). The
+text and the files already stored are still accepted, and the receipt fingerprint still covers every original
+attachment ID. Accepting the event (`accept_channel_event`, one database transaction) and the replay check before
+the fetch run outside the budget.
+
+Those webhooks also take a short in-flight claim before they fetch (Redis, keyed like the event receipt,
+lasting the budget plus ten seconds, which covers the replay check and the acceptance transaction that run
+outside the budget). A provider redelivery that arrives while the first delivery still holds the claim is
+refused with a retryable `503`, a `Retry-After` header (the claim's lifetime) and `detail.code`
+`channel_event_in_flight`, with no second download or storage write. It is never acknowledged with a 2xx,
+because the provider reads that as delivered and the event would be lost if the first delivery then failed.
+The first delivery releases the claim when it ends, however it ends, so the redelivery is answered by the
+durable receipt (a replay, acknowledged) or, when the first delivery failed, processed in full. How each
+provider redelivers:
+
+- Slack redelivers a non-2xx or slow (over 3 seconds) event up to three times, about immediately, after
+  about a minute and after about five, with `X-Slack-Retry-Num` 1 to 3
+  ([Slack retry behavior](https://slack.dev/keep-the-lights-on-error-handling-for-slack-apps),
+  [measured](https://slack.green/en/blog/slack-events-api-retry)). The third retry (`X-Slack-Retry-Num: 3`)
+  ignores a held claim and proceeds, because nothing follows it; the receipt reservation still keeps the
+  event from being accepted twice, at the cost of at most one repeated download.
+- Telegram repeats a non-2xx webhook request and gives up after a reasonable number of attempts
+  ([`setWebhook`](https://core.telegram.org/bots/api#setwebhook)).
+- WhatsApp Cloud retries a non-200 with decreasing frequency for up to 7 days. A batch processes its other
+  messages as before and then answers the whole delivery with the `503` when any message found its claim
+  held; the messages already accepted replay on the redelivery.
+
+A claim left by a dead process expires, and with Redis unavailable the webhook behaves as it did before. The
+claim is advisory: the durable receipt stays the only dedupe, and a replay after acceptance still answers
+through it.
+
+A Slack event with neither `ts` nor `event_id` has no identity to claim or dedupe. Slack sends `event_id` on every
+callback and `ts` on every message and app mention
+([Events API](https://docs.slack.dev/apis/events-api), [`message`](https://docs.slack.dev/reference/events/message),
+[`app_mention`](https://docs.slack.dev/reference/events/app_mention)), so such an event is refused with `400` and
+`Slack event ID is required`, like a Discord or WeCom event without an ID, before any claim, download,
+sender resolution or write.
+
+A signed Slack event from a sender who is not a linked member (an unlinked or unbound account) is acknowledged with
+`200` and `{"ok": true}` and ignored, as WhatsApp does: nothing is accepted or stored, and no reply is posted into Slack,
+because a group channel would get one per message. The delivery's in-flight claim is released as for any delivery that
+ends, so a redelivery is processed again rather than refused with `503`. Returning an error instead would only make
+Slack redeliver the event three times.
+
+A Feishu message event without a `message_id` has no identity to dedupe on. Feishu sends `message_id` on every
+`im.message.receive_v1` event and names it the key to deduplicate repeated pushes
+([Receive message](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive)), so the webhook refuses
+such an event with `400` and `Feishu message ID is required` before any download, sender resolution or write. Over
+the WebSocket the same refusal would make the frame answer `500`, as lark-oapi's own `_handle_data_frame` does for any
+handler error, and Feishu would redeliver an event that never gains an ID; it is logged as a warning and acknowledged
+instead. A message kind the agent cannot read (sticker, audio, interactive card and the like) and every event type
+other than `im.message.receive_v1` (bot added, message read, reactions) are acknowledged on both paths without loading
+the agent or model. A message from a sender who is not a linked member is acknowledged and ignored on both paths, with
+no reply and nothing written; Feishu holds no in-flight claim, so there is none to release. Every other refusal (a
+revoked connector source, a conflicting event, a 403 from authorization) still fails the delivery.
+
+A DingTalk stream message without a `msgId` has no identity to dedupe on: the event key would be the same for every
+such message of a conversation, so the second would be answered as a replay or a conflict, and a media message would
+be downloaded and stored before acceptance refused it. The bot message payload carries the message ID as `msgId`
+([Receive messages](https://open.dingtalk.com/document/dingstart/robot-receive-message)), so the stream logs a
+warning and acknowledges a message without one before any replay check, download, store or acceptance. An error
+acknowledgment would not help: DingTalk pushes bot messages once and uses the acknowledgment only for diagnosis
+([Stream protocol FAQ](https://open-dingtalk.github.io/developerpedia/docs/learn/stream/protocol)). A message from a
+sender who is not a linked member is acknowledged and ignored too, with no reply and nothing written. Every other
+failure (a database, Redis, storage or provider error, a revoked connector source, a conflicting event, a 403 from
+authorization) still answers the SDK with an error code.
+
+A Google Chat message event without `message.name` has no identity to dedupe on. Chat names every message
+`spaces/{space}/messages/{message}` and the receipt is keyed by project, space and that name, so the webhook refuses
+such an event with `400` and `Google Chat message name is required` before any download, sender resolution or write.
+No inline pipeline answers it. A message from a bot, or with neither text nor an attachment, is acknowledged
+with `{}`, and an `ADDED_TO_SPACE` event without a message is answered with the welcome text; none of them is
+accepted. A message with no sender, or from a sender who is not a linked member, is acknowledged with `{}` and
+ignored: nothing is accepted or stored, and no reply is sent. Every other refusal (a `403` from authorization, a
+`422` for media Chat cannot serve, a conflicting event) still fails the delivery. Google Chat holds no in-flight
+claim.
+
+A WeCom text, image, file or video callback without a `MsgId` has no identity to dedupe on and never gains one, so the
+webhook refuses it with `400` and `WeCom message ID is required` before acceptance, sender resolution or any media
+download; the `503` every other failure gets would make WeCom retry it. A KF sync page is read, not delivered, so one
+message that cannot be accepted must not hold back the rest: a message without `msgid`, or an image, file or video
+without `media_id`, is logged as a warning and skipped, and the page goes on (cursor handling is unchanged). A message
+from a sender who is not a linked member is acknowledged with `success` and ignored on the callback, inside a KF page
+and over the AI Bot WebSocket, with no reply and nothing written; over the WebSocket the stream is finished with an
+empty reply, as for an accepted message, and a message without an ID is logged and finished the same way. A WebSocket
+text, image, file, mixed or video frame that names no sender is logged as a warning with the frame's keys and answered
+with a fixed "unable to identify the sender" reply before any download, storage or acceptance. Every other
+failure (access token, `sync_msg`, storage, database, a 403 from authorization, a conflicting event) still answers
+`503`, so WeCom redelivers and the receipts dedupe what was already accepted.
 
 WhatsApp validates the raw-body signature before processing, visits every message
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed
-events replay safely when the provider redelivers the batch.
+events replay safely when the provider redelivers the batch. A message without an `id`
+can never gain one, so it is skipped with a warning before any claim, download, sender
+resolution or write and never makes the delivery fail; the rest of the batch is processed
+as before.
+
+The WeChat poller stores its `get_updates_buf` cursor only after every message of a batch has been handled, and a
+failed batch is fetched again from the same cursor after a capped backoff. A message without a `message_id` can
+never gain one and a message from a sender who is not a linked member is refused on every redelivery, so either
+would hold the poller on that batch forever. `process_wechat_message` logs a warning (no ID) or an info line (unlinked sender)
+and skips the message before any context cache write, media download or acceptance, and the cursor moves past it.
+Storage, database, Redis and provider HTTP failures still propagate: the batch is fetched again from the old cursor
+and the receipts dedupe the messages already accepted.
 
 WhatsApp free-form replies require a signed inbound `metadata.phone_number_id`
 matching the configured receiving phone number. Its Unix-second message timestamp,
@@ -70,7 +177,9 @@ existing-database upgrade is supplied.
 
 WeCom text/KF webhook acknowledgments wait for acceptance. DingTalk stream callbacks
 await acceptance on the application loop before returning an SDK success acknowledgment;
-an unavailable loop or failed acceptance returns a retryable SDK error. Feishu WebSocket
+an unavailable loop or failed acceptance returns an SDK error acknowledgment. DingTalk does not re-push bot
+messages after an error acknowledgment (only event-subscription topics are re-pushed), so a DingTalk message whose
+acceptance fails is not delivered again. Feishu WebSocket
 event frames likewise receive success only after acceptance, including multipart frames.
 Provider retry policies and connection lifetime still bound redelivery; these acknowledgments
 do not promise exactly-once external delivery.
@@ -98,6 +207,47 @@ disconnecting cancels them. A reply that reaches the bridge while it is between
 sockets is recorded as rejected and is never sent later. Unpaired attempts, logout,
 a replaced or forbidden session, account conflicts, ambiguous identity, credential
 store failures and lost owner authorization end the connection as before.
+
+## Personal bridge fleet limits (WhatsApp and Zalo)
+
+Each connector process supervises its personal bridges with three settings per bridge, so a
+worker restart with hundreds of linked numbers returns them in paced waves instead of
+spawning hundreds of Node processes at once:
+
+| Setting (`WHATSAPP_PERSONAL_` / `ZALO_PERSONAL_`) | Default | Range | Meaning |
+|---|---|---|---|
+| `MAX_RUNNING_CHILDREN` | 200 | 1-5000 | Live bridge leases across all engine processes (fleet-wide) |
+| `MAX_STARTS_PER_POLL` | 5 | 1-100 | New bridges each engine process starts on each one-second supervisor poll |
+| `WORKER_HEAP_MB` | 512 | 64-8192 | V8 old-generation ceiling in MiB of each bridge's SDK worker |
+
+Waiting connections start longest waiting first: the later of when the previous bridge was
+released and when its retry gate opened. A connection in cooldown or inside its durable
+`retry_at` never counts against the pace, and neither does a claim that is declined (a stopped agent
+or an owner who lost authorization): only a claim that wins a bridge counts, so a declined connection
+never holds back the ones behind it. Once the ceiling is reached the supervisor logs
+`fleet_ceiling_reached` once and keeps polling; each freed slot goes to the next waiting connection.
+The candidate read is one joined query, whatever the number of connections.
+
+The ceiling is fleet-wide and per bridge, so replicas share it instead of multiplying it. Every claim
+takes a transaction-scoped advisory lock (key `personal_bridge_fleet:whatsapp` or
+`personal_bridge_fleet:zalo`, hashed with `hashtextextended`) and counts the connections whose lease is
+live (`claim_token` set and `lease_until` in the future); at the ceiling it is refused, the process stops
+claiming for that poll, and `fleet_ceiling_reached` logs once per episode with the fleet-wide count. A bridge
+renews its 30-second lease about every second, so a process that died stops counting after at most 30
+seconds (its row stays claimed until teardown, as before). A connection row locked elsewhere (the creator's
+start, a revoke, another claimer) is declined without waiting. Each claim is abandoned after 10 seconds and
+handled like a failed one (the per-connection cooldown); because a hung claim usually has a shared cause
+(a stuck lock holder or the database), the timeout also ends that poll's claims, so one poll spends at most
+one 10-second budget however many connections wait, the pass still beats, and the next poll starts with the
+connections behind it. Any other claim error only skips its connection. Every
+replica enforces its own configured ceiling against the shared count, so set the same value on all of them.
+
+The parent passes the heap ceiling as `--worker-heap-mb=<MiB>` after the bridge entry; the
+environment still carries only `PATH`. A worker that outgrows it ends only its own bridge, which
+reaches the parent as an ordinary transient child death: WhatsApp exits non-zero after a
+`worker_exit` failure diagnostic and Zalo closes with `transport_failed`. The durable retry budget
+(5, 15, 30, 60, 120 seconds) is charged, no replacement starts before its `retry_at`, and
+paired credentials are kept even once the budget is spent.
 
 ## Personal QR WhatsApp bursts
 
@@ -160,12 +310,12 @@ Stored on `channel_configs.channel_type` (`channel_type_enum`):
 
 | Type | Product | Transport | Module entry |
 |------|---------|-----------|--------------|
-| `feishu` | Feishu / Lark | stream + event webhook | `api/feishu.py` + `feishu_ws.py` (inbound via `channels.inbound`) |
+| `feishu` | Feishu / Lark | stream + event webhook | `api/feishu.py` + `feishu_ws.py` (durable native-event submissions via `feishu_submissions`) |
 | `wecom` | WeCom | stream | `api/wecom.py`, `services/wecom_stream.py` |
 | `dingtalk` | DingTalk | stream | `api/dingtalk.py`, `services/dingtalk_stream.py` |
 | `slack` | Slack | Events API webhook | `api/slack.py` (durable native-event submissions) |
 | `discord` | Discord | gateway | `api/discord_bot.py`, `services/discord_gateway.py` |
-| `microsoft_teams` | Microsoft Teams | Bot Framework webhook | `api/teams.py` (inbound via `channels.inbound`) |
+| `microsoft_teams` | Microsoft Teams | Bot Framework webhook | `api/teams.py` (durable native-event submissions) |
 | `google_chat` | Google Chat | Chat app HTTP endpoint | `api/google_chat.py` (full shared package) |
 | `wechat` | WeChat | poll / ilink | `api/wechat.py`, `services/wechat_channel.py` |
 | `whatsapp` | WhatsApp | Cloud webhook / Personal QR connector | `api/whatsapp.py`, `channels/whatsapp_personal_supervisor.py` (proactive not registered) |
@@ -342,8 +492,8 @@ using separate API/connector roles must run the `bootstrap` role first.
   remain retryable after repair; there is no synchronous LLM completion guarantee.
 - Native-event receipts, not process-local or Redis hints, prevent duplicate
   acceptance across workers. Authorization is checked again on redelivery.
-- Attachments are not downloaded by this integration. Attachment-only events
-  retain the existing explicit unsupported-attachment response.
+- Attachments are downloaded with the service account (`chat.bot` scope) before acceptance; without
+  `service_account_json`, or for a Drive file, the delivery is refused with `422`.
 
 ### Proactive send
 
@@ -351,6 +501,24 @@ using separate API/connector roles must run the `bootstrap` role first.
 - Requires prior inbound traffic so a session holds `google_chat_spaces/...`.
 - Resolves DM sessions for the member first, then agent-scoped sessions including
   **group** rooms (creator-owned group sessions are included).
+- A member whose organization record is not linked to a MaraClaw account has no session, so the send is
+  refused with "requires them to message the bot first"; nothing creates an account for them.
+
+## Provider access tokens
+
+Google Chat and Microsoft Teams outbound calls and Google Chat media downloads use the same Redis-backed
+IM token cache as Feishu, WeCom and DingTalk (`app/services/im_token_cache.py`):
+
+- A burst of replies costs one token exchange per account per expiry window across all workers, not one per
+  message. Entries live for the provider's reported `expires_in` less five minutes.
+- Google Chat entries are keyed by the service-account email, a SHA-256 digest of its private key and the
+  scopes; Teams entries by app id, tenant and a SHA-256 digest of the client secret (managed identity has no
+  secret). A rotated key or secret therefore never reuses an old token, and no key or secret is stored in Redis
+  or logged.
+- When Google Chat or Teams answers `401`, the rejected token is dropped (only if it is still the cached one)
+  and the call is retried once with a fresh token. Google Chat keeps the same `requestId`, so a message that
+  was already delivered is not duplicated. A media download that is still denied reports its usual `422`.
+- A refused exchange is never cached and Redis errors fall open to a direct exchange.
 
 ## Security notes
 

@@ -5,15 +5,18 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.testclient import TestClient
 from redis.exceptions import RedisError
 from tests.membership_generation_fixtures import pin_membership_generation
+from tests.rate_limit_fakes import install_limiter_redis
 
 from app.api import files as files_api
 from app.config import get_settings
 from app.core import security
-from app.core.security import create_access_token, decode_access_token
+from app.core.rate_limit import TOO_MANY_REQUESTS_DETAIL
+from app.core.security import create_access_token, decode_access_token, get_current_user
 from app.services import file_download_tickets as tickets
 
 
@@ -261,3 +264,84 @@ async def test_access_revoked_between_mint_and_redeem(context, monkeypatch, chan
     with pytest.raises(HTTPException) as exc:
         await tickets.authorize_binding(binding, agent_id=binding.agent_id, path=binding.path, inline=False)
     assert exc.value.status_code == code
+
+
+def _download_route(monkeypatch, jwt):
+    """The real download-ticket route; the user it loads, the access check and the ticket it mints are counted."""
+    loads = AsyncMock(return_value=SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4()))
+    minted = AsyncMock(return_value=tickets.DownloadTicketResponse(ticket="opaque", expires_in=60))
+    access = AsyncMock()
+    monkeypatch.setattr(files_api, "check_agent_access", access)
+    monkeypatch.setattr(files_api, "_downloadable_storage_key", AsyncMock())
+    monkeypatch.setattr(tickets, "create", minted)
+    monkeypatch.setattr(get_settings(), "TRUSTED_PROXIES", [])
+    app = FastAPI()
+    app.include_router(files_api.router, prefix="/api")
+
+    async def current_user():
+        return await loads()
+
+    app.dependency_overrides[get_current_user] = current_user
+    client = TestClient(app, client=("203.0.113.5", 1))
+    url = f"/api/agents/{uuid.uuid4()}/files/download-ticket"
+    return (
+        client,
+        lambda: client.post(url, json={"path": "workspace/a.txt"}, headers={"Authorization": f"Bearer {jwt}"}),
+        loads,
+        access,
+        minted,
+    )
+
+
+async def test_download_ticket_throttle_refuses_a_spent_user_before_the_access_check(monkeypatch):
+    # Given a budget of two tickets per user and the real route.
+    install_limiter_redis(monkeypatch)
+    monkeypatch.setattr(get_settings(), "TICKET_RATE_LIMIT_USER_ATTEMPTS", 2)
+    pin_membership_generation(monkeypatch)
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    jwt = await create_access_token(str(uuid.uuid4()), "member", identity_id=uuid.uuid4())
+    client, post, _, access, minted = _download_route(monkeypatch, jwt)
+
+    with client:
+        # When the user spends it, then the next request is a 429 before the access check or the mint.
+        assert [post().status_code for _ in range(2)] == [200, 200]
+        refused = post()
+        assert refused.status_code == 429
+        assert refused.json() == {"detail": TOO_MANY_REQUESTS_DETAIL}
+        assert int(refused.headers["retry-after"]) > 0
+        assert (access.await_count, minted.await_count) == (2, 2)
+
+
+async def test_download_ticket_throttle_fails_open_when_redis_is_down(monkeypatch):
+    redis = install_limiter_redis(monkeypatch)
+    redis.broken_on_execute = True
+    monkeypatch.setattr(get_settings(), "TICKET_RATE_LIMIT_USER_ATTEMPTS", 1)
+    pin_membership_generation(monkeypatch)
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    jwt = await create_access_token(str(uuid.uuid4()), "member", identity_id=uuid.uuid4())
+    client, post, _, _, minted = _download_route(monkeypatch, jwt)
+
+    with client:
+        assert [post().status_code for _ in range(3)] == [200] * 3
+    assert minted.await_count == 3
+
+
+async def test_download_ticket_throttle_refuses_a_spent_address_before_the_caller_is_loaded(monkeypatch):
+    install_limiter_redis(monkeypatch)
+    monkeypatch.setattr(get_settings(), "AUTH_RATE_LIMIT_ADDRESS_ATTEMPTS", 1)
+    pin_membership_generation(monkeypatch)
+    monkeypatch.setattr(security.identity_dao, "get_auth_generation", AsyncMock(return_value=7))
+    jwt = await create_access_token(str(uuid.uuid4()), "member", identity_id=uuid.uuid4())
+    client, post, loads, _, minted = _download_route(monkeypatch, jwt)
+
+    with client:
+        assert post().status_code == 200
+        refused = post()
+
+    assert (refused.status_code, refused.json()) == (429, {"detail": TOO_MANY_REQUESTS_DETAIL})
+    assert (loads.await_count, minted.await_count) == (1, 1)
+
+
+@pytest.fixture(autouse=True)
+def limiter_redis(monkeypatch):
+    return install_limiter_redis(monkeypatch)

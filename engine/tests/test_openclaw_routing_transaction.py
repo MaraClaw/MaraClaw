@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.api import background_tasks
+from app.dao.chat_dao import chat_message_dao
 from app.dao.gateway_message_dao import PendingDuplicateProbe
 from app.db import session
 from app.records.agent import AgentRecord
@@ -99,6 +100,28 @@ async def test_prepared_enqueue_defers_wake_until_commit(
     ]
     assert wake_context == ([] if rollback else [(1, None)])
     assert raw.rollbacks == int(rollback)
+
+
+async def test_normal_enqueue_commits_without_reading_the_transcript(
+    monkeypatch: pytest.MonkeyPatch, raw: _FakeRawConnection
+) -> None:
+    # Given a destination whose preparation and insert are stubbed, and a transcript read that must never happen.
+    agent = AgentRecord(id=uuid4(), name="Destination", creator_id=uuid4())
+    prepared = routing.PreparedOpenClawMessage(agent, "hello", "primary", "openai/model", "rule")
+    created = GatewayMessageRecord(id=uuid4(), agent_id=agent.id, content="hello")
+    prepare = AsyncMock(return_value=prepared)
+    transcript = AsyncMock(side_effect=AssertionError("enqueue must not read the transcript"))
+    monkeypatch.setattr(routing, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(routing, "_insert_prepared_message", AsyncMock(return_value=created))
+    monkeypatch.setattr(routing, "_schedule_inbox_wake", Mock())
+    monkeypatch.setattr(chat_message_dao, "list_recent", transcript)
+    # When
+    result = await routing.enqueue_openclaw_message(agent=agent, content="hello", conversation_id="thread")
+    # Then
+    assert result is created
+    prepare.assert_awaited_once_with(agent=agent, content="hello")
+    transcript.assert_not_awaited()
+    assert raw.commits == 1
 
 
 async def test_prepared_enqueue_suppresses_duplicate_user_message(

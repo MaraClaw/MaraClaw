@@ -8,7 +8,12 @@ import httpx
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from, json_object_from_response
 from app.records.outbound_plan import OutboundChunk, OutboundFileChunk, OutboundProvider
 from app.services import im_token_cache
-from app.services.channels.outbound_errors import ProviderDeliveryError, provider_deadline, response_body
+from app.services.channels.outbound_errors import (
+    ProviderDeliveryError,
+    delivery_error,
+    provider_deadline,
+    response_body,
+)
 from app.services.channels.outbound_http import outbound_client
 from app.services.channels.outbound_plan import ConfiguredOutbound
 from app.services.channels.whatsapp_window import require_reply_window, utcnow
@@ -16,7 +21,7 @@ from app.services.channels.whatsapp_window import require_reply_window, utcnow
 
 def require_ack(response: httpx.Response, provider: OutboundProvider, acknowledged: bool, code: str) -> None:
     if not acknowledged:
-        raise ProviderDeliveryError(provider, code, provider_deadline(response, datetime.now(UTC)))
+        raise delivery_error(provider, code, provider_deadline(response, datetime.now(UTC)))
 
 
 # Feishu "missing/invalid access token" business codes, the token subset of `_check_feishu_err` in
@@ -155,10 +160,10 @@ async def send_chunk(
                 provider_message_id = json_as_str_or(json_object_from(messages[0]).get("id"))
         case OutboundProvider.GOOGLE_CHAT:
             from app.services.channels.google_chat import (
-                CHAT_API_BASE,
                 CHAT_BOT_SCOPE,
                 _service_account_access_token,
                 _service_account_info,
+                post_chat_message,
             )
 
             info = _service_account_info(config)
@@ -170,11 +175,9 @@ async def send_chunk(
             if target.thread is not None:
                 payload["thread"] = {"name": target.thread}
                 params["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
-            response = await client.post(
-                f"{CHAT_API_BASE}/{target.destination}/messages",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-                json=payload,
+            # A rejected token is renewed once inside; the unchanged requestId keeps a delivered message from duplicating.
+            response, _ = await post_chat_message(
+                client, info, target.destination, token=token, params=params, payload=payload
             )
             body = response_body(response, target.provider)
             require_ack(response, target.provider, bool(body.get("name")), "missing_ack")

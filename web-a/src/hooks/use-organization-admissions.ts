@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type { OrganizationAdmissionId, OrganizationAdmissionStatus } from '@/lib/organization-admissions-api'
-import { canReviewOrganizationAdmissions } from '@/lib/types/auth'
+import { canReviewOrganizationAdmissions } from '@/lib/types/auth-guards'
 import { organizationAdmissionDecisionOptions, organizationAdmissionEmailRetryOptions, organizationAdmissionsOptions } from './organization-admission-options'
 import { useAuth } from './use-auth'
 import { useSessionMutation } from './use-session-mutation'

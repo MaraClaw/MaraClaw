@@ -13,6 +13,7 @@ import anyio
 import httpx
 import pytest
 from fastapi import HTTPException
+from tests.rate_limit_fakes import install_limiter_redis
 
 from app.api import agents as agents_api, files as files_api
 from app.core.domain.agents import AgentStatus
@@ -224,7 +225,7 @@ def test_every_guest_visible_file_mutator_carries_the_exclusion_and_reads_do_not
     }
     guarded: set[tuple[str, str]] = set()
     unguarded: set[tuple[str, str]] = set()
-    for router in (agents_api.router, files_api.router, files_api.upload_router):
+    for router in (agents_api.router, agents_api.runtime_router, files_api.router, files_api.upload_router):
         for route in router.routes:
             methods = getattr(route, "methods", None) or set()
             dependant = getattr(route, "dependant", None)
@@ -350,3 +351,8 @@ async def test_reconciliation_stop_skips_an_in_flight_cutover(gate: Gate, tmp_pa
     await agent_stops.stop_containers([agent])
     current.assert_awaited_once_with(agent.id)
     stop.assert_awaited_once_with(agent)
+
+
+@pytest.fixture(autouse=True)
+def limiter_redis(monkeypatch):
+    return install_limiter_redis(monkeypatch)

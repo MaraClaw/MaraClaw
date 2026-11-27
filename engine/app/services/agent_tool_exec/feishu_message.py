@@ -16,7 +16,7 @@ from app.records.org import OrgMemberRecord
 from app.services import feishu_service as feishu_service_module
 from app.services.agent_tool_exec.registry import ToolArguments
 from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import get_platform_user_by_org_member
+from app.services.channel_user_service import linked_platform_user
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,10 +32,15 @@ async def _save_outgoing_to_feishu_session(outgoing: _OutgoingFeishuMessage) -> 
     """Save an outgoing Feishu P2P message without blocking send success."""
     try:
         agent = await agent_dao.get(outgoing.agent_id)
-        platform_user = await get_platform_user_by_org_member(
+        platform_user = await linked_platform_user(
             org_member=outgoing.member,
             agent_tenant_id=agent.tenant_id if agent else None,
         )
+        if platform_user is None:
+            logger.info(
+                f"[Feishu] Outgoing message not saved to history: member {outgoing.member.id} has no linked user"
+            )
+            return
         session = await find_or_create_channel_session(
             agent_id=outgoing.agent_id,
             user_id=platform_user.id,

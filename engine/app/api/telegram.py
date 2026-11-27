@@ -30,7 +30,7 @@ from app.services.channels.config import (
 )
 from app.services.channels.redact import channel_config_out
 from app.services.channels.sender_links import consume_link_command, parse_link_command
-from app.services.channels.submissions import ChannelEventConflictError, accept_channel_event
+from app.services.channels.submissions import ChannelEventConflictError, accept_channel_event, claim_channel_event
 from app.services.channels.telegram import telegram_event
 from app.services.channels.telegram_setup import configure_telegram, telegram_webhook_url
 
@@ -125,10 +125,10 @@ async def telegram_event_webhook(config_id: UUID, request: Request) -> OkAcknowl
                 from app.services.channels.submissions import is_channel_event_replay
                 from app.services.channels.telegram_media import enrich_media
 
-                if await is_channel_event_replay(event):
-                    return {"ok": True}
-                enriched, content = await enrich_media(config, event, update.message)
-                _ = await accept_channel_event(enriched, content=content, saved_content=content)
+                async with claim_channel_event(event):
+                    if not await is_channel_event_replay(event):
+                        enriched, content = await enrich_media(config, event, update.message)
+                        _ = await accept_channel_event(enriched, content=content, saved_content=content)
             else:
                 _ = await accept_channel_event(event)
         except ChannelUserResolutionError:

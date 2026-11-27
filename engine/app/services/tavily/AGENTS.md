@@ -7,7 +7,7 @@ Engine-side Tavily key ring and HTTP proxy. Guest skills use this proxy; this pa
 - `http_client.py` - the Tavily-only shared `httpx.AsyncClient`: one per event loop, explicit limits, no redirects, a cookie jar that stores and replays nothing. `shutdown_tavily_client()` closes it from lifespan `stop()`. Never `async with` it, and never reuse `outbound_client()` or `llm/http_pool.py` (that one follows redirects)
 - `tokens.py` - guest proxy token (not a real Tavily secret)
 - `analytics.py` - billed POST → `web_search_events` (normalized + HMAC, no raw). Must not fail the guest.
-- `export.py` - worker drain to `ANALYTICS_S3_PREFIX` (never workspace `agents/`); the `web_search_export` loop has a readiness progress budget and beats after each drain or reclaim pass, a failed PUT included
+- `export.py` - worker drain to `ANALYTICS_S3_PREFIX` (never workspace `agents/`); the `web_search_export` loop has a readiness progress budget and beats after each drain or reclaim pass, a failed PUT included. Its retention pass (first tick, then hourly) deletes in committed batches of 5000 (`web_search_event_dao.delete_payloads_older_than`, `delete_older_than`, then `delete_orphaned_payloads`, each `FOR UPDATE SKIP LOCKED` so workers starting together never block each other) and beats after each full batch; the cutoff, the payload-before-event order and the export status counts are unchanged
 
 ## Proxy behavior
 

@@ -6,10 +6,14 @@ import shutil
 import stat
 from contextlib import suppress
 from pathlib import Path
+from typing import BinaryIO, Final
 from uuid import uuid4
 
 from app.services.storage_runtime.base import StorageLinkRefusedError
 from app.services.storage_runtime.local_contained import contained_parent, refuse_if_link
+from app.services.storage_runtime.upload_source import UploadSource
+
+_COPY_CHUNK_BYTES: Final = 1024 * 1024
 
 
 def _refuse_link_at(directory: int, name: str) -> None:
@@ -18,13 +22,21 @@ def _refuse_link_at(directory: int, name: str) -> None:
             raise StorageLinkRefusedError
 
 
-def publish_complete_file(root: Path, relative: str, data: bytes) -> os.stat_result | None:
+def _fill(stream: BinaryIO, payload: bytes | UploadSource) -> None:
+    """Write the payload into `stream`; a source is copied in bounded chunks, never read whole."""
+    if isinstance(payload, bytes):
+        _ = stream.write(payload)
+    else:
+        shutil.copyfileobj(payload.body(), stream, _COPY_CHUNK_BYTES)
+
+
+def publish_complete_file(root: Path, relative: str, data: bytes | UploadSource) -> os.stat_result | None:
     with contained_parent(root, relative, create=True) as (directory, name):
         temporary = f".storage-create-{uuid4().hex}"
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=directory)
         try:
             with os.fdopen(fd, "wb") as stream:
-                stream.write(data)
+                _fill(stream, data)
                 stream.flush()
                 os.fsync(stream.fileno())
                 info = os.fstat(stream.fileno())
@@ -39,7 +51,7 @@ def publish_complete_file(root: Path, relative: str, data: bytes) -> os.stat_res
             os.unlink(temporary, dir_fd=directory)
 
 
-def write_contained_file(root: Path, relative: str, data: bytes) -> None:
+def write_contained_file(root: Path, relative: str, data: bytes | UploadSource) -> None:
     """Rewrite `relative` in place, so an existing file keeps its inode and mode; missing parents are created.
 
     A directory or other non-file at `relative` raises `OSError` and is left untouched.
@@ -58,7 +70,7 @@ def write_contained_file(root: Path, relative: str, data: bytes) -> None:
         os.close(fd)
         raise
     with os.fdopen(fd, "wb") as stream:
-        _ = stream.write(data)
+        _fill(stream, data)
 
 
 def delete_contained_entry(root: Path, relative: str) -> None:

@@ -5,6 +5,7 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
+from itertools import count
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -19,7 +20,7 @@ from app.db.connection import DbConnection
 from app.records.agent import AgentRecord
 from app.scripts import bootstrap_db
 from app.services import openclaw_routing
-from app.services.channels import binding, llm_bridge
+from app.services.channels import binding, submissions
 from test_bootstrap_postgres import schema_db
 
 __all__ = ["schema_db"]
@@ -80,12 +81,11 @@ async def live_channel(schema_db, monkeypatch):
     agent = await agent_dao.get(agent_id)
     assert agent is not None
 
-    async def prepare(*, agent, content, history=None):
+    async def prepare(*, agent, content):
         return openclaw_routing.PreparedOpenClawMessage(agent, content, "primary", None, "qa")
 
-    monkeypatch.setattr(openclaw_routing, "prepare_openclaw_message", prepare)
+    monkeypatch.setattr(submissions, "prepare_shared_openclaw_message", prepare)
     monkeypatch.setattr(openclaw_routing, "_schedule_inbox_wake", lambda *args: None)
-    monkeypatch.setattr(llm_bridge, "_load_agent_and_model", AsyncMock(return_value=(agent, None, None)))
     published = AsyncMock()
     monkeypatch.setattr(binding, "_publish_user_message", published)
     app = FastAPI()
@@ -111,10 +111,13 @@ async def canonical_sessions(live: LiveChannel) -> dict[UUID, str]:
     return {UUID(str(row["user_id"])): str(row["id"]) for row in rows}
 
 
+slack_event_numbers = count(1)
+
+
 async def post_slack(live: LiveChannel, *, sender="U0", text="hello", channel="D0", valid_signature=True):
-    body = json.dumps(
-        {"type": "event_callback", "event": {"type": "message", "user": sender, "channel": channel, "text": text}}
-    ).encode()
+    number = next(slack_event_numbers)
+    event = {"type": "message", "user": sender, "channel": channel, "text": text, "ts": f"1700000000.{number:06d}"}
+    body = json.dumps({"type": "event_callback", "event_id": f"Ev{number:08d}", "event": event}).encode()
     stamp = str(int(time.time()))
     signature = hmac.new(b"qa-secret", b"v0:" + stamp.encode() + b":" + body, hashlib.sha256).hexdigest()
     return await live.client.post(

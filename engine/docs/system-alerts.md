@@ -24,7 +24,7 @@ Current boundaries:
   before shutdown. Successful finite setup/optional tasks, cancellation and normal
   shutdown do not create loop-exit incidents. Required-task readiness is unchanged.
 - Route background-task and scheduler-execution completion observers.
-- Explicit unexpected WebSocket catches: chat lifecycle, history loading,
+- Explicit unexpected WebSocket catches: chat lifecycle, the welcome probe,
   pub/sub delivery, Redis disconnect cleanup, guest-config preparation and failed
   onboarding/submission turns. Existing error frames, rejection and cleanup remain.
 - Startup exceptions escaping `Runtime.start`, before the lifespan yields, plus

@@ -97,6 +97,7 @@ FIXED_CASES = [
             "session_id": None,
             "before_content": None,
             "after_content": "a",
+            "content_omitted": False,
             "created_at": None,
             "updated_at": None,
         },

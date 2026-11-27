@@ -19,7 +19,7 @@ from psycopg.pq import TransactionStatus
 from app.config import get_settings
 from app.core.logging import logger
 from app.db.connection import DbConnection
-from app.db.pool import durable_pool, get_pool
+from app.db.pool import durable_pool, get_pool, set_request_lock_timeout
 
 _conn_ctx: ContextVar[DbConnection | None] = ContextVar("psycopg_conn_ctx", default=None)
 
@@ -228,13 +228,20 @@ async def bind_crud_connection() -> AsyncIterator[None]:
 
     When the process pool is unset (unit tests without ``init_pool``), this is
     a no-op so ASGI tests keep working.
+
+    The checkout carries ``DATABASE_REQUEST_LOCK_TIMEOUT_MS`` as a session-level ``lock_timeout`` (0 leaves the
+    server default), so a request cannot wait on a row lock longer than a client would wait for the response; the
+    pool's reset clears it before the connection is reused.
     """
     try:
         _ = get_pool()
     except RuntimeError:
         yield
         return
-    async with connection_ctx():
+    async with connection_ctx() as db:
+        timeout_ms = get_settings().DATABASE_REQUEST_LOCK_TIMEOUT_MS
+        if timeout_ms:
+            await set_request_lock_timeout(db, timeout_ms)
         yield
 
 

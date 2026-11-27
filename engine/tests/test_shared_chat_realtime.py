@@ -1,7 +1,6 @@
 import json
 import time
 from contextlib import nullcontext
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -18,7 +17,8 @@ from app.records.chat import ChatSessionRecord
 from app.records.user import UserRecord
 from app.services import chat_tickets
 from app.services.realtime_runtime import chat_authorization
-from app.services.realtime_runtime.router import RealtimeRouter
+from app.services.realtime_runtime.router import PresenceLookup, RealtimeRouter
+from test_websocket_session_query import MemoryPresence
 
 DONE_TEXT = '{"type":"done"}'
 
@@ -43,7 +43,7 @@ async def deliver(
         )
     else:
         router = RealtimeRouter()
-        monkeypatch.setattr(router, "_list_presence", AsyncMock(return_value=[]))
+        monkeypatch.setattr(router, "_session_lookup", AsyncMock(return_value=PresenceLookup({})))
         await router.route_message(
             agent_id=str(agent_id),
             session_id=session_id,
@@ -144,7 +144,7 @@ async def test_canonical_turn_reaches_only_the_owners_sockets(monkeypatch, remot
         (b, other_session, str(other)),
         (viewer, owner_session, str(admin)),
     ]
-    monkeypatch.setattr(ws_api.realtime_router, "_list_presence", AsyncMock(return_value=[]))
+    monkeypatch.setattr(ws_api.realtime_router, "_session_lookup", AsyncMock(return_value=PresenceLookup({})))
     turn_id = str(uuid4())
     events: list[RealtimeMessage] = [
         {"type": "done", "role": "user", "content": "hello", "message_id": str(uuid4()), "session_id": owner_session},
@@ -260,29 +260,22 @@ async def test_canonical_redis_envelope_targets_only_the_owners_instances(monkey
     agent_id, owner = str(uuid4()), str(uuid4())
     session_id = str(uuid4())
     router = RealtimeRouter()
-    publish = AsyncMock()
-    monkeypatch.setattr(
-        "app.services.realtime_runtime.router.get_redis", AsyncMock(return_value=SimpleNamespace(publish=publish))
+    store = MemoryPresence(
+        agent_id,
+        {
+            "owner": {"instance_id": "owner-remote", "session_id": session_id, "user_id": owner},
+            "admin": {"instance_id": "admin-remote", "session_id": session_id, "user_id": str(uuid4())},
+            "private": {"instance_id": "private-remote", "session_id": str(uuid4()), "user_id": owner},
+        },
     )
-    monkeypatch.setattr(
-        router,
-        "_list_presence",
-        AsyncMock(
-            return_value=[
-                {"instance_id": "owner-remote", "session_id": session_id, "user_id": owner},
-                {"instance_id": "admin-remote", "session_id": session_id, "user_id": str(uuid4())},
-                {"instance_id": "private-remote", "session_id": str(uuid4()), "user_id": owner},
-            ]
-        ),
-    )
+    monkeypatch.setattr("app.services.realtime_runtime.router.get_redis", AsyncMock(return_value=store))
 
     _ = await router.route_message(
         agent_id=agent_id, session_id=session_id, user_id=owner, message={"type": "done"}, local_connections=[]
     )
 
-    publish.assert_awaited_once()
-    assert publish.await_args is not None
-    channel, envelope = publish.await_args.args
+    assert len(store.published) == 1
+    channel, envelope = store.published[0]
     assert channel == "realtime:ws:instance:owner-remote"
     assert json.loads(envelope)["session_id"] == session_id
     assert json.loads(envelope)["user_id"] == owner

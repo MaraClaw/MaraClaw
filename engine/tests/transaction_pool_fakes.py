@@ -5,10 +5,30 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import cast
+from typing import Self, cast
 
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow
+
+LOCK_TIMEOUT_SQL = "SELECT set_config('lock_timeout', %(ms)s, false)"
+
+
+class _LockTimeoutCursor:
+    """Cursor that accepts only the checkout-time request ``lock_timeout`` statement a bound request issues."""
+
+    def __init__(self, executed: list[str]) -> None:
+        self._executed = executed
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def execute(self, query: str, params: object = None) -> None:
+        assert query == LOCK_TIMEOUT_SQL
+        assert isinstance(params, dict)
+        self._executed.append(query)
 
 
 class CountingRawConnection:
@@ -18,6 +38,10 @@ class CountingRawConnection:
         self.commits = 0
         self.rollbacks = 0
         self.in_transaction = False
+        self.executed: list[str] = []
+
+    def cursor(self) -> _LockTimeoutCursor:
+        return _LockTimeoutCursor(self.executed)
 
     def begin(self) -> None:
         self.in_transaction = True

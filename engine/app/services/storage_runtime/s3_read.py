@@ -3,11 +3,13 @@
 import re
 from collections.abc import Callable, Mapping
 from contextlib import closing
+from functools import partial
 from typing import Protocol, TypeIs
 
 from botocore.exceptions import ClientError
 
 from app.core.json_types import json_as_int
+from app.core.thread_lanes import ThreadLane
 from app.services.storage_runtime.base import (
     MaterializedFile,
     StorageReadLimitExceededError,
@@ -112,6 +114,10 @@ def read_object_snapshot(get_object: Callable[[], Mapping[str, object]], key: st
         )
 
 
-async def materialize_object(get_object: Callable[[], Mapping[str, object]], suffix: str) -> MaterializedFile:
-    """Stream the object into a temp file made by the worker; the returned handle owns it."""
-    return await materialize_copy(lambda: closing(_open_body(get_object)), suffix)
+async def materialize_object(
+    lane: ThreadLane, get_object: Callable[[], Mapping[str, object]], suffix: str
+) -> MaterializedFile:
+    """Stream the object into a temp file made by a `lane` worker; the returned handle owns it."""
+    return await materialize_copy(
+        lambda: closing(_open_body(get_object)), suffix, partial(lane.run, abandon_on_cancel=True)
+    )

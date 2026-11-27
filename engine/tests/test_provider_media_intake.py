@@ -6,13 +6,15 @@ import anyio
 import httpx
 import pytest
 from fastapi import HTTPException
-from tests.channel_media_fixtures import set_attachment_limit
+from tests.channel_media_fixtures import claim_store, set_attachment_limit
 from tests.im_webhook_fixtures import AGENT_ID
 from tests.provider_media_fixtures import PROVIDERS, REAL_CLIENT, media_case
 
 from app.services.channels import discord_media, google_chat_media, teams_media
-from app.services.channels.media_limits import skipped_attachments_note
+from app.services.channels.media_limits import MediaBudget, skipped_attachments_note
 from app.services.storage_runtime.quota_errors import StorageQuotaError
+
+__all__ = ["claim_store"]
 
 
 @pytest.mark.parametrize("name", PROVIDERS)
@@ -187,3 +189,18 @@ async def test_discord_callback_retry_contract_and_errors_are_bounded(
         assert "interaction-canary" not in result.text
         assert calls == ["discord.com"]
         case.accept.assert_not_awaited()
+
+
+@pytest.mark.parametrize("name", PROVIDERS)
+async def test_providers_that_answer_before_fetching_ignore_the_webhook_deadline_and_claim(
+    monkeypatch, tmp_path, claim_store, name
+):
+    # Given: the acknowledgement budget that Slack, Telegram and WhatsApp take is already spent
+    case = media_case(name, monkeypatch, tmp_path)
+    monkeypatch.setattr(MediaBudget, "for_acknowledgement", lambda: MediaBudget(deadline=0.0, clock=lambda: 1.0))
+    # When: the provider takes its attachment through its own intake
+    await case.invoke(monkeypatch, "caption")
+    # Then: the file was still downloaded, stored and accepted, and no in-flight claim was taken
+    assert len(case.requests) == (2 if name == "discord_interaction" else 1)
+    assert len(case.accept.call_args.args[0].attachments) == 1
+    assert claim_store.taken == 0

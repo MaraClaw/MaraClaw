@@ -7,6 +7,13 @@ from __future__ import annotations
 
 from enum import Enum
 
+import httpx
+
+from app.services.llm.retry_policy import LLMHTTPError
+
+RATE_LIMITED_STATUS = 429
+SERVER_ERROR_STATUSES = range(500, 600)
+
 
 class FailoverErrorType(Enum):
     """Classification of LLM errors for failover decisions."""
@@ -18,6 +25,10 @@ class FailoverErrorType(Enum):
 
 def classify_error(error: Exception) -> FailoverErrorType:
     """Classify an exception as retryable or non-retryable.
+
+    A provider's HTTP status decides first: 429 and 5xx are retryable, every other status is the caller's mistake
+    and never retryable, whatever its body says. Errors without a status are classified by their message, and a
+    typed timeout whose message names nothing is retryable.
 
     Retryable errors:
     - Network timeout / connection errors
@@ -31,8 +42,21 @@ def classify_error(error: Exception) -> FailoverErrorType:
     - Schema errors
     - Content policy violations
     """
-    error_msg = str(error).lower()
+    if isinstance(error, LLMHTTPError):
+        return _classify_status(error.status_code)
+    kind = _classify_message(str(error).lower())
+    if kind is FailoverErrorType.UNKNOWN and isinstance(error, httpx.TimeoutException | TimeoutError):
+        return FailoverErrorType.RETRYABLE
+    return kind
 
+
+def _classify_status(status_code: int) -> FailoverErrorType:
+    if status_code == RATE_LIMITED_STATUS or status_code in SERVER_ERROR_STATUSES:
+        return FailoverErrorType.RETRYABLE
+    return FailoverErrorType.NON_RETRYABLE
+
+
+def _classify_message(error_msg: str) -> FailoverErrorType:
     # Non-retryable: authentication and authorization
     if any(kw in error_msg for kw in ["auth", "unauthorized", "forbidden", "invalid api key", "api key invalid"]):
         return FailoverErrorType.NON_RETRYABLE

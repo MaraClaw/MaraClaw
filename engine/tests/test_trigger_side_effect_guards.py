@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -11,7 +12,9 @@ from tests.test_background_llm import background_case, tool_response
 from app.dao.agent_dao import agent_dao
 from app.records.agent import AgentRecord
 from app.records.chat import ChatSessionRecord
+from app.records.okr import OKRSettingsRecord
 from app.records.trigger import AgentTriggerRecord
+from app.services import okr_daily_collection as collection
 from app.services.llm import caller
 from app.services.llm.background_guard import ScheduleLeaseLostError
 from app.services.llm.types import LLMResponse
@@ -296,3 +299,31 @@ async def test_read_mark_checks_guard_after_lookup_before_update(monkeypatch, gu
         )
     # Then a denied write never starts; the default behavior remains unchanged.
     assert writes == ([] if guarded else [True])
+
+
+async def test_okr_collection_stops_sending_when_the_lease_is_lost_between_messages(monkeypatch):
+    # Given an OKR agent tracking two digital employees and a lease guard that is lost after the first message
+    tenant_id, agent_id = uuid4(), uuid4()
+    settings = OKRSettingsRecord(tenant_id, enabled=True, daily_report_enabled=True, okr_agent_id=agent_id)
+    monkeypatch.setattr(collection.okr_settings_dao, "get_by_tenant", AsyncMock(return_value=settings))
+    monkeypatch.setattr(
+        collection.agent_dao, "get", AsyncMock(return_value=AgentRecord(agent_id, "OKR", uuid4(), tenant_id=tenant_id))
+    )
+    monkeypatch.setattr(collection.agent_relationship_dao, "list_for_agent_with_members", AsyncMock(return_value=[]))
+    targets = [AgentRecord(uuid4(), name, uuid4(), tenant_id=tenant_id) for name in ("First", "Second")]
+    monkeypatch.setattr(collection.agent_agent_relationship_dao, "list_target_agents", AsyncMock(return_value=targets))
+    send = AsyncMock(return_value="✅")
+    monkeypatch.setattr(collection, "_send_message_to_agent", send)
+    checks = 0
+
+    def guard():
+        nonlocal checks
+        checks += 1
+        if checks > 1:
+            raise ExecutionLeaseLostError("taken over")
+
+    # When the collection runs for its period
+    with pytest.raises(ExecutionLeaseLostError):
+        await collection.trigger_daily_collection_for_tenant(tenant_id, date(2026, 11, 25), guard=guard)
+    # Then only the message sent while the lease was held went out
+    send.assert_awaited_once()

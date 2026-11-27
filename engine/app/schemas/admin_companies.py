@@ -89,8 +89,18 @@ class CompanyRuntimeWorkspaceOut(BaseModel):
 
     used_bytes: int
     limit_bytes: int
-    measured_at: datetime | None
+    measured_at: datetime | None = Field(
+        description="Start of the stored measurement; null while the agent was never measured (sizes are placeholders)."
+    )
     over_since: datetime | None
+    walk_failed_at: datetime | None = Field(
+        description="Start of the latest attempt whose directory walk passed its deadline; cleared by a stored "
+        "measurement that started at or after it."
+    )
+    remeasure_requested_at: datetime | None = Field(
+        description="When a request path handed its re-measure to the quota worker; cleared by a stored measurement "
+        "that started at or after it."
+    )
 
 
 class CompanyRuntimeAgentOut(BaseModel):

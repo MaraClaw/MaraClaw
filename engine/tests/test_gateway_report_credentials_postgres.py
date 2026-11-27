@@ -7,6 +7,7 @@ import pytest
 from psycopg.pq import TransactionStatus
 from psycopg.types.json import Jsonb
 
+from app.config import get_settings
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.channel_credentials import channel_credentials
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao as dao
@@ -160,7 +161,9 @@ async def test_different_principal_is_blocked_until_original_account_is_repaired
     assert wire.messages[-1][1] == "last chunk"
 
 
-async def test_missing_canonical_credentials_remain_repairable_after_ten_thousand_attempts(credential_db, monkeypatch):
+async def test_missing_canonical_credentials_remain_repairable_on_the_last_attempt_below_the_ceiling(
+    credential_db, monkeypatch
+):
     db, row, provider = credential_db
     wire = CredentialProvider(db, provider)
     transport(monkeypatch, wire.respond)
@@ -168,7 +171,8 @@ async def test_missing_canonical_credentials_remain_repairable_after_ten_thousan
     await change_credentials(db, row, None)
     async with transaction(db.second):
         await db.second.execute(
-            "UPDATE gateway_report_deliveries SET attempts = 10000 WHERE id = %(id)s", {"id": row.id}
+            "UPDATE gateway_report_deliveries SET attempts = %(attempts)s WHERE id = %(id)s",
+            {"id": row.id, "attempts": get_settings().GATEWAY_REPORT_MAX_ATTEMPTS - 2},
         )
 
     assert await relay.relay_batch() == 1

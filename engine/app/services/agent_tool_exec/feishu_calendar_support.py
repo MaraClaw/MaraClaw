@@ -8,7 +8,6 @@ from typing import Protocol, TypeIs
 
 from app.core.logging import logger
 from app.services import agent_tools
-from app.services.agent_tool_exec.channel_context import channel_feishu_sender_open_id
 from app.services.agent_tool_exec.registry import ToolArguments, ToolArgumentValue
 from app.services.feishu_service import FeishuService, feishu_service
 
@@ -135,7 +134,4 @@ async def _calendar_attendees(
         if open_id not in (None, "") and open_id not in attendee_open_ids:
             attendee_open_ids.append(open_id)
             attendee_display.append(email)
-    sender_open_id = channel_feishu_sender_open_id.get(None)
-    if sender_open_id not in (None, "") and sender_open_id not in attendee_open_ids:
-        attendee_open_ids.append(sender_open_id)
     return attendee_open_ids, attendee_display

@@ -12,6 +12,7 @@ from app.db.session import connection_ctx
 from app.services import agent_start_reconciler as reconciler, guest_readiness
 from app.services.agent_lifecycle import LifecycleSuccess, start_agent_guest
 from app.services.agent_start_store import PostgresStartStore, committed_start_connection
+from app.services.docker_capacity import DockerPriority
 from app.services.guest_admission import GuestStartStoppedError
 from app.services.guest_identity import guest_container_name
 from test_guest_start_safety import Docker
@@ -355,7 +356,9 @@ async def test_first_ready_pass_does_not_publish_running(start_db, guest_surface
     assert await start_db.fetchval("SELECT status FROM agents WHERE id=%(id)s", {"id": original.id}) == "running"
 
 
-async def test_cancelled_cleanup_discovers_labelled_successor_of_missing_observation(start_db, guest_surface):
+async def test_cancelled_cleanup_discovers_labelled_successor_of_missing_observation(
+    start_db, guest_surface, monkeypatch
+):
     # Given an earlier observation disappeared before a retry created its canonical writer.
     operation, original = await pending_start(start_db)
     docker, _probes = guest_surface
@@ -363,11 +366,22 @@ async def test_cancelled_cleanup_discovers_labelled_successor_of_missing_observa
     guest = docker.add(replace(original, container_id="successor"))
     guest.config.labels["maraclaw.start_operation"] = str(operation.operation_id)
     await PostgresStartStore().cancel(original.id)
+    priorities = []
+    lane_call = reconciler.run_docker
+
+    async def spy(function, *args, priority=None, **kwargs):
+        priorities.append(priority)
+        return await lane_call(function, *args, priority=priority, **kwargs)
+
+    monkeypatch.setattr(reconciler, "run_docker", spy)
     # When the cancelled operation cleans up after a process restart.
     await reconciler.cleanup_cancelled_start(operation)
-    # Then a stale observed ID cannot orphan its operation-labelled writer.
+    # Then a stale observed ID cannot orphan its operation-labelled writer, and every Docker call took the lane
+    # at background priority.
     assert guest.state.status == "exited"
     assert await PostgresStartStore().outstanding() == []
+    assert priorities
+    assert set(priorities) == {DockerPriority.BACKGROUND}
 
 
 async def test_prepublication_flush_ambiguity_preserves_recoverable_guest(start_db, guest_surface, monkeypatch):

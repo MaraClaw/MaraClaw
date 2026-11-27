@@ -58,7 +58,7 @@ async def cache_replay(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[CacheRe
         for module, name in (
             (access_cache, "get_cache_redis"),
             (redis_cache, "_client"),
-            (agent_context_cache, "get_redis"),
+            (agent_context_cache, "get_cache_redis"),
             (cache_invalidation_worker, "get_cache_redis"),
         ):
 

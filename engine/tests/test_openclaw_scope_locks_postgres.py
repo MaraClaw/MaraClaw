@@ -434,7 +434,6 @@ async def test_read_only_refusal_behind_a_lane_holder_returns_the_callers_canoni
                 user=admin,
                 agent=world.held,
                 session_id=session_id,
-                history=[],
             )
         refusals.append(refused.value)
 

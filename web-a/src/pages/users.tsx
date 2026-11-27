@@ -13,7 +13,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { ApiError } from '@/lib/http'
-import { isGenesisAdmin, isPlatformAdminUser } from '@/lib/types/auth'
+import { isGenesisAdmin, isPlatformAdminUser } from '@/lib/types/auth-guards'
 import {
   asAdminUser,
   isEndUserRole,

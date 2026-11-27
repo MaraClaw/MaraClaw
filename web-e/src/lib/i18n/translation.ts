@@ -1,11 +1,19 @@
-import { vietnamese, type TranslationKey } from './catalog.ts'
+import type { TranslationKey, vietnamese } from './catalog.ts'
+import { retryingImport } from '../retrying-import.ts'
 
 export type Locale = 'en' | 'vi'
 export const LANGUAGE_STORAGE_KEY = 'maraclaw-language'
 export const localeTags = { en: 'en-US', vi: 'vi-VN' } as const
 
+// The catalog is type-only here: its strings are their own chunk, fetched by `loadVietnamese`.
+let catalog: typeof vietnamese | null = null
+
+/** Fetches the Vietnamese strings once. Rejects (and lets a later call retry) when the chunk cannot load. */
+export const loadVietnamese: () => Promise<void> = retryingImport(() => import('./catalog.ts').then((module) => { catalog = module.vietnamese }))
+
+/** True once `loadVietnamese` has resolved; until then `vi` lookups return the English key. */
 export function isTranslationKey(value: string): value is TranslationKey {
-  return Object.hasOwn(vietnamese, value)
+  return catalog !== null && Object.hasOwn(catalog, value)
 }
 
 export function parseLocale(value: unknown): Locale {
@@ -22,7 +30,7 @@ type Values<Key extends TranslationKey> = [ParametersOf<Key>] extends [never]
 export type Translate = <Key extends TranslationKey>(key: Key, ...values: Values<Key>) => string
 
 export function translateOwned(locale: Locale, key: string): string {
-  return locale === 'vi' && isTranslationKey(key) ? vietnamese[key] : key
+  return locale === 'vi' && catalog !== null && isTranslationKey(key) ? catalog[key] : key
 }
 
 export function createTranslator(locale: Locale): Translate {

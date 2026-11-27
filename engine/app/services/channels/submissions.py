@@ -2,22 +2,30 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal, override
-from uuid import UUID
+from typing import TYPE_CHECKING, Final, Literal, override
+from uuid import UUID, uuid4
 
+import anyio
 from fastapi import HTTPException
 
+from app.config import get_settings
+from app.core.events import get_cache_redis
 from app.core.json_types import JsonObject
+from app.core.logging import logger
 from app.core.permissions import compute_agent_access_level
+from app.core.redis_cache import CacheUnavailableError, cache_key, guarded
 from app.core.row_memo import clear_entity_memo
 from app.core.security import load_user_principal
 from app.dao import agent_dao, channel_config_dao
 from app.dao.channel_event_media_dao import channel_event_media_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.channel_source_lock import lock_channel_source
-from app.dao.chat_dao import chat_message_dao, chat_session_dao
+from app.dao.chat_dao import chat_session_dao
 from app.dao.company_admission_dao import company_admission_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
@@ -37,7 +45,6 @@ from app.services.channels.personal_burst_original import PERSONAL_REPLY_TITLE, 
 from app.services.channels.personal_burst_outcome import PersonalAdmission, PersonalReplayed
 from app.services.channels.stream_source import STREAM_MODES, StreamSource, check_stream_source, connection_mode
 from app.services.channels.types import normalize_channel_type
-from app.services.llm.utils import convert_chat_messages_to_llm_format
 from app.services.openclaw_model_selection import prepare_shared_openclaw_message
 from app.services.openclaw_routing import enqueue_prepared_openclaw_message
 from app.services.quota_guard import charge_conversation_quota
@@ -181,10 +188,14 @@ async def _authorize(event: ChannelEvent) -> tuple[AgentRecord, UserRecord]:
     return agent, principal
 
 
+def _receipt_provider(event: ChannelEvent) -> str:
+    return "zalo" if event.zalo_source is not None else event.provider
+
+
 def _receipt(event: ChannelEvent, agent: AgentRecord) -> ChannelEventReceiptRecord:
     return ChannelEventReceiptRecord(
         config_id=event.config_id,
-        provider="zalo" if event.zalo_source is not None else event.provider,
+        provider=_receipt_provider(event),
         event_key=event.event_key,
         agent_id=agent.id,
         tenant_id=agent.tenant_id,
@@ -211,6 +222,98 @@ async def is_channel_event_replay(event: ChannelEvent) -> bool:
     agent, _ = await _authorize(event)
     candidate = _receipt(event, agent)
     return _matching(await channel_event_receipt_dao.find(candidate), candidate)
+
+
+# How long an in-flight claim outlives the media budget. Every fetch and store runs inside the budget; this covers the
+# work around it that does not: the replay check before it and the acceptance transaction (`accept_channel_event`) after it.
+CLAIM_GRACE_SECONDS: Final = 10.0
+CHANNEL_EVENT_IN_FLIGHT: Final = "channel_event_in_flight"
+_CLAIM_RELEASE_SECONDS: Final = 1
+_RELEASE_IF_OWNER: Final = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+)
+
+
+def _claim_key(event: ChannelEvent) -> str:
+    identity = json.dumps([str(event.config_id), _receipt_provider(event), event.event_key], separators=(",", ":"))
+    return cache_key("channel-claim", hashlib.sha256(identity.encode()).hexdigest())
+
+
+def _claim_ttl_seconds() -> float:
+    return get_settings().CHANNEL_MEDIA_ACK_BUDGET_SECONDS + CLAIM_GRACE_SECONDS
+
+
+class ChannelEventInFlightError(HTTPException):
+    """Another delivery of this event holds its in-flight claim: 503, ``Retry-After`` and code ``channel_event_in_flight``.
+
+    The provider redelivers once the first delivery has settled: as a receipt replay if that one was accepted, or in
+    full if it failed and released its claim. ``Retry-After`` is the claim's lifetime, after which the first delivery has
+    ended or its claim has expired.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            503,
+            detail={"code": CHANNEL_EVENT_IN_FLIGHT, "message": "This event is still being processed. Redeliver it."},
+            headers={"Retry-After": str(math.ceil(_claim_ttl_seconds()))},
+        )
+
+
+async def _take_claim(key: str, token: str) -> bool | None:
+    """True when this delivery now holds the claim, False when another does, None when the claim store is unavailable."""
+    ttl_ms = round(_claim_ttl_seconds() * 1000)
+
+    async def take() -> object:
+        return await (await get_cache_redis()).set(key, token, px=ttl_ms, nx=True)
+
+    try:
+        return bool(await guarded(take))
+    except CacheUnavailableError as exc:
+        logger.debug("channel event claim skipped: {}", exc)
+        return None
+
+
+async def _release_claim(key: str, token: str) -> None:
+    async def release() -> None:
+        await (await get_cache_redis()).eval(_RELEASE_IF_OWNER, 1, key, token)
+
+    with anyio.move_on_after(_CLAIM_RELEASE_SECONDS, shield=True):
+        try:
+            _ = await guarded(release)
+        except CacheUnavailableError as exc:
+            logger.debug("channel event claim release skipped: {}", exc)
+
+
+@asynccontextmanager
+async def claim_channel_event(event: ChannelEvent, *, final_delivery: bool = False) -> AsyncGenerator[None]:
+    """Hold the in-flight claim of ``event`` while a delivery of it fetches and stores media and is accepted.
+
+    The claim is keyed like the receipt but advisory: the receipt reservation in ``accept_channel_event`` stays the only
+    durable dedupe. It keeps a provider redelivery that lands while the first delivery is still working from downloading
+    the same files again. Such a delivery is refused with ``ChannelEventInFlightError`` (503 + ``Retry-After``), never
+    acknowledged: the provider takes a 2xx as the event delivered, so acknowledging it would lose the event if the first
+    delivery then failed. The redelivery arrives after the first has settled and is answered by the receipt, or
+    processed in full if the first failed and released its claim.
+
+    ``final_delivery`` is for a provider's last redelivery (Slack's ``X-Slack-Retry-Num: 3``): nothing redelivers after
+    it, so a held claim is ignored and the delivery proceeds without owning it. The receipt reservation still keeps the
+    event from being accepted twice; the cost is at most one repeated download.
+
+    The first delivery releases its claim when it ends, however it ends. One left by a process that died expires after
+    the media budget plus ``CLAIM_GRACE_SECONDS``, and an unavailable store (Redis down or its pool busy) lets the
+    delivery proceed as it did before claims existed.
+    """
+    key, token = _claim_key(event), uuid4().hex
+    claimed = await _take_claim(key, token)
+    if claimed is False:
+        logger.info("channel event in flight: provider={} config={}", event.provider, event.config_id)
+        if not final_delivery:
+            raise ChannelEventInFlightError
+    try:
+        yield
+    finally:
+        if claimed is True:
+            await _release_claim(key, token)
 
 
 async def _ensure_owner_transcript(agent_id: UUID) -> None:
@@ -271,11 +374,8 @@ async def accept_channel_event(
             )
             return AcceptedChannelEvent(replayed=False, personal=await admit_personal_original(original))
         await charge_conversation_quota(sender)
-        history = convert_chat_messages_to_llm_format(
-            await chat_message_dao.list_recent(agent_id=agent.id, conversation_id=str(session.id), limit=8)
-        )
         prepared = await prepare_shared_openclaw_message(
-            agent=agent, content=event.text if content is None else content, history=history
+            agent=agent, content=event.text if content is None else content
         )
         _ = await persist_channel_user_message(
             agent_id=agent.id,

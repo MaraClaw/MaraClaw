@@ -10,10 +10,11 @@ from fastapi import HTTPException
 from tests.channel_submission_fixtures import channel_db, receipt_db
 from tests.test_whatsapp_personal_integration import connected
 
+from app.config import get_settings
 from app.dao.user_dao import user_dao
 from app.dao.whatsapp_personal_auth_dao import AuthMutation, write_auth
 from app.dao.whatsapp_personal_dao import candidates, claim, get_personal, reaped
-from app.dao.whatsapp_personal_runtime_dao import runtime_for
+from app.dao.whatsapp_personal_runtime_dao import RETRY_DELAYS, runtime_for
 from app.db.pool import close_pool, init_pool
 from app.db.session import transaction
 from app.records.whatsapp_personal import PersonalConnection, PersonalRuntime
@@ -62,6 +63,26 @@ async def test_child_process_receives_only_executable_lookup_environment(monkeyp
     # Then only the executable search path crosses the boundary.
     assert child_env["PATH"] == "/usr/bin:/bin"
     assert not set(_LEAKS) & set(child_env)
+
+
+async def test_child_process_receives_the_worker_heap_ceiling_as_a_flag(monkeypatch):
+    # Given an operator-chosen heap ceiling.
+    monkeypatch.setattr(get_settings(), "WHATSAPP_PERSONAL_WORKER_HEAP_MB", 96)
+    # When the real spawn seam starts a process that reports its arguments.
+    script = "import json,sys;print(json.dumps(sys.argv[1:]))"
+    with anyio.fail_after(10):
+        process = await spawn_child((sys.executable, "-c", script))
+        async with process:
+            assert process.stdout is not None
+            raw = b""
+            try:
+                while True:
+                    raw += await process.stdout.receive()
+            except anyio.EndOfStream:
+                pass
+            await process.wait()
+    # Then the bridge learns its ceiling from one flag; the environment boundary stays with the test above.
+    assert json.loads(raw) == ["--worker-heap-mb=96"]
 
 
 async def test_non_ascii_child_token_fails_closed_without_crashing_supervisor(channel_db):
@@ -140,6 +161,13 @@ async def test_current_child_closed_logged_out_revokes_and_purges(channel_db):
 
 
 _CRASH = "import sys\nsys.stdin.readline()\nsys.exit(3)\n"
+# What the bridge does when its SDK worker runs out of memory: a failure diagnostic, then a failing exit status.
+_WORKER_OOM = (
+    "import json,sys\n"
+    "token=json.loads(sys.stdin.readline())['token']\n"
+    "print(json.dumps({'type':'diagnostic','id':'oom','token':token,'stage':'worker_exit','event':'failure'}),flush=True)\n"
+    "sys.exit(1)\n"
+)
 _MALFORMED = (
     "import sys\n"
     "sys.stdin.readline()\n"
@@ -150,7 +178,9 @@ _MALFORMED = (
 )
 
 
-@pytest.mark.parametrize("script", [_CRASH, _MALFORMED], ids=["nonzero_exit", "malformed_frame"])
+@pytest.mark.parametrize(
+    "script", [_CRASH, _MALFORMED, _WORKER_OOM], ids=["nonzero_exit", "malformed_frame", "worker_oom"]
+)
 async def test_transient_child_failure_keeps_paired_credentials_and_waits_for_retry(channel_db, script):
     # Given a paired, claimed connection with stored credentials.
     f = channel_db
@@ -184,6 +214,57 @@ async def test_transient_child_failure_keeps_paired_credentials_and_waits_for_re
     assert runtime.retry_at > datetime.now(UTC)
     assert owner.config_id not in waiting
     assert reclaimed is None
+
+
+async def test_repeated_worker_oom_is_paced_by_the_durable_budget_and_never_revokes_credentials(channel_db):
+    # Given a paired, claimed connection with stored credentials whose bridge worker keeps running out of memory.
+    f = channel_db
+    async with transaction(f.db.first):
+        owner = await connected(f)
+        await write_auth(owner, AuthMutation("creds", {"main": "secret"}))
+    current = owner
+    await init_pool(conninfo=f.db.conninfo, min_size=1, max_size=4)
+    try:
+        for attempt, delay in enumerate(RETRY_DELAYS, start=1):
+            before = datetime.now(UTC)
+            with anyio.fail_after(10):
+                await run_child(current, (sys.executable, "-u", "-c", _WORKER_OOM))
+            async with transaction(f.db.second):
+                runtime = await runtime_for(owner.config_id)
+                waiting = {candidate.config_id for candidate in await candidates()}
+                stored = await f.db.second.fetchval("SELECT count(*) FROM whatsapp_personal_auth")
+                gated = await claim(owner.config_id)
+                # Then each death is charged once with its escalating delay, and nothing respawns before it passes.
+                assert runtime.reconnect_attempts == attempt
+                assert runtime.retry_at is not None
+                assert delay <= (runtime.retry_at - before).total_seconds() < delay + 5
+                assert owner.config_id not in waiting
+                assert gated is None
+                assert stored == 1
+                await f.db.second.execute(
+                    "UPDATE channel_configs SET extra_config=jsonb_set(extra_config::jsonb,"
+                    "'{whatsapp_runtime,retry_at}',to_jsonb(now()-interval '1 second'))::json"
+                )
+                reclaimed = await claim(owner.config_id)
+            assert reclaimed is not None
+            current = reclaimed
+        # When the budget is spent and the next worker dies the same way.
+        with anyio.fail_after(10):
+            await run_child(current, (sys.executable, "-u", "-c", _WORKER_OOM))
+    finally:
+        await close_pool()
+    # Then the connection pauses with its credentials kept for the owner's explicit restart, never purged.
+    async with transaction(f.db.second):
+        row = await get_personal(owner.agent_id)
+        stored = await f.db.second.fetchval("SELECT count(*) FROM whatsapp_personal_auth")
+        waiting = await candidates()
+    assert row is not None
+    assert not row.desired
+    assert row.state == "paused"
+    assert row.error_code == "transport_failed"
+    assert row.account_id == owner.account_id
+    assert stored == 1
+    assert waiting == []
 
 
 async def test_bridge_transport_close_keeps_credentials_and_claim_until_reap(channel_db):

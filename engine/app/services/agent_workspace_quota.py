@@ -3,7 +3,8 @@
 A worker measures each agent's host workspace directory plus its guest container's writable layer. An agent whose last
 measurement is over its tier's allowance refuses new human work until a later measurement is back under it; it can
 still start, relay reports, run work already accepted and delete files. Measurements run off the event loop and never
-inside a database connection. A directory walk that passes its deadline stops and records nothing.
+inside a database connection. A directory walk that passes its deadline stops and is recorded on the usage row as
+a failed walk: the stored sizes and block stand, and the worker measures that agent first in its next pass.
 """
 
 import asyncio
@@ -26,14 +27,17 @@ from app.core.notification_kinds import NotificationKind
 from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.db.session import connection_ctx
 from app.records.agent import AgentRecord
+from app.records.agent_workspace_usage import AgentWorkspaceUsageRecord
 from app.services.agent_manager import agent_manager
 from app.services.agent_resource_pressure import record_workspace_disk_pressure
+from app.services.docker_capacity import DockerBusyError, DockerPriority, run_docker
 from app.services.notification_service import send_notification
 from app.services.organization_plans import plan_for, tier_for_tenant
 from app.services.quota_guard import QuotaExceededError
 
 LAYER_INSPECT_TIMEOUT_SECONDS: Final = 60.0
 WALK_DEADLINE_SECONDS: Final = 120.0
+REQUEST_WAIT_SECONDS: Final = 5.0
 ENTRIES_PER_DEADLINE_CHECK: Final = 256
 _VANISHED: Final = (FileNotFoundError, PermissionError, NotADirectoryError)
 _GIB: Final = 1024**3
@@ -201,12 +205,13 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
 
     Agents with no allowance (system agents and agents with no organization) lose any stored row. A layer size Docker
     cannot report keeps the previously stored one (zero without one), so a failed read never flaps the block.
-    ``layers`` is the worker pass's shared state: once Docker is unavailable, later agents of the same pass skip the
+    ``layers`` is the worker pass's shared state: once Docker is unavailable (or its lane is busy), later agents of the same pass skip the
     read and keep their stored size. Each stored measurement also feeds the resource-pressure episodes, which can never
     fail this pass.
 
-    A directory walk that passes ``WALK_DEADLINE_SECONDS`` is logged and abandons the measurement before the layer
-    read and the store: no size, usage row, pressure sample or alert, and the stored row stands.
+    A directory walk that passes ``WALK_DEADLINE_SECONDS`` is logged and recorded on the usage row as a failed walk
+    (``record_walk_failure``), then abandons the measurement before the layer read and the store: no size, pressure
+    sample or alert, and the stored sizes and ``over_since`` stand. A failed walk neither lifts nor creates a block.
 
     A measurement is ordered by when it started. If one that started later is already stored (a delete's re-measure
     overtook this one), nothing is written, fed to the episodes or alerted: the stored row decides.
@@ -216,6 +221,7 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
         _ = await agent_workspace_usage_dao.delete(record_id=agent.id)
         return
     tier = await tier_for_tenant(agent.tenant_id)
+    limit_bytes = plan_for(tier).workspace_disk_bytes.value
     started = datetime.now(UTC)
     try:
         dir_bytes = await to_thread.run_sync(
@@ -223,10 +229,11 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
         )
     except WorkspaceMeasurementTimeoutError:
         logger.warning(
-            "[WorkspaceQuota] directory walk passed its {} second deadline; nothing recorded; agent={}",
+            "[WorkspaceQuota] directory walk passed its {} second deadline; recorded as a failed walk; agent={}",
             WALK_DEADLINE_SECONDS,
             agent.id,
         )
+        _ = await agent_workspace_usage_dao.record_walk_failure(agent.id, limit_bytes=limit_bytes, started=started)
         return
     layer_bytes = 0
     client = agent_manager.reacquire_docker_client()
@@ -235,10 +242,15 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
         measured: int | None = None
         if client is not None and not layers.unavailable:
             try:
-                measured = await to_thread.run_sync(
-                    measure_layer_bytes, client, container_id, LAYER_INSPECT_TIMEOUT_SECONDS, abandon_on_cancel=True
+                measured = await run_docker(
+                    measure_layer_bytes,
+                    client,
+                    container_id,
+                    LAYER_INSPECT_TIMEOUT_SECONDS,
+                    priority=DockerPriority.BACKGROUND,
+                    abandon_on_cancel=True,
                 )
-            except LayerReadUnavailableError as exc:
+            except (LayerReadUnavailableError, DockerBusyError) as exc:
                 layers.unavailable = True
                 logger.warning(
                     "[WorkspaceQuota] Docker layer sizes unavailable ({}); stored sizes are kept for the rest of this "
@@ -254,7 +266,7 @@ async def measure_agent(agent: AgentRecord, layers: LayerReads | None = None) ->
         agent.id,
         dir_bytes=dir_bytes,
         layer_bytes=layer_bytes,
-        limit_bytes=plan_for(tier).workspace_disk_bytes.value,
+        limit_bytes=limit_bytes,
         started=started,
     )
     if usage is None:
@@ -310,14 +322,43 @@ async def layer_caused_block(agent: AgentRecord) -> bool:
     return usage is not None and usage.over_since is not None and _layer_is_cause(usage.dir_bytes, usage.limit_bytes)
 
 
+async def _hand_to_worker(agent: AgentRecord) -> None:
+    _ = await agent_workspace_usage_dao.request_remeasure(agent.id, requested=datetime.now(UTC))
+    logger.info("[WorkspaceQuota] re-measure left to the worker; agent={}", agent.id)
+
+
+async def _remeasure_within_request(agent: AgentRecord, usage: AgentWorkspaceUsageRecord | None) -> None:
+    """Measure ``agent`` for a request that waits at most ``REQUEST_WAIT_SECONDS``; the worker takes over after that.
+
+    The caller may run inside a request's connection scope. The measurement runs in an empty context, so its directory
+    walk and Docker inspect hold no connection or transaction of that request. A measurement that is not done in time
+    is cancelled and the agent is marked for priority re-measurement: the worker's next pass measures it before any
+    other agent, and a block lifts as soon as that measurement finds the workspace under its allowance.
+
+    ``usage`` is the agent's stored row. A cancelled walk thread runs on until its own deadline, so while an earlier
+    request's hand-off is younger than ``WALK_DEADLINE_SECONDS`` a new request only renews the mark instead of starting
+    one more walk of the same directory.
+    """
+    asked = None if usage is None else usage.remeasure_requested_at
+    if asked is not None and (datetime.now(UTC) - asked).total_seconds() < WALK_DEADLINE_SECONDS:
+        await _hand_to_worker(agent)
+        return
+    measurement = asyncio.create_task(measure_agent(agent), context=contextvars.Context())
+    try:
+        async with asyncio.timeout(REQUEST_WAIT_SECONDS):
+            await measurement
+    except TimeoutError:
+        await _hand_to_worker(agent)
+
+
 async def remeasure_after_recreation(agent: AgentRecord) -> None:
     """Re-measure an agent whose guest container was just recreated so its block lifts at once; never raises.
 
-    The caller is a start that may run inside a request's connection scope. The measurement runs in an empty context,
-    so its directory walk and Docker inspect hold no connection or transaction of that request.
+    The caller is a start: it waits for the measurement at most ``REQUEST_WAIT_SECONDS`` and leaves a slower one to the
+    worker, which measures this agent first in its next pass.
     """
     try:
-        await asyncio.create_task(measure_agent(agent), context=contextvars.Context())
+        await _remeasure_within_request(agent, await agent_workspace_usage_dao.get(agent.id))
     except Exception as exc:
         logger.bind(exception_type=type(exc).__name__).warning(
             "[WorkspaceQuota] re-measure after recreation failed agent={}", agent.id
@@ -325,11 +366,15 @@ async def remeasure_after_recreation(agent: AgentRecord) -> None:
 
 
 async def refresh_workspace_usage_after_delete(agent: AgentRecord) -> None:
-    """Re-measure an agent that is currently blocked so a file delete lifts the block at once; never raises."""
+    """Re-measure an agent that is currently blocked so a file delete lifts the block at once; never raises.
+
+    The delete waits for the measurement at most ``REQUEST_WAIT_SECONDS`` and leaves a slower one (a huge workspace) to
+    the worker, which measures this agent first in its next pass.
+    """
     try:
         usage = await agent_workspace_usage_dao.get(agent.id)
         if usage is not None and usage.over_since is not None:
-            await measure_agent(agent)
+            await _remeasure_within_request(agent, usage)
     except Exception as exc:
         logger.bind(exception_type=type(exc).__name__).warning(
             "[WorkspaceQuota] re-measure after delete failed agent={}", agent.id

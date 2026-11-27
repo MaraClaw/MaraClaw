@@ -16,7 +16,8 @@ import { hasPendingAdmission } from '@/lib/admission-access'
 import { joinDefaultOrg } from '@/lib/auth-api'
 import { joinInvitation } from '@/lib/invitations-api'
 import { userFacingRequestError } from '@/lib/http'
-import { userMustChangePassword, type JoinOrgResponse } from '@/lib/types/auth'
+import type { JoinOrgResponse } from '@/lib/types/auth'
+import { userMustChangePassword } from '@/lib/types/auth-guards'
 
 const highlights = [
   { icon: Building2, title: 'An invitation comes first', body: 'Validate the code sent to your email to reveal the destination.' },

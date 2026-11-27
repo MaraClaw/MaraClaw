@@ -15,6 +15,7 @@ from app.core.domain.users import UserRole
 from app.core.events import get_cache_redis
 from app.core.json_types import json_loads_object
 from app.core.logging import logger
+from app.core.redis_cache import CacheUnavailableError, guarded
 from app.records.agent import AgentRecord
 from app.records.cache_invalidation import CacheInvalidation, CacheInvalidationKind
 
@@ -90,8 +91,22 @@ def _ttl_seconds() -> int:
     return int(getattr(get_settings(), "AGENT_ACCESS_CACHE_TTL_SECONDS", 45) or 0)
 
 
-def _ver_key(agent_id: uuid.UUID) -> str:
+def _ver_key(agent_id: uuid.UUID | str) -> str:
     return _POLICY_VERSION_KEY.format(agent_id=agent_id)
+
+
+def acl_version_key(agent_id: uuid.UUID | str) -> str | None:
+    """The Redis key holding the agent's policy version, or ``None`` while the access cache is disabled.
+
+    For a caller that reads the version inside a pipeline it already runs; turn the raw reply into the token
+    ``read_acl_version`` would have returned with ``acl_version_token``.
+    """
+    return None if _ttl_seconds() <= 0 else _ver_key(agent_id)
+
+
+def acl_version_token(raw: object) -> str:
+    """The policy version token for a raw ``GET`` reply; ``"0"`` for a key that does not exist."""
+    return str(raw or "0")
 
 
 def _dec_key(agent_id: uuid.UUID, user_id: uuid.UUID) -> str:
@@ -104,18 +119,22 @@ def _tenant_token(user: _UserLike) -> str:
 
 
 async def read_acl_snapshot(user_id: uuid.UUID, agent_id: uuid.UUID) -> AclSnapshot:
-    """Read the policy version and decision in one pipeline; bounded by the cache socket timeout."""
+    """Read the policy version and decision in one pipeline, under the cache breaker and the cache socket timeout."""
     if _ttl_seconds() <= 0 or has_pending_acl_writes():
         return NO_ACL_SNAPSHOT
-    try:
+
+    async def read() -> list[object]:
         client = await get_cache_redis()
         pipe = client.pipeline()
         _ = pipe.set(_ver_key(agent_id), uuid.uuid4().hex, ex=max(_ttl_seconds() * 40, 3600), nx=True)
         _ = pipe.get(_ver_key(agent_id))
         _ = pipe.get(_dec_key(agent_id, user_id))
-        results = list[object](await pipe.execute())
-    except Exception as exc:
-        logger.debug("access_cache read skipped: {}", type(exc).__name__)
+        return list[object](await pipe.execute())
+
+    try:
+        results = await guarded(read)
+    except CacheUnavailableError as exc:
+        logger.debug("access_cache read skipped: {}", exc)
         return NO_ACL_SNAPSHOT
     if len(results) < 3:
         return NO_ACL_SNAPSHOT
@@ -157,15 +176,19 @@ async def get_cached_level(
 
 async def read_acl_version(agent_id: uuid.UUID) -> str:
     """Return the current aclver token, or ``\"0\"`` if Redis is down / disabled."""
-    if _ttl_seconds() <= 0:
+    key = acl_version_key(agent_id)
+    if key is None:
         return "0"
+
+    async def read() -> object:
+        return await (await get_cache_redis()).get(key)
+
     try:
-        client = await get_cache_redis()
-        ver_raw = await client.get(_ver_key(agent_id))
-    except Exception as exc:
-        logger.debug("access_cache ver skipped: {}", type(exc).__name__)
+        ver_raw = await guarded(read)
+    except CacheUnavailableError as exc:
+        logger.debug("access_cache ver skipped: {}", exc)
         return "0"
-    return str(ver_raw or "0")
+    return acl_version_token(ver_raw)
 
 
 async def set_cached_level(
@@ -181,7 +204,8 @@ async def set_cached_level(
     payload = json.dumps(
         {"level": level, "user_role": user.role, "user_tenant_id": _tenant_token(user), "ver": observed_ver}
     )
-    try:
+
+    async def fill() -> None:
         client = await get_cache_redis()
         await client.eval(
             _FILL_SCRIPT,
@@ -192,8 +216,11 @@ async def set_cached_level(
             payload,
             str(_ttl_seconds()),
         )
-    except Exception as exc:
-        logger.debug("access_cache set skipped: {}", type(exc).__name__)
+
+    try:
+        await guarded(fill)
+    except CacheUnavailableError as exc:
+        logger.debug("access_cache set skipped: {}", exc)
 
 
 def has_pending_acl_writes() -> bool:

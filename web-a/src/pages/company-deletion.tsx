@@ -12,7 +12,7 @@ import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
 import { useSessionMutation } from '@/hooks/use-session-mutation'
 import { deleteCompany, getCompanyDeletionPreview, type CompanyStats } from '@/lib/companies-api'
 import { ApiError } from '@/lib/http'
-import { isPlatformAdminUser } from '@/lib/types/auth'
+import { isPlatformAdminUser } from '@/lib/types/auth-guards'
 import { useTranslation } from '@/hooks/use-translation'
 
 const buttonMotion = 'h-auto min-h-11 max-w-full whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'

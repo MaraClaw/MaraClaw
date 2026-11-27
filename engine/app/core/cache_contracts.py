@@ -11,6 +11,15 @@ class RedisValueRead:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionKeysRead:
+    """One round trip's view of a session snapshot and the generations that gate it (each None when absent or not read)."""
+
+    snapshot: object | None
+    user_version: str | None
+    identity_version: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class SessionCacheObservation:
     identity_id: UUID | None
     user_version: str
