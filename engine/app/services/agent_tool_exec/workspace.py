@@ -16,6 +16,7 @@ from app.services.focus_service import is_focus_file_path
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.storage_runtime.base import StorageReadLimitExceededError
 from app.services.workspace_collaboration import (
+    TASKS_SNAPSHOT_FILE,
     delete_workspace_file,
     move_workspace_path,
     normalize_workspace_path,
@@ -24,10 +25,18 @@ from app.services.workspace_collaboration import (
 
 type TempWorkspaceRunner = Callable[[Path], Awaitable[str]]
 
+_TASKS_SNAPSHOT_READ_ONLY = (
+    f"❌ {TASKS_SNAPSHOT_FILE} is a legacy read-only snapshot. Use the task APIs/UI to manage tasks."
+)
+
 
 def _string_argument(arguments: ToolArguments, name: str) -> str:
     value = arguments.get(name)
     return value if isinstance(value, str) else ""
+
+
+def _is_tasks_snapshot(path: str) -> bool:
+    return normalize_workspace_path(path) == TASKS_SNAPSHOT_FILE
 
 
 async def _run_with_temp_workspace(
@@ -70,6 +79,8 @@ async def _execute_workspace_mutation(
             return "❌ Missing required argument 'content' for write_file"
         if is_focus_file_path(path):
             return "❌ Focus is no longer stored in focus.md. Use upsert_focus_item or complete_focus_item."
+        if _is_tasks_snapshot(path):
+            return _TASKS_SNAPSHOT_READ_ONLY
         if _is_enterprise_info_path(path):
             return (
                 "❌ enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."
@@ -99,8 +110,6 @@ async def _execute_workspace_mutation(
             return "❌ Missing required argument 'destination_path' for move_file"
         if is_focus_file_path(source_path) or is_focus_file_path(destination_path):
             return "❌ Focus is no longer stored in focus.md. Use Focus tools instead."
-        if str(source_path).strip("/") in {"tasks.json", "soul.md"}:
-            return f"❌ {source_path} cannot be moved (protected)"
         if _is_enterprise_info_path(source_path) or _is_enterprise_info_path(destination_path):
             return (
                 "❌ enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."
@@ -147,6 +156,8 @@ async def _execute_workspace_mutation(
             return "❌ Missing required argument 'new_string' for edit_file"
         if is_focus_file_path(path):
             return "❌ Focus is no longer stored in focus.md. Use upsert_focus_item or complete_focus_item."
+        if _is_tasks_snapshot(path):
+            return _TASKS_SNAPSHOT_READ_ONLY
         if _is_enterprise_info_path(path):
             return (
                 "❌ enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."

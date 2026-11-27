@@ -28,6 +28,10 @@ from app.services.workspace_locking import WorkspaceLockLostError, check_workspa
 
 USER_AUTOSAVE_MERGE_SECONDS = 60
 EDIT_LOCK_TTL_SECONDS = 90
+# The delete and move tools refuse these files. tasks.json is also read-only for agents (a snapshot synced from the
+# database); soul.md stays writable.
+TASKS_SNAPSHOT_FILE = "tasks.json"
+PROTECTED_WORKSPACE_FILES = frozenset({TASKS_SNAPSHOT_FILE, "soul.md"})
 MAX_REVISION_TEXT_BYTES = 512 * 1024
 MAX_NAMED_REJECTED_PATHS = 50
 BINARY_REVISION_EXTENSIONS = {
@@ -294,6 +298,12 @@ async def delete_workspace_file(
 ) -> WorkspaceWriteResult:
     """Delete a workspace file and record the deleted content."""
     normalized = normalize_workspace_path(path)
+    if not normalized:
+        return WorkspaceWriteResult(
+            False, normalized, "Cannot delete the workspace root. Provide a file or folder path."
+        )
+    if normalized in PROTECTED_WORKSPACE_FILES:
+        return WorkspaceWriteResult(False, normalized, f"{normalized} cannot be deleted (protected)")
     storage = get_storage_backend()
     storage_key = normalize_storage_key(f"{agent_id}/{normalized}")
     if enforce_human_lock and actor_type != "user":
@@ -384,7 +394,7 @@ async def move_workspace_path(
         return WorkspaceWriteResult(False, source_normalized, "Missing source path")
     if not destination_normalized:
         return WorkspaceWriteResult(False, destination_normalized, "Missing destination path")
-    if source_normalized in {"tasks.json", "soul.md"}:
+    if source_normalized in PROTECTED_WORKSPACE_FILES:
         return WorkspaceWriteResult(False, source_normalized, f"{source_normalized} cannot be moved (protected)")
 
     storage = get_storage_backend()

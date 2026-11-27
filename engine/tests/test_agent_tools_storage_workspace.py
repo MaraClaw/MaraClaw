@@ -1,8 +1,9 @@
 import asyncio
 import re
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,8 @@ from pydantic import BaseModel
 from app.config import get_settings
 from app.core.domain.focus import FocusKind, FocusStatus
 from app.core.events import RedisPoolOverloadError
-from app.services import agent_tools, workspace_collaboration, workspace_locking
+from app.dao.agent_dao import agent_dao
+from app.services import activity_logger, agent_tools, workspace_collaboration, workspace_locking
 from app.services.agent_tool_exec import (
     _agent_tool_exec_storage as storage,
     workspace,
@@ -2656,3 +2658,116 @@ async def test_registered_edit_file_reads_one_range_of_at_most_the_limit_and_nev
     tool_read, *_revision_reads = backend.reads
     assert tool_read == (EDIT_LIMIT, None, 3)
     assert [revision["operation"] for revision in captured_revisions] == ["edit"]
+
+
+WORKSPACE_SEED = {"soul.md": b"# soul", "tasks.json": b"[]", "workspace/a.md": b"keep"}
+
+
+@dataclass(frozen=True, slots=True)
+class AgentFiles:
+    """An agent whose workspace holds WORKSPACE_SEED, and one way the engine runs a tool call for it."""
+
+    agent_id: uuid.UUID
+    backend: StorageBackend
+    run: Callable[[str, ToolArguments], Awaitable[str]]
+
+    async def stored(self) -> dict[str, bytes | None]:
+        keys = {name: f"{self.agent_id}/{name}" for name in WORKSPACE_SEED}
+        return {
+            name: await self.backend.read_bytes_bounded(key, EDIT_LIMIT) if await self.backend.exists(key) else None
+            for name, key in keys.items()
+        }
+
+
+@pytest.fixture(params=["execute_tool", "execute_tool_direct"])
+async def agent_files(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, edit_backend, tmp_path):
+    agent_id, backend = edit_backend
+    for name, data in WORKSPACE_SEED.items():
+        await backend.write_bytes(f"{agent_id}/{name}", data)
+
+    async def tenant_lookup(_agent_id: uuid.UUID) -> str:
+        return "tenant-a"
+
+    async def no_agent(_agent_id: uuid.UUID) -> None:
+        return None
+
+    async def no_activity(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(agent_tools, "_get_agent_tenant_id", tenant_lookup)
+    monkeypatch.setattr(agent_tools, "_agent_workspace_root", lambda _agent_id: tmp_path)
+    monkeypatch.setattr(agent_dao, "get", no_agent)  # the autonomy gate lets an agent it cannot load through
+    monkeypatch.setattr(activity_logger, "log_activity", no_activity)
+
+    async def run(tool_name: str, arguments: ToolArguments) -> str:
+        if request.param == "execute_tool":
+            return await agent_tools.execute_tool(tool_name, arguments, agent_id=agent_id, user_id=agent_id)
+        return await agent_tools._execute_tool_direct(tool_name, arguments, agent_id)
+
+    return AgentFiles(agent_id, backend, run)
+
+
+@pytest.mark.parametrize(
+    ("path", "protected"),
+    [
+        ("soul.md", "soul.md"),
+        ("/soul.md", "soul.md"),
+        ("./soul.md", "soul.md"),
+        ("a/../soul.md", "soul.md"),
+        ("soul.md/", "soul.md"),
+        ("tasks.json", "tasks.json"),
+        ("./tasks.json", "tasks.json"),
+        ("workspace/../tasks.json", "tasks.json"),
+    ],
+)
+async def test_agent_delete_file_refuses_soul_md_and_tasks_json_on_the_normalised_path(agent_files, path, protected):
+    result = await agent_files.run("delete_file", {"path": path})
+
+    assert result == f"❌ {protected} cannot be deleted (protected)"
+    assert await agent_files.stored() == WORKSPACE_SEED
+
+
+@pytest.mark.parametrize("path", ["", ".", "/", "workspace/.."])
+async def test_agent_delete_file_refuses_the_workspace_root_and_keeps_every_file(agent_files, path):
+    result = await agent_files.run("delete_file", {"path": path})
+
+    assert result.startswith("❌")
+    assert await agent_files.stored() == WORKSPACE_SEED
+
+
+async def test_agent_delete_file_still_deletes_other_files(agent_files):
+    result = await agent_files.run("delete_file", {"path": "workspace/a.md"})
+
+    assert result == "✅ Deleted workspace/a.md"
+    assert await agent_files.stored() == {**WORKSPACE_SEED, "workspace/a.md": None}
+
+
+@pytest.mark.parametrize("path", ["tasks.json", "/tasks.json", "./tasks.json", "a/../tasks.json"])
+async def test_agent_write_and_edit_file_refuse_the_tasks_json_snapshot(agent_files, captured_revisions, path):
+    written = await agent_files.run("write_file", {"path": path, "content": '[{"title": "x"}]'})
+    edited = await agent_files.run("edit_file", {"path": path, "old_string": "[]", "new_string": '[{"title": "x"}]'})
+
+    for result in (written, edited):
+        assert result.startswith("❌")
+        assert "tasks.json" in result
+    assert await agent_files.stored() == WORKSPACE_SEED
+    assert captured_revisions == []
+
+
+@pytest.mark.parametrize("path", ["soul.md", "/soul.md"])
+async def test_agent_write_and_edit_file_still_change_soul_md(agent_files, path):
+    written = await agent_files.run("write_file", {"path": path, "content": "# new soul"})
+    edited = await agent_files.run("edit_file", {"path": path, "old_string": "new", "new_string": "newer"})
+
+    assert written == "✅ Written to soul.md (10 chars)"
+    assert edited == "✅ Replaced 1 occurrence(s) in soul.md"
+    assert (await agent_files.stored())["soul.md"] == b"# newer soul"
+
+
+@pytest.mark.parametrize("path", ["/soul.md", "./tasks.json", "a/../soul.md"])
+async def test_agent_move_file_refuses_soul_md_and_tasks_json_on_the_normalised_path(agent_files, path):
+    result = await agent_files.run("move_file", {"source_path": path, "destination_path": "workspace/moved.md"})
+
+    assert result.startswith("❌")
+    assert "cannot be moved (protected)" in result
+    assert await agent_files.stored() == WORKSPACE_SEED
