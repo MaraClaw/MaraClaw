@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -18,7 +19,7 @@ from pywhales.components.container import cli_wrapper as container_cli
 from app.services import guest_readiness, openclaw_update_executor
 from app.services.docker_capacity import docker_capacity, run_docker, shutdown_docker_capacity
 from app.services.guest_admission import GuestStartPreflightError, GuestStartStoppedError
-from app.services.guest_probe import probe_guest
+from app.services.guest_probe import ProbeChild, probe_guest
 from app.services.openclaw_update_docker import UpgradeDocker
 from test_guest_start_safety import BlockedProbe, env
 from test_openclaw_update_executor import Harness
@@ -356,22 +357,29 @@ def test_probe_preserves_real_client_prefix_and_environment(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("upgrade", [False, True])
-def test_probe_timeout_kills_and_reaps_real_cli(tmp_path, upgrade):
+def test_probe_timeout_kills_and_reaps_real_cli(tmp_path, monkeypatch, upgrade):
     # Given a controlled executable sleeps much longer than the host probe budget.
     executable = tmp_path / "sleeping-docker"
-    pid_file = tmp_path / "probe.pid"
-    executable.write_text(
-        f"#!{sys.executable}\nimport os, pathlib, time\n"
-        f"pathlib.Path({json.dumps(str(pid_file))}).write_text(str(os.getpid()))\ntime.sleep(60)\n",
-        encoding="utf-8",
-    )
+    executable.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(60)\n", encoding="utf-8")
     executable.chmod(0o700)
+    # The pid comes from the spawn itself: under load the deadline can kill the interpreter before it runs any code.
+    spawned: list[int] = []
+    spawn = ProbeChild.spawn
+
+    def recording_spawn(child: ProbeChild, command: list[str]) -> subprocess.Popen[bytes] | None:
+        process = spawn(child, command)
+        if process is not None:
+            spawned.append(process.pid)
+        return process
+
+    monkeypatch.setattr(ProbeChild, "spawn", recording_spawn)
     # When the real read-only helper times it out.
     client = DockerClient(client_call=[str(executable)])
     result = UpgradeDocker(client).ready("owned-guest", 1.0) if upgrade else probe_guest(client, "owned-guest", 1.0)
-    # Then the timeout is failure and the direct child has already been waited for, not left a zombie.
+    # Then the timeout is failure and the one child it spawned has already been waited for, not left a zombie.
     assert result is False
-    assert_reaped(int(pid_file.read_text(encoding="utf-8")))
+    assert len(spawned) == 1
+    assert_reaped(spawned[0])
 
 
 def assert_reaped(pid: int) -> None:
