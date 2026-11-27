@@ -243,6 +243,13 @@ class Settings(BaseSettings):
     # Raw bytes of attachments one send_email call may carry in total (about a third more once base64-encoded, so the
     # default stays under the 25 MB cap common providers apply). A larger set refuses the whole message.
     EMAIL_ATTACHMENTS_MAX_BYTES: int = Field(default=18 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
+    # Threads of the agent email lane: the IMAP and SMTP exchanges of read_emails, reply_email, send_email and the
+    # connection test, and the attachment reads, run there, apart from the event loop and every other thread pool.
+    # Each exchange holds one for at most a few socket timeouts, so a slow mail host cannot use more than this.
+    AGENT_EMAIL_LANE_THREADS: int = Field(default=8, ge=1, le=64)
+    # Threads of the system email lane: authentication, broadcast, admission and incident mail (the leased workers send
+    # up to 5 + 5 + 5 + 4 at once) and the invitation, reset, verification and SMTP-test sends of request handlers.
+    SYSTEM_EMAIL_LANE_THREADS: int = Field(default=32, ge=1, le=128)
     # Public auth throttling: fixed windows in Redis, checked before any password check or email send.
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=300, ge=1)
     # Attempts per window for one account (login, forgot-password, resend-verification each count separately).

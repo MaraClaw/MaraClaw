@@ -13,6 +13,8 @@ import smtplib
 import ssl
 import tempfile
 import uuid
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from email.header import decode_header
 from email.message import Message
@@ -25,17 +27,22 @@ from functools import partial
 from pathlib import Path
 from typing import IO, BinaryIO, NotRequired, TypedDict, cast
 
-import anyio
-
 from app.config import get_settings
 from app.core.email import force_ipv4, send_smtp_email, send_smtp_stream
 from app.core.json_types import json_as_bool, json_as_str_or
 from app.core.logging import logger
+from app.core.thread_lanes import ThreadLane
 from app.services.storage_runtime.base import (
     StorageBackend,
     StorageReadChangedError,
     StorageReadLimitExceededError,
 )
+
+AGENT_EMAIL_LANE = ThreadLane(get_settings().AGENT_EMAIL_LANE_THREADS, name="agent-email-lane")
+# Seconds one socket operation of a mail exchange may take, IMAP or SMTP. A send, a read and a reply use the first (the
+# timeout the SMTP side of send_email and reply_email always had), the connection test the second (its SMTP timeout).
+_EXCHANGE_TIMEOUT_SECONDS = 15
+_PROBE_TIMEOUT_SECONDS = 10
 
 
 class EmailProviderPreset(TypedDict):
@@ -279,10 +286,10 @@ async def _copy_attachment(storage: StorageBackend, key: str, budget: int, out: 
             left = info.st_size
             while left:
                 wanted = min(_CHUNK_BYTES, left)
-                if await anyio.to_thread.run_sync(_write_base64_read, out, stream, wanted) != wanted:
+                if await AGENT_EMAIL_LANE.run(partial(_write_base64_read, out, stream, wanted)) != wanted:
                     raise StorageReadChangedError(key)
                 left -= wanted
-            after = await anyio.to_thread.run_sync(os.fstat, stream.fileno())
+            after = await AGENT_EMAIL_LANE.run(partial(os.fstat, stream.fileno()))
             if (after.st_mtime_ns, after.st_size) != (info.st_mtime_ns, info.st_size):
                 raise StorageReadChangedError(key)
         finally:
@@ -296,7 +303,7 @@ async def _copy_attachment(storage: StorageBackend, key: str, budget: int, out: 
         chunk = await storage.read_bytes_bounded(key, wanted, offset=position)
         if len(chunk) != wanted:
             raise StorageReadChangedError(key)
-        await anyio.to_thread.run_sync(_write_base64, out, chunk)
+        await AGENT_EMAIL_LANE.run(partial(_write_base64, out, chunk))
     if (await storage.get_version(key)).token != version.token:
         raise StorageReadChangedError(key)
     return version.size
@@ -410,7 +417,8 @@ async def send_email(
             else:
                 _ = outgoing.write(msg.as_bytes(policy=_WIRE_POLICY))
             _ = outgoing.seek(0)
-            _ = await anyio.to_thread.run_sync(
+            # Never abandoned on cancel: `outgoing` closes when this block ends, and a half-written DATA must finish.
+            _ = await AGENT_EMAIL_LANE.run(
                 partial(
                     send_smtp_stream,
                     host=cfg["smtp_host"],
@@ -421,7 +429,7 @@ async def send_email(
                     to_addrs=recipients,
                     message=outgoing,
                     use_ssl=cfg.get("smtp_ssl", True),
-                    timeout=15,
+                    timeout=_EXCHANGE_TIMEOUT_SECONDS,
                 )
             )
 
@@ -433,8 +441,8 @@ async def send_email(
 
 
 async def _send_off_loop(cfg: ResolvedEmailConfig, to_addrs: list[str], msg_string: str, socket_timeout: int) -> None:
-    """Send a small message on a worker thread, so its SMTP round trips never hold the event loop."""
-    await anyio.to_thread.run_sync(
+    """Send a small message on the agent email lane, so its SMTP round trips never hold the event loop."""
+    await AGENT_EMAIL_LANE.run(
         partial(
             send_smtp_email,
             host=cfg["smtp_host"],
@@ -448,6 +456,82 @@ async def _send_off_loop(cfg: ResolvedEmailConfig, to_addrs: list[str], msg_stri
             timeout=socket_timeout,
         )
     )
+
+
+@contextmanager
+def _imap_session(cfg: ResolvedEmailConfig, folder: str, timeout: int) -> Generator[imaplib.IMAP4_SSL]:
+    """A logged-in IMAP connection with `folder` selected read-only, logged out on exit; blocking, for a lane thread."""
+    with (
+        force_ipv4(),
+        imaplib.IMAP4_SSL(
+            cfg["imap_host"], cfg["imap_port"], ssl_context=ssl.create_default_context(), timeout=timeout
+        ) as mail,
+    ):
+        _ = mail.login(cfg["email_address"], cfg["auth_code"])
+        _ = mail.select(folder, readonly=True)
+        yield mail
+
+
+async def _run_imap[T](exchange: Callable[[], T]) -> T:
+    """Run one IMAP exchange on the agent email lane.
+
+    An exchange only reads and closes its own connection within the socket timeouts, so a cancelled caller leaves it
+    to finish instead of waiting for it.
+    """
+    return await AGENT_EMAIL_LANE.run(exchange, abandon_on_cancel=True)
+
+
+def _read_mailbox(cfg: ResolvedEmailConfig, limit: int, search: str | None, folder: str) -> str:
+    """The reply of `read_emails`: its whole IMAP exchange, search to last fetch."""
+    with _imap_session(cfg, folder, _EXCHANGE_TIMEOUT_SECONDS) as mail:
+        # Search
+        if search not in (None, ""):
+            _, msg_nums = mail.search(None, search)
+        else:
+            _, msg_nums = mail.search(None, "ALL")
+
+        raw_ids = msg_nums[0] if msg_nums else None
+        if not isinstance(raw_ids, (bytes, bytearray)):
+            return "📭 No emails found."
+        msg_ids = raw_ids.decode().split()
+        if not msg_ids:
+            return "📭 No emails found."
+
+        # Get latest N emails
+        latest_ids = msg_ids[-limit:]
+        latest_ids.reverse()  # Newest first
+
+        results: list[str] = []
+        for mid in latest_ids:
+            _, msg_data = mail.fetch(mid, "(RFC822)")
+            first = msg_data[0] if msg_data else None
+            if not isinstance(first, tuple):
+                continue
+            raw = cast("object", first[1])
+            if not isinstance(raw, bytes):
+                raise TypeError("IMAP message payload must be bytes")
+            msg = email_lib.message_from_bytes(raw)
+
+            from_addr = _decode_header_value(_message_header(msg, "From"))
+            subject = _decode_header_value(_message_header(msg, "Subject", "(No subject)"))
+            date_str = _message_header(msg, "Date")
+            message_id = _message_header(msg, "Message-ID")
+            body = _extract_body(msg)
+            # Truncate body for readability
+            if len(body) > 500:
+                body = body[:500] + "..."
+
+            results.append(
+                "---\n"
+                f"**From:** {from_addr}\n"
+                f"**Subject:** {subject}\n"
+                f"**Date:** {date_str}\n"
+                f"**Message-ID:** {message_id}\n"
+                f"**Body:**\n{body}"
+            )
+
+        header = f"📬 {len(results)} email(s) from {folder}:\n\n"
+        return header + "\n\n".join(results)
 
 
 async def read_emails(
@@ -474,61 +558,7 @@ async def read_emails(
     limit = min(limit, 30)  # Cap at 30
 
     try:
-        with force_ipv4():
-            context = ssl.create_default_context()
-            with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                _ = mail.login(addr, password)
-                _ = mail.select(folder, readonly=True)
-
-                # Search
-                if search not in (None, ""):
-                    _, msg_nums = mail.search(None, search)
-                else:
-                    _, msg_nums = mail.search(None, "ALL")
-
-                raw_ids = msg_nums[0] if msg_nums else None
-                if not isinstance(raw_ids, (bytes, bytearray)):
-                    return "📭 No emails found."
-                msg_ids = raw_ids.decode().split()
-                if not msg_ids:
-                    return "📭 No emails found."
-
-                # Get latest N emails
-                latest_ids = msg_ids[-limit:]
-                latest_ids.reverse()  # Newest first
-
-                results: list[str] = []
-                for mid in latest_ids:
-                    _, msg_data = mail.fetch(mid, "(RFC822)")
-                    first = msg_data[0] if msg_data else None
-                    if not isinstance(first, tuple):
-                        continue
-                    raw = cast("object", first[1])
-                    if not isinstance(raw, bytes):
-                        raise TypeError("IMAP message payload must be bytes")
-                    msg = email_lib.message_from_bytes(raw)
-
-                    from_addr = _decode_header_value(_message_header(msg, "From"))
-                    subject = _decode_header_value(_message_header(msg, "Subject", "(No subject)"))
-                    date_str = _message_header(msg, "Date")
-                    message_id = _message_header(msg, "Message-ID")
-                    body = _extract_body(msg)
-                    # Truncate body for readability
-                    if len(body) > 500:
-                        body = body[:500] + "..."
-
-                    results.append(
-                        "---\n"
-                        f"**From:** {from_addr}\n"
-                        f"**Subject:** {subject}\n"
-                        f"**Date:** {date_str}\n"
-                        f"**Message-ID:** {message_id}\n"
-                        f"**Body:**\n{body}"
-                    )
-
-                header = f"📬 {len(results)} email(s) from {folder}:\n\n"
-                return header + "\n\n".join(results)
-
+        return await _run_imap(partial(_read_mailbox, cfg, limit, search, folder))
     except imaplib.IMAP4.error as e:
         err = str(e)
         if "LOGIN" in err.upper() or "AUTH" in err.upper():
@@ -536,6 +566,28 @@ async def read_emails(
         return f"❌ IMAP error: {err[:200]}"
     except Exception as e:
         return f"❌ Failed to read emails: {str(e)[:200]}"
+
+
+def _fetch_original(cfg: ResolvedEmailConfig, message_id: str, folder: str) -> tuple[str, str] | None:
+    """The From and decoded Subject of the message with `message_id`, or None when the folder has none."""
+    with _imap_session(cfg, folder, _EXCHANGE_TIMEOUT_SECONDS) as mail:
+        _, msg_nums = mail.search(None, f'HEADER Message-ID "{message_id}"')
+        raw_ids = msg_nums[0] if msg_nums else None
+        if not isinstance(raw_ids, (bytes, bytearray)):
+            return None
+        msg_ids = raw_ids.decode().split()
+        if not msg_ids:
+            return None
+
+        _, msg_data = mail.fetch(msg_ids[0], "(RFC822)")
+        first = msg_data[0] if msg_data else None
+        if not isinstance(first, tuple) or len(first) < 2:
+            raise TypeError("IMAP message payload is missing")
+        raw = cast("object", first[1])
+        if not isinstance(raw, bytes):
+            raise TypeError("IMAP message payload must be bytes")
+        original = email_lib.message_from_bytes(raw)
+        return _message_header(original, "From"), _decode_header_value(_message_header(original, "Subject"))
 
 
 async def reply_email(
@@ -560,57 +612,41 @@ async def reply_email(
         return "❌ Email not configured."
 
     try:
-        with force_ipv4():
-            # First, fetch the original email to get From/Subject
-            context = ssl.create_default_context()
-            original_from = ""
-            original_subject = ""
+        # First, fetch the original email to get From/Subject
+        original = await _run_imap(partial(_fetch_original, cfg, message_id, folder))
+        if original is None:
+            return f"❌ Original email not found with Message-ID: {message_id}"
+        original_from, original_subject = original
 
-            with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                _ = mail.login(addr, password)
-                _ = mail.select(folder, readonly=True)
-                _, msg_nums = mail.search(None, f'HEADER Message-ID "{message_id}"')
-                raw_ids = msg_nums[0] if msg_nums else None
-                if not isinstance(raw_ids, (bytes, bytearray)):
-                    return f"❌ Original email not found with Message-ID: {message_id}"
-                msg_ids = raw_ids.decode().split()
-                if not msg_ids:
-                    return f"❌ Original email not found with Message-ID: {message_id}"
+        # Build reply
+        reply_subject = original_subject if original_subject.lower().startswith("re:") else f"Re: {original_subject}"
 
-                _, msg_data = mail.fetch(msg_ids[0], "(RFC822)")
-                first = msg_data[0] if msg_data else None
-                if not isinstance(first, tuple) or len(first) < 2:
-                    raise TypeError("IMAP message payload is missing")
-                raw = cast("object", first[1])
-                if not isinstance(raw, bytes):
-                    raise TypeError("IMAP message payload must be bytes")
-                original = email_lib.message_from_bytes(raw)
-                original_from = _message_header(original, "From")
-                original_subject = _decode_header_value(_message_header(original, "Subject"))
+        reply_msg = MIMEMultipart()
+        reply_msg["From"] = addr
+        reply_to = parseaddr(original_from)[1] or original_from
+        reply_msg["To"] = reply_to
+        reply_msg["Subject"] = reply_subject
+        reply_msg["In-Reply-To"] = message_id
+        reply_msg["References"] = message_id
+        reply_msg["Message-ID"] = make_msgid()
 
-            # Build reply
-            reply_subject = (
-                original_subject if original_subject.lower().startswith("re:") else f"Re: {original_subject}"
-            )
+        reply_msg.attach(MIMEText(body, "plain", "utf-8"))
 
-            reply_msg = MIMEMultipart()
-            reply_msg["From"] = addr
-            reply_to = parseaddr(original_from)[1] or original_from
-            reply_msg["To"] = reply_to
-            reply_msg["Subject"] = reply_subject
-            reply_msg["In-Reply-To"] = message_id
-            reply_msg["References"] = message_id
-            reply_msg["Message-ID"] = make_msgid()
+        # Send
+        await _send_off_loop(cfg, [reply_to], reply_msg.as_string(), _EXCHANGE_TIMEOUT_SECONDS)
 
-            reply_msg.attach(MIMEText(body, "plain", "utf-8"))
-
-            # Send
-            await _send_off_loop(cfg, [reply_to], reply_msg.as_string(), 15)
-
-            return f"✅ Reply sent to {reply_to} (Subject: {reply_subject})"
+        return f"✅ Reply sent to {reply_to} (Subject: {reply_subject})"
 
     except Exception as e:
         return f"❌ Failed to reply: {str(e)[:200]}"
+
+
+def _count_inbox(cfg: ResolvedEmailConfig) -> int:
+    """How many messages the INBOX holds, from one IMAP exchange."""
+    with _imap_session(cfg, "INBOX", _PROBE_TIMEOUT_SECONDS) as mail:
+        _, msg_nums = mail.search(None, "ALL")
+        inbox_ids = msg_nums[0] if msg_nums else None
+        return len(inbox_ids.decode().split()) if isinstance(inbox_ids, (bytes, bytearray)) else 0
 
 
 async def test_connection(config: EmailConfig) -> EmailConnectionResult:
@@ -629,15 +665,8 @@ async def test_connection(config: EmailConfig) -> EmailConnectionResult:
 
     # Test IMAP
     try:
-        with force_ipv4():
-            context = ssl.create_default_context()
-            with imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], ssl_context=context) as mail:
-                _ = mail.login(addr, password)
-                _ = mail.select("INBOX", readonly=True)
-                _, msg_nums = mail.search(None, "ALL")
-                inbox_ids = msg_nums[0] if msg_nums else None
-                count = len(inbox_ids.decode().split()) if isinstance(inbox_ids, (bytes, bytearray)) else 0
-                result["imap"] = f"✅ IMAP connected ({count} emails in INBOX)"
+        count = await _run_imap(partial(_count_inbox, cfg))
+        result["imap"] = f"✅ IMAP connected ({count} emails in INBOX)"
     except imaplib.IMAP4.error as e:
         result["ok"] = False
         result["imap"] = f"❌ IMAP failed: {str(e)[:150]}"
@@ -651,7 +680,7 @@ async def test_connection(config: EmailConfig) -> EmailConnectionResult:
             cfg,
             [addr],  # Send to self for test
             f"From: {addr}\nTo: {addr}\nSubject: MaraClaw Connection Test\n\nSMTP Connection Successful.",
-            10,
+            _PROBE_TIMEOUT_SECONDS,
         )
         result["smtp"] = "✅ SMTP connected"
     except smtplib.SMTPAuthenticationError:

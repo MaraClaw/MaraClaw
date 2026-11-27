@@ -604,8 +604,18 @@ ORIGINAL = b"From: Alice <alice@example.test>\r\nSubject: Question\r\nMessage-ID
 class FakeIMAP:
     """Just enough of `imaplib.IMAP4_SSL` for the reply and connection test paths: one stored message."""
 
-    def __init__(self, host: str, port: int, ssl_context: object = None) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        ssl_context: object = None,
+        timeout: float | None = None,
+        on_login: Callable[[FakeIMAP], None] | None = None,
+    ) -> None:
         del host, port, ssl_context
+        self.timeout = timeout
+        self.on_login = on_login
 
     def __enter__(self) -> Self:
         return self
@@ -614,6 +624,8 @@ class FakeIMAP:
         return None
 
     def login(self, user: str, password: str) -> tuple[str, list[bytes]]:
+        if self.on_login is not None:
+            self.on_login(self)
         return "OK", [f"{user}:{password}".encode()]
 
     def select(self, folder: str, readonly: bool = False) -> tuple[str, list[bytes]]:

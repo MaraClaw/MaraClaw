@@ -20,6 +20,7 @@ async def test_cancel_queued_sibling_while_claimed_smtp_continues(
     scope = rows[0]
     entered, finished, polled = anyio.Event(), anyio.Event(), anyio.Event()
     release = threading.Event()
+    token = anyio.lowlevel.current_token()
     attempts: list[str] = []
 
     async def resolve(tenant_id: UUID | None = None) -> email.SystemEmailConfig:
@@ -28,11 +29,11 @@ async def test_cancel_queued_sibling_while_claimed_smtp_continues(
 
     def smtp(*, msg_string: str, **_kwargs: str | int | bool | list[str]) -> None:
         attempts.append(msg_string)
-        anyio.from_thread.run_sync(entered.set)
+        anyio.from_thread.run_sync(entered.set, token=token)
         try:
             assert release.wait(timeout=10)
         finally:
-            anyio.from_thread.run_sync(finished.set)
+            anyio.from_thread.run_sync(finished.set, token=token)
 
     async def poll(_seconds: int) -> None:
         polled.set()

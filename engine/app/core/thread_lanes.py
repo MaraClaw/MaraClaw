@@ -13,8 +13,9 @@ threads, so slow work in one subsystem (S3 calls, document conversion) never que
 - The lane slot belongs to the thread, not the caller: an abandoned call keeps its slot until the thread returns, so
   abandoned work can never push the lane past its size.
 
-Users: `S3Connection.lane` (`app/services/storage_runtime/AGENTS.md`) and the document conversion lane
-(`app/services/document_conversion/conversion_lane.py`).
+Users: `S3Connection.lane` (`app/services/storage_runtime/AGENTS.md`), the document conversion lane
+(`app/services/document_conversion/conversion_lane.py`), the agent email lane (`email_service.AGENT_EMAIL_LANE`) and the
+system email lane (`system_email_service.SYSTEM_EMAIL_LANE`; `app/services/AGENTS.md`).
 """
 
 from __future__ import annotations

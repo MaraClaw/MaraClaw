@@ -123,7 +123,9 @@ operation or the entire thread lifetime. Cancellation, batch timeout or an
 unexpected child error exits the owned loop, cancels and awaits async siblings,
 and leaves unsettled leases recoverable. It does not continue spawning batches
 behind abandoned threads. At most the current five threads can remain per
-worker invocation; process termination may wait on native thread shutdown.
+worker invocation; process termination may wait on native thread shutdown. Every send runs on the system email lane
+(`SYSTEM_EMAIL_LANE`, `SYSTEM_EMAIL_LANE_THREADS` threads, default 32), apart from agent email and every shared thread
+pool; an abandoned thread keeps its lane slot until it returns, so abandoned sends can never outgrow the lane.
 
 The runtime restarts an exited loop (never from its done-callback: each restart is a
 fresh coroutine from a supervisor task) with doubling delays from 1 s up to
