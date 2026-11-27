@@ -11,10 +11,16 @@ from typing import override
 import pytest
 from pydantic import BaseModel
 
+from app.config import get_settings
 from app.core.domain.focus import FocusKind, FocusStatus
 from app.core.events import RedisPoolOverloadError
 from app.services import agent_tools, workspace_collaboration, workspace_locking
-from app.services.agent_tool_exec import _agent_tool_exec_storage as storage, workspace, workspace_read
+from app.services.agent_tool_exec import (
+    _agent_tool_exec_storage as storage,
+    workspace,
+    workspace_read,
+    workspace_read_window,
+)
 from app.services.agent_tool_exec._agent_tool_exec_storage import list_files as storage_list_files
 from app.services.agent_tool_exec.registry import (
     ToolArguments,
@@ -1339,12 +1345,18 @@ def _search_metadata(result: str) -> _SearchMetadata:
     return _SearchMetadata.model_validate_json(result.rsplit("\nSearch page: ", 1)[1])
 
 
-async def _registered_search(agent_id: uuid.UUID, arguments: ToolArguments, tenant: str | None = "tenant-a") -> str:
-    handler = resolve("search_files")
+async def _registered_tool(
+    name: str, agent_id: uuid.UUID, arguments: ToolArguments, tenant: str | None = "tenant-a"
+) -> str:
+    handler = resolve(name)
     assert handler is not None
     with use_execution_context(ToolExecutionContext(tenant_id=tenant, workspace_root=agent_tools.WORKSPACE_ROOT)):
-        result = handler(arguments=arguments, agent_id=agent_id, user_id=agent_id, session_id="search", on_output=None)
+        result = handler(arguments=arguments, agent_id=agent_id, user_id=agent_id, session_id=name, on_output=None)
         return result if isinstance(result, str) else await result
+
+
+async def _registered_search(agent_id: uuid.UUID, arguments: ToolArguments, tenant: str | None = "tenant-a") -> str:
+    return await _registered_tool("search_files", agent_id, arguments, tenant)
 
 
 class _SearchStorage(MemoryStorageBackend):
@@ -2413,3 +2425,419 @@ async def test_a_new_file_and_a_missing_destination_are_not_marked_omitted(monke
         ("move_destination", False),
     ]
     assert captured_revisions[0]["before_content"] is None
+
+
+# read_file and edit_file read through bounded ranges and never take a whole object into memory.
+NOTES = "workspace/notes.md"
+CHUNK = 64
+
+
+class _RecordedReads(MemoryStorageBackend):
+    """Records every bounded read as (max_bytes, offset, bytes returned) and refuses whole-object reads."""
+
+    def __init__(self):
+        super().__init__()
+        self.reads: list[tuple[int, int | None, int]] = []
+
+    @override
+    async def read_bytes(self, key: str) -> bytes:
+        raise AssertionError("a tool must never read a whole object")
+
+    @override
+    async def read_text(self, key: str, encoding: str = "utf-8", errors: str = "replace") -> str:
+        raise AssertionError("a tool must never read a whole object")
+
+    @override
+    async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        data = await super().read_bytes_bounded(key, max_bytes, offset=offset)
+        self.reads.append((max_bytes, offset, len(data)))
+        return data
+
+
+async def _registered_read(agent_id: uuid.UUID, **arguments: ToolArgumentValue) -> str:
+    return await _registered_tool("read_file", agent_id, {"path": NOTES, **arguments})
+
+
+async def _stored_notes(search_backend: tuple[uuid.UUID, StorageBackend], data: bytes) -> uuid.UUID:
+    agent_id, backend = search_backend
+    await backend.write_bytes(f"{agent_id}/{NOTES}", data)
+    return agent_id
+
+
+def _row_texts(result: str) -> list[str]:
+    """The text of each numbered row of a read_file result, without its header and footer."""
+    body = result.split("\n", 1)[1].split("\n\n... [")[0]
+    return [row.partition("\t")[2] for row in body.split("\n")] if body else []
+
+
+SMALL = b"one\ntwo\nthree\nfour\nfive\n"
+SMALL_ROWS = "     1\tone\n     2\ttwo\n     3\tthree\n     4\tfour\n     5\tfive"
+
+
+@pytest.mark.parametrize(
+    ("data", "arguments", "expected"),
+    [
+        (SMALL, {}, f"📄 {NOTES} (lines 1-5 of 5)\n{SMALL_ROWS}"),
+        (
+            SMALL,
+            {"offset": 1, "limit": 2},
+            f"📄 {NOTES} (lines 2-3 of 5)\n     2\ttwo\n     3\tthree\n\n... [2 more lines not shown, lines 4-5]",
+        ),
+        (SMALL, {"offset": 4, "limit": 10}, f"📄 {NOTES} (lines 5-5 of 5)\n     5\tfive"),
+        (SMALL, {"offset": 5}, "Offset 5 exceeds file length (5 lines total)"),
+        (SMALL, {"offset": 90, "limit": 3}, "Offset 90 exceeds file length (5 lines total)"),
+        (
+            SMALL,
+            {"offset": -3, "limit": 1},
+            f"📄 {NOTES} (lines 1-1 of 5)\n     1\tone\n\n... [4 more lines not shown, lines 2-5]",
+        ),
+        (b"", {}, f"📄 {NOTES} (lines 0-0 of 0)\n"),
+        (b"", {"offset": 7}, f"📄 {NOTES} (lines 0-0 of 0)\n"),
+        (b"no newline", {}, f"📄 {NOTES} (lines 1-1 of 1)\n     1\tno newline"),
+        (
+            b"a\r\nb\rc\x0cd\xe2\x80\xa8e\xff",
+            {},
+            f"📄 {NOTES} (lines 1-5 of 5)\n     1\ta\n     2\tb\n     3\tc\n     4\td\n     5\te\ufffd",
+        ),
+    ],
+)
+async def test_registered_read_file_keeps_the_output_of_a_whole_read(search_backend, data, arguments, expected):
+    agent_id = await _stored_notes(search_backend, data)
+
+    assert await _registered_read(agent_id, **arguments) == expected
+
+
+@pytest.mark.parametrize("boundary", ["utf8", "crlf", "lone_cr", "unicode", "invalid_utf8", "eof"])
+async def test_registered_read_file_chunk_boundaries_keep_decode_and_line_semantics(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch, boundary: str
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", CHUNK)
+    prefix = b"x" * (CHUNK - 1)
+    data, expected = {
+        "utf8": (prefix + "中needle\nlast".encode(), [prefix.decode() + "中needle", "last"]),
+        "crlf": (prefix + b"\r\nneedle", [prefix.decode(), "needle"]),
+        "lone_cr": (prefix + b"\rneedle", [prefix.decode(), "needle"]),
+        "unicode": (prefix + "\u2028needle".encode(), [prefix.decode(), "needle"]),
+        "invalid_utf8": (prefix + b"\xe4\xffneedle\nneedle", [prefix.decode() + "\ufffd\ufffdneedle", "needle"]),
+        "eof": (prefix + b"x", [prefix.decode() + "x"]),
+    }[boundary]
+    agent_id = await _stored_notes(search_backend, data)
+
+    result = await _registered_read(agent_id)
+
+    assert result.split("\n", 1)[0] == f"📄 {NOTES} (lines 1-{len(expected)} of {len(expected)})"
+    assert _row_texts(result) == expected
+
+
+MESSY = "é中😀\r\nplain\x85two\u2028\r\n\r\n\x0b\x1c\x1d\x1e\x0cend".encode() + b"\xff\xe4\xb8"
+
+
+@pytest.mark.parametrize("chunk", range(1, 14))
+async def test_registered_read_file_does_not_depend_on_the_chunk_size(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch, chunk: int
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", chunk)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", 4 * chunk)
+    agent_id = await _stored_notes(search_backend, MESSY)
+    lines = MESSY.decode(errors="replace").splitlines()
+
+    result = await _registered_read(agent_id)
+
+    assert result.split("\n", 1)[0] == f"📄 {NOTES} (lines 1-{len(lines)} of {len(lines)})"
+    assert _row_texts(result) == lines
+
+
+async def test_registered_read_file_stops_reading_once_a_later_line_exists_and_pages_on(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", CHUNK)
+    lines = [f"line {number:03}" for number in range(1, 101)]
+    agent_id = await _stored_notes(search_backend, "".join(f"{line}\n" for line in lines).encode())
+    _, backend = search_backend
+    original = backend.read_bytes_bounded
+    offsets: list[int | None] = []
+
+    async def record_range(key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        offsets.append(offset)
+        return await original(key, max_bytes, offset=offset)
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", record_range)
+
+    first = await _registered_read(agent_id, limit=2)
+
+    assert first == (
+        f"📄 {NOTES} (lines 1-2; more lines follow)\n     1\tline 001\n     2\tline 002"
+        "\n\n... [more lines not shown; continue with offset=2]"
+    )
+    assert offsets == [0]
+    collected: list[str] = []
+    offset = 0
+    pages = 0
+    while True:
+        page = await _registered_read(agent_id, offset=offset, limit=7)
+        collected.extend(_row_texts(page))
+        pages += 1
+        continuation = re.search(r"continue with offset=(\d+)\]$", page)
+        if continuation is None:
+            break
+        offset = int(continuation.group(1))
+    assert collected == lines
+    assert pages == 15
+    assert page.split("\n", 1)[0] == f"📄 {NOTES} (lines 99-100 of 100)"
+
+
+async def test_registered_read_file_reaches_a_deep_offset_and_a_past_end_offset_in_bounded_ranges(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", CHUNK)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", CHUNK)
+    lines = [f"line {number:03}" for number in range(1, 101)]
+    data = "".join(f"{line}\n" for line in lines).encode()
+    agent_id = await _stored_notes(search_backend, data)
+    _, backend = search_backend
+    original = backend.read_bytes_bounded
+    ranges: list[tuple[int, int | None, int]] = []
+
+    async def record_range(key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
+        chunk = await original(key, max_bytes, offset=offset)
+        ranges.append((max_bytes, offset, len(chunk)))
+        return chunk
+
+    monkeypatch.setattr(backend, "read_bytes_bounded", record_range)
+
+    deep = await _registered_read(agent_id, offset=90, limit=3)
+    assert deep == (
+        f"📄 {NOTES} (lines 91-93; more lines follow)\n    91\tline 091\n    92\tline 092\n    93\tline 093"
+        "\n\n... [more lines not shown; continue with offset=93]"
+    )
+    assert [offset for _, offset, _ in ranges] == list(range(0, 833, CHUNK))
+
+    ranges.clear()
+    past_end = await _registered_read(agent_id, offset=500)
+    assert past_end == "Offset 500 exceeds file length (100 lines total)"
+    assert [offset for _, offset, _ in ranges] == list(range(0, len(data) + 1, CHUNK))
+    assert {max_bytes for max_bytes, _, _ in ranges} == {CHUNK}
+    assert max(size for _, _, size in ranges) == CHUNK
+    assert ranges[-1][2] < CHUNK
+
+
+async def test_registered_read_file_truncates_a_long_line_across_chunks_and_still_finds_the_next(
+    search_backend: tuple[uuid.UUID, StorageBackend], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", 4)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", 4)
+    monkeypatch.setattr(workspace_read_window, "MAX_LINE_CHARS", 10)
+    agent_id = await _stored_notes(search_backend, ("0123456789" + "abcdefghijklmnopqrstuvwxyz\r\nshort\n").encode())
+
+    result = await _registered_read(agent_id)
+
+    assert result == (
+        f"📄 {NOTES} (lines 1-2 of 2)\n     1\t0123456789... [line truncated: 26 more characters]\n     2\tshort"
+    )
+    assert await _registered_read(agent_id, offset=1) == f"📄 {NOTES} (lines 2-2 of 2)\n     2\tshort"
+
+
+@pytest.mark.parametrize(
+    ("budget", "kept"),
+    [(30, 2), (15, 1), (5, 1)],
+    ids=["two_rows_fit", "one_row_fits", "first_row_always_kept"],
+)
+@pytest.mark.parametrize("chunk", [workspace_read.READ_CHUNK_BYTES, 16], ids=["whole_file_in_chunk", "early_stop"])
+async def test_registered_read_file_closes_the_window_at_the_output_budget(
+    search_backend: tuple[uuid.UUID, StorageBackend],
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int,
+    kept: int,
+    chunk: int,
+):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", chunk)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", chunk)
+    monkeypatch.setattr(workspace_read_window, "MAX_WINDOW_CHARS", budget)
+    agent_id = await _stored_notes(search_backend, b"".join(f"line {number:02}\n".encode() for number in range(1, 11)))
+
+    result = await _registered_read(agent_id, limit=1_000_000)
+
+    rows = "\n".join(f"{number:6}\tline {number:02}" for number in range(1, kept + 1))
+    if chunk == 16:
+        expected = f"📄 {NOTES} (lines 1-{kept}; more lines follow)\n{rows}\n\n... [more lines not shown; continue with offset={kept}]"
+    else:
+        expected = (
+            f"📄 {NOTES} (lines 1-{kept} of 10)\n{rows}\n\n... [{10 - kept} more lines not shown, lines {kept + 1}-10]"
+        )
+    assert result == expected
+
+
+async def test_registered_read_file_issues_only_chunk_sized_ranged_reads_on_a_large_single_line(monkeypatch):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", 1024)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", 1024)
+    agent_id = uuid.uuid4()
+    backend = _RecordedReads()
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    await backend.write_bytes(f"{agent_id}/{NOTES}", b"x" * 40_000 + b"\nsecond\n")
+
+    result = await _registered_read(agent_id)
+
+    omitted = 40_000 - workspace_read_window.MAX_LINE_CHARS
+    assert result == (
+        f"📄 {NOTES} (lines 1-2 of 2)\n     1\t{'x' * workspace_read_window.MAX_LINE_CHARS}"
+        f"... [line truncated: {omitted} more characters]\n     2\tsecond"
+    )
+    assert [offset for _, offset, _ in backend.reads] == list(range(0, 40_008, 1024))
+    assert {max_bytes for max_bytes, _, _ in backend.reads} == {1024}
+    assert max(size for _, _, size in backend.reads) == 1024
+    assert backend.reads[-1][2] == 40_008 % 1024
+
+
+@pytest.mark.parametrize(
+    ("arguments", "reads", "expected"),
+    [
+        (
+            {"offset": 3, "limit": 1},
+            [(4, 0, 4), (8, 4, 8), (16, 12, 16), (16, 28, 16)],
+            (
+                f"📄 {NOTES} (lines 4-4; more lines follow)\n     4\tline 04"
+                "\n\n... [more lines not shown; continue with offset=4]"
+            ),
+        ),
+        (
+            {},
+            [(4, 0, 4), (8, 4, 8), (16, 12, 16), (16, 28, 16), (16, 44, 16), (16, 60, 12)],
+            f"📄 {NOTES} (lines 1-9 of 9)\n" + "\n".join(f"{number:6}\tline {number:02}" for number in range(1, 10)),
+        ),
+    ],
+    ids=["early_stop", "read_to_eof"],
+)
+async def test_registered_read_file_doubles_the_read_size_up_to_the_cap(monkeypatch, arguments, reads, expected):
+    monkeypatch.setattr(workspace_read, "READ_CHUNK_BYTES", 4)
+    monkeypatch.setattr(workspace_read, "MAX_READ_CHUNK_BYTES", 16)
+    agent_id = uuid.uuid4()
+    backend = _RecordedReads()
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: backend)
+    await backend.write_bytes(
+        f"{agent_id}/{NOTES}", b"".join(f"line {number:02}\n".encode() for number in range(1, 10))
+    )
+
+    result = await _registered_read(agent_id, **arguments)
+
+    assert result == expected
+    assert backend.reads == reads
+
+
+EDIT_LIMIT = 64
+EDIT_KEY = "workspace/a.md"
+
+
+def _use_edit_storage(monkeypatch: pytest.MonkeyPatch, backend: StorageBackend) -> None:
+    async def no_lock(**_arguments: object) -> None:
+        return None
+
+    monkeypatch.setattr(workspace, "get_storage_backend", lambda: backend)
+    monkeypatch.setattr(workspace_collaboration, "get_storage_backend", lambda: backend)
+    monkeypatch.setattr(workspace_collaboration, "get_active_lock", no_lock)
+    monkeypatch.setattr(get_settings(), "WORKSPACE_FILE_CONTENT_MAX_BYTES", EDIT_LIMIT)
+
+
+@pytest.fixture(params=["local", "object"])
+def edit_backend(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    captured_revisions: list[dict[str, object]],
+) -> tuple[uuid.UUID, StorageBackend]:
+    backend = LocalStorageBackend(str(tmp_path)) if request.param == "local" else _RecordedReads()
+    _use_edit_storage(monkeypatch, backend)
+    return uuid.uuid4(), backend
+
+
+async def _registered_edit(agent_id: uuid.UUID, old: str, new: str, **arguments: ToolArgumentValue) -> str:
+    return await _registered_tool(
+        "edit_file", agent_id, {"path": EDIT_KEY, "old_string": old, "new_string": new, **arguments}
+    )
+
+
+@pytest.mark.parametrize("size", [EDIT_LIMIT - 1, EDIT_LIMIT, EDIT_LIMIT + 1])
+async def test_registered_edit_file_refuses_a_file_over_the_workspace_content_limit(edit_backend, size):
+    agent_id, backend = edit_backend
+    key = f"{agent_id}/{EDIT_KEY}"
+    original = b"old" + b"x" * (size - 3)
+    await backend.write_bytes(key, original)
+
+    result = await _registered_edit(agent_id, "old", "new")
+
+    if size <= EDIT_LIMIT:
+        assert result == f"✅ Replaced 1 occurrence(s) in {EDIT_KEY}"
+        assert await backend.read_bytes_bounded(key, EDIT_LIMIT) == b"new" + b"x" * (size - 3)
+    else:
+        assert result.startswith(f"❌ {EDIT_KEY} is larger than the {EDIT_LIMIT}-byte limit")
+        assert "write_file" in result
+        assert await backend.read_bytes_bounded(key, EDIT_LIMIT + 1) == original
+
+
+@pytest.mark.parametrize(
+    "original",
+    [b"old \xff tail", b"\xffold", b"old \xe4\xb8", b"caf\xe9 old"],
+    ids=["byte_inside", "leading_byte", "truncated_character_at_end", "latin1"],
+)
+async def test_registered_edit_file_refuses_invalid_utf8_and_leaves_the_file_untouched(
+    edit_backend, captured_revisions, original
+):
+    agent_id, backend = edit_backend
+    key = f"{agent_id}/{EDIT_KEY}"
+    await backend.write_bytes(key, original)
+
+    result = await _registered_edit(agent_id, "old", "new")
+
+    assert result.startswith(f"❌ {EDIT_KEY} is not valid UTF-8")
+    assert "write_file" in result
+    assert await backend.read_bytes_bounded(key, EDIT_LIMIT) == original
+    assert captured_revisions == []
+
+
+async def test_registered_edit_file_keeps_valid_text_exactly_as_it_was(edit_backend, captured_revisions):
+    agent_id, backend = edit_backend
+    key = f"{agent_id}/{EDIT_KEY}"
+    await backend.write_bytes(key, "\ufeffa\r\nb é\r\nb é\r\nlast".encode())
+
+    result = await _registered_edit(agent_id, "b é", "c", replace_all=True)
+
+    assert result == f"✅ Replaced 2 occurrence(s) in {EDIT_KEY}"
+    assert await backend.read_bytes_bounded(key, EDIT_LIMIT) == "\ufeffa\r\nc\r\nc\r\nlast".encode()
+    assert [(revision["operation"], revision["after_content"]) for revision in captured_revisions] == [
+        ("edit", "\ufeffa\r\nc\r\nc\r\nlast")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("old", "expected_start"),
+    [
+        ("absent", f"❌ 'old_string' not found in {EDIT_KEY}."),
+        ("twice", f"❌ 'old_string' appears 2 times in {EDIT_KEY}."),
+    ],
+)
+async def test_registered_edit_file_keeps_its_not_found_and_ambiguous_replies(edit_backend, old, expected_start):
+    agent_id, backend = edit_backend
+    key = f"{agent_id}/{EDIT_KEY}"
+    await backend.write_bytes(key, b"twice twice")
+
+    result = await _registered_edit(agent_id, old, "new")
+
+    assert result.startswith(expected_start)
+    assert await backend.read_bytes_bounded(key, EDIT_LIMIT) == b"twice twice"
+
+
+async def test_registered_edit_file_reads_one_range_of_at_most_the_limit_and_never_a_whole_object(
+    monkeypatch, captured_revisions
+):
+    agent_id = uuid.uuid4()
+    backend = _RecordedReads()
+    _use_edit_storage(monkeypatch, backend)
+    key = f"{agent_id}/{EDIT_KEY}"
+    await backend.write_bytes(key, b"old")
+
+    assert await _registered_edit(agent_id, "old", "new") == f"✅ Replaced 1 occurrence(s) in {EDIT_KEY}"
+
+    tool_read, *_revision_reads = backend.reads
+    assert tool_read == (EDIT_LIMIT, None, 3)
+    assert [revision["operation"] for revision in captured_revisions] == ["edit"]

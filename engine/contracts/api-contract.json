@@ -8939,7 +8939,13 @@
         "type": "object"
       },
       "FileContent": {
+        "description": "A file read in full. ``binary`` marks bytes that are not UTF-8: ``content`` then only describes the file.",
         "properties": {
+          "binary": {
+            "default": false,
+            "title": "Binary",
+            "type": "boolean"
+          },
           "content": {
             "title": "Content",
             "type": "string"
@@ -8947,6 +8953,10 @@
           "path": {
             "title": "Path",
             "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
           },
           "version_token": {
             "anyOf": [
@@ -8962,7 +8972,8 @@
         },
         "required": [
           "path",
-          "content"
+          "content",
+          "size"
         ],
         "title": "FileContent",
         "type": "object"
@@ -50347,6 +50358,7 @@
       "EmailConnectionResult",
       "EmailProviderHelp",
       "EmailTestRequest",
+      "FileContent",
       "FileInfoPage",
       "FocusItemResponse",
       "FocusKind",
@@ -50717,6 +50729,7 @@
       "EmailConnectionResult",
       "EmailProviderHelp",
       "EmailTestRequest",
+      "FileContent",
       "FileInfo",
       "FileInfoPage",
       "FocusItemResponse",

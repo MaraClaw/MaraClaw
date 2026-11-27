@@ -50,7 +50,7 @@ export async function prepareChatSkills(page: Page) {
         return route.fulfill({ status: 204 })
       }
       expect(request.method()).toBe('GET')
-      return route.fulfill({ json: { path, content: '# Report skill', version_token: 'report-v1' } })
+      return route.fulfill({ json: { path, content: '# Report skill', version_token: 'report-v1', size: 14, binary: false } })
     }
     expect(request.method()).toBe('GET')
     if (url.pathname === `/api/agents/${originalAgent.id}/files/revisions`) {

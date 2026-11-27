@@ -113,11 +113,33 @@ test('file content reads return the full body or a typed too-large result, never
     assert.equal(url.pathname, '/api/agents/agent/files/content')
     return url.searchParams.get('path') === 'big.log'
       ? Response.json({ detail: { code: 'file_too_large', message: 'too big', max_bytes: 1048576 } }, { status: 413 })
-      : Response.json({ path: 'a.txt', content: 'hello', version_token: 'v1' })
+      : Response.json({ path: 'a.txt', content: 'hello', version_token: 'v1', size: 5, binary: false })
   })
   assert.deepEqual(await readFileContent('agent', 'a.txt'), { kind: 'content', path: 'a.txt', content: 'hello', version_token: 'v1' })
   assert.deepEqual(await readFileContent('agent', 'big.log'), { kind: 'too-large', path: 'big.log', maxBytes: 1048576 })
 })
+
+test('a file the engine marks as binary reads as its byte count with no editable body', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const url = new URL(String(input), 'https://fixture.test')
+    assert.equal(url.pathname, '/api/agents/agent/files/content')
+    assert.equal(url.searchParams.get('path'), 'images/logo & mark.png')
+    return Response.json({ path: 'images/logo & mark.png', content: '[Binary file: logo & mark.png, 2048 bytes]', version_token: 'v2', size: 2048, binary: true })
+  })
+  assert.deepEqual(await readFileContent('agent', 'images/logo & mark.png'), { kind: 'binary', path: 'images/logo & mark.png', size: 2048 })
+})
+
+test('text without the binary marker or a version token still reads as editable content', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ path: 'a.txt', content: 'héllo', version_token: null, size: 6 }))
+  assert.deepEqual(await readFileContent('agent', 'a.txt'), { kind: 'content', path: 'a.txt', content: 'héllo' })
+})
+
+for (const body of [{ path: 'a.bin', content: '[Binary file: a.bin, 1 bytes]', size: 1, binary: 'true' }, { path: 'a.txt', content: 'hello' }]) {
+  test(`file content reads reject malformed native response ${JSON.stringify(body)}`, async (t) => {
+    t.mock.method(globalThis, 'fetch', async () => Response.json(body))
+    await assert.rejects(readFileContent('agent', 'a.txt'), ZodError)
+  })
+}
 
 test('other read failures, including a 413 without the file limit code, still reject', async (t) => {
   let status = 413

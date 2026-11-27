@@ -680,6 +680,9 @@ export type EmailConfig = z.infer<typeof EmailConfigSchema>;
 export const EmailTestRequestSchema = z.looseObject({ ["config"]: EmailConfigSchema });
 export type EmailTestRequest = z.infer<typeof EmailTestRequestSchema>;
 
+export const FileContentSchema = z.looseObject({ ["binary"]: z.boolean().optional(), ["content"]: z.string(), ["path"]: z.string(), ["size"]: z.number().refine(Number.isInteger), ["version_token"]: z.union([z.string(), z.null()]).optional() });
+export type FileContent = z.infer<typeof FileContentSchema>;
+
 export const FileInfoSchema = z.looseObject({ ["is_dir"]: z.boolean(), ["modified_at"]: z.string().optional(), ["name"]: z.string(), ["path"]: z.string(), ["size"]: z.number().refine(Number.isInteger).optional(), ["url"]: z.union([z.string(), z.null()]).optional(), ["version_token"]: z.union([z.string(), z.null()]).optional() });
 export type FileInfo = z.infer<typeof FileInfoSchema>;
 

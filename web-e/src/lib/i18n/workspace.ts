@@ -586,6 +586,7 @@ export const workspace = {
   "Uploaded": "Đã tải lên",
   "Cannot read file": "Không thể đọc tập tin",
   "This file is larger than the {limit} editor limit. Download it to view or change it.": "Tập tin này lớn hơn giới hạn trình chỉnh sửa {limit}. Hãy tải xuống để xem hoặc thay đổi.",
+  "This file ({size}) is not text, so it cannot be edited here. Download it to view or change it.": "Tập tin này ({size}) không phải văn bản nên không thể chỉnh sửa tại đây. Hãy tải xuống để xem hoặc thay đổi.",
   "Saved": "Đã lưu",
   "Save failed": "Lưu không thành công",
   "Unable to start download. Try again.": "Không thể bắt đầu tải xuống. Hãy thử lại.",

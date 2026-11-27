@@ -290,9 +290,13 @@ async def _delete_workspace_file(
 
 
 class FileContent(BaseModel):
+    """A file read in full. ``binary`` marks bytes that are not UTF-8: ``content`` then only describes the file."""
+
     path: str
     content: str
     version_token: str | None = None
+    size: int
+    binary: bool = False
 
 
 class FileWrite(BaseModel):
@@ -554,16 +558,18 @@ async def read_file(
     except StorageReadLimitExceededError as exc:
         raise _file_too_large(exc.max_bytes) from exc
 
+    data = await _read_bytes_within_limit(storage, key)
     try:
-        content = await _read_text_within_limit(storage, key)
-        return FileContent(path=path, content=content, version_token=version.token)
+        content = data.decode("utf-8")
     except UnicodeDecodeError:
-        stat = await storage.stat(key)
         return FileContent(
             path=path,
-            content=f"[Binary file: {Path(path).name}, {stat.size} bytes]",
+            content=f"[Binary file: {Path(path).name}, {len(data)} bytes]",
             version_token=version.token,
+            size=len(data),
+            binary=True,
         )
+    return FileContent(path=path, content=content, version_token=version.token, size=len(data))
 
 
 def _entry_version_token(entry: StorageEntry) -> str | None:

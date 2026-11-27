@@ -499,17 +499,18 @@ def test_an_oversized_save_fails_validation_before_any_storage_call(monkeypatch,
     touched.assert_not_awaited()
 
 
+@pytest.mark.parametrize("fill", [b"x", b"\xff"])
 @pytest.mark.parametrize(("size", "too_large"), [(LIMIT - 1, False), (LIMIT, False), (LIMIT + 1, True)])
 async def test_content_read_returns_a_file_up_to_the_limit_and_refuses_one_byte_over(
-    workspace_storage, size, too_large
+    workspace_storage, fill, size, too_large
 ):
-    # Given
+    # Given a text or binary file under, at or one byte over the limit
     user, agent, storage = workspace_storage.user, workspace_storage.agent, workspace_storage.storage
     key = f"{agent.id}/workspace/log.txt"
-    await storage.write_bytes(key, b"x" * size)
+    await storage.write_bytes(key, fill * size)
     # When
     request = files_api.read_file(agent_id=agent.id, path="workspace/log.txt", current_user=user)
-    # Then
+    # Then the size check comes first, whatever the bytes are
     if too_large:
         with pytest.raises(HTTPException) as exc:
             await request
@@ -521,8 +522,50 @@ async def test_content_read_returns_a_file_up_to_the_limit_and_refuses_one_byte_
         }
     else:
         result = await request
-        assert result.content == "x" * size
+        binary = fill == b"\xff"
+        assert result.binary is binary
+        assert result.size == size
+        assert result.content == (f"[Binary file: log.txt, {size} bytes]" if binary else "x" * size)
         assert result.version_token == (await storage.get_version(key)).token
+
+
+@pytest.mark.parametrize(
+    ("name", "data"),
+    [
+        ("logo.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"),
+        ("lone.bin", b"\xff"),
+        ("cut.txt", "café".encode()[:-1]),
+    ],
+)
+async def test_content_read_marks_bytes_that_are_not_utf8_as_binary_with_their_real_size(workspace_storage, name, data):
+    # Given a PNG header, a lone 0xff byte and text whose last UTF-8 character is cut short
+    user, agent, storage = workspace_storage.user, workspace_storage.agent, workspace_storage.storage
+    key = f"{agent.id}/workspace/{name}"
+    await storage.write_bytes(key, data)
+    # When
+    result = await files_api.read_file(agent_id=agent.id, path=f"workspace/{name}", current_user=user)
+    # Then the file is described instead of decoded with replacement characters
+    assert result.binary is True
+    assert result.size == len(data)
+    assert result.content == f"[Binary file: {name}, {len(data)} bytes]"
+    assert result.version_token == (await storage.get_version(key)).token
+
+
+@pytest.mark.parametrize("text", ["", "plain notes\n", "é" * 7 + "xx", "日本 🎉 ï"])
+async def test_content_read_returns_utf8_text_unchanged_and_unmarked(workspace_storage, text):
+    # Given empty, ASCII and multibyte UTF-8 text within the limit
+    user, agent, storage = workspace_storage.user, workspace_storage.agent, workspace_storage.storage
+    data = text.encode("utf-8")
+    assert len(data) <= LIMIT
+    key = f"{agent.id}/workspace/notes.md"
+    await storage.write_bytes(key, data)
+    # When
+    result = await files_api.read_file(agent_id=agent.id, path="workspace/notes.md", current_user=user)
+    # Then
+    assert result.binary is False
+    assert result.content == text
+    assert result.size == len(data)
+    assert result.version_token == (await storage.get_version(key)).token
 
 
 @pytest.mark.parametrize("name", ["log.txt", "rows.csv", "notes.md", "page.html"])

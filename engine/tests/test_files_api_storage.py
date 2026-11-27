@@ -667,6 +667,32 @@ async def test_s3_content_read_never_pulls_more_than_one_byte_past_the_limit(
     assert all(read is not None and read <= CONTENT_LIMIT + 1 for read in source.read_sizes)
 
 
+@pytest.mark.parametrize(
+    ("data", "binary"),
+    [
+        (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", True),
+        (b"\xff", True),
+        ("café".encode()[:-1], True),
+        (b"\xff" * CONTENT_LIMIT, True),
+        ("日本 🎉 ï".encode(), False),
+    ],
+)
+async def test_s3_content_read_marks_bytes_that_are_not_utf8_as_binary_with_their_real_size(
+    monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, data: bytes, binary: bool
+):
+    # Given an S3 object holding binary bytes (one exactly at the limit) or multibyte UTF-8 text
+    monkeypatch.setattr(files.settings, "WORKSPACE_FILE_CONTENT_MAX_BYTES", CONTENT_LIMIT)
+    source = preview_over_s3(monkeypatch, agent_id, "blob.dat", data)
+    # When
+    result = await files.read_file(agent_id, path="workspace/blob.dat", current_user=make_user())
+    # Then
+    assert result.binary is binary
+    assert result.size == len(data)
+    assert result.content == (f"[Binary file: blob.dat, {len(data)} bytes]" if binary else data.decode("utf-8"))
+    assert result.version_token == (await files.get_storage_backend().get_version(source.key)).token
+    assert result.version_token is not None
+
+
 @pytest.mark.parametrize("name", ["log.txt", "rows.csv", "notes.md"])
 async def test_s3_text_preview_refuses_an_object_over_the_limit_instead_of_truncating_it(
     monkeypatch: pytest.MonkeyPatch, agent_id: uuid.UUID, name: str

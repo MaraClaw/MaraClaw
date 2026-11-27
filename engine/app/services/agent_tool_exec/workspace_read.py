@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import codecs
 import fnmatch
 import re
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
 from pathlib import Path
+from typing import Final
 
 from app.services.storage_runtime.base import StorageBackend, StorageEntry
 
+from .workspace_read_window import LineWindow
 from .workspace_search import search_page
-from .workspace_search_cursor import InvalidSearchCursorError, SearchQuery, parse_position
+from .workspace_search_cursor import FILE_BYTES, InvalidSearchCursorError, SearchQuery, parse_position
 from .workspace_search_scope import search_key_allowed, search_path_allowed
+
+READ_CHUNK_BYTES: Final = FILE_BYTES
+MAX_READ_CHUNK_BYTES: Final = 4 * FILE_BYTES
 
 type StorageBackendFactory = Callable[[], StorageBackend]
 type ToolStorageKeyFn = Callable[[uuid.UUID, str, str | None], tuple[str, str, bool]]
@@ -89,21 +95,48 @@ async def _storage_read_file(
     if not await storage.is_file(storage_key):
         return f"File not found: {rel_path}"
     try:
-        content = await storage.read_text(storage_key, encoding="utf-8", errors="replace")
-        lines = content.splitlines()
-        total_lines = len(lines)
-        start = max(0, offset)
-        end = min(total_lines, start + limit)
+        window = LineWindow(max(0, offset), max(0, limit))
+        total_lines = await _feed_window(storage, storage_key, window)
+        start = window.start
+        end = start + len(window.rows)
+        output = "\n".join(window.rows)
+        if total_lines is None:
+            output += f"\n\n... [more lines not shown; continue with offset={end}]"
+            return f"📄 {rel_path} (lines {start + 1}-{end}; more lines follow)\n" + output
         if start >= total_lines > 0:
             return f"Offset {offset} exceeds file length ({total_lines} lines total)"
-        selected_lines = lines[start:end]
-        output = "\n".join(f"{index + 1:6}\t{line}" for index, line in enumerate(selected_lines, start=start))
+        end = min(total_lines, end)
         if total_lines > end:
             output += f"\n\n... [{total_lines - end} more lines not shown, lines {end + 1}-{total_lines}]"
         header = f"📄 {rel_path} (lines {start + 1 if total_lines else 0}-{end} of {total_lines})\n"
         return header + output
     except Exception as error:
         return f"Read failed: {error}"
+
+
+async def _feed_window(storage: StorageBackend, storage_key: str, window: LineWindow) -> int | None:
+    """Stream the file into ``window`` in ranged reads; the file's line count, or ``None``.
+
+    The first read is ``READ_CHUNK_BYTES`` and each later one doubles up to ``MAX_READ_CHUNK_BYTES``, so a small file
+    costs one read and a deep page costs few round trips while no more than the cap is held. ``None`` means reading
+    stopped at a chunk that showed a line after the window with more of the file still unread, so the total is
+    unknown. A chunk that ends the file is always counted to its end, which keeps the exact totals a file read whole
+    used to report. Each chunk is decoded by one incremental decoder, so a character cut by a chunk boundary decodes
+    as it does in a whole read, with the same replacement of invalid bytes.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    position = 0
+    size = READ_CHUNK_BYTES
+    while True:
+        data = await storage.read_bytes_bounded(storage_key, size, offset=position)
+        end_of_file = len(data) < size
+        window.feed(decoder.decode(data, final=end_of_file))
+        if end_of_file:
+            return window.finish()
+        if window.more:
+            return None
+        position += len(data)
+        size = min(2 * size, MAX_READ_CHUNK_BYTES)
 
 
 def _storage_walk_files(storage: StorageBackend, root_key: str) -> AsyncGenerator[StorageEntry]:

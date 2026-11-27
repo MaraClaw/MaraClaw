@@ -1,5 +1,6 @@
 import { ApiError, apiFormRequest, apiRequest } from './http.ts'
 import type { ChatMessage } from './chat/message.ts'
+import { FileContentSchema } from './engine-contracts.generated.ts'
 export { listFilesPage } from './agent-files-api.ts'
 export type { ChatMessage } from './chat/message.ts'
 export { createSchedule, deleteSchedule, listScheduleHistory, listSchedules, runSchedule, updateSchedule } from './schedules-api.ts'
@@ -79,9 +80,13 @@ export async function listFiles(agentId: string, path = '', signal?: AbortSignal
   return apiRequest(`/api/agents/${agentId}/files/${query}`, { ...(signal === undefined ? {} : { signal }) })
 }
 
-/** A file read in full, or one the engine refused to read because it is over `maxBytes`; never a partial body. */
+/**
+ * A file read in full, a file whose bytes are not UTF-8 text (`size` bytes, nothing to edit), or one the engine
+ * refused to read because it is over `maxBytes`; never a partial body.
+ */
 export type FileContentResult =
   | { readonly kind: 'content'; readonly path: string; readonly content: string; readonly version_token?: string }
+  | { readonly kind: 'binary'; readonly path: string; readonly size: number }
   | { readonly kind: 'too-large'; readonly path: string; readonly maxBytes: number }
 
 function fileTooLargeLimit(error: unknown): number | null {
@@ -93,10 +98,11 @@ function fileTooLargeLimit(error: unknown): number | null {
 
 export async function readFileContent(agentId: string, path: string): Promise<FileContentResult> {
   try {
-    const file = await apiRequest<{ path: string; content: string; version_token?: string }>(
-      `/api/agents/${agentId}/files/content?path=${encodeURIComponent(path)}`,
-    )
-    return { kind: 'content', ...file }
+    const file = await apiRequest(`/api/agents/${agentId}/files/content?path=${encodeURIComponent(path)}`, {
+      schema: FileContentSchema,
+    })
+    if (file.binary === true) return { kind: 'binary', path: file.path, size: file.size }
+    return { kind: 'content', path: file.path, content: file.content, ...(file.version_token == null ? {} : { version_token: file.version_token }) }
   } catch (error) {
     const maxBytes = fileTooLargeLimit(error)
     if (maxBytes === null) throw error

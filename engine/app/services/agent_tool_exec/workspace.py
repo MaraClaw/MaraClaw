@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from app.config import get_settings
 from app.services.agent_tool_exec.registry import ToolArguments
 from app.services.agent_tool_exec.workspace_paths import _normalize_tool_rel_path, _tool_storage_key
 from app.services.agent_tool_exec.workspace_temp import (
@@ -13,6 +14,7 @@ from app.services.agent_tool_exec.workspace_temp import (
 )
 from app.services.focus_service import is_focus_file_path
 from app.services.storage import get_storage_backend, normalize_storage_key
+from app.services.storage_runtime.base import StorageReadLimitExceededError
 from app.services.workspace_collaboration import (
     delete_workspace_file,
     move_workspace_path,
@@ -164,7 +166,21 @@ async def _execute_workspace_mutation(
         if not await storage.is_file(storage_key):
             return f"File not found: {path}"
 
-        content = await storage.read_text(storage_key, encoding="utf-8", errors="replace")
+        max_bytes = get_settings().WORKSPACE_FILE_CONTENT_MAX_BYTES
+        try:
+            raw = await storage.read_bytes_bounded(storage_key, max_bytes)
+        except StorageReadLimitExceededError:
+            return (
+                f"❌ {path} is larger than the {max_bytes}-byte limit for edit_file, so it was not changed. "
+                "Read the part you need with read_file (offset and limit), or replace the whole file with write_file."
+            )
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return (
+                f"❌ {path} is not valid UTF-8 text, so edit_file cannot change it without corrupting it; "
+                "it was left unchanged. Replace the whole file with write_file if you mean to overwrite it."
+            )
         if old_string not in content:
             return (
                 f"❌ 'old_string' not found in {path}. Please check the exact text including whitespace and newlines."

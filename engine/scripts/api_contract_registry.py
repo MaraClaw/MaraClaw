@@ -6,7 +6,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from app.api.admin import list_company_picker_options, toggle_company
 from app.api.agent_credentials import AgentCredentialPayload
-from app.api.files import list_files_page
+from app.api.files import list_files_page, read_file
 from app.api.skills import install_from_clawhub, refresh_registry_skill
 from app.api.upload import UploadPolicy
 from app.core.domain.activity import ActivityAction
@@ -181,7 +181,14 @@ PUBLIC_SCHEMA_NAMES = {
 }
 
 AUDITED_HTTP_ENDPOINTS = frozenset(
-    {list_files_page, install_from_clawhub, refresh_registry_skill, list_company_picker_options, toggle_company}
+    {
+        list_files_page,
+        read_file,
+        install_from_clawhub,
+        refresh_registry_skill,
+        list_company_picker_options,
+        toggle_company,
+    }
 )
 
 
