@@ -3,9 +3,12 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from io import BytesIO
 from types import SimpleNamespace
+from typing import override
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -22,6 +25,7 @@ from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 from app.records.workspace import WorkspaceFileRevisionRecord
 from app.services import file_download_tickets, workspace_collaboration
+from app.services.storage_runtime.base import StorageReadChangedError, StorageVersion
 from app.services.storage_runtime.disposition import content_disposition
 from app.services.storage_runtime.local import LocalStorageBackend
 from materialize_fixtures import GatedObject, temp_files, temp_root
@@ -110,21 +114,66 @@ async def test_local_preview_never_removes_the_workspace_file(monkeypatch, tmp_p
     assert temp_files(temp_root) == []
 
 
-async def test_download_without_a_presigned_url_buffers_bytes_instead_of_copying_to_disk(
+class RangedObject(GatedObject):
+    """The object of `GatedObject` answering ranged GETs as S3 does; `replaced_after_get` maps a GET number to the ETag
+    HEAD reports from then on."""
+
+    def __init__(self, key: str, data: bytes):
+        super().__init__(key, data)
+        self.etag = '"e"'
+        self.ranges: list[str] = []
+        self.replaced_after_get: dict[int, str] = {}
+
+    @override
+    def head_object(self, **request: str) -> dict[str, object]:
+        return {**super().head_object(**request), "ETag": self.etag}
+
+    @override
+    def get_object(self, **request: str) -> dict[str, object]:
+        assert request["Key"] == self.key
+        self.get_calls += 1
+        self.ranges.append(request["Range"])
+        first, _, last = request["Range"].removeprefix("bytes=").partition("-")
+        start, stop = int(first), min(int(last), len(self.data) - 1)
+        self.etag = self.replaced_after_get.get(self.get_calls, self.etag)
+        return {"Body": BytesIO(self.data[start : stop + 1]), "ContentRange": f"bytes {start}-{stop}/{len(self.data)}"}
+
+
+async def test_download_without_a_presigned_url_streams_the_object_instead_of_copying_to_disk(
     monkeypatch, temp_root, download
 ):
-    # Given: an S3 backend that cannot presign, so the response must come from memory
+    # Given: an S3 backend that cannot presign, so the response must come from the object store itself
     key = f"{download.agent_id}/workspace/report.pdf"
-    source = GatedObject(key, b"report-bytes")
+    source = RangedObject(key, b"report-bytes")
     storage = source.backend(monkeypatch)
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
     # When
     response = await _download(download, "bearer")
     # Then
     assert not isinstance(response, FileResponse)
-    assert response.body == b"report-bytes"
+    assert await _body(response) == b"report-bytes"
     assert source.get_calls == 1
     assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize(("replaced_after_get", "delivered"), [(None, b"0123456789ab"), (2, b"01234")])
+async def test_s3_download_without_a_presigned_url_reads_chunk_ranges_and_stops_on_a_new_etag(
+    monkeypatch, download, replaced_after_get, delivered
+):
+    # Given: a 12 byte object read 5 bytes at a time, replaced (new ETag) right after the second ranged GET or never
+    monkeypatch.setattr("app.services.storage_runtime.file_stream._CHUNK_BYTES", 5)
+    source = RangedObject(f"{download.agent_id}/workspace/report.pdf", b"0123456789ab")
+    if replaced_after_get is not None:
+        source.replaced_after_get[replaced_after_get] = '"v2"'
+    storage = source.backend(monkeypatch)
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    response = await _download(download, "bearer")
+    # When the body is read
+    received, failure = await _drain(response)
+    # Then every GET asked for one chunk, and a replaced object delivers only what the first ETag covered
+    assert (failure is None) == (replaced_after_get is None)
+    assert source.ranges == ["bytes=0-4", "bytes=5-9", "bytes=10-11"][: replaced_after_get or 3]
+    assert b"".join(received) == delivered
 
 
 async def test_cancelled_office_sidecar_keeps_attachment_without_markdown(monkeypatch, tmp_path):
@@ -249,11 +298,20 @@ async def test_manage_access_can_delete_agent_workspace_file(monkeypatch, tmp_pa
 
 
 class DownloadStorage:
-    def __init__(self, key: str, *, presigned: str | None = None, local_path=None):
+    """A remote store: no presigned URL and no local descriptor unless a test gives one, and no whole-object read."""
+
+    def __init__(self, key: str, *, presigned: str | None = None, local_path=None, data: bytes = b"report-bytes"):
         self.key = key
         self.presigned = presigned
         self.local_path = local_path
         self.presign_calls = []
+        self.data = data
+        self.etag = "v1"
+        self.vanished = False
+        self.reads: list[tuple[int, int | None]] = []
+        # Read ordinal (1-based) -> (data, etag) the object holds from just before / just after that read.
+        self.replaced_before: dict[int, tuple[bytes, str]] = {}
+        self.replaced_after: dict[int, tuple[bytes, str]] = {}
 
     async def exists(self, key):
         return key == self.key
@@ -271,8 +329,20 @@ class DownloadStorage:
         stream = self.local_path.open("rb")
         return stream, os.fstat(stream.fileno())
 
-    async def read_bytes(self, _key):
-        return b"report-bytes"
+    async def get_version(self, key):
+        return StorageVersion(
+            key=key, exists=key == self.key and not self.vanished, is_dir=False, size=len(self.data), etag=self.etag
+        )
+
+    async def read_bytes_bounded(self, _key, max_bytes, *, offset=None):
+        self.reads.append((max_bytes, offset))
+        if replacement := self.replaced_before.get(len(self.reads)):
+            self.data, self.etag = replacement
+        start = offset or 0
+        chunk = self.data[start : start + max_bytes]
+        if replacement := self.replaced_after.get(len(self.reads)):
+            self.data, self.etag = replacement
+        return chunk
 
 
 class DownloadRedis:
@@ -340,6 +410,19 @@ async def _body(response) -> bytes:
     return b"".join([chunk async for chunk in response.body_iterator])
 
 
+async def _drain(response) -> tuple[list[bytes], StorageReadChangedError | None]:
+    """Every chunk the body sent before it ended, and the failure that ended it early, if any."""
+    received: list[bytes] = []
+    body = response.body_iterator
+    while True:
+        try:
+            received.append(await anext(body))
+        except StopAsyncIteration:
+            return received, None
+        except StorageReadChangedError as failure:
+            return received, failure
+
+
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
 async def test_download_presigned_branch_redirects(monkeypatch, download, auth):
     storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", presigned="https://s3.example/signed")
@@ -392,13 +475,113 @@ async def test_download_local_branch_answers_range_and_conditional_requests(monk
 
 
 @pytest.mark.parametrize("auth", ["bearer", "ticket"])
-async def test_download_bytes_branch_sets_disposition(monkeypatch, download, auth):
+async def test_download_last_resort_streams_with_the_announced_length_and_disposition(monkeypatch, download, auth):
     storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf")
     monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
     response = await _download(download, auth, inline=True)
-    assert response.body == b"report-bytes"
+    assert isinstance(response, StreamingResponse)
+    assert await _body(response) == b"report-bytes"
     assert response.media_type == "application/pdf"
+    assert response.headers["content-length"] == "12"
     assert response.headers["content-disposition"] == content_disposition("report.pdf", "inline")
+
+
+@pytest.mark.parametrize("auth", ["bearer", "ticket"])
+async def test_download_last_resort_reads_ranged_chunks_and_never_the_whole_object(monkeypatch, download, auth):
+    # Given a 12 byte object and a 5 byte chunk size, on a store with no whole-object read at all
+    monkeypatch.setattr("app.services.storage_runtime.file_stream._CHUNK_BYTES", 5)
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", data=b"0123456789ab")
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    # When it is downloaded
+    response = await _download(download, auth)
+    # Then every read is one chunk at its offset and the body is the object
+    assert await _body(response) == b"0123456789ab"
+    assert storage.reads == [(5, 0), (5, 5), (2, 10)]
+    assert response.headers["content-length"] == "12"
+
+
+async def test_download_last_resort_reads_at_most_one_mebibyte_at_a_time(monkeypatch, download):
+    # Given an object of 2.5 MiB and four bytes, whose reads the store records
+    data = bytes(range(256)) * 10240 + b"tail"
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", data=data)
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    # When it is downloaded with the shipped chunk size
+    response = await _download(download, "bearer")
+    # Then the body is the object, read as two whole mebibytes and the rest
+    assert await _body(response) == data
+    assert response.headers["content-length"] == str(len(data))
+    assert [(size, offset) for size, offset in storage.reads] == [
+        (1048576, 0),
+        (1048576, 1048576),
+        (len(data) - 2097152, 2097152),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("when", "ordinal", "delivered"),
+    [("before", 2, [b"01234"]), ("after", 1, []), ("after", 2, [b"01234"])],
+)
+async def test_download_last_resort_stops_when_the_object_changes_instead_of_mixing_versions(
+    monkeypatch, download, when, ordinal, delivered
+):
+    # Given an object that is replaced by one of the same size just before or just after a ranged read
+    monkeypatch.setattr("app.services.storage_runtime.file_stream._CHUNK_BYTES", 5)
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", data=b"0123456789ab")
+    getattr(storage, f"replaced_{when}")[ordinal] = (b"ABCDEFGHIJKL", "v2")
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    response = await _download(download, "bearer")
+    received, failure = await _drain(response)
+    # Then only chunks of the first version were sent, so the transfer ends short of its Content-Length
+    assert failure is not None
+    assert received == delivered
+    assert sum(map(len, received)) < int(response.headers["content-length"])
+
+
+async def test_download_last_resort_stops_on_a_short_read_even_when_the_version_is_unchanged(monkeypatch, download):
+    # Given an object that comes back shorter than announced under the same version
+    monkeypatch.setattr("app.services.storage_runtime.file_stream._CHUNK_BYTES", 5)
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", data=b"0123456789ab")
+    storage.replaced_before[2] = (b"0123456", "v1")
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    response = await _download(download, "bearer")
+    received, failure = await _drain(response)
+    assert failure is not None
+    assert received == [b"01234"]
+
+
+async def test_download_last_resort_answers_404_for_an_object_that_vanished_after_the_checks(monkeypatch, download):
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf")
+    storage.vanished = True
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    with pytest.raises(HTTPException) as exc:
+        await _download(download, "bearer")
+    assert exc.value.status_code == 404
+    assert storage.reads == []
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_download_last_resort_over_http_is_a_whole_200_or_a_failed_transfer(monkeypatch, download, changed):
+    # Given the real route in front of a store that reaches the last resort
+    monkeypatch.setattr("app.services.storage_runtime.file_stream._CHUNK_BYTES", 5)
+    storage = DownloadStorage(f"{download.agent_id}/workspace/report.pdf", data=b"0123456789ab")
+    if changed:
+        storage.replaced_before[3] = (b"ABCDEFGHIJKL", "v2")
+    monkeypatch.setattr(files_api, "get_storage_backend", lambda: storage)
+    app = FastAPI()
+    app.include_router(files_api.router, prefix="/api")
+    url = f"/api/agents/{download.agent_id}/files/download"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        # When the file is fetched
+        request = client.get(url, params={"path": "workspace/report.pdf"}, headers={"Authorization": "Bearer jwt"})
+        # Then an unchanged object arrives whole, and a replaced one fails the transfer instead of finishing
+        if changed:
+            with pytest.raises(StorageReadChangedError):
+                _ = await request
+        else:
+            response = await request
+            assert (response.status_code, response.content) == (200, b"0123456789ab")
+            assert response.headers["content-length"] == "12"
+            assert response.headers["content-disposition"] == content_disposition("report.pdf", "attachment")
 
 
 async def test_bearer_wins_without_consuming_ticket(monkeypatch, download):

@@ -316,6 +316,9 @@ class Settings(BaseSettings):
     # Largest file the editor, the text and CSV previews and the enterprise knowledge base content read take into memory,
     # and the most text one save may carry. A larger file answers 413 `file_too_large` and is downloaded instead.
     WORKSPACE_FILE_CONTENT_MAX_BYTES: int = Field(default=1048576, gt=0, le=67108864)
+    # Largest HTML file a public /p/{short_id} page is served from, and the largest the publish tool and the publish
+    # route accept. A source that grew past it later answers 413 and counts no view.
+    PUBLISHED_PAGE_MAX_BYTES: int = Field(default=5_242_880, ge=1, le=67_108_864)
 
     # Document conversion (the convert_* tools). Blocking work (openpyxl, python-docx, WeasyPrint, large file reads) runs
     # on a lane of this many threads of its own, never on the event loop or the default executor.

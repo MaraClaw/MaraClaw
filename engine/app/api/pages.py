@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from app.config import get_settings
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao.published_page_dao import published_page_dao
@@ -15,6 +16,7 @@ from app.records.user import UserRecord
 from app.schemas.content_response_catalog import DeletedAcknowledgement, PublishedPageResponse
 from app.services.file_storage_paths import require_member_visible_path
 from app.services.storage import get_storage_backend, normalize_storage_key
+from app.services.storage_runtime import StorageReadLimitExceededError
 
 # Public router - no /api prefix, no auth
 public_router = APIRouter(tags=["pages"])
@@ -39,7 +41,11 @@ async def render_page(short_id: str) -> HTMLResponse:
     if not await storage.exists(storage_key) or not await storage.is_file(storage_key):
         raise HTTPException(status_code=404, detail="Source file no longer exists")
 
-    html_content = await storage.read_text(storage_key, encoding="utf-8", errors="replace")
+    try:
+        raw = await storage.read_bytes_bounded(storage_key, get_settings().PUBLISHED_PAGE_MAX_BYTES)
+    except StorageReadLimitExceededError as exc:
+        raise HTTPException(status_code=413, detail="Page is too large to display") from exc
+    html_content = raw.decode("utf-8", errors="replace")
 
     await published_page_dao.increment_view_count(page.id)
 
@@ -95,7 +101,7 @@ async def publish_page(
     body: PagePublish, current_user: UserRecord = Depends(get_current_user)
 ) -> PublishedPageResponse:
     """Publish an HTML workspace file as a public /p/{short_id} page."""
-    from app.services.agent_tool_exec.publish import _publish_page
+    from app.services.agent_tool_exec.publish import PAGE_TOO_LARGE_PREFIX, _publish_page
 
     _agent, access_level = await check_agent_access(current_user, body.agent_id)
     _require_manage(current_user, access_level)
@@ -103,7 +109,7 @@ async def publish_page(
 
     result = await _publish_page(body.agent_id, current_user.id, Path(), {"path": body.path})
     if not result.startswith("Published successfully"):
-        raise HTTPException(status_code=400, detail=result)
+        raise HTTPException(status_code=413 if result.startswith(PAGE_TOO_LARGE_PREFIX) else 400, detail=result)
 
     pages = await published_page_dao.list_for_agent(body.agent_id)
     published = next((p for p in pages if p.source_path == body.path), pages[0] if pages else None)

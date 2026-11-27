@@ -91,7 +91,7 @@ from app.services.storage_runtime.base import (
 )
 from app.services.storage_runtime.dir_page import DirPageRequest, collect_visible_page
 from app.services.storage_runtime.disposition import content_disposition
-from app.services.storage_runtime.file_stream import file_response
+from app.services.storage_runtime.file_stream import file_response, storage_response
 from app.services.storage_runtime.skill_install import (
     SkillFilesConflictError,
     SkillFilesInvalidError,
@@ -935,8 +935,10 @@ async def _download_response(key: str, path: str, inline: bool, request_headers:
         # Serve the descriptor an O_NOFOLLOW walk opened: a link the guest swaps in after the checks is refused.
         stream, info = opened
         return file_response(request_headers, stream, info, media_type=media_type, headers=headers)
-    data = await storage.read_bytes(key)
-    return Response(content=data, media_type=media_type, headers=headers)
+    version = await storage.get_version(key)
+    if not version.exists or version.is_dir:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+    return storage_response(storage, key, version, media_type=media_type, headers=headers)
 
 
 @router.post(

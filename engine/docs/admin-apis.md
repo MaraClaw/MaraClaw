@@ -114,6 +114,8 @@ Password-reset and verify links prefer the requesting frontend `Origin` (or Refe
 
 `PUBLIC_BASE_URL` is deployment-owned and loaded through `Settings` from the environment or `.env`. Request hosts are never a fallback. Without a configured base, webhook-URL endpoints, SSO redirects (including stored tenant domains), and invitation emails return **503** with a configuration error. SSO enablement still updates its flag but does not assign a domain. Published pages retain relative `/p/<id>` links with a configuration note, and webhook-trigger creation returns an error without creating a trigger. Without either a configured base or an allowlisted frontend origin, verification mail is skipped and logged while registration succeeds; forgot-password keeps its generic response. `PUT /api/enterprise/system-settings/platform` rejects any `public_base_url` key with **422**; configure `PUBLIC_BASE_URL` in the deployment instead.
 
+Published pages (`POST /api/pages/`, public `GET /p/<id>`) serve an HTML workspace file of at most `PUBLISHED_PAGE_MAX_BYTES` (default 5 MiB, at most 64 MiB). Publishing a larger file is **413** with the path and the limit in `detail` and creates no page; a published source that has since grown past the limit answers **413** on `GET /p/<id>` and counts no view. The page title is taken from the first 64 KiB of the file.
+
 Base path for most routes: **`/api`**.
 
 Self-prefixed exceptions (no double-prefix): `okr` → `/api/okr`, plus a few public/websocket routers (see `app/api/AGENTS.md`).
