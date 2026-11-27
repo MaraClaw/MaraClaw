@@ -261,7 +261,7 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "feishu_calendar_list",
-            "description": "查询飞书日历。**自动读取当前对话用户的真实忙碌时段（freebusy）**，同时列出 bot 创建的日程。用于查询某人是否有空、安排日程时避开冲突。",
+            "description": "查询飞书日历：列出 bot 创建的日程；提供 user_open_id 时，同时读取该用户的真实忙碌时段（freebusy）。用于查询某人是否有空、安排日程时避开冲突。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -275,7 +275,7 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
                     },
                     "user_open_id": {
                         "type": "string",
-                        "description": "要查询 freebusy 的用户 open_id。不填则自动使用当前对话发送者。",
+                        "description": "要查询 freebusy 的用户 open_id。不填则只列出 bot 创建的日程，不查询任何人的忙碌时段。",
                     },
                     "max_results": {
                         "type": "integer",
@@ -290,7 +290,7 @@ FEISHU_AGENT_TOOLS: list[ToolDefinition] = [
         "type": "function",
         "function": {
             "name": "feishu_calendar_create",
-            "description": "Create a Feishu calendar event immediately. The current user is automatically invited as attendee - no email or authorization required. Just provide the title and time.",
+            "description": "Create a Feishu calendar event immediately. Nobody is invited automatically: list the people to invite in attendee_names, attendee_open_ids or attendee_emails. No authorization required. Just provide the title and time.",
             "parameters": {
                 "type": "object",
                 "properties": {

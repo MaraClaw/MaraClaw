@@ -9,7 +9,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.org import OrgMemberRecord
 from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import get_platform_user_by_org_member
+from app.services.channel_user_service import linked_platform_user
 
 
 async def _save_channel_message(
@@ -24,10 +24,13 @@ async def _save_channel_message(
 ) -> None:
     """Persist a proactive outbound channel message."""
     agent = await agent_dao.get(agent_id)
-    platform_user = await get_platform_user_by_org_member(
+    platform_user = await linked_platform_user(
         org_member=org_member,
         agent_tenant_id=agent.tenant_id if agent else None,
     )
+    if platform_user is None:
+        logger.info(f"[{log_label}] Proactive message not saved: member {org_member.id} has no linked user")
+        return
     session = await find_or_create_channel_session(
         agent_id=agent_id,
         user_id=platform_user.id,

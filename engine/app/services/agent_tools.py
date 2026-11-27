@@ -1024,10 +1024,6 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: ToolParameters) ->
     return await _agent_tool_exec_feishu_contacts._feishu_user_search(agent_id, arguments)
 
 
-async def _feishu_contacts_refresh(agent_id: uuid.UUID) -> None:
-    await _agent_tool_exec_feishu_contacts._feishu_contacts_refresh(agent_id)
-
-
 # ─── Email Tool Helpers ─────────────────────────────────────
 
 

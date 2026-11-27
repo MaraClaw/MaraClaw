@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.records.org import OrgMemberRecord
-from app.services.channel_user_service import ChannelUserService, get_platform_user_by_org_member
+from app.services.channel_user_service import ChannelUserService, linked_platform_user
 from app.services.sso_service import sso_service
 
 
@@ -166,7 +166,7 @@ async def test_channel_user_service_uses_wechat_external_id_for_existing_member_
 
 
 @pytest.mark.asyncio
-async def test_platform_user_by_org_member_serializes_tenant_id_for_sso_matches(monkeypatch):
+async def test_linked_platform_user_serializes_tenant_id_for_sso_matches(monkeypatch):
     tenant_id = uuid.uuid4()
     matched_user = SimpleNamespace(
         id=uuid.uuid4(),
@@ -187,7 +187,7 @@ async def test_platform_user_by_org_member_serializes_tenant_id_for_sso_matches(
         "app.services.channel_user_service.user_dao.get_with_identity", AsyncMock(return_value=matched_user)
     )
 
-    user = await get_platform_user_by_org_member(member, tenant_id)
+    user = await linked_platform_user(member, tenant_id)
 
     assert user is matched_user
     email_match.assert_awaited_once_with("alice@example.com", str(tenant_id))

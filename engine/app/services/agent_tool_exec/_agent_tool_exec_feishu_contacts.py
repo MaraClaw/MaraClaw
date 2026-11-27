@@ -2,28 +2,12 @@ from __future__ import annotations
 
 import uuid
 from contextlib import suppress
-from pathlib import Path
-from types import ModuleType
 
 from app.dao.agent_dao import agent_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.user_dao import user_dao
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments
-from app.services.im_sdk_types import is_object_list
-
-_cached_users: list[dict[str, str]] = []
-
-
-def _cached_user_count(facade: ModuleType) -> int:
-    cached_users = getattr(facade, "_cached_users", None)
-    if is_object_list(cached_users):
-        return len(cached_users)
-    return len(_cached_users)
-
-
-def _contacts_cache_file(agent_id: uuid.UUID) -> Path:
-    return Path("/data/workspaces") / str(agent_id) / "feishu_contacts_cache.json"
 
 
 async def _feishu_user_search(agent_id: uuid.UUID, arguments: ToolArguments) -> str:
@@ -76,25 +60,4 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: ToolArguments) -> 
                         result_lines.append(f"  邮箱: {email}")
                     return "\n".join(result_lines)
 
-    total = _cached_user_count(agent_tools)
-    if total == 0:
-        return (
-            f"❌ 本地通讯录缓存为空，暂时无法搜索「{name}」。\n\n"
-            "通讯录缓存会在同事向机器人发消息时自动建立。\n"
-            "如果「覃睿」从未给机器人发过消息，可以请他先给机器人发一条消息，"
-            "之后就能直接搜索到他了。\n\n"
-            "或者，请直接告诉我「覃睿」的飞书 open_id 或邮箱，我可以立刻操作。"
-        )
-    return (
-        f"❌ 未在本地通讯录（已缓存 {total} 人）中找到「{name}」。\n\n"
-        "通讯录缓存来自给机器人发过消息的同事。\n"
-        "如果「{name}」从未给机器人发消息，请他先发一条，之后即可自动识别。\n"
-        "或者请直接提供其飞书 open_id / 工作邮箱。"
-    )
-
-
-async def _feishu_contacts_refresh(agent_id: uuid.UUID) -> None:
-    with suppress(Exception):
-        cache_file = _contacts_cache_file(agent_id)
-        if cache_file.exists():
-            cache_file.unlink()
+    return f"❌ 未在通讯录中找到「{name}」。请直接提供其飞书 open_id / 工作邮箱。"

@@ -1,8 +1,9 @@
 """Channel identity lookup for messaging platforms.
 
 ``ChannelUserService`` finds the OrgMember a channel identity is linked to. Inbound senders are attributed only through
-a linked, active member (``channels.binding.resolve_bound_sender``), so a message never creates a user or a member.
-``get_platform_user_by_org_member`` serves outbound tools and permission candidates.
+a linked, active member (``channels.binding.resolve_bound_sender``). ``linked_platform_user`` serves outbound tools and
+permission candidates by finding the user an OrgMember already belongs to. No channel or org-member path creates a user,
+an identity or a member: a member with no linked or matching user has no platform user.
 """
 
 from __future__ import annotations
@@ -11,10 +12,8 @@ import uuid
 from collections.abc import Mapping
 from typing import ClassVar
 
-from app.core.domain.users import UserRole
 from app.core.json_types import JsonObject, json_as_str, json_object_from
-from app.core.logging import logger
-from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_dao
+from app.dao import org_member_dao, user_dao
 from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services.sso_service import sso_service
@@ -32,10 +31,10 @@ class ChannelUserResolutionError(ValueError):
     """Raised when a channel message cannot be safely attributed to a user."""
 
 
-async def _require_company_membership(user: UserRecord | None, tenant_id: uuid.UUID | None) -> None:
+async def _require_company_membership(user: UserRecord, tenant_id: uuid.UUID | None) -> None:
     from app.dao.company_admission_dao import company_admission_dao
 
-    if tenant_id is None or (user is not None and user.tenant_id == tenant_id):
+    if tenant_id is None or user.tenant_id == tenant_id:
         return
     tenant = await company_admission_dao.tenant(tenant_id)
     if tenant is not None and not tenant.is_system and not tenant.is_default_end_user_org:
@@ -138,11 +137,15 @@ class ChannelUserService:
 channel_user_service = ChannelUserService()
 
 
-async def get_platform_user_by_org_member(
+async def linked_platform_user(
     org_member: OrgMemberRecord,
     agent_tenant_id: uuid.UUID | None = None,
-) -> UserRecord:
-    """Get or create platform User from an existing OrgMember."""
+) -> UserRecord | None:
+    """Return the platform user an OrgMember belongs to, or None when it has none; never creates one.
+
+    A member already linked to a user in the agent's tenant resolves to it. Otherwise an existing user with the member's
+    email or phone is linked to the member. An unlinked member that matches no user stays unlinked.
+    """
     agent_tenant_id_text = str(agent_tenant_id) if agent_tenant_id is not None else None
 
     if org_member.user_id:
@@ -156,44 +159,10 @@ async def get_platform_user_by_org_member(
         user = await sso_service.match_user_by_email(org_member.email, agent_tenant_id_text)
     if not user and org_member.phone is not None and org_member.phone:
         user = await sso_service.match_user_by_mobile(org_member.phone, agent_tenant_id_text or "")
+    if not user:
+        return None
 
     await _require_company_membership(user, agent_tenant_id or org_member.tenant_id)
-    if user:
-        _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
-        loaded = await user_dao.get_with_identity(user.id)
-        return loaded or user
-
-    provider = await identity_provider_dao.get(org_member.provider_id) if org_member.provider_id else None
-    channel_type = provider.provider_type if provider else "unknown"
-
-    email = org_member.email
-    name = org_member.name or email or "User"
-
-    identity = await identity_dao.get_by_email(email) if email not in (None, "") else None
-    if not identity and org_member.phone is not None and org_member.phone:
-        identity = await identity_dao.get_by_phone(org_member.phone)
-
-    if not identity:
-        identity = await identity_dao.create_identity(
-            email=email,
-            phone=org_member.phone,
-            password_hash=None,
-            is_platform_admin=False,
-            email_verified=True,
-        )
-
-    user = await user_dao.create(
-        obj_in={
-            "identity_id": identity.id,
-            "display_name": name,
-            "avatar_url": org_member.avatar_url,
-            "role": UserRole.MEMBER,
-            "registration_source": channel_type,
-            "tenant_id": agent_tenant_id,
-            "is_active": True,
-        }
-    )
     _ = await org_member_dao.update(db_obj=org_member, obj_in={"user_id": user.id})
-    logger.info(f"[channel_user_service] Created User {user.id} for OrgMember {org_member.id} ({name})")
     loaded = await user_dao.get_with_identity(user.id)
     return loaded or user

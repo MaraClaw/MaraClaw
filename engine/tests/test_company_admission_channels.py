@@ -5,7 +5,7 @@ import pytest
 from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.org_member_dao import org_member_dao
 from app.records.agent import AgentRecord
-from app.services.channel_user_service import ChannelUserResolutionError, get_platform_user_by_org_member
+from app.services.channel_user_service import ChannelUserResolutionError, linked_platform_user
 from app.services.channels.binding import resolve_bound_sender
 from company_admission_fixtures import AdmissionScenario, admission_scenario
 
@@ -34,7 +34,7 @@ async def test_channel_sender_cannot_create_company_membership(admission_scenari
     assert await scenario.db.fetchone(ROW_COUNTS_SQL) == before
 
 
-async def test_unbound_org_member_cannot_create_company_membership(admission_scenario: AdmissionScenario):
+async def test_unbound_org_member_has_no_platform_user_and_creates_none(admission_scenario: AdmissionScenario):
     scenario = admission_scenario
     provider = await identity_provider_dao.create(
         obj_in={"provider_type": "slack", "name": "Slack", "tenant_id": scenario.target_id}
@@ -47,11 +47,12 @@ async def test_unbound_org_member_cannot_create_company_membership(admission_sce
             "external_id": "unbound",
         }
     )
-    with pytest.raises(ChannelUserResolutionError):
-        await get_platform_user_by_org_member(member, scenario.target_id)
-    assert (
-        await scenario.db.fetchval("SELECT count(*) FROM users WHERE tenant_id=%(id)s", {"id": scenario.target_id}) == 2
-    )
+    before = await scenario.db.fetchone(ROW_COUNTS_SQL)
+    assert await linked_platform_user(member, scenario.target_id) is None
+    assert await scenario.db.fetchone(ROW_COUNTS_SQL) == before
+    stored = await org_member_dao.get(member.id)
+    assert stored is not None
+    assert stored.user_id is None
 
 
 @pytest.mark.parametrize("linked", [False, True])
@@ -84,7 +85,7 @@ async def test_channel_cannot_link_source_member_as_company_member(
             extra_info={"email": "applicant@acme.test"},
         )
         if inbound
-        else get_platform_user_by_org_member(member, scenario.target_id)
+        else linked_platform_user(member, scenario.target_id)
     )
     with pytest.raises(ChannelUserResolutionError):
         await attempt

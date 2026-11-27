@@ -7,7 +7,7 @@ from typing import NotRequired, Self, TypedDict, TypeGuard, Unpack
 
 from app.core.json_types import JsonObject
 from app.services import agent_tools
-from app.services.agent_tool_exec import channel_context, registry
+from app.services.agent_tool_exec import registry
 
 _FW_COLON = "\uff1a"
 _FW_COMMA = "\uff0c"
@@ -128,18 +128,14 @@ async def test_doc_create_preserves_regular_wiki_and_folder_token_fallback_shape
     writer = _write_module()
     service = _FakeFeishuService(create_responses=[{"code": 0, "data": {"document": {"document_id": "doc_new"}}}])
     _patch_facade(monkeypatch, service)
-    share_httpx = _FakeHttpxModule({"code": 0, "msg": "ok"})
-    monkeypatch.setattr(writer, "_httpx_module", lambda: share_httpx)
-    sender_token = channel_context.channel_feishu_sender_open_id.set("ou_sender")
-    try:
-        regular = await target._feishu_doc_create(uuid.uuid4(), {"title": "Plan", "folder_token": "fld1"})
-    finally:
-        channel_context.channel_feishu_sender_open_id.reset(sender_token)
+    regular_httpx = _FakeHttpxModule()
+    monkeypatch.setattr(writer, "_httpx_module", lambda: regular_httpx)
+    regular = await target._feishu_doc_create(uuid.uuid4(), {"title": "Plan", "folder_token": "fld1"})
 
-    assert f"✅ 文档创建成功{_FW_EXCLAMATION}\n✅ 已自动为你开通访问权限。" in regular
+    assert regular.startswith(f"✅ 文档创建成功{_FW_EXCLAMATION}\n标题{_FW_COLON}Plan\n")
     assert f"Token{_FW_COLON}doc_new" in regular
     assert service.create_calls == [("app-id", "app-secret", "fld1", "Plan")]
-    assert _json_call_at(share_httpx.calls, 0)[2]["json"]["member_id"] == "ou_sender"
+    assert regular_httpx.calls == []  # nobody is granted access to the new document
 
     wiki_httpx = _FakeHttpxModule({"code": 0, "data": {"node": {"obj_token": "doc_wiki", "node_token": "wiki_node"}}})
     monkeypatch.setattr(writer, "_httpx_module", lambda: wiki_httpx)

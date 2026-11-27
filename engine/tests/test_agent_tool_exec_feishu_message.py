@@ -9,7 +9,9 @@ import pytest
 
 from app.records.org import OrgMemberRecord
 from app.services import agent_tools
+from app.services.agent_tool_exec.registry import ToolArguments
 from app.services.feishu_service import FeishuAPIError
+from im_token_cache_fakes import captured_app_log
 
 
 class _FeishuSender:
@@ -76,6 +78,7 @@ def _patch_dependencies(
     direct_relationship=None,
     named_relationships=None,
     sender: _FeishuSender,
+    linked_user: bool = True,
 ):
     platform_calls = []
     session_calls = []
@@ -93,7 +96,7 @@ def _patch_dependencies(
 
     async def platform_user(*, org_member, agent_tenant_id=None):
         platform_calls.append((org_member, agent_tenant_id))
-        return SimpleNamespace(id=uuid.uuid4())
+        return SimpleNamespace(id=uuid.uuid4()) if linked_user else None
 
     async def channel_session(**kwargs):
         session_calls.append(kwargs)
@@ -114,7 +117,7 @@ def _patch_dependencies(
     monkeypatch.setattr(target.agent_relationship_dao, "get_active_for_agent_by_feishu_id", get_active_by_feishu)
     monkeypatch.setattr(target.agent_relationship_dao, "list_for_agent_with_members", list_with_members)
     monkeypatch.setattr(target, "evaluate_human_relationship_status", _active_status)
-    monkeypatch.setattr(target, "get_platform_user_by_org_member", platform_user)
+    monkeypatch.setattr(target, "linked_platform_user", platform_user)
     monkeypatch.setattr(target, "find_or_create_channel_session", channel_session)
     monkeypatch.setattr(target.chat_message_dao, "insert_message", insert_message)
     monkeypatch.setattr(target.chat_session_dao, "update", session_update)
@@ -221,6 +224,39 @@ async def test_send_feishu_message_named_member_success_saves_history(
     assert platform_calls[0][0] is member
     assert session_calls[0]["external_conv_id"] == "feishu_p2p_ou_alice"
     assert message_inserts[0]["content"] == "hello"
+
+
+@pytest.mark.parametrize("by_user_id", [True, False])
+async def test_send_feishu_message_to_unlinked_member_sends_without_saving_history(
+    monkeypatch: pytest.MonkeyPatch, by_user_id: bool
+) -> None:
+    target = _message_module()
+    sender = _FeishuSender([{"code": 0, "msg": "ok"}])
+    member = _member()
+    platform_calls, session_calls, message_inserts = _patch_dependencies(
+        monkeypatch,
+        target,
+        config=_config(),
+        direct_relationship=_relationship(member=member) if by_user_id else None,
+        named_relationships=None if by_user_id else [_relationship(member=member)],
+        sender=sender,
+        linked_user=False,
+    )
+    arguments: ToolArguments = (
+        {"user_id": "ou_direct", "message": "hello"} if by_user_id else {"member_name": "Alice", "message": "hello"}
+    )
+
+    with captured_app_log() as log:
+        result = await agent_tools._send_feishu_message(uuid.uuid4(), arguments)
+
+    assert result.startswith("✅")
+    assert len(sender.calls) == 1
+    assert len(platform_calls) == 1
+    assert platform_calls[0][0] is member
+    assert session_calls == []
+    assert message_inserts == []
+    assert any(str(member.id) in line for line in log)
+    assert not any("hello" in line for line in log)
 
 
 async def test_send_feishu_message_feishu_api_error_uses_user_message(monkeypatch) -> None:

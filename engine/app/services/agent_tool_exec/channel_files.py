@@ -22,8 +22,6 @@ from app.records.channel_config import ChannelConfigRecord
 from app.services import agent_tools
 from app.services.agent_tool_exec.registry import ToolArguments
 
-from . import channel_context
-
 
 def _httpx_module():
     import httpx
@@ -48,7 +46,7 @@ async def _run_path_call[T](call: Callable[[], T]) -> T:
 
 
 async def _send_channel_file(agent_id: uuid.UUID, ws: Path, arguments: ToolArguments) -> str:
-    """Send a file to an explicit channel recipient, current channel, or web download URL."""
+    """Send a file to an explicit channel recipient, or return its web download URL."""
     file_path_value = arguments.get("file_path", "")
     message_value = arguments.get("message", "")
     member_name_value = arguments.get("member_name", "")
@@ -74,23 +72,13 @@ async def _send_channel_file(agent_id: uuid.UUID, ws: Path, arguments: ToolArgum
             "Use send_message_to_agent for digital employees, or omit member_name to return a download link."
         )
 
-    sender = channel_context.channel_file_sender.get()
-    if sender is not None:
-        try:
-            await sender(file_path, accompany_msg)
-            return f"File '{file_path.name}' sent to user via channel."
-        except Exception as error:
-            return f"Failed to send file: {error}"
-
-    aid = channel_context.channel_web_agent_id.get() or str(agent_id)
     base_abs = await _resolve_path(agent_tools.WORKSPACE_ROOT / str(agent_id))
     try:
         file_rel = str((await _resolve_path(file_path)).relative_to(base_abs))
     except ValueError:
         file_rel = rel_path
-    settings = get_settings()
-    base_url = getattr(settings, "BASE_URL", "").rstrip("/") or ""
-    download_url = f"{base_url}/api/agents/{aid}/files/download?path={file_rel}"
+    base_url = get_settings().PUBLIC_BASE_URL.strip().rstrip("/")
+    download_url = f"{base_url}/api/agents/{agent_id}/files/download?path={file_rel}"
     msg = f"File ready: [{file_path.name}]({download_url})"
     if accompany_msg:
         msg = accompany_msg + "\n\n" + msg
@@ -173,8 +161,7 @@ async def _send_file_via_feishu(
     except Exception as error:
         import json as json_module
 
-        settings = get_settings()
-        base_url = getattr(settings, "BASE_URL", "").rstrip("/") or ""
+        base_url = get_settings().PUBLIC_BASE_URL.strip().rstrip("/")
         base_abs = await _resolve_path(agent_tools.WORKSPACE_ROOT / str(agent_id))
         try:
             relative_path = str((await _resolve_path(file_path)).relative_to(base_abs))

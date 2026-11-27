@@ -7,9 +7,9 @@ is refused.
 
 An account is an active membership (``users.is_active``) of the company whose role is not ``platform_admin``: members,
 agent admins and organization admins alike, as the plan quote counts the administrator. IM channel and Feishu users
-are not a separate case: an inbound channel message never creates a user, ``get_platform_user_by_org_member`` refuses to
-create one in any non-system, non-default organization, which every capped organization is, and
-``FeishuService.login_or_register`` has no caller.
+are not a separate case: no channel or org-member path creates a user. An inbound channel message never does, and
+``channel_user_service.linked_platform_user``, which the outbound tools and the permission candidates use, only returns
+the user a member is already linked to or matches by email or phone.
 An agent is counted exactly as the per-account cap counts it (``agent_dao.count_ordinary_for_creator``), company-wide:
 non-expired, non-system, any lifecycle status.
 

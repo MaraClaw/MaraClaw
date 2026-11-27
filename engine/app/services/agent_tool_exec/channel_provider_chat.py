@@ -13,7 +13,7 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
 from app.records.org import OrgMemberRecord
 from app.services.agent_tool_exec.channel_provider_common import _save_channel_message
-from app.services.channel_user_service import get_platform_user_by_org_member
+from app.services.channel_user_service import linked_platform_user
 
 
 async def _send_slack_message(
@@ -89,15 +89,18 @@ async def _send_teams_channel_message(
             return "❌ Teams proactive send requires an existing inbound conversation to capture service_url"
 
         agent = await agent_dao.get(agent_id)
-        platform_user = await get_platform_user_by_org_member(
+        platform_user = await linked_platform_user(
             org_member=target_member,
             agent_tenant_id=agent.tenant_id if agent else None,
         )
+        requires_first_message = f"❌ Teams proactive send to {member_name} requires them to message the bot first"
+        if platform_user is None:
+            return requires_first_message
         sessions = await chat_session_dao.list_for_user(agent_id=agent_id, user_id=platform_user.id)
         session = next((s for s in sessions if s.source_channel == "microsoft_teams"), None)
         conversation_id = str(session.external_conv_id or "").strip() if session else ""
         if session is None or not conversation_id:
-            return f"❌ Teams proactive send to {member_name} requires them to message the bot first"
+            return requires_first_message
 
         await _send_teams_message(
             config,
@@ -134,10 +137,16 @@ async def _send_google_chat_message(
             return "❌ This agent has no Google Chat channel configured"
 
         agent = await agent_dao.get(agent_id)
-        platform_user = await get_platform_user_by_org_member(
+        platform_user = await linked_platform_user(
             org_member=target_member,
             agent_tenant_id=agent.tenant_id if agent else None,
         )
+        requires_first_message = (
+            f"❌ Google Chat proactive send to {member_name} requires them to message the bot first "
+            "(DM preferred; group rooms work after any message in that space)"
+        )
+        if platform_user is None:
+            return requires_first_message
 
         # Prefer DM sessions owned by the member, then agent-scoped google_chat sessions
         # (includes creator-owned group rooms the member previously messaged).
@@ -167,10 +176,7 @@ async def _send_google_chat_message(
 
         external = str(session.external_conv_id or "").strip() if session else ""
         if session is None or not external:
-            return (
-                f"❌ Google Chat proactive send to {member_name} requires them to message the bot first "
-                "(DM preferred; group rooms work after any message in that space)"
-            )
+            return requires_first_message
 
         try:
             space_name, thread_name = parse_external_conv_id(external)

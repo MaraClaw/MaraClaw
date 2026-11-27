@@ -1,4 +1,4 @@
-"""Feishu (Lark) OAuth and API integration service."""
+"""Feishu (Lark) API integration service."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ import asyncio
 import json
 from collections import OrderedDict
 from pathlib import Path
-from typing import ClassVar, NotRequired, Protocol, TypedDict, TypeIs
-from uuid import UUID
+from typing import ClassVar, Protocol, TypeIs
 
 import httpx
 
@@ -28,9 +27,6 @@ from app.core.json_types import (
     object_list_from_row,
 )
 from app.core.outbound_transport import public_http_client
-from app.core.security import create_access_token
-from app.dao import identity_dao, identity_provider_dao, org_member_dao, user_dao
-from app.records.user import UserRecord
 from app.services.channels.media_limits import read_capped
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES, MAX_INPUT_BYTES
 from app.services.im_token_cache import ImTokenKey, ImTokenRefusedError, MintedToken, get_or_mint_im_token
@@ -122,8 +118,6 @@ def _require_lark_client_cls() -> type[object]:
 
 settings = get_settings()
 
-FEISHU_OAUTH_ENDPOINT = "https://open.feishu.cn/open-apis/authen/v1/oidc/access_token"
-FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
 FEISHU_APP_ACCESS_ENDPOINT = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
 FEISHU_SEND_MSG_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
 
@@ -154,16 +148,6 @@ async def get_feishu_app_token_or_blank(app_id: str | None, app_secret: str | No
         return await get_feishu_app_token(app_id, app_secret)
     except ImTokenRefusedError:
         return ""
-
-
-class FeishuOAuthUser(TypedDict):
-    open_id: str
-    union_id: str
-    user_id: str
-    name: str
-    email: str
-    avatar_url: str
-    mobile: NotRequired[str]
 
 
 class FeishuAPIError(RuntimeError):
@@ -211,7 +195,7 @@ class FeishuAPIError(RuntimeError):
 
 
 class FeishuService:
-    """Service for Feishu OAuth login and message API."""
+    """Service for the Feishu message and document API."""
 
     # Maximum number of lark SDK client instances to keep alive simultaneously.
     # Each entry corresponds to a unique (app_id, app_secret) pair.  Excess entries
@@ -274,153 +258,12 @@ class FeishuService:
 
         return data_obj
 
-    async def get_app_access_token(self) -> str:
-        """Get or refresh the app-level access token. Deprecated: Use get_tenant_access_token instead."""
-        return await self.get_tenant_access_token(self.app_id, self.app_secret)
-
     async def get_tenant_access_token(self, app_id: str | None = None, app_secret: str | None = None) -> str:
         """Get the cached app-level access token ("" when Feishu refuses)."""
         token = await get_feishu_app_token_or_blank(app_id or self.app_id, app_secret or self.app_secret)
         if app_id in (None, ""):
             self._app_access_token = token
         return token
-
-    async def exchange_code_for_user(self, code: str) -> FeishuOAuthUser:
-        """Exchange OAuth authorization code for user info.
-
-        Returns dict with: open_id, union_id, user_id, name, email, avatar_url
-        """
-        app_token = await self.get_app_access_token()
-
-        async with httpx.AsyncClient() as client:
-            typed_client: httpx.AsyncClient = client
-            # Get user access token
-            token_resp: httpx.Response = await typed_client.post(
-                FEISHU_OAUTH_ENDPOINT,
-                json={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                },
-                headers={"Authorization": f"Bearer {app_token}"},
-            )
-            token_data = _json_object(_response_json_object(token_resp).get("data"))
-            user_access_token = json_as_str_or(token_data.get("access_token"), "")
-
-            # Get user info
-            info_resp: httpx.Response = await typed_client.get(
-                FEISHU_USER_INFO_URL,
-                headers={
-                    "Authorization": f"Bearer {user_access_token}",
-                },
-            )
-            info_data = _json_object(_response_json_object(info_resp).get("data"))
-
-            return {
-                "open_id": json_as_str_or(info_data.get("open_id"), ""),
-                "union_id": json_as_str_or(info_data.get("union_id"), ""),
-                "user_id": json_as_str_or(info_data.get("user_id"), ""),
-                "name": json_as_str_or(info_data.get("name"), ""),
-                "email": json_as_str_or(info_data.get("email"), ""),
-                "avatar_url": json_as_str_or(info_data.get("avatar_url"), ""),
-            }
-
-    async def login_or_register(
-        self, feishu_user: FeishuOAuthUser, tenant_id: str | None = None
-    ) -> tuple[UserRecord, str]:
-        """Login existing user or register new one via Feishu SSO.
-
-        Uses OrgMember as the identity anchor (synced from Feishu org directory).
-        Returns (user, jwt_token).
-        """
-        open_id = feishu_user["open_id"]
-        user_id = feishu_user.get("user_id", "")
-        fs_email = feishu_user.get("email", "")
-        fs_name = feishu_user.get("name", "")
-        fs_avatar = feishu_user.get("avatar_url", "")
-        tenant_uuid: UUID | None = None
-        if tenant_id not in (None, ""):
-            try:
-                tenant_uuid = UUID(str(tenant_id))
-            except ValueError, TypeError:
-                tenant_uuid = None
-
-        provider = await identity_provider_dao.get_by_type_and_tenant("feishu", tenant_uuid)
-        if not provider:
-            provider = await identity_provider_dao.create(
-                obj_in={
-                    "provider_type": "feishu",
-                    "name": "Feishu",
-                    "is_active": True,
-                    "config": {"app_id": self.app_id, "app_secret": self.app_secret},
-                    "tenant_id": tenant_uuid,
-                }
-            )
-
-        member = None
-        if open_id:
-            member = await org_member_dao.find_active_by_any_ids(
-                provider_id=provider.id,
-                open_id=open_id,
-            )
-        if not member and user_id:
-            member = await org_member_dao.find_active_by_any_ids(
-                provider_id=provider.id,
-                external_id=user_id,
-            )
-
-        user: UserRecord | None = None
-        if member and member.user_id:
-            user = await user_dao.get_with_identity(member.user_id)
-
-        if not user and fs_email:
-            user = await user_dao.get_by_email_and_tenant(fs_email, tenant_uuid)
-            if user:
-                user = await user_dao.get_with_identity(user.id)
-
-        if user:
-            updates: dict[str, str] = {}
-            if fs_avatar:
-                updates["avatar_url"] = fs_avatar
-            if fs_name:
-                updates["display_name"] = fs_name
-            if updates:
-                user = await user_dao.update(db_obj=user, obj_in=updates)
-            if (
-                user.identity_id
-                and fs_email
-                and (user.email in (None, "") or str(user.email).endswith("@feishu.local"))
-            ):
-                identity = await identity_dao.get(user.identity_id)
-                if identity:
-                    _ = await identity_dao.update(db_obj=identity, obj_in={"email": fs_email})
-                    user = await user_dao.get_with_identity(user.id) or user
-            if member and not member.user_id:
-                _ = await org_member_dao.update(db_obj=member, obj_in={"user_id": user.id})
-        else:
-            from app.services.registration_service import registration_service
-
-            identity = await registration_service.find_or_create_identity(
-                email=fs_email or None,
-                phone=feishu_user.get("mobile"),
-                password=open_id,
-            )
-
-            user = await user_dao.create(
-                obj_in={
-                    "identity_id": identity.id,
-                    "display_name": fs_name or fs_email or "User",
-                    "avatar_url": fs_avatar or None,
-                    "registration_source": "feishu",
-                    "tenant_id": tenant_uuid,
-                    "is_active": True,
-                }
-            )
-            user = await user_dao.get_with_identity(user.id) or user
-            if member:
-                _ = await org_member_dao.update(db_obj=member, obj_in={"user_id": user.id})
-
-        token = await create_access_token(str(user.id), user.role)
-        return user, token
 
     async def send_message(
         self,

@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 from tests.test_channel_delivery_transport import transport
 
+from app.config import Settings
 from app.core.domain.channels import ChannelType
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.records.agent import AgentRecord
@@ -25,7 +26,6 @@ from app.records.org import OrgMemberRecord
 from app.records.user import UserRecord
 from app.services import activity_logger, agent_tools, okr_daily_collection
 from app.services.agent_tool_exec import (
-    channel_context,
     channel_messaging,
     channel_provider_whatsapp as provider,
     channel_providers,
@@ -33,64 +33,73 @@ from app.services.agent_tool_exec import (
 )
 from app.services.agent_tool_exec.registry import ToolArguments
 from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import get_platform_user_by_org_member
+from app.services.channel_user_service import linked_platform_user
 from app.services.channels import outbound_plan
-
-
-def test_channel_contextvars_are_exported_from_channel_context() -> None:
-    context = importlib.import_module("app.services.agent_tool_exec.channel_context")
-
-    assert channel_context.channel_file_sender is context.channel_file_sender
-    assert channel_context.channel_web_agent_id is context.channel_web_agent_id
-    assert channel_context.channel_feishu_sender_open_id is context.channel_feishu_sender_open_id
 
 
 def test_channel_runtime_dependencies_import_from_owners() -> None:
     assert find_or_create_channel_session is not None
-    assert get_platform_user_by_org_member is not None
+    assert linked_platform_user is not None
 
 
-async def test_send_channel_file_uses_sender_contextvar(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("public_base", "origin"), [("", ""), ("https://public.example/", "https://public.example")])
+async def test_send_channel_file_without_a_recipient_returns_the_download_link_of_the_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, public_base: str, origin: str
+) -> None:
     channel_files = importlib.import_module("app.services.agent_tool_exec.channel_files")
     agent_id = uuid.uuid4()
-    source_file = tmp_path / "report.txt"
-    source_file.write_text("daily report", encoding="utf-8")
-    calls: list[tuple[Path, str]] = []
+    workspace = tmp_path / str(agent_id)
+    workspace.mkdir()
+    (workspace / "report.txt").write_text("daily report", encoding="utf-8")
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(channel_files, "get_settings", lambda: Settings(PUBLIC_BASE_URL=public_base))
 
-    async def sender(file_path: Path, message: str = "") -> None:
-        calls.append((file_path, message))
+    result = await channel_files._send_channel_file(
+        agent_id, workspace, {"file_path": "report.txt", "message": "please review"}
+    )
 
-    token = channel_context.channel_file_sender.set(sender)
-    try:
-        result = await channel_files._send_channel_file(
-            agent_id,
-            tmp_path,
-            {"file_path": "report.txt", "message": "please review"},
-        )
-    finally:
-        channel_context.channel_file_sender.reset(token)
-
-    assert result == "File 'report.txt' sent to user via channel."
-    assert calls == [(source_file.resolve(), "please review")]
+    assert result == (
+        f"please review\n\nFile ready: [report.txt]({origin}/api/agents/{agent_id}/files/download?path=report.txt)"
+    )
 
 
-async def test_send_channel_file_missing_sender_keeps_download_and_error_behavior(tmp_path: Path) -> None:
+async def test_failed_feishu_upload_sends_the_public_download_link_instead(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     channel_files = importlib.import_module("app.services.agent_tool_exec.channel_files")
+    from app.services.feishu_service import feishu_service
+
     agent_id = uuid.uuid4()
-    source_file = tmp_path / "report.txt"
-    source_file.write_text("daily report", encoding="utf-8")
+    workspace = tmp_path / str(agent_id)
+    workspace.mkdir()
+    report = workspace / "report.txt"
+    report.write_text("daily report", encoding="utf-8")
+    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(channel_files, "get_settings", lambda: Settings(PUBLIC_BASE_URL="https://public.example/"))
+    sent: list[str] = []
 
-    token = channel_context.channel_file_sender.set(None)
-    try:
-        result = await channel_files._send_channel_file(
-            agent_id,
-            tmp_path,
-            {"file_path": "report.txt"},
-        )
-    finally:
-        channel_context.channel_file_sender.reset(token)
+    async def recipient(*_args: object) -> tuple[str, str]:
+        return ("ou_alice", "open_id")
 
-    assert "no active channel sender" in result.lower() or "download" in result.lower() or "❌" in result
+    async def refused_upload(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("im:resource missing")
+
+    async def send_message(
+        _app_id: str | None, _app_secret: str | None, _receive_id: str, _msg_type: str, content: str, **_kwargs: object
+    ) -> dict[str, object]:
+        sent.append(json.loads(content)["text"])
+        return {}
+
+    monkeypatch.setattr(channel_files, "_resolve_feishu_recipient", recipient)
+    monkeypatch.setattr(feishu_service, "upload_and_send_file", refused_upload)
+    monkeypatch.setattr(feishu_service, "send_message", send_message)
+    config = ChannelConfigRecord(uuid.uuid4(), agent_id, ChannelType.FEISHU, app_id="cli", app_secret="secret")
+
+    result = await channel_files._send_file_via_feishu(agent_id, config, report, "Alice", "")
+
+    assert result == "File upload to Feishu failed, sent download link to Alice instead."
+    assert len(sent) == 1
+    assert f"report.txt\nhttps://public.example/api/agents/{agent_id}/files/download?path=report.txt" in sent[0]
 
 
 def test_okr_daily_collection_imports_channel_message_from_owner() -> None:
