@@ -94,7 +94,7 @@ is handled by the form of its reference, the same rule
 
 | Missing reference | Outcome |
 |---|---|
-| Bare name without a digest or repository slash (for example `arm64-openclaw:2026.11.3`), or an image ID such as `sha256:...` | Local-only, never pulled. The start fails with a preflight error, code `runtime_failed`. The operator must build the image on that Docker daemon |
+| Bare name without a digest or repository slash (for example `arm64-openclaw:2026.11.10`), or an image ID such as `sha256:...` | Local-only, never pulled. The start fails with a preflight error, code `runtime_failed`. The operator must build the image on that Docker daemon |
 | Namespaced/registry or digest-pinned reference | Pulled once, bounded by `OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS`. A failed or timed-out pull fails the start with `runtime_failed` |
 
 A refusal is logged as a warning with the image reference and its cause. A Docker

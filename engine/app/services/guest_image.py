@@ -1,7 +1,7 @@
 """Guest image rule shared by guest starts and OpenClaw upgrades.
 
 A reference with a registry host, a namespace or a digest may be pulled. A bare, non-digest name
-(``arm64-openclaw:2026.11.3``) or an image id is local to the worker's Docker daemon and is never pulled.
+(``arm64-openclaw:2026.11.10``) or an image id is local to the worker's Docker daemon and is never pulled.
 """
 
 from dataclasses import dataclass, field

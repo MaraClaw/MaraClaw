@@ -1,4 +1,4 @@
-"""OpenClaw 2026.11.3 SQLite adapter: read the live WAL, never replay guest work."""
+"""OpenClaw 2026.11.10 SQLite adapter: read the live WAL, never replay guest work."""
 
 import json
 import os

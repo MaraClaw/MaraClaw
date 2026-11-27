@@ -365,7 +365,7 @@ async def test_new_guest_starts_without_log_options_when_the_daemon_driver_is_un
         pytest.param("registry.example/team/openclaw:1", False, None, 1, True, id="registry-missing-is-pulled"),
         pytest.param("registry.example/team/openclaw:1", False, "pull", 1, False, id="registry-pull-fails"),
         pytest.param("registry.example/team/openclaw:1", False, "inspect", 0, False, id="registry-inspect-malformed"),
-        pytest.param("arm64-openclaw:2026.11.3", False, None, 0, False, id="local-missing-is-never-pulled"),
+        pytest.param("arm64-openclaw:2026.11.10", False, None, 0, False, id="local-missing-is-never-pulled"),
         pytest.param(f"sha256:{'a' * 64}", False, None, 0, False, id="image-id-missing-is-never-pulled"),
     ],
 )

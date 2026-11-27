@@ -376,7 +376,7 @@ class Settings(BaseSettings):
 
     # Docker (for Agent containers)
     DOCKER_NETWORK: str = "maraclaw_network"
-    MARACLAW_OPENCLAW_IMAGE: str = "arm64-openclaw:2026.11.3"
+    MARACLAW_OPENCLAW_IMAGE: str = "arm64-openclaw:2026.11.10"
     OPENCLAW_GATEWAY_PORT: int = 18789
     OPENCLAW_THINKING_DEFAULT: (
         Literal["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"] | None
