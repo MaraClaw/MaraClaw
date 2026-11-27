@@ -1,4 +1,4 @@
-"""Inbound enqueue stub + gateway report IM delivery."""
+"""Gateway report IM delivery."""
 
 from __future__ import annotations
 
@@ -10,16 +10,6 @@ import pytest
 from app.records.agent import AgentRecord
 from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.gateway_message import GatewayMessageRecord
-from app.services.channels.inbound import (
-    CHANNEL_REPLY_QUEUED,
-    generate_channel_reply,
-    is_queued_channel_reply,
-)
-
-
-def test_queued_stub_is_recognized() -> None:
-    assert is_queued_channel_reply(CHANNEL_REPLY_QUEUED)
-    assert not is_queued_channel_reply("Here is the real answer")
 
 
 @pytest.mark.asyncio
@@ -167,31 +157,3 @@ async def test_deliver_session_reply_skips_web() -> None:
         source_channel="web",
     )
     await deliver_session_reply(agent=agent, session=session, content="hi")
-
-
-@pytest.mark.asyncio
-async def test_generate_channel_reply_wakes_in_background(monkeypatch: pytest.MonkeyPatch) -> None:
-    agent = AgentRecord(id=uuid.uuid4(), creator_id=uuid.uuid4(), name="Bot")
-    captured: dict[str, object] = {}
-
-    async def fake_enqueue(**kwargs):
-        captured.update(kwargs)
-        return GatewayMessageRecord(
-            id=uuid.uuid4(),
-            agent_id=agent.id,
-            content=str(kwargs.get("content") or ""),
-        )
-
-    monkeypatch.setattr("app.services.openclaw_routing.enqueue_openclaw_message", fake_enqueue)
-    reply = await generate_channel_reply(
-        agent_id=agent.id,
-        user_text="hello from whatsapp",
-        user_id=uuid.uuid4(),
-        session_id=str(uuid.uuid4()),
-        agent_model=agent,
-    )
-
-    assert reply == CHANNEL_REPLY_QUEUED
-    assert "await_wake" not in captured
-    assert captured["content"] == "hello from whatsapp"
-    assert "history" not in captured

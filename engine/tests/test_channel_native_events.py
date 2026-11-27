@@ -215,7 +215,6 @@ async def test_dingtalk_rotation_between_external_steps_forbids_later_effects(pi
             "sender",
             "conversation",
             "1",
-            "",
             message_id="native-1",
             source=source,
         )

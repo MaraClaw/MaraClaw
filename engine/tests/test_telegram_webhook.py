@@ -23,6 +23,7 @@ from app.services.channels.submissions import AcceptedChannelEvent, ChannelEvent
 from app.services.storage_runtime import agent_files
 from app.services.storage_runtime.local import LocalStorageBackend
 from channel_media_fixtures import (
+    ClaimStore,
     ClockedStream,
     GatedStream,
     SlowStream,
@@ -35,6 +36,13 @@ from channel_media_fixtures import (
 )
 
 __all__ = ["ack_clock", "claim_store"]
+
+
+@pytest.fixture(autouse=True)
+def no_real_claims(claim_store: ClaimStore) -> ClaimStore:
+    # Webhooks here take in-flight claims; on a real Redis one test's claim would answer a later test's delivery 503.
+    return claim_store
+
 
 CONFIG_ID = UUID("11111111-1111-4111-8111-111111111111")
 AGENT_ID = UUID("22222222-2222-4222-8222-222222222222")

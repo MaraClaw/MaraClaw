@@ -22,6 +22,7 @@ from app.dao.channel_config_dao import channel_config_dao
 from app.records.channel_config import ChannelConfigRecord
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import jittered_backoff
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels.stream_reconcile import StreamReconciler
 from app.services.channels.stream_source import (
     StreamSource,
@@ -504,7 +505,8 @@ async def _process_wecom_stream_message(
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
     if not message_id:
-        raise ValueError("WeCom message ID is required")
+        logger.warning("[WeCom Stream] Ignored a message without an ID for agent {}", agent_id)
+        return ""
     if source is None:
         raise RuntimeError("WeCom connection source is required")
     from app.services.channels.wecom_media import accept_wecom_media, stream_media
@@ -523,11 +525,14 @@ async def _process_wecom_stream_message(
         is_group=chat_type in {"group", "groupchat", "group_chat"} and bool(chat_id),
         stream_source=source,
     )
-    if media:
-        config = await authorize_stream_source(source)
-        await accept_wecom_media(native, config, media)
-    else:
-        await accept_channel_event(native)
+    try:
+        if media:
+            config = await authorize_stream_source(source)
+            await accept_wecom_media(native, config, media)
+        else:
+            await accept_channel_event(native)
+    except ChannelUserResolutionError:
+        logger.info("[WeCom Stream] Ignored a message from a sender who is not a linked member of agent {}", agent_id)
     return ""
 
 

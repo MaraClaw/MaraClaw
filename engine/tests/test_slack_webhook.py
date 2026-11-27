@@ -26,6 +26,7 @@ from app.services.channels.media_limits import (
 from app.services.document_parser import IMAGE_UPLOAD_MAX_BYTES
 from app.services.storage_runtime.quota_errors import StorageQuotaError
 from channel_media_fixtures import (
+    ClaimStore,
     ClockedStream,
     CountingStream,
     GatedStream,
@@ -42,6 +43,13 @@ from channel_media_fixtures import (
 from channel_shared_webhook_fixtures import context, pipeline
 
 __all__ = ["ack_clock", "claim_store", "context", "pipeline"]
+
+
+@pytest.fixture(autouse=True)
+def no_real_claims(claim_store: ClaimStore) -> ClaimStore:
+    # Webhooks here take in-flight claims; on a real Redis one test's claim would answer a later test's delivery 503.
+    return claim_store
+
 
 NOW = 1_700_000_000
 SECRET = "app-secret"

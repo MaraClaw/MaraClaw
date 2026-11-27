@@ -9,6 +9,7 @@ from typing import NotRequired, TypedDict
 from app.core.json_types import JsonValue, is_str_dict, object_attr
 from app.core.logging import logger
 from app.records.channel_config import ChannelConfigRecord
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels.wechat_media import WeChatMedia, parse_wechat_media, store_wechat_media
 
 
@@ -124,7 +125,8 @@ async def process_wechat_message(agent_id: uuid.UUID, raw_message: JsonValue, co
         return
 
     if not message["message_id"]:
-        raise ValueError("WeChat message ID is required")
+        logger.warning(f"[WeChat] Message without an ID for agent {agent_id}, message skipped")
+        return
     native = ChannelEvent(
         config_id=config.id,
         agent_id=agent_id,
@@ -136,17 +138,20 @@ async def process_wechat_message(agent_id: uuid.UUID, raw_message: JsonValue, co
         kind="media" if media else "text",
         media_ids=tuple(item.fingerprint_id() for item in media),
     )
-    if await is_channel_event_replay(native):
-        return
-    await remember_wechat_context(
-        agent_id=agent_id,
-        from_user_id=from_user_id,
-        context_token=context_token,
-        conv_id=native.conversation_id,
-    )
-    if media:
-        media_content, attachments = await store_wechat_media(agent_id, media)
-        content = "\n".join(part for part in (user_text, media_content) if part)
-        await accept_channel_event(replace(native, attachments=attachments), content=content, saved_content=content)
-    else:
-        await accept_channel_event(native)
+    try:
+        if await is_channel_event_replay(native):
+            return
+        await remember_wechat_context(
+            agent_id=agent_id,
+            from_user_id=from_user_id,
+            context_token=context_token,
+            conv_id=native.conversation_id,
+        )
+        if media:
+            media_content, attachments = await store_wechat_media(agent_id, media)
+            content = "\n".join(part for part in (user_text, media_content) if part)
+            await accept_channel_event(replace(native, attachments=attachments), content=content, saved_content=content)
+        else:
+            await accept_channel_event(native)
+    except ChannelUserResolutionError:
+        logger.info(f"[WeChat] Sender is not a linked member of agent {agent_id}, message skipped")

@@ -1,16 +1,20 @@
 import asyncio
 import json
 import threading
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import anyio
 import dingtalk_stream
 import httpx
 import pytest
+from fastapi import HTTPException
 from tests.test_channel_shared_processors import context, pipeline
 
 from app.api import dingtalk
+from app.core.domain.channels import ChannelType
 from app.services import dingtalk_stream as dingtalk_media
+from app.services.channels import binding, submissions
 from app.services.channels.dingtalk_stream_transport import DingTalkTransport
 from app.services.channels.media_limits import MediaTooLargeError
 from app.services.channels.stream_source import stream_source
@@ -19,6 +23,53 @@ from channel_media_fixtures import serve
 from stream_source_fixtures import connection_config
 
 __all__ = ["context", "pipeline"]
+
+
+def bot_message(kind, text="hello", **fields):
+    return {
+        "msgtype": kind,
+        "senderStaffId": "staff-id",
+        "conversationId": "chat-id",
+        "text": {"content": text},
+        "content": {"downloadCode": "code", "fileName": "capture.png"},
+        **fields,
+    }
+
+
+async def deliver(monkeypatch, agent_id, messages):
+    """Send each message through the real SDK client of a started manager and return the acknowledgement codes."""
+    manager, done, loop = DingTalkStreamManager(), asyncio.Event(), asyncio.get_running_loop()
+    acknowledgements = []
+
+    async def send(payload):
+        acknowledgements.append(json.loads(payload)["code"])
+
+    def run(transport, client):
+        client.websocket = type("Socket", (), {"send": staticmethod(send)})()
+
+        async def receive():
+            for index, data in enumerate(messages):
+                await client.route_message(
+                    {
+                        "type": "CALLBACK",
+                        "headers": {"topic": dingtalk_stream.ChatbotMessage.TOPIC, "messageId": f"delivery-{index}"},
+                        "data": json.dumps(data),
+                    }
+                )
+
+        try:
+            asyncio.run(receive())
+        finally:
+            manager._stop_events[agent_id].set()
+            loop.call_soon_threadsafe(done.set)
+
+    monkeypatch.setattr(DingTalkTransport, "run", run)
+    try:
+        await manager.start_client(agent_id, "app", "secret")
+        await asyncio.wait_for(done.wait(), 3)
+    finally:
+        await manager.stop_all()
+    return acknowledgements
 
 
 @pytest.mark.parametrize("fails", [False, True])
@@ -38,7 +89,7 @@ async def test_sdk_thread_ack_waits_for_main_loop_acceptance(monkeypatch, fails)
         await release.wait()
         if fails:
             raise RuntimeError("database unavailable")
-        committed.append(kwargs["message_id"])
+        committed.append(json.loads(kwargs["native"].event_key))
 
     async def send(payload):
         acknowledgements.append(json.loads(payload))
@@ -74,7 +125,7 @@ async def test_sdk_thread_ack_waits_for_main_loop_acceptance(monkeypatch, fails)
         assert acknowledgements == committed == []
         release.set()
     # Then
-    assert committed == ([] if fails else ["native-id"])
+    assert committed == ([] if fails else [["app", "", "native-id"]])
     assert [ack["code"] for ack in acknowledgements] == [
         dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION if fails else dingtalk_stream.AckMessage.STATUS_OK
     ]
@@ -192,9 +243,6 @@ async def test_dispatch_on_application_loop_awaits_without_deadlock():
 
 @pytest.mark.parametrize("kind", ["text", "picture"])
 async def test_connected_sdk_refuses_rotated_text_and_media_sources_before_new_effects(pipeline, monkeypatch, kind):
-    from app.core.domain.channels import ChannelType
-    from app.services.channels import submissions
-
     config = pipeline[4]
     config.channel_type = ChannelType.DINGTALK
     config.app_id, config.app_secret = "app", "secret"
@@ -258,6 +306,83 @@ async def test_connected_sdk_refuses_rotated_text_and_media_sources_before_new_e
         pipeline[-1].assert_awaited_once()
     finally:
         await manager.stop_all()
+
+
+@pytest.mark.parametrize("identity", [{}, {"msgId": ""}, {"msgId": None}])
+@pytest.mark.parametrize("kind", ["text", "picture", "file"])
+async def test_message_without_an_id_is_acknowledged_before_any_replay_check_download_or_acceptance(
+    monkeypatch, kind, identity
+):
+    # Given: a stream whose messages carry no DingTalk message ID, then one that does
+    agent_id, effects = uuid4(), []
+    connection_config(monkeypatch, agent_id, "dingtalk")
+
+    async def replay(event):
+        effects.append(("replay", event.event_key))
+        return False
+
+    async def media(**kwargs):
+        effects.append(("media", None))
+        return "hello", None, None
+
+    async def accept(**kwargs):
+        effects.append(("accept", kwargs["native"].event_key))
+
+    monkeypatch.setattr(dingtalk_media, "is_channel_event_replay", replay)
+    monkeypatch.setattr(dingtalk_media, "_process_media_message", media)
+    monkeypatch.setattr(dingtalk, "process_dingtalk_message", accept)
+    # When: two different messages of one conversation arrive without an ID, then a normal one
+    acknowledgements = await deliver(
+        monkeypatch,
+        agent_id,
+        [
+            bot_message(kind, "first", **identity),
+            bot_message(kind, "second", **identity),
+            bot_message(kind, "third", msgId="native-1"),
+        ],
+    )
+    # Then: all three are acknowledged, and only the one with an ID reached replay check, download and acceptance
+    key = '["app","chat-id","native-1"]'
+    assert acknowledgements == [dingtalk_stream.AckMessage.STATUS_OK] * 3
+    assert effects == ([("accept", key)] if kind == "text" else [("replay", key), ("media", None), ("accept", key)])
+
+
+@pytest.mark.parametrize("kind", ["text", "picture"])
+@pytest.mark.parametrize(
+    ("refusal", "code"),
+    [
+        ("unbound", dingtalk_stream.AckMessage.STATUS_OK),
+        ("unauthorized", dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION),
+    ],
+)
+async def test_unlinked_sender_is_acknowledged_and_ignored_but_any_other_refusal_still_fails(
+    pipeline, monkeypatch, kind, refusal, code
+):
+    # Given: a sender who is not a linked member, or one whose access to the agent is refused
+    config = pipeline[4]
+    config.channel_type = ChannelType.DINGTALK
+    config.app_id, config.app_secret = "app", "secret"
+    *_, persist, enqueue = pipeline
+    downloads, reserve = [], AsyncMock(return_value=True)
+
+    async def media(**kwargs):
+        downloads.append(kwargs["source"])
+        return "hello", None, None
+
+    monkeypatch.setattr(dingtalk_media, "_process_media_message", media)
+    monkeypatch.setattr(submissions.channel_event_receipt_dao, "reserve", reserve)
+    if refusal == "unbound":
+        monkeypatch.setattr(binding.channel_user_service, "_find_org_member", AsyncMock(return_value=None))
+    else:
+        monkeypatch.setattr(binding, "check_agent_access", AsyncMock(side_effect=HTTPException(403)))
+    # When
+    acknowledgements = await deliver(monkeypatch, config.agent_id, [bot_message(kind, msgId="native-1")])
+    # Then: only the unlinked sender is acknowledged; nothing was downloaded, reserved, stored or queued either way
+    assert acknowledgements == [code]
+    assert downloads == []
+    reserve.assert_not_awaited()
+    persist.assert_not_awaited()
+    enqueue.assert_not_awaited()
 
 
 @pytest.mark.parametrize("unavailable", ["absent", "stopped", "closed", "closing"])

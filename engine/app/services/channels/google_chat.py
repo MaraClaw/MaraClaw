@@ -164,10 +164,6 @@ def audience_for_config(config: ChannelConfigRecord) -> str:
     return str(audience_raw).strip()
 
 
-def has_service_account(config: ChannelConfigRecord) -> bool:
-    return _service_account_info(config) is not None
-
-
 def parse_google_chat_event(body: GoogleChatEventPayload | JsonObject) -> GoogleChatInbound | None:
     """Parse a Chat app interaction event into a normalized inbound message."""
     event_type = str(body.get("type") or "").strip().upper()

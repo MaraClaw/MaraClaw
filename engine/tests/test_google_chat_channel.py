@@ -1,4 +1,4 @@
-"""Unit tests for Google Chat helpers, channel registry, dedupe, and redaction."""
+"""Unit tests for Google Chat helpers, channel registry, and redaction."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from app.core.json_types import JsonObject, json_object_from
 from app.records.outbound_plan import OutboundChunk, OutboundProvider
 from app.services.agent_tool_exec.channel_messaging import _outbound_senders
 from app.services.channels import google_chat, google_chat_media, outbound_transport, submissions
-from app.services.channels.dedup import already_processed, mark_processed, remember_if_new
 from app.services.channels.google_chat import (
     CHAT_ISSUER,
     chunk_text,
@@ -214,16 +213,6 @@ def test_chunk_text():
     assert sum(len(c) for c in chunks) == 8000
 
 
-def test_dedup_mark_after_success():
-    ns = f"test-{uuid4()}"
-    key = "evt-1"
-    assert already_processed(ns, key) is False
-    mark_processed(ns, key)
-    assert already_processed(ns, key) is True
-    assert remember_if_new(ns, "evt-2") is False
-    assert remember_if_new(ns, "evt-2") is True
-
-
 def test_redact_service_account_json():
     extra: JsonObject = {
         "audience": "123",
@@ -316,7 +305,6 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
     config = SimpleNamespace(id=uuid4(), app_id="chat-app", is_configured=True, verification_token="token")
     monkeypatch.setattr(google_chat_api.channel_config, "get_channel_config", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat_api.gchat, "audience_for_config", lambda _: "")
-    monkeypatch.setattr(google_chat_api.gchat, "has_service_account", lambda _: True)
     message_name = "spaces/A/messages/B"
     payload = json.dumps(
         {
@@ -336,9 +324,6 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
             return_value={"type": "http.request", "body": payload},
         ),
     )
-    marked = AsyncMock()
-    monkeypatch.setattr(google_chat_api.channel_dedup, "already_processed_shared", AsyncMock(return_value=True))
-    monkeypatch.setattr(google_chat_api.channel_dedup, "mark_processed_shared", marked)
     started, release = asyncio.Event(), asyncio.Event()
     from app.services.openclaw_routing import GuestConfigWriteError
 
@@ -357,8 +342,6 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
             raise failure
 
     monkeypatch.setattr(submissions, "accept_channel_event", accept)
-    schedule = AsyncMock()
-    monkeypatch.setattr(google_chat_api, "schedule_background_task", schedule)
     # When
     operation = asyncio.create_task(google_chat_api.google_chat_event_webhook(agent_id, request))
     try:
@@ -372,8 +355,6 @@ async def test_native_webhook_waits_for_acceptance_and_preserves_retryable_failu
             await asyncio.wait_for(operation, 1)
     else:
         assert await asyncio.wait_for(operation, 1) == {}
-    marked.assert_not_awaited()
-    schedule.assert_not_called()
 
 
 # --- Configure route: credential validation, omission preservation, authorization, redaction ---

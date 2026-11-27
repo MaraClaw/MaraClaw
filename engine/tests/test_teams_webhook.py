@@ -19,7 +19,7 @@ from tests.im_webhook_fixtures import AGENT_ID, channel_config, webhook_client
 from app.api import teams
 from app.core.json_types import JsonObject, json_object_from, object_call
 from app.records.channel_config import ChannelConfigRecord
-from app.services.channels import dedup, submissions, teams_auth
+from app.services.channels import submissions, teams_auth
 from im_token_cache_fakes import CacheKey, TeamsWire, TokenCache, captured_app_log, install_token_cache
 
 SERVICE_URL = "https://smba.trafficmanager.net/amer/"
@@ -138,18 +138,10 @@ async def test_teams_authenticates_before_persist_dedup_or_dispatch(monkeypatch,
         fetch_keys.side_effect = httpx.ConnectError("Key endpoint unavailable")
     if failure == "invalid_key":
         fetch_keys.return_value = [{"kid": "connector-key", "kty": "RSA"}]
-    seen, mark, update, dispatch, logs = (
-        AsyncMock(return_value=False),
-        AsyncMock(),
-        AsyncMock(return_value=config),
-        AsyncMock(),
-        Mock(),
-    )
+    update, dispatch, logs = AsyncMock(return_value=config), AsyncMock(), Mock()
     monkeypatch.setattr(teams_auth, "_fetch_signing_keys", fetch_keys)
     monkeypatch.setattr(teams.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(teams.channel_config_dao, "update", update)
-    monkeypatch.setattr(dedup, "already_processed_shared", seen)
-    monkeypatch.setattr(dedup, "mark_processed_shared", mark)
     monkeypatch.setattr(submissions, "accept_channel_event", dispatch)
     monkeypatch.setattr(teams, "_send_teams_message", AsyncMock())
     monkeypatch.setattr(teams, "logger", logs)
@@ -160,13 +152,10 @@ async def test_teams_authenticates_before_persist_dedup_or_dispatch(monkeypatch,
         assert response.json() == {"ok": True}
         assert update.call_args.kwargs["obj_in"]["extra_config"]["service_url"] == SERVICE_URL
         dispatch.assert_awaited_once()
-        mark.assert_not_awaited()
         assert "private-message" not in repr(logs.mock_calls)
     else:
         assert response.status_code == 401
         assert not update.called
-        assert not seen.called
-        assert not mark.called
         assert not dispatch.called
         assert not logs.mock_calls
 

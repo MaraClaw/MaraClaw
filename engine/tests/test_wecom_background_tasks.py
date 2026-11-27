@@ -10,7 +10,6 @@ from app.api import background_tasks, wecom
 from app.core.domain.channels import ChannelType
 from app.db import session as session_module
 from app.records.channel_config import ChannelConfigRecord
-from app.services.channels import dedup
 from test_db_session import _FakePool, _FakeRawConnection
 
 
@@ -52,9 +51,6 @@ async def test_webhook_waits_for_acceptance_and_retries_failure(monkeypatch, kin
             raise RuntimeError("database unavailable")
         committed.append(key)
 
-    monkeypatch.setattr(dedup, "already_processed_shared", AsyncMock(return_value=True))
-    mark = AsyncMock()
-    monkeypatch.setattr(dedup, "mark_processed_shared", mark)
     scheduled = Mock()
     monkeypatch.setattr(wecom, "schedule_background_task", scheduled)
     monkeypatch.setattr(wecom, "_process_wecom_text" if kind == "text" else "_process_wecom_kf_event", process)
@@ -73,7 +69,6 @@ async def test_webhook_waits_for_acceptance_and_retries_failure(monkeypatch, kin
         assert retry.status_code == 200
         assert committed == [key]
     scheduled.assert_not_called()
-    mark.assert_not_awaited()
 
 
 @pytest.mark.asyncio

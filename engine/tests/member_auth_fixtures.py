@@ -63,6 +63,7 @@ def member_auth_setup(monkeypatch: pytest.MonkeyPatch, *, count: int = 1) -> Mem
     ]
     pool = CountingPool()
     monkeypatch.setattr(session, "get_pool", lambda: pool)
+    install_limiter_redis(monkeypatch)
     monkeypatch.setattr(auth.identity_dao, "get_by_login_identifier", AsyncMock(return_value=identity))
     monkeypatch.setattr(auth.identity_dao, "get_by_email", AsyncMock(return_value=identity))
     monkeypatch.setattr(auth.identity_dao, "get", AsyncMock(return_value=identity))
@@ -100,7 +101,6 @@ def oauth_setup(monkeypatch: pytest.MonkeyPatch, setup: MemberAuthSetup) -> tupl
     monkeypatch.setattr(sso_service, "link_identity", link)
     monkeypatch.setattr(registration_service, "ensure_web_org_member", AsyncMock())
     install_state_redis(monkeypatch)
-    install_limiter_redis(monkeypatch)
     pending = auth.OAuthPendingCache(
         provider_type="feishu",
         audience=AuthAudience.MEMBER,

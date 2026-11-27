@@ -13,7 +13,7 @@ from tests.im_webhook_fixtures import AGENT_ID, channel_config, webhook_client
 from app.api import whatsapp
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.db.session import transaction
-from app.services.channels import dedup, submissions
+from app.services.channels import submissions
 
 BODY = b'{"entry":[{"changes":[{"value":{"messages":[{"id":"wa-event","type":"reaction"}]}}]}]}'
 
@@ -100,24 +100,19 @@ async def test_whatsapp_authenticates_raw_body_before_dedup(monkeypatch, failure
         config.encrypt_key = None
     if failure == "modified_body":
         body += b" "
-    seen, mark, update, dispatch, logs = AsyncMock(return_value=False), AsyncMock(), AsyncMock(), AsyncMock(), Mock()
+    update, dispatch, logs = AsyncMock(), AsyncMock(), Mock()
     monkeypatch.setattr(whatsapp.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(whatsapp.channel_config_dao, "update", update)
     monkeypatch.setattr(submissions, "accept_channel_event", dispatch)
-    monkeypatch.setattr(dedup, "already_processed_shared", seen)
-    monkeypatch.setattr(dedup, "mark_processed_shared", mark)
     monkeypatch.setattr(whatsapp, "logger", logs)
     async with webhook_client(whatsapp.router) as client:
         response = await client.post(f"/api/channel/whatsapp/{AGENT_ID}/webhook", content=body, headers=headers)
     if failure is None:
         assert response.status_code == 200
         assert response.json() == {"ok": True}
-        mark.assert_not_awaited()
         dispatch.assert_not_awaited()
     else:
         assert response.status_code == 401
-        assert not seen.called
-        assert not mark.called
         assert not update.called
         assert not dispatch.called
         assert not logs.mock_calls
@@ -137,7 +132,6 @@ async def test_signed_batch_continues_after_failure_and_redelivery_replays_commi
     monkeypatch.setattr(whatsapp.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     send = AsyncMock(side_effect=AssertionError("acceptance must not send an apology"))
     monkeypatch.setattr(whatsapp, "_send_whatsapp_messages", send)
-    monkeypatch.setattr(dedup, "already_processed_shared", AsyncMock(return_value=True))
     original_accept, original_prepare = submissions.accept_channel_event, submissions.prepare_shared_openclaw_message
     prepare_calls: list[str] = []
     fail_once = True
@@ -197,3 +191,50 @@ async def test_signed_batch_continues_after_failure_and_redelivery_replays_commi
             {"user": fixture.sender_id},
         )
     assert state == {"receipts": 4, "messages": 4, "enqueued": 4, "intents": 4, "charged": 4}
+
+
+def signed_batch(account, *messages):
+    value = {"metadata": {"phone_number_id": account}, "messages": list(messages)}
+    body = json.dumps({"entry": [{"changes": [{"value": value}]}]}).encode()
+    return body, {"x-hub-signature-256": "sha256=" + hmac.new(b"app-secret", body, hashlib.sha256).hexdigest()}
+
+
+@pytest.mark.parametrize("identity", [{}, {"id": ""}, {"id": "   "}])
+async def test_a_message_without_an_id_is_skipped_with_a_warning_and_the_batch_is_acknowledged(monkeypatch, identity):
+    config = channel_config("whatsapp")
+    monkeypatch.setattr(whatsapp.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    accept, logs = AsyncMock(), Mock()
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    monkeypatch.setattr(whatsapp, "logger", logs)
+    idless = {**identity, "from": "15550001", "type": "text", "text": {"body": "no id"}}
+    good = {"id": "wa-good", "from": "15550001", "type": "text", "text": {"body": "hello"}}
+    body, headers = signed_batch(config.app_id, idless, good)
+    async with webhook_client(whatsapp.router) as client:
+        response = await client.post(f"/api/channel/whatsapp/{AGENT_ID}/webhook", content=body, headers=headers)
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    accept.assert_awaited_once()
+    assert accept.await_args is not None
+    assert accept.await_args.args[0].event_key == "wa-good"
+    logs.warning.assert_called_once()
+    logs.exception.assert_not_called()
+
+
+async def test_a_media_message_without_an_id_is_never_downloaded_and_the_batch_is_acknowledged(monkeypatch):
+    config = channel_config("whatsapp")
+    monkeypatch.setattr(whatsapp.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    replay, accept, download = AsyncMock(return_value=False), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(submissions, "is_channel_event_replay", replay)
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    monkeypatch.setattr("app.services.channels.whatsapp_cloud_media.enrich_media", download)
+    idless = {"from": "15550001", "type": "image", "image": {"id": "media1"}}
+    good = {"id": "wa-good", "from": "15550001", "type": "text", "text": {"body": "hello"}}
+    body, headers = signed_batch(config.app_id, idless, good)
+    async with webhook_client(whatsapp.router) as client:
+        response = await client.post(f"/api/channel/whatsapp/{AGENT_ID}/webhook", content=body, headers=headers)
+    assert response.status_code == 200
+    download.assert_not_awaited()
+    replay.assert_not_awaited()
+    accept.assert_awaited_once()
+    assert accept.await_args is not None
+    assert accept.await_args.args[0].event_key == "wa-good"

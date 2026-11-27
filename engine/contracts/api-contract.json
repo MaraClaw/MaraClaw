@@ -36450,7 +36450,7 @@
     },
     "/api/channel/google-chat/{agent_id}/webhook": {
       "post": {
-        "description": "HTTP endpoint for a Google Chat app (interaction events).\n\nConfigure the Chat app's HTTP endpoint URL to the webhook-url from\n``GET /agents/{id}/google-chat-channel/webhook-url``.\n\nWhen a service account is configured, the webhook acknowledges quickly and\ndelivers the LLM reply asynchronously via the Chat API (within Google's ~30s\nsync budget for the ack). Without a service account, a short sync reply is\nreturned only for membership events / errors; messages still attempt a bounded\nsync LLM path as a fallback.",
+        "description": "HTTP endpoint for a Google Chat app (interaction events).\n\nConfigure the Chat app's HTTP endpoint URL to the webhook-url from\n``GET /agents/{id}/google-chat-channel/webhook-url``.\n\nEvery message is accepted natively before the webhook answers ``{}``: its receipt, transcript and gateway row\ncommit together, OpenClaw runs the turn later and the report relay posts the reply through the Chat API with the\nservice account. A message without ``message.name`` has no identity to dedupe on, so it is refused with 400 before\nany download, sender resolution or write. A message without a sender, or from a sender who is not a linked member,\nis acknowledged and ignored.",
         "operationId": "post_2f6170692f6368616e6e656c2f676f6f676c652d636861742f7b6167656e745f69647d2f776562686f6f6b",
         "parameters": [
           {

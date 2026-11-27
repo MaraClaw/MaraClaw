@@ -3,7 +3,6 @@
 Provides Config CRUD and message handling for DingTalk bots using Stream mode.
 """
 
-import json
 import uuid
 from typing import TypedDict
 
@@ -142,39 +141,14 @@ async def delete_dingtalk_channel(agent_id: uuid.UUID, current_user: UserRecord 
 
 
 async def process_dingtalk_message(
-    agent_id: uuid.UUID,
-    sender_staff_id: str,
+    native: ChannelEvent,
     user_text: str,
-    conversation_id: str,
-    conversation_type: str,
-    session_webhook: str,
     image_base64_list: list[str] | None = None,
     saved_file_paths: list[str] | None = None,
-    sender_nick: str = "",
-    message_id: str = "",
-    native_event: ChannelEvent | None = None,
 ):
+    """Accept a stream message under its native event, which the stream built with the real DingTalk message ID."""
     import re as _re_dt
 
-    _ = sender_nick, session_webhook
-    sender_staff_id = (sender_staff_id or "").strip()
-    if not message_id and native_event is None:
-        raise HTTPException(status_code=400, detail="DingTalk message ID is required")
-    config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.DINGTALK)
-    if config is None:
-        raise HTTPException(status_code=404, detail="DingTalk not configured")
-    native = native_event or ChannelEvent(
-        config_id=config.id,
-        agent_id=agent_id,
-        provider="dingtalk",
-        event_key=json.dumps([config.app_id, conversation_id, message_id], separators=(",", ":")),
-        sender_id=sender_staff_id,
-        conversation_id=(
-            f"dingtalk_group_{conversation_id}" if conversation_type == "2" else f"dingtalk_p2p_{sender_staff_id}"
-        ),
-        text=user_text,
-        is_group=conversation_type == "2",
-    )
     saved = _re_dt.sub(r"\[image_data:data:image/[^;]+;base64,[A-Za-z0-9+/=]+\]", "", user_text).strip()
     if saved_file_paths is not None and len(saved_file_paths) > 0:
         saved = "\n".join([*(f"[file:{path}]" for path in saved_file_paths), saved]).strip()

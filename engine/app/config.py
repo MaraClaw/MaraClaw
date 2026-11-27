@@ -281,8 +281,6 @@ class Settings(BaseSettings):
     USER_SESSION_CACHE_TTL_SECONDS: int = 20
     # Redis TTL for tenant rows used on chat/timezone/catalog paths. 0 disables.
     TENANT_CACHE_TTL_SECONDS: int = 60
-    # Redis TTL for inbound channel event dedup. 0 uses process-local only.
-    CHANNEL_DEDUP_TTL_SECONDS: int = 86400
     # Most attachments the engine fetches from one native channel message; later ones are skipped with one notice.
     CHANNEL_MEDIA_MAX_ATTACHMENTS: int = Field(default=10, ge=1, le=10)
     # Seconds a Slack, Telegram or WhatsApp Cloud webhook may spend starting fetches and stores for attachments before it

@@ -26,6 +26,7 @@ from app.records.channel_config import ChannelConfigRecord
 from app.records.chat_attachment import ChatAttachment
 from app.runtime.callbacks import CallbackAdmission, CallbackRefusedError
 from app.runtime.tasks import ReconnectBackoff
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import dingtalk_downloads
 from app.services.channels.dingtalk_downloads import get_media_download_url as _get_media_download_url
 from app.services.channels.dingtalk_stream_transport import DingTalkTransport
@@ -687,13 +688,19 @@ class DingTalkStreamManager:
 
                 msgtype = msg_data.get("msgtype", "text")
                 sender_staff_id = incoming.sender_staff_id or incoming.sender_id or ""
-                sender_nick = incoming.sender_nick or ""
                 message_id = incoming.message_id or ""
                 conversation_id = incoming.conversation_id or ""
                 conversation_type = incoming.conversation_type or "1"
-                session_webhook = incoming.session_webhook or ""
 
                 logger.info(f"[DingTalk Stream] Received {msgtype} message from {sender_staff_id}")
+
+                if not message_id:
+                    # The ID is the receipt key's only per-message part, so messages without one would share a key.
+                    # DingTalk never re-pushes a bot message, so an error ack would only add noise: acknowledge first.
+                    logger.warning(
+                        "[DingTalk Stream] Ignored a {} message without a message ID for agent {}", msgtype, agent_id
+                    )
+                    return dingtalk_stream.AckMessage.STATUS_OK, "ignored message without ID"
 
                 if msgtype == "text":
                     # Plain text: use existing logic
@@ -726,19 +733,7 @@ class DingTalkStreamManager:
                     )
 
                     await manager_self._dispatch(
-                        main_loop,
-                        lambda: process_dingtalk_message(
-                            agent_id=agent_id,
-                            sender_staff_id=sender_staff_id,
-                            user_text=user_text,
-                            conversation_id=conversation_id,
-                            conversation_type=conversation_type,
-                            session_webhook=session_webhook,
-                            sender_nick=sender_nick,
-                            message_id=message_id,
-                            native_event=native,
-                        ),
-                        admission,
+                        main_loop, lambda: process_dingtalk_message(native=native, user_text=user_text), admission
                     )
 
                 else:
@@ -753,8 +748,6 @@ class DingTalkStreamManager:
                             sender_staff_id=sender_staff_id,
                             conversation_id=conversation_id,
                             conversation_type=conversation_type,
-                            session_webhook=session_webhook,
-                            sender_nick=sender_nick,
                             message_id=message_id,
                             source=source,
                         ),
@@ -764,6 +757,11 @@ class DingTalkStreamManager:
                 return dingtalk_stream.AckMessage.STATUS_OK, "ok"
             except asyncio.CancelledError:
                 return dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION, "DingTalk acceptance cancelled"
+            except ChannelUserResolutionError:
+                logger.info(
+                    "[DingTalk Stream] Ignored a message from a sender who is not a linked member of agent {}", agent_id
+                )
+                return dingtalk_stream.AckMessage.STATUS_OK, "ignored unlinked sender"
             except Exception as e:
                 logger.error(f"[DingTalk Stream] Error in message handler: {e}")
                 import traceback
@@ -830,9 +828,7 @@ class DingTalkStreamManager:
         sender_staff_id: str,
         conversation_id: str,
         conversation_type: str,
-        session_webhook: str,
-        sender_nick: str = "",
-        message_id: str = "",
+        message_id: str,
         source: StreamSource | None = None,
     ):
         """Download media, then dispatch to process_dingtalk_message."""
@@ -841,40 +837,34 @@ class DingTalkStreamManager:
         if source is None:
             raise RuntimeError("DingTalk connection source is required")
         await authorize_stream_source(source)
-        native = None
-        if message_id:
-            body = msg_data.get("content", {})
-            parts = [msg_data.get("text", {}).get("content", ""), body.get("recognition", "")]
-            media = [
-                code
-                for code in (msg_data.get("downloadCode"), body.get("downloadCode"))
-                if code is not None and code != ""
-            ]
-            for section in body.get("richText", []):
-                for item in section if isinstance(section, list) else [section]:
-                    parts.append(item.get("text", ""))
-                    code = item.get("downloadCode")
-                    if code is not None and code != "":
-                        media.append(code)
-            native = ChannelEvent(
-                config_id=source.config_id,
-                agent_id=agent_id,
-                provider="dingtalk",
-                event_key=json.dumps([app_key, conversation_id, message_id], separators=(",", ":")),
-                sender_id=sender_staff_id,
-                conversation_id=(
-                    f"dingtalk_group_{conversation_id}"
-                    if conversation_type == "2"
-                    else f"dingtalk_p2p_{sender_staff_id}"
-                ),
-                text="\n".join(part for part in parts if part),
-                kind=msg_data.get("msgtype", "text"),
-                media_ids=tuple(media),
-                is_group=conversation_type == "2",
-                stream_source=source,
-            )
-            if await is_channel_event_replay(native):
-                return
+        body = msg_data.get("content", {})
+        parts = [msg_data.get("text", {}).get("content", ""), body.get("recognition", "")]
+        media = [
+            code for code in (msg_data.get("downloadCode"), body.get("downloadCode")) if code is not None and code != ""
+        ]
+        for section in body.get("richText", []):
+            for item in section if isinstance(section, list) else [section]:
+                parts.append(item.get("text", ""))
+                code = item.get("downloadCode")
+                if code is not None and code != "":
+                    media.append(code)
+        native = ChannelEvent(
+            config_id=source.config_id,
+            agent_id=agent_id,
+            provider="dingtalk",
+            event_key=json.dumps([app_key, conversation_id, message_id], separators=(",", ":")),
+            sender_id=sender_staff_id,
+            conversation_id=(
+                f"dingtalk_group_{conversation_id}" if conversation_type == "2" else f"dingtalk_p2p_{sender_staff_id}"
+            ),
+            text="\n".join(part for part in parts if part),
+            kind=msg_data.get("msgtype", "text"),
+            media_ids=tuple(media),
+            is_group=conversation_type == "2",
+            stream_source=source,
+        )
+        if await is_channel_event_replay(native):
+            return
 
         user_text, image_base64_list, saved_file_paths = await _process_media_message(
             msg_data=msg_data,
@@ -888,28 +878,20 @@ class DingTalkStreamManager:
             logger.info("[DingTalk Stream] Empty content after media processing, skipping")
             return
 
-        if native is not None:
-            native = replace(
-                native,
-                attachments=tuple(
-                    ChatAttachment(path=path, name=PurePosixPath(path).name) for path in saved_file_paths or ()
-                ),
-            )
+        native = replace(
+            native,
+            attachments=tuple(
+                ChatAttachment(path=path, name=PurePosixPath(path).name) for path in saved_file_paths or ()
+            ),
+        )
 
         await authorize_stream_source(source)
 
         await process_dingtalk_message(
-            agent_id=agent_id,
-            sender_staff_id=sender_staff_id,
+            native=native,
             user_text=user_text,
-            conversation_id=conversation_id,
-            conversation_type=conversation_type,
-            session_webhook=session_webhook,
             image_base64_list=image_base64_list,
             saved_file_paths=saved_file_paths,
-            sender_nick=sender_nick,
-            message_id=message_id,
-            native_event=native,
         )
 
     async def stop_client(self, agent_id: uuid.UUID):

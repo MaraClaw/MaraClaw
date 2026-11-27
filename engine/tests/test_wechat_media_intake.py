@@ -1,7 +1,7 @@
 import asyncio
 import base64
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from app.core.json_types import JsonObject
 from app.core.outbound_policy import OutboundPolicyError
 from app.services import wechat_channel, wechat_message_processor
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import submissions, wechat_media
 from app.services.channels.media_limits import skipped_attachments_note
 from app.services.storage_runtime import facade
@@ -122,6 +123,36 @@ async def test_ilink_media_auth_and_replay_precede_downloads(intake, gate):
     assert wire.requests == []
     accept.assert_not_awaited()
     context.assert_not_awaited()
+
+
+async def test_ilink_media_without_a_message_id_is_skipped_with_a_warning_before_any_work(intake, monkeypatch):
+    config, wire, replay, accept, context = intake
+    logs = Mock()
+    monkeypatch.setattr(wechat_message_processor, "logger", logs)
+    raw = message()
+    raw["message_id"] = ""
+    await wechat_message_processor.process_wechat_message(config.agent_id, raw, config)
+    logs.warning.assert_called_once()
+    assert wire.requests == []
+    replay.assert_not_awaited()
+    context.assert_not_awaited()
+    accept.assert_not_awaited()
+
+
+@pytest.mark.parametrize("stage", ["replay", "accept"])
+async def test_ilink_media_from_an_unlinked_sender_is_skipped_with_an_info_log_and_nothing_raised(
+    intake, monkeypatch, stage
+):
+    config, wire, replay, accept, _ = intake
+    wire.payload = AES.new(b"0123456789abcdef", AES.MODE_ECB).encrypt(pad(b"file", 16))
+    logs = Mock()
+    monkeypatch.setattr(wechat_message_processor, "logger", logs)
+    {"replay": replay, "accept": accept}[stage].side_effect = ChannelUserResolutionError("unlinked")
+    await wechat_message_processor.process_wechat_message(config.agent_id, message(), config)
+    logs.info.assert_called_once()
+    logs.warning.assert_not_called()
+    # An unlinked sender is refused by the replay check before the file is fetched.
+    assert len(wire.requests) == (0 if stage == "replay" else 1)
 
 
 @pytest.mark.parametrize(

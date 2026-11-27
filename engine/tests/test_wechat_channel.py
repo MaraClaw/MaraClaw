@@ -12,6 +12,7 @@ from app.records.chat import ChatMessageRecord, ChatSessionRecord
 from app.records.user import UserRecord
 from app.runtime import connectors
 from app.services import wechat_channel, wechat_message_processor
+from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import binding, submissions
 from app.services.openclaw_routing import PreparedOpenClawMessage
 from worker_progress_fixtures import WorkerHTTP, worker_http
@@ -400,6 +401,84 @@ async def test_a_poll_whose_messages_fail_to_process_does_not_reset_the_backoff(
     await manager._run_client(uuid.uuid4())
     # Then the delays escalate instead of restarting after every completed fetch.
     assert delays == [3, 6, 12]
+
+
+def wechat_text(message_id: str, sender: str) -> dict[str, object]:
+    return {
+        "message_id": message_id,
+        "from_user_id": sender,
+        "session_id": f"chat-{sender}",
+        "context_token": "context-token",
+        "item_list": [{"type": 1, "text_item": {"text": "Please check."}}],
+    }
+
+
+async def test_a_poll_batch_skips_a_message_without_an_id_and_an_unlinked_sender_and_stores_the_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a batch of a message without an ID, one from an unlinked sender and a good one.
+    batch: dict[str, object] = {
+        "get_updates_buf": "next",
+        "msgs": [wechat_text("", "idless-user"), wechat_text("m-1", "unlinked-user"), wechat_text("m-2", "good-user")],
+    }
+    manager, _ = poll_manager(monkeypatch, [batch])
+    delays = record_retry_waits(monkeypatch)
+    agent_id = uuid.uuid4()
+    update, remember = AsyncMock(), AsyncMock()
+    accept = AsyncMock(return_value=submissions.AcceptedChannelEvent(replayed=False))
+
+    async def replay(event: submissions.ChannelEvent) -> bool:
+        if event.sender_id == "unlinked-user":
+            raise ChannelUserResolutionError("Link your channel identity in the web application.")
+        return False
+
+    monkeypatch.setattr(manager, "_update_extra", update)
+    monkeypatch.setattr(wechat_channel, "remember_wechat_context", remember)
+    monkeypatch.setattr(submissions, "is_channel_event_replay", replay)
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    # When the poller handles the batch and polls once more.
+    await manager._run_client(agent_id)
+    # Then only the good message was remembered and accepted, no poll error backed the poller off, and the cursor moved
+    # past the whole batch before the next poll.
+    accept.assert_awaited_once()
+    assert accept.await_args is not None
+    assert accept.await_args.args[0].sender_id == "good-user"
+    remember.assert_awaited_once()
+    assert remember.await_args is not None
+    assert remember.await_args.kwargs["from_user_id"] == "good-user"
+    assert delays == []
+    assert [entry.args for entry in update.await_args_list] == [
+        (agent_id, {"get_updates_buf": "next"}),
+        (agent_id, {"get_updates_buf": "", "session_expired": True}),
+    ]
+
+
+async def test_a_transient_failure_after_a_skipped_message_keeps_the_cursor_until_the_retry_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a batch of a message without an ID and a good one whose first acceptance meets a storage outage.
+    batch: dict[str, object] = {
+        "get_updates_buf": "next",
+        "msgs": [wechat_text("", "idless-user"), wechat_text("m-1", "good-user")],
+    }
+    manager, _ = poll_manager(monkeypatch, [batch, batch])
+    delays = record_retry_waits(monkeypatch)
+    update = AsyncMock()
+    accept = AsyncMock(side_effect=[OSError("storage unavailable"), submissions.AcceptedChannelEvent(replayed=False)])
+    order = Mock()
+    order.attach_mock(accept, "accept")
+    order.attach_mock(update, "cursor")
+    monkeypatch.setattr(manager, "_update_extra", update)
+    monkeypatch.setattr(wechat_channel, "remember_wechat_context", AsyncMock())
+    monkeypatch.setattr(submissions, "is_channel_event_replay", AsyncMock(return_value=False))
+    monkeypatch.setattr(submissions, "accept_channel_event", accept)
+    agent_id = uuid.uuid4()
+    # When the poller retries the batch.
+    await manager._run_client(agent_id)
+    # Then the failed poll stored no cursor and waited once, and the cursor moved only after the retry's acceptance.
+    assert len(delays) == 1
+    assert [entry[0] for entry in order.mock_calls] == ["accept", "accept", "cursor", "cursor"]
+    assert update.await_args_list[0].args == (agent_id, {"get_updates_buf": "next"})
 
 
 async def test_cancellation_during_a_poll_error_wait_ends_the_poller_at_once(monkeypatch: pytest.MonkeyPatch) -> None:

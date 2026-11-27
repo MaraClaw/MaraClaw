@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels import binding
+from channel_media_fixtures import ClaimStore, claim_store
 from channel_shared_webhook_fixtures import (
     WEBHOOKS,
     context,
@@ -14,7 +15,13 @@ from channel_shared_webhook_fixtures import (
     webhook_pipeline,
 )
 
-__all__ = ["context", "pipeline", "webhook_pipeline"]
+__all__ = ["claim_store", "context", "pipeline", "webhook_pipeline"]
+
+
+@pytest.fixture(autouse=True)
+def no_real_claims(claim_store: ClaimStore) -> ClaimStore:
+    # Webhooks here take in-flight claims; on a real Redis one test's claim would answer a later test's delivery 503.
+    return claim_store
 
 
 @pytest.mark.parametrize("webhook", WEBHOOKS)

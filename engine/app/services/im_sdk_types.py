@@ -73,9 +73,6 @@ class DingTalkChatbotMessage(Protocol):
     def sender_id(self) -> str | None: ...
 
     @property
-    def sender_nick(self) -> str | None: ...
-
-    @property
     def message_id(self) -> str | None: ...
 
     @property
@@ -83,9 +80,6 @@ class DingTalkChatbotMessage(Protocol):
 
     @property
     def conversation_type(self) -> str | None: ...
-
-    @property
-    def session_webhook(self) -> str | None: ...
 
     def get_text_list(self) -> Sequence[object] | None: ...
 

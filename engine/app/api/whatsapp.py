@@ -296,7 +296,7 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                     continue
 
                 if not message_id:
-                    failed = True
+                    logger.warning("[WhatsApp] Ignored a message without an ID for agent %s", agent_id)
                     continue
                 from fastapi import HTTPException
 
@@ -334,7 +334,12 @@ async def whatsapp_event_webhook(agent_id: uuid.UUID, request: Request) -> Respo
                                 await accept_channel_event(enriched, content=content, saved_content=content)
                     else:
                         await accept_channel_event(native)
-                except ChannelUserResolutionError, AgentExpired, QuotaExceeded:
+                except ChannelUserResolutionError:
+                    logger.info(
+                        "[WhatsApp] Ignored a message from a sender who is not a linked member of agent %s", agent_id
+                    )
+                    continue
+                except AgentExpired, QuotaExceeded:
                     continue
                 except ChannelEventInFlightError as exc:
                     in_flight = exc

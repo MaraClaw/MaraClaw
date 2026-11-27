@@ -6,14 +6,14 @@ MaraClaw connects digital employees to external chat products through **agent-sc
 `channel_configs` rows. Each connector owns inbound delivery (webhook, stream, or
 gateway) and optional proactive send via `send_channel_message`.
 
-Shared package: **`app/services/channels/`** (types, config CRUD, inbound helpers,
+Shared package: **`app/services/channels/`** (types, config CRUD,
 transactional submissions, redaction, Google Chat transport).
 
 ## Inbound Acceptance
 
 Provider-native message/event IDs identify inbound submissions in
-`channel_event_receipts`, scoped by channel configuration and provider. Redis/local
-dedupe caches are not the acceptance authority. Receipts survive transcript deletion
+`channel_event_receipts`, scoped by channel configuration and provider. Redis claims and
+other cache hints are not the acceptance authority. Receipts survive transcript deletion
 and remain for the lifetime of the channel configuration.
 
 `channels/submissions.py` rechecks configuration, sender identity, company status,
@@ -85,7 +85,7 @@ A Slack event with neither `ts` nor `event_id` has no identity to claim or dedup
 callback and `ts` on every message and app mention
 ([Events API](https://docs.slack.dev/apis/events-api), [`message`](https://docs.slack.dev/reference/events/message),
 [`app_mention`](https://docs.slack.dev/reference/events/app_mention)), so such an event is refused with `400` and
-`Slack event ID is required`, like a Discord, WeCom or DingTalk event without an ID, before any claim, download,
+`Slack event ID is required`, like a Discord or WeCom event without an ID, before any claim, download,
 sender resolution or write.
 
 A signed Slack event from a sender who is not a linked member (an unlinked or unbound account) is acknowledged with
@@ -106,9 +106,52 @@ the agent or model. A message from a sender who is not a linked member is acknow
 no reply and nothing written; Feishu holds no in-flight claim, so there is none to release. Every other refusal (a
 revoked connector source, a conflicting event, a 403 from authorization) still fails the delivery.
 
+A DingTalk stream message without a `msgId` has no identity to dedupe on: the event key would be the same for every
+such message of a conversation, so the second would be answered as a replay or a conflict, and a media message would
+be downloaded and stored before acceptance refused it. The bot message payload carries the message ID as `msgId`
+([Receive messages](https://open.dingtalk.com/document/dingstart/robot-receive-message)), so the stream logs a
+warning and acknowledges a message without one before any replay check, download, store or acceptance. An error
+acknowledgment would not help: DingTalk pushes bot messages once and uses the acknowledgment only for diagnosis
+([Stream protocol FAQ](https://open-dingtalk.github.io/developerpedia/docs/learn/stream/protocol)). A message from a
+sender who is not a linked member is acknowledged and ignored too, with no reply and nothing written. Every other
+failure (a database, Redis, storage or provider error, a revoked connector source, a conflicting event, a 403 from
+authorization) still answers the SDK with an error code.
+
+A Google Chat message event without `message.name` has no identity to dedupe on. Chat names every message
+`spaces/{space}/messages/{message}` and the receipt is keyed by project, space and that name, so the webhook refuses
+such an event with `400` and `Google Chat message name is required` before any download, sender resolution or write.
+No inline pipeline answers it. A message from a bot, or with neither text nor an attachment, is acknowledged
+with `{}`, and an `ADDED_TO_SPACE` event without a message is answered with the welcome text; none of them is
+accepted. A message with no sender, or from a sender who is not a linked member, is acknowledged with `{}` and
+ignored: nothing is accepted or stored, and no reply is sent. Every other refusal (a `403` from authorization, a
+`422` for media Chat cannot serve, a conflicting event) still fails the delivery. Google Chat holds no in-flight
+claim.
+
+A WeCom text, image, file or video callback without a `MsgId` has no identity to dedupe on and never gains one, so the
+webhook refuses it with `400` and `WeCom message ID is required` before acceptance, sender resolution or any media
+download; the `503` every other failure gets would make WeCom retry it. A KF sync page is read, not delivered, so one
+message that cannot be accepted must not hold back the rest: a message without `msgid`, or an image, file or video
+without `media_id`, is logged as a warning and skipped, and the page goes on (cursor handling is unchanged). A message
+from a sender who is not a linked member is acknowledged with `success` and ignored on the callback, inside a KF page
+and over the AI Bot WebSocket, with no reply and nothing written; over the WebSocket the stream is finished with an
+empty reply, as for an accepted message, and a message without an ID is logged and finished the same way. Every other
+failure (access token, `sync_msg`, storage, database, a 403 from authorization, a conflicting event) still answers
+`503`, so WeCom redelivers and the receipts dedupe what was already accepted.
+
 WhatsApp validates the raw-body signature before processing, visits every message
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed
-events replay safely when the provider redelivers the batch.
+events replay safely when the provider redelivers the batch. A message without an `id`
+can never gain one, so it is skipped with a warning before any claim, download, sender
+resolution or write and never makes the delivery fail; the rest of the batch is processed
+as before.
+
+The WeChat poller stores its `get_updates_buf` cursor only after every message of a batch has been handled, and a
+failed batch is fetched again from the same cursor after a capped backoff. A message without a `message_id` can
+never gain one and a message from a sender who is not a linked member is refused on every redelivery, so either
+would hold the poller on that batch forever. `process_wechat_message` logs a warning (no ID) or an info line (unlinked sender)
+and skips the message before any context cache write, media download or acceptance, and the cursor moves past it.
+Storage, database, Redis and provider HTTP failures still propagate: the batch is fetched again from the old cursor
+and the receipts dedupe the messages already accepted.
 
 WhatsApp free-form replies require a signed inbound `metadata.phone_number_id`
 matching the configured receiving phone number. Its Unix-second message timestamp,
@@ -132,7 +175,9 @@ existing-database upgrade is supplied.
 
 WeCom text/KF webhook acknowledgments wait for acceptance. DingTalk stream callbacks
 await acceptance on the application loop before returning an SDK success acknowledgment;
-an unavailable loop or failed acceptance returns a retryable SDK error. Feishu WebSocket
+an unavailable loop or failed acceptance returns an SDK error acknowledgment. DingTalk does not re-push bot
+messages after an error acknowledgment (only event-subscription topics are re-pushed), so a DingTalk message whose
+acceptance fails is not delivered again. Feishu WebSocket
 event frames likewise receive success only after acceptance, including multipart frames.
 Provider retry policies and connection lifetime still bound redelivery; these acknowledgments
 do not promise exactly-once external delivery.
@@ -268,7 +313,7 @@ Stored on `channel_configs.channel_type` (`channel_type_enum`):
 | `dingtalk` | DingTalk | stream | `api/dingtalk.py`, `services/dingtalk_stream.py` |
 | `slack` | Slack | Events API webhook | `api/slack.py` (durable native-event submissions) |
 | `discord` | Discord | gateway | `api/discord_bot.py`, `services/discord_gateway.py` |
-| `microsoft_teams` | Microsoft Teams | Bot Framework webhook | `api/teams.py` (inbound via `channels.inbound`) |
+| `microsoft_teams` | Microsoft Teams | Bot Framework webhook | `api/teams.py` (durable native-event submissions) |
 | `google_chat` | Google Chat | Chat app HTTP endpoint | `api/google_chat.py` (full shared package) |
 | `wechat` | WeChat | poll / ilink | `api/wechat.py`, `services/wechat_channel.py` |
 | `whatsapp` | WhatsApp | Cloud webhook / Personal QR connector | `api/whatsapp.py`, `channels/whatsapp_personal_supervisor.py` (proactive not registered) |
@@ -445,8 +490,8 @@ using separate API/connector roles must run the `bootstrap` role first.
   remain retryable after repair; there is no synchronous LLM completion guarantee.
 - Native-event receipts, not process-local or Redis hints, prevent duplicate
   acceptance across workers. Authorization is checked again on redelivery.
-- Attachments are not downloaded by this integration. Attachment-only events
-  retain the existing explicit unsupported-attachment response.
+- Attachments are downloaded with the service account (`chat.bot` scope) before acceptance; without
+  `service_account_json`, or for a Drive file, the delivery is refused with `422`.
 
 ### Proactive send
 

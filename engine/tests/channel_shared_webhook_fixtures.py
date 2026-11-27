@@ -14,7 +14,7 @@ from starlette.requests import Request
 from app.api import discord_bot, feishu, google_chat, slack, teams, whatsapp
 from app.core.json_types import JsonObject
 from app.dao.chat_dao import chat_message_dao, chat_session_dao
-from app.services.channels import dedup, feishu_submissions, inbound, slack_submissions
+from app.services.channels import feishu_submissions, slack_submissions
 from test_channel_shared_processors import context, pipeline
 
 __all__ = ["context", "pipeline"]
@@ -29,7 +29,7 @@ WEBHOOKS = [
     "feishu",
     "feishu_image",
     "feishu_file",
-    "google_inline",
+    "google_chat",
 ]
 
 
@@ -42,10 +42,7 @@ def webhook_pipeline(pipeline, monkeypatch):
     monkeypatch.setattr(slack.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat.channel_config, "get_channel_config", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat.gchat, "audience_for_config", lambda _: "")
-    monkeypatch.setattr(dedup, "already_processed_shared", AsyncMock(return_value=False))
-    monkeypatch.setattr(dedup, "mark_processed_shared", AsyncMock())
     monkeypatch.setattr(chat_message_dao, "insert_message", AsyncMock())
-    monkeypatch.setattr(inbound, "persist_assistant_message", AsyncMock())
     monkeypatch.setattr(chat_session_dao, "update", AsyncMock())
     monkeypatch.setattr(
         feishu_submissions.feishu_service, "download_message_resource", AsyncMock(return_value=b"image-bytes")
@@ -93,8 +90,6 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False, na
         if name.startswith("feishu")
         else "microsoft_teams"
         if name == "teams"
-        else "google_chat"
-        if name == "google_inline"
         else name
     )
     match name:
@@ -198,7 +193,7 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False, na
                     },
                 },
             )
-        case "google_inline":
+        case "google_chat":
             await google_chat.google_chat_event_webhook(
                 agent.id,
                 request_for(

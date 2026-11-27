@@ -287,7 +287,8 @@ domain admission: OAuth does not establish email ownership, and a provider-selec
 company cannot bypass email verification or replace the domain target. Provider
 linkage remains on the applicant's actual membership through repeated login.
 Already-admitted SSO users and genesis provisioning remain
-unchanged. IM lazy registration cannot create company members; applicants must
+unchanged. An IM sender is never registered: an inbound message is attributed
+only to a member already linked in the agent's company, so applicants must
 complete web admission first. Admin assign-user only changes roles within the
 existing company and cannot move users between companies.
 
