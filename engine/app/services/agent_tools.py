@@ -600,25 +600,6 @@ async def _storage_find_files(
     )
 
 
-def _list_files(ws: Path, rel_path: str, tenant_id: str | None = None) -> str:
-    from app.services.agent_tool_exec import workspace_local_read
-
-    return workspace_local_read._list_files(ws, rel_path, tenant_id=tenant_id, workspace_root=WORKSPACE_ROOT)
-
-
-def _read_file(ws: Path, rel_path: str, tenant_id: str | None = None, offset: int = 0, limit: int = 2000) -> str:
-    from app.services.agent_tool_exec import workspace_local_read
-
-    return workspace_local_read._read_file(
-        ws,
-        rel_path,
-        tenant_id=tenant_id,
-        offset=offset,
-        limit=limit,
-        resolve_tool_source_path=_resolve_tool_source_path,
-    )
-
-
 def _read_document_sync(ws: Path, rel_path: str, max_chars: int = 8000, tenant_id: str | None = None) -> str:
     from app.services.agent_tool_exec.document_reading import _read_document_sync as read_document_sync
 
@@ -684,79 +665,6 @@ async def _convert_markdown_to_pdf(agent_id: uuid.UUID, ws: Path, arguments: Too
     from app.services.agent_tool_exec.document_convert import _convert_markdown_to_pdf as convert_markdown_to_pdf
 
     return await convert_markdown_to_pdf(agent_id, ws, arguments)
-
-
-def _write_file(ws: Path, rel_path: str, content: str, tenant_id: str | None = None) -> str:
-    from app.services.agent_tool_exec import workspace_mutate_sync
-
-    return workspace_mutate_sync._write_file(
-        ws,
-        rel_path,
-        content,
-        tenant_id=tenant_id,
-        workspace_root=WORKSPACE_ROOT,
-        is_enterprise_info_path=_is_enterprise_info_path,
-    )
-
-
-def _delete_file(ws: Path, rel_path: str) -> str:
-    from app.services.agent_tool_exec import workspace_mutate_sync
-
-    return workspace_mutate_sync._delete_file(
-        ws,
-        rel_path,
-        is_enterprise_info_path=_is_enterprise_info_path,
-    )
-
-
-def _edit_file(
-    ws: Path, rel_path: str, old_string: str, new_string: str, replace_all: bool = False, tenant_id: str | None = None
-) -> str:
-    from app.services.agent_tool_exec import workspace_mutate_sync
-
-    return workspace_mutate_sync._edit_file(
-        ws,
-        rel_path,
-        old_string,
-        new_string,
-        replace_all=replace_all,
-        tenant_id=tenant_id,
-        workspace_root=WORKSPACE_ROOT,
-        is_enterprise_info_path=_is_enterprise_info_path,
-    )
-
-
-def _search_files(
-    ws: Path,
-    pattern: str,
-    path: str = ".",
-    file_pattern: str = "*",
-    ignore_case: bool = False,
-    tenant_id: str | None = None,
-) -> str:
-    from app.services.agent_tool_exec import workspace_local_search
-
-    return workspace_local_search._search_files(
-        ws,
-        pattern,
-        path=path,
-        file_pattern=file_pattern,
-        ignore_case=ignore_case,
-        tenant_id=tenant_id,
-        workspace_root=WORKSPACE_ROOT,
-    )
-
-
-def _find_files(ws: Path, pattern: str, path: str = ".", tenant_id: str | None = None) -> str:
-    from app.services.agent_tool_exec import workspace_local_search
-
-    return workspace_local_search._find_files(
-        ws,
-        pattern,
-        path=path,
-        tenant_id=tenant_id,
-        workspace_root=WORKSPACE_ROOT,
-    )
 
 
 async def _manage_tasks(

@@ -615,86 +615,36 @@ async def test_storage_focus_callbacks_use_focus_service_owners(monkeypatch) -> 
     ]
 
 
-def test_local_workspace_read_helpers_preserve_listing_and_pagination(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "agent"
-    notes = workspace / "workspace" / "notes.md"
-    notes.parent.mkdir(parents=True)
-    notes.write_text("first\nsecond\n", encoding="utf-8")
-    (workspace / ".hidden").write_text("hidden", encoding="utf-8")
-    (tmp_path / "enterprise_info_tenant-a").mkdir()
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
+@pytest.mark.asyncio
+async def test_storage_listing_adds_the_enterprise_folder_at_the_root_and_skips_hidden_entries(monkeypatch):
+    agent_id = uuid.uuid4()
+    storage = MemoryStorageBackend({f"{agent_id}/workspace/notes.md": b"first\n", f"{agent_id}/.hidden": b"hidden"})
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: storage)
 
-    # When
-    listing = agent_tools._list_files(workspace, "", tenant_id="tenant-a")
-    read = agent_tools._read_file(workspace, "workspace/notes.md", offset=1, limit=1)
-    empty = workspace / "empty.md"
-    empty.write_text("", encoding="utf-8")
-    empty_read = agent_tools._read_file(workspace, "empty.md")
+    listing = await agent_tools._storage_list_dir(agent_id, "", tenant_id="tenant-a")
 
-    # Then
-    assert "📁 enterprise_info/ (shared company info)" in listing
-    assert ".hidden" not in listing
-    assert read == "📄 workspace/notes.md (lines 2-2 of 2)\n     2\tsecond"
-    assert empty_read == "Offset 0 exceeds file length (0 lines total)"
-
-
-def test_local_workspace_search_and_find_preserve_filters_and_results(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "agent"
-    docs = workspace / "workspace"
-    docs.mkdir(parents=True)
-    (docs / "notes.md").write_text("Needle\n", encoding="utf-8")
-    (docs / "ignored.png").write_bytes(b"binary")
-    (docs / "large.txt").write_bytes(b"x" * 1025)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-
-    # When
-    search = agent_tools._search_files(workspace, "needle", path="workspace", file_pattern="*.md", ignore_case=True)
-    found = agent_tools._find_files(workspace, "*.txt", path="workspace")
-    missing = agent_tools._find_files(workspace, "*.csv", path="workspace")
-
-    # Then
-    assert search == "🔍 Found 1+ match(es) in 1 file(s) for pattern 'needle':\nworkspace/notes.md:1: Needle"
-    assert found == "📂 Found 1 item(s) (0 dirs, 1 files) matching '*.txt':\n📄 workspace/large.txt (1KB)"
-    assert missing == "No files matching pattern: *.csv"
-
-
-def test_local_workspace_mutations_preserve_protections_errors_and_success(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "agent"
-    workspace.mkdir()
-    target = workspace / "workspace" / "notes.md"
-    target.parent.mkdir()
-    target.write_text("one\none\n", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-
-    # When
-    protected_write = agent_tools._write_file(workspace, "tasks.json", "ignored")
-    protected_enterprise = agent_tools._write_file(workspace, "enterprise_info/report.md", "ignored")
-    write = agent_tools._write_file(workspace, "workspace/new.md", "hello")
-    ambiguous_edit = agent_tools._edit_file(workspace, "workspace/notes.md", "one", "two")
-    edit = agent_tools._edit_file(workspace, "workspace/notes.md", "one", "two", replace_all=True)
-    protected_delete = agent_tools._delete_file(workspace, "soul.md")
-    protected_tasks_delete = agent_tools._delete_file(workspace, "tasks.json")
-    delete = agent_tools._delete_file(workspace, "workspace/new.md")
-
-    # Then
-    assert protected_write == "tasks.json is a legacy read-only snapshot. Use the task APIs/UI to manage tasks."
     assert (
-        protected_enterprise
-        == "enterprise_info is shared company context and is read-only for agents. Ask an admin to update it."
+        listing
+        == "📂 root: 2 folder(s), 0 file(s)\n  📁 enterprise_info/ (shared company info)\n  📁 workspace/ (1 items)"
     )
-    assert write == "✅ Written to workspace/new.md (5 chars)"
-    assert (
-        ambiguous_edit
-        == "❌ 'old_string' appears 2 times in workspace/notes.md. Use replace_all=true or provide more context to make the match unique."
-    )
-    assert edit == "✅ Replaced 2 occurrence(s) in workspace/notes.md"
-    assert target.read_text(encoding="utf-8") == "two\ntwo\n"
-    assert protected_delete == "soul.md cannot be deleted (protected)"
-    assert protected_tasks_delete == "tasks.json cannot be deleted (protected)"
-    assert delete == "✅ Deleted workspace/new.md"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("write_file", {"path": "enterprise_info/report.md", "content": "ignored"}),
+        ("edit_file", {"path": "enterprise_info/report.md", "old_string": "a", "new_string": "b"}),
+        ("delete_file", {"path": "enterprise_info/report.md"}),
+        ("move_file", {"source_path": "workspace/a.md", "destination_path": "enterprise_info/a.md"}),
+        ("move_file", {"source_path": "enterprise_info/a.md", "destination_path": "workspace/a.md"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_workspace_mutation_refuses_enterprise_info_paths_without_io(tool_name, arguments):
+    result = await workspace._execute_workspace_mutation(tool_name, arguments, agent_id=uuid.uuid4(), session_id=None)
+
+    assert result.startswith("❌")
+    assert "enterprise_info" in result
 
 
 @pytest.mark.asyncio
@@ -708,6 +658,15 @@ async def test_workspace_mutation_rejects_tasks_snapshot_move_without_io():
 
     # Then
     assert result == "❌ tasks.json cannot be moved (protected)"
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [("../other/secret.md", "other/secret.md"), ("a/../../b.md", "b.md"), ("/abs/x.md", "abs/x.md"), ("..", "")],
+)
+def test_storage_mutations_keep_every_path_inside_the_agent_tree(path, expected):
+    # write, edit and delete address `{agent_id}/{normalized}`, so a path that climbs can only land under the agent
+    assert workspace_collaboration.normalize_workspace_path(path) == expected
 
 
 def test_workspace_path_resolvers_reject_sibling_prefix_escape(monkeypatch, tmp_path):
@@ -726,59 +685,6 @@ def test_workspace_path_resolvers_reject_sibling_prefix_escape(monkeypatch, tmp_
         agent_tools._resolve_tool_target_path(workspace, "nested/../../workspace-escape/secret.md")
 
 
-def test_local_workspace_helpers_reject_sibling_prefix_escape(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "workspace"
-    sibling_workspace = tmp_path / "workspace-escape"
-    workspace.mkdir()
-    sibling_workspace.mkdir()
-    secret = sibling_workspace / "secret.md"
-    secret.write_text("secret", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    escape_path = "../workspace-escape"
-
-    # When
-    listing = agent_tools._list_files(workspace, escape_path)
-    search = agent_tools._search_files(workspace, "secret", path=escape_path)
-    found = agent_tools._find_files(workspace, "*.md", path=escape_path)
-    write = agent_tools._write_file(workspace, f"{escape_path}/written.md", "escaped")
-    delete = agent_tools._delete_file(workspace, f"{escape_path}/secret.md")
-    edit = agent_tools._edit_file(workspace, f"{escape_path}/secret.md", "secret", "edited")
-
-    # Then
-    assert listing == "Access denied for this path"
-    assert search == "Access denied for this path"
-    assert found == "Access denied for this path"
-    assert write == "Access denied for this path"
-    assert delete == "Access denied for this path"
-    assert edit == "Access denied for this path"
-    assert secret.read_text(encoding="utf-8") == "secret"
-    assert not (sibling_workspace / "written.md").exists()
-
-
-def test_local_workspace_helpers_reject_enterprise_sibling_prefix_escape(monkeypatch, tmp_path):
-    # Given
-    workspace = tmp_path / "workspace"
-    enterprise_root = tmp_path / "enterprise_info_tenant-a"
-    sibling_enterprise_root = tmp_path / "enterprise_info_tenant-a-escape"
-    workspace.mkdir()
-    enterprise_root.mkdir()
-    sibling_enterprise_root.mkdir()
-    (sibling_enterprise_root / "secret.md").write_text("secret", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    escape_path = "enterprise_info/../enterprise_info_tenant-a-escape"
-
-    # When
-    listing = agent_tools._list_files(workspace, escape_path, tenant_id="tenant-a")
-    search = agent_tools._search_files(workspace, "secret", path=escape_path, tenant_id="tenant-a")
-    found = agent_tools._find_files(workspace, "*.md", path=escape_path, tenant_id="tenant-a")
-
-    # Then
-    assert listing == "Access denied for this path"
-    assert search == "Access denied for this path"
-    assert found == "Access denied for this path"
-
-
 def test_workspace_helpers_allow_nested_paths_within_root(monkeypatch, tmp_path):
     # Given
     workspace = tmp_path / "workspace"
@@ -790,14 +696,10 @@ def test_workspace_helpers_allow_nested_paths_within_root(monkeypatch, tmp_path)
     # When
     source = agent_tools._resolve_tool_source_path(workspace, "nested/../nested/notes.md")
     target = agent_tools._resolve_tool_target_path(workspace, "nested/draft.md")
-    listing = agent_tools._list_files(workspace, "nested")
-    search = agent_tools._search_files(workspace, "needle", path="nested")
 
     # Then
     assert source == nested_file
     assert target == workspace / "nested" / "draft.md"
-    assert listing == "📂 nested: 0 folder(s), 1 file(s)\n  📄 notes.md (6B)"
-    assert search == "🔍 Found 1+ match(es) in 1 file(s) for pattern 'needle':\nnested/notes.md:1: needle"
 
 
 @pytest.mark.asyncio
@@ -1097,30 +999,6 @@ def _build_symlink_fixture(tmp_path: Path) -> tuple[Path, Path]:
     return workspace, sibling
 
 
-def _forbid_outside_access(monkeypatch: pytest.MonkeyPatch, outside: Path) -> None:
-    """Fail the test when content, size or children of anything under ``outside`` are read."""
-    read_text, iterdir, stat = Path.read_text, Path.iterdir, Path.stat
-
-    def is_outside(path: Path) -> bool:
-        return path.resolve().is_relative_to(outside.resolve())
-
-    def guarded_read_text(self: Path, *args, **kwargs):
-        assert not is_outside(self), f"read content of {self}"
-        return read_text(self, *args, **kwargs)
-
-    def guarded_iterdir(self: Path):
-        assert not is_outside(self), f"listed children of {self}"
-        return iterdir(self)
-
-    def guarded_stat(self: Path, *args, **kwargs):
-        assert not is_outside(self), f"stat of {self}"
-        return stat(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", guarded_read_text)
-    monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
-    monkeypatch.setattr(Path, "stat", guarded_stat)
-
-
 def test_source_path_fallback_rejects_symlink_sibling_resolving_outside_root(monkeypatch, tmp_path):
     # Given: "secretnote.md" does not exist, so the normalized-name fallback matches "secret note.md" -> outside file
     workspace, sibling = _build_symlink_fixture(tmp_path)
@@ -1131,7 +1009,6 @@ def test_source_path_fallback_rejects_symlink_sibling_resolving_outside_root(mon
     # When / Then
     with pytest.raises(ValueError, match="Access denied for this path"):
         agent_tools._resolve_tool_source_path(workspace, "workspace/secretnote.md")
-    assert agent_tools._read_file(workspace, "workspace/secretnote.md") == "Access denied for this path"
 
 
 def test_source_path_fallback_keeps_symlink_sibling_resolving_inside_root(monkeypatch, tmp_path):
@@ -1141,10 +1018,8 @@ def test_source_path_fallback_keeps_symlink_sibling_resolving_inside_root(monkey
     monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
 
     source = agent_tools._resolve_tool_source_path(workspace, "workspace/mynotes.md")
-    read = agent_tools._read_file(workspace, "workspace/mynotes.md")
 
     assert source == (docs / "notes.md").resolve()
-    assert "needle inside" in read
 
 
 def test_source_path_fallback_prefers_inside_match_over_escaping_match(monkeypatch, tmp_path):
@@ -1157,82 +1032,22 @@ def test_source_path_fallback_prefers_inside_match_over_escaping_match(monkeypat
     assert agent_tools._resolve_tool_source_path(workspace, "workspace/a  b.md") == (docs / "ab.MD").resolve()
 
 
-def test_local_search_skips_entries_resolving_outside_root_without_reading_them(monkeypatch, tmp_path):
-    workspace, sibling = _build_symlink_fixture(tmp_path)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    _forbid_outside_access(monkeypatch, sibling)
+@pytest.mark.asyncio
+async def test_storage_listing_of_a_local_workspace_never_shows_links_planted_to_another_agent(monkeypatch, tmp_path):
+    agent_id, other_id = uuid.uuid4(), uuid.uuid4()
+    root = tmp_path / "storage"
+    docs = root / str(agent_id) / "workspace"
+    (docs / "real-dir").mkdir(parents=True)
+    (docs / "notes.md").write_text("inside\n", encoding="utf-8")
+    (root / str(other_id)).mkdir()
+    (root / str(other_id) / "secret.md").write_text("outside\n", encoding="utf-8")
+    (docs / "leak-file.md").symlink_to(root / str(other_id) / "secret.md")
+    (docs / "leak-dir").symlink_to(root / str(other_id), target_is_directory=True)
+    monkeypatch.setattr(agent_tools, "get_storage_backend", lambda: LocalStorageBackend(str(root)))
 
-    through_directory_link = agent_tools._search_files(workspace, "needle", path="workspace", file_pattern="*/*.md")
-    everything = agent_tools._search_files(workspace, "needle", path="workspace")
+    listing = await agent_tools._storage_list_dir(agent_id, "workspace")
 
-    assert "outside" not in through_directory_link
-    assert "outside" not in everything
-    assert "workspace/notes.md:1: needle inside" in everything
-    assert "workspace/inside-file.md:1: needle inside" in everything
-    assert "workspace/real-dir/child.md:1: needle child" in everything
-    assert "workspace/inside-dir/child.md:1: needle child" in through_directory_link
-    # notes.md, inside-file.md, real-dir/child.md; the two outside links are not even counted as searched
-    assert everything.startswith("🔍 Found 3+ match(es) in 3 file(s)")
-
-
-def test_local_find_skips_entries_resolving_outside_root_without_statting_them(monkeypatch, tmp_path):
-    workspace, sibling = _build_symlink_fixture(tmp_path)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    _forbid_outside_access(monkeypatch, sibling)
-
-    everything = agent_tools._find_files(workspace, "*", path="workspace")
-    through_directory_link = agent_tools._find_files(workspace, "outside-dir/*", path="workspace")
-    only_outside = agent_tools._find_files(workspace, "outside-*", path="workspace")
-
-    assert "outside" not in everything
-    assert "📄 workspace/inside-file.md (14B)" in everything
-    assert "📁 workspace/inside-dir/" in everything
-    assert everything.startswith("📂 Found 4 item(s) (2 dirs, 2 files) matching '*':")
-    assert through_directory_link == "No files matching pattern: outside-dir/*"
-    assert only_outside == "No files matching pattern: outside-*"
-
-
-def test_local_listing_skips_entries_resolving_outside_root_without_reading_them(monkeypatch, tmp_path):
-    workspace, sibling = _build_symlink_fixture(tmp_path)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    _forbid_outside_access(monkeypatch, sibling)
-
-    listing = agent_tools._list_files(workspace, "workspace")
-
-    assert "outside" not in listing
-    assert listing == (
-        "📂 workspace: 2 folder(s), 2 file(s)\n"
-        "  📁 inside-dir/ (1 items)\n"
-        "  📄 inside-file.md (14B)\n"
-        "  📄 notes.md (14B)\n"
-        "  📁 real-dir/ (1 items)"
-    )
-
-
-def test_enterprise_root_search_find_and_listing_skip_symlinks_to_other_tenant(monkeypatch, tmp_path):
-    workspace = tmp_path / "agent"
-    workspace.mkdir()
-    enterprise = tmp_path / "enterprise_info_tenant-a"
-    other_tenant = tmp_path / "enterprise_info_tenant-a-other"
-    enterprise.mkdir()
-    other_tenant.mkdir()
-    (other_tenant / "payroll.md").write_text("needle payroll\n", encoding="utf-8")
-    (enterprise / "handbook.md").write_text("needle handbook\n", encoding="utf-8")
-    (enterprise / "handbook-link.md").symlink_to(enterprise / "handbook.md")
-    (enterprise / "payroll-link.md").symlink_to(other_tenant / "payroll.md")
-    (enterprise / "other-tenant").symlink_to(other_tenant, target_is_directory=True)
-    monkeypatch.setattr(agent_tools, "WORKSPACE_ROOT", tmp_path)
-    _forbid_outside_access(monkeypatch, other_tenant)
-
-    listing = agent_tools._list_files(workspace, "enterprise_info", tenant_id="tenant-a")
-    search = agent_tools._search_files(workspace, "needle", path="enterprise_info", tenant_id="tenant-a")
-    found = agent_tools._find_files(workspace, "*", path="enterprise_info", tenant_id="tenant-a")
-
-    assert "payroll" not in listing + search + found
-    assert "other-tenant" not in listing + search + found
-    assert listing == "📂 enterprise_info: 0 folder(s), 2 file(s)\n  📄 handbook-link.md (16B)\n  📄 handbook.md (16B)"
-    assert search.startswith("🔍 Found 2+ match(es) in 2 file(s)")
-    assert found.startswith("📂 Found 2 item(s) (0 dirs, 2 files) matching '*':")
+    assert listing == "📂 workspace: 1 folder(s), 1 file(s)\n  📁 real-dir/ (0 items)\n  📄 notes.md (7B)"
 
 
 class CountingStorageBackend(MemoryStorageBackend):
