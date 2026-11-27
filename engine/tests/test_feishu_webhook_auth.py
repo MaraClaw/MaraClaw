@@ -113,17 +113,15 @@ async def test_feishu_rejects_before_any_event_side_effect(monkeypatch, failure)
         headers["x-lark-signature"] = "not-hex"
     if failure == "non_ascii_signature":
         headers = {b"x-lark-signature": b"\xff", b"x-lark-request-timestamp": b"123", b"x-lark-request-nonce": b"nonce"}
-    dispatch, dedup, update, logs = AsyncMock(), AsyncMock(), AsyncMock(), Mock()
+    dispatch, update, logs = AsyncMock(), AsyncMock(), Mock()
     monkeypatch.setattr(feishu.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(feishu.channel_config_dao, "update", update)
-    monkeypatch.setattr(feishu.channel_dedup, "already_processed_shared", dedup)
     monkeypatch.setattr(feishu, "process_feishu_event", dispatch)
     monkeypatch.setattr(feishu, "logger", logs)
     async with webhook_client(feishu.router) as client:
         response = await client.post(f"/api/channel/feishu/{AGENT_ID}/webhook", content=body, headers=headers)
     assert response.status_code == 401
     assert not dispatch.called
-    assert not dedup.called
     assert not update.called
     assert not logs.mock_calls
 

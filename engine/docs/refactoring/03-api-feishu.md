@@ -1,5 +1,7 @@
 # 3. `app/api/feishu.py`
 
+> **Status:** the inline event, file and LLM pipeline this plan splits was removed: every Feishu message is accepted through `channels/feishu_submissions.py`, and `app/api/feishu.py` now holds only OAuth, channel configuration and the webhook wrapper. The snapshot below describes the file before that change.
+
 ## Snapshot
 
 | Field | Value |

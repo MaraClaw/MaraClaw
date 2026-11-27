@@ -6,6 +6,8 @@ import re
 from dataclasses import replace
 from pathlib import PurePosixPath
 
+from fastapi import HTTPException
+
 from app.core.json_types import JsonObject, JsonValue, json_as_str_or, json_loads_object, json_object_from
 from app.records.channel_config import ChannelConfigRecord
 from app.records.chat_attachment import ChatAttachment
@@ -42,14 +44,28 @@ def _post_parts(value: JsonValue) -> tuple[list[str], list[str]]:
     return text, images
 
 
+class FeishuMessageIdRequiredError(HTTPException):
+    """A message event without ``message_id``: 400 on the webhook, which Feishu documents as present on every event."""
+
+    def __init__(self) -> None:
+        super().__init__(status_code=400, detail="Feishu message ID is required")
+
+
 async def accept_feishu_event(
     config: ChannelConfigRecord, event: JsonObject, *, source: StreamSource | None = None
 ) -> bool:
+    """Accept a received message, keyed by ``message_id``; False when its kind is one Feishu events carry but we ignore.
+
+    A supported message without a ``message_id`` has no identity to dedupe on, so it raises
+    ``FeishuMessageIdRequiredError`` before any download or write.
+    """
     message = json_object_from(event.get("message"))
     message_id = json_as_str_or(message.get("message_id"))
     kind = json_as_str_or(message.get("message_type"), "text")
-    if not message_id or kind not in ("text", "post", "image", "file", "media"):
+    if kind not in ("text", "post", "image", "file", "media"):
         return False
+    if not message_id:
+        raise FeishuMessageIdRequiredError
     sender = json_object_from(json_object_from(event.get("sender")).get("sender_id"))
     external_id = json_as_str_or(sender.get("user_id"))
     open_id = json_as_str_or(sender.get("open_id"))

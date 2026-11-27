@@ -41,7 +41,6 @@ content each carry one skipped-files notice, and text after the cutoff, includin
 interleaved with images in a rich post, is kept. The receipt fingerprint still covers
 every original attachment ID, so a retry that changes only a skipped attachment conflicts
 with the durable receipt. Personal Zalo, Telegram and WhatsApp media keep their own limits.
-A Feishu post without a message id has no retrievable images, so its text is processed with no media work.
 
 `CHANNEL_MEDIA_ACK_BUDGET_SECONDS` (above 0 up to 30, default 2) bounds the wall-clock time a Slack,
 Telegram or WhatsApp Cloud webhook spends starting fetches and stores for its attachments before it answers; Slack
@@ -94,6 +93,18 @@ A signed Slack event from a sender who is not a linked member (an unlinked or un
 because a group channel would get one per message. The delivery's in-flight claim is released as for any delivery that
 ends, so a redelivery is processed again rather than refused with `503`. Returning an error instead would only make
 Slack redeliver the event three times.
+
+A Feishu message event without a `message_id` has no identity to dedupe on. Feishu sends `message_id` on every
+`im.message.receive_v1` event and names it the key to deduplicate repeated pushes
+([Receive message](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive)), so the webhook refuses
+such an event with `400` and `Feishu message ID is required` before any download, sender resolution or write. Over
+the WebSocket the same refusal would make the frame answer `500`, as lark-oapi's own `_handle_data_frame` does for any
+handler error, and Feishu would redeliver an event that never gains an ID; it is logged as a warning and acknowledged
+instead. A message kind the agent cannot read (sticker, audio, interactive card and the like) and every event type
+other than `im.message.receive_v1` (bot added, message read, reactions) are acknowledged on both paths without loading
+the agent or model. A message from a sender who is not a linked member is acknowledged and ignored on both paths, with
+no reply and nothing written; Feishu holds no in-flight claim, so there is none to release. Every other refusal (a
+revoked connector source, a conflicting event, a 403 from authorization) still fails the delivery.
 
 WhatsApp validates the raw-body signature before processing, visits every message
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed
@@ -252,7 +263,7 @@ Stored on `channel_configs.channel_type` (`channel_type_enum`):
 
 | Type | Product | Transport | Module entry |
 |------|---------|-----------|--------------|
-| `feishu` | Feishu / Lark | stream + event webhook | `api/feishu.py` + `feishu_ws.py` (inbound via `channels.inbound`) |
+| `feishu` | Feishu / Lark | stream + event webhook | `api/feishu.py` + `feishu_ws.py` (durable native-event submissions via `feishu_submissions`) |
 | `wecom` | WeCom | stream | `api/wecom.py`, `services/wecom_stream.py` |
 | `dingtalk` | DingTalk | stream | `api/dingtalk.py`, `services/dingtalk_stream.py` |
 | `slack` | Slack | Events API webhook | `api/slack.py` (durable native-event submissions) |

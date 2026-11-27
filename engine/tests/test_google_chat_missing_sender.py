@@ -39,7 +39,6 @@ async def test_missing_sender_is_acknowledged_without_transcript_access(
             "resolve_sender_user",
             "open_channel_session",
             "bind_channel_conversation",
-            "persist_user_message",
             "persist_assistant_message",
             "generate_channel_reply",
         )

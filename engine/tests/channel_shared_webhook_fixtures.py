@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -35,28 +35,24 @@ WEBHOOKS = [
 
 @pytest.fixture
 def webhook_pipeline(pipeline, monkeypatch):
-    agent, _, _, _, config, *_ = pipeline
+    _, _, _, _, config, *_ = pipeline
     config.is_configured = True
     config.encrypt_key = "signing-secret"
     config.verification_token = "verification-token"
     monkeypatch.setattr(slack.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat.channel_config, "get_channel_config", AsyncMock(return_value=config))
     monkeypatch.setattr(google_chat.gchat, "audience_for_config", lambda _: "")
-    monkeypatch.setattr(feishu, "_load_agent_and_model", AsyncMock(return_value=(agent, None, None)))
     monkeypatch.setattr(dedup, "already_processed_shared", AsyncMock(return_value=False))
     monkeypatch.setattr(dedup, "mark_processed_shared", AsyncMock())
     monkeypatch.setattr(chat_message_dao, "insert_message", AsyncMock())
     monkeypatch.setattr(inbound, "persist_assistant_message", AsyncMock())
     monkeypatch.setattr(chat_session_dao, "update", AsyncMock())
-    monkeypatch.setattr(feishu.feishu_service, "send_message", AsyncMock(return_value={}))
-    monkeypatch.setattr(feishu.feishu_service, "download_message_resource", AsyncMock(return_value=b"image-bytes"))
+    monkeypatch.setattr(
+        feishu_submissions.feishu_service, "download_message_resource", AsyncMock(return_value=b"image-bytes")
+    )
     upload = AsyncMock(return_value=("key", "workspace/uploads/upload.bin", "path"))
-    monkeypatch.setattr(feishu, "store_agent_upload", upload)
     monkeypatch.setattr(slack_submissions, "store_agent_upload", upload)
     monkeypatch.setattr(feishu_submissions, "store_agent_upload", upload)
-    storage = MagicMock()
-    storage.exists = AsyncMock(return_value=False)
-    monkeypatch.setattr(feishu, "get_storage_backend", lambda: storage)
     monkeypatch.setattr("asyncio.sleep", AsyncMock())
     client_class = httpx.AsyncClient
     transport = httpx.MockTransport(
@@ -70,7 +66,6 @@ def webhook_pipeline(pipeline, monkeypatch):
     def schedule(coroutine, description):
         scheduled.append(coroutine)
 
-    monkeypatch.setattr(feishu, "schedule_background_task", schedule)
     monkeypatch.setattr("app.api.background_tasks.schedule_background_task", schedule)
     yield pipeline, scheduled
     for coroutine in scheduled:

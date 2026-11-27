@@ -73,29 +73,6 @@ async def open_channel_session(
     )
 
 
-async def persist_user_message(
-    *,
-    agent_id: uuid.UUID,
-    user_id: uuid.UUID,
-    session: ChatSessionRecord,
-    content: str,
-    thinking: str | None = None,
-    participant_id: uuid.UUID | None = None,
-    agent: AgentRecord | None = None,
-    touch_last_active: bool = False,
-) -> None:
-    await persist_channel_user_message(
-        agent_id=agent_id,
-        user_id=user_id,
-        conversation_id=str(session.id),
-        content=content,
-        thinking=thinking,
-        participant_id=participant_id,
-        touch_last_active=touch_last_active,
-        agent=agent,
-    )
-
-
 async def persist_assistant_message(
     *,
     agent_id: uuid.UUID,
