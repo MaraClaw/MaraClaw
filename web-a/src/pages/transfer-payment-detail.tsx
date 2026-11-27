@@ -1,4 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useDistance } from '@/hooks/use-distance'
 import { useTranslation } from '@/hooks/use-translation'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -22,7 +23,8 @@ const draftSchema = z.object({ reason: transferReasonSchema })
 type DecisionDraft = z.infer<typeof draftSchema>
 
 function PaymentReview({ request, ready }: { readonly request: TransferSummary; readonly ready: boolean }) {
-  const { t, locale, date, distance, owned } = useTranslation()
+  const { t, locale, date, owned } = useTranslation()
+  const distance = useDistance()
   const { user } = useAuth()
   const fieldId = useId()
   const submitting = useRef(false)

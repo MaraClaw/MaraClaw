@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CapacityOrderId, CapacityOrderStatus } from '@/lib/capacity-api'
 import {
   canBuyCapacity, canManageCapacityPaymentSettings, canReviewCapacityPayments, canViewCapacityOrders, isPlatformAdminUser,
-} from '@/lib/types/auth'
+} from '@/lib/types/auth-guards'
 import {
   capacityCancelOptions, capacityDecisionOptions, capacityEvidenceOptions, capacityOrderCreateOptions, capacityOrderOptions,
   capacityOrdersOptions, capacityOverviewOptions, capacityReviewDetailOptions, capacityReviewListOptions,

@@ -39,7 +39,7 @@ import {
   type GrokSubscriptionStart,
   type LlmModel,
 } from '@/lib/llm-models-api'
-import { isPlatformAdminUser } from '@/lib/types/auth'
+import { isPlatformAdminUser } from '@/lib/types/auth-guards'
 import { availableReasoningEffort, reasoningEffortWrite } from '@/lib/reasoning-efforts'
 import { cn } from '@/lib/utils'
 import { ChatGPTSubscriptionCard } from '@/pages/chatgpt-subscription-card'

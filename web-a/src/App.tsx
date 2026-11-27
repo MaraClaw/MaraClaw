@@ -1,7 +1,7 @@
 import { Component, type ReactNode } from 'react'
 import { Toaster } from 'sonner'
 
-import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button-variants'
 import { AuthProvider } from '@/hooks/use-auth'
 import { TranslationProvider, useTranslation } from '@/hooks/use-translation'
 import { AppRouter } from '@/routes'
@@ -12,7 +12,7 @@ function RootError({ error }: { readonly error: Error }) {
     <div role="alert" className="flex min-h-svh flex-col items-center justify-center gap-3 bg-background px-6 text-center">
       <p className="font-display text-lg font-semibold">{t('Something went wrong')}</p>
       <p className="max-w-md text-sm text-muted-foreground">{error.message}</p>
-      <Button type="button" onClick={() => window.location.reload()}>{t('Try again')}</Button>
+      <button type="button" data-slot="button" className={buttonVariants()} onClick={() => window.location.reload()}>{t('Try again')}</button>
     </div>
   )
 }

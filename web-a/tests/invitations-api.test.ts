@@ -4,7 +4,7 @@ import { z } from 'zod'
 
 import { fetchInvitationCodes, invitationCodeSchema, invitationSendFailure, inviteUsersSchema, revokeInvitation, sendInvitations } from '../src/lib/invitations-api.ts'
 import { ApiError } from '../src/lib/http.ts'
-import { canManageInvitations } from '../src/lib/types/auth.ts'
+import { canManageInvitations } from '../src/lib/types/auth-guards.ts'
 import { adminUser } from './helpers.ts'
 
 const item = {

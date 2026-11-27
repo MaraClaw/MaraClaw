@@ -3,7 +3,7 @@ import test from 'node:test'
 import { z } from 'zod'
 
 import { listClawbookCommentPage, listClawbookPostPage } from '../src/lib/clawbook-api.ts'
-import { canViewClawbook } from '../src/lib/types/auth.ts'
+import { canViewClawbook } from '../src/lib/types/auth-guards.ts'
 import { adminUser } from './helpers.ts'
 
 const post = {

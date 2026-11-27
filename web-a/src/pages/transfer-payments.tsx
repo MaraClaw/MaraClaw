@@ -1,3 +1,4 @@
+import { useDistance } from '@/hooks/use-distance'
 import { useTranslation } from '@/hooks/use-translation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useId, useState } from 'react'
@@ -17,7 +18,8 @@ import { transferReviewViewSchema, type TransferReviewView } from '@/lib/transfe
 import { transferActionClass, transferFeeLabel, transferStatusLabels, transferStatusVariants } from './transfer-payment-labels'
 
 export function TransferPaymentsPanel() {
-  const { t, locale, date, distance, number } = useTranslation()
+  const { t, locale, date, number } = useTranslation()
+  const distance = useDistance()
   const filterId = useId()
   const client = useQueryClient()
   const [view, setView] = useState<TransferReviewView>('pending')

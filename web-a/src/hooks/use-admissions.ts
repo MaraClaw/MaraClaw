@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type { AdmissionId, AdmissionStatus } from '@/lib/admissions-api'
-import { canReviewAdmissions } from '@/lib/types/auth'
+import { canReviewAdmissions } from '@/lib/types/auth-guards'
 import { admissionDecisionOptions, admissionDetailOptions, admissionReviewsOptions } from './admission-options'
 import { useAuth } from './use-auth'
 import { useSessionMutation } from './use-session-mutation'

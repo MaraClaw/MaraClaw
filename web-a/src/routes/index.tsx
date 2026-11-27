@@ -1,16 +1,17 @@
 import { Suspense } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
-import { AdminShell } from '@/components/layout/admin-shell'
 import { RouteErrorBoundary } from '@/components/route-error-boundary'
 import { useAuth } from '@/hooks/use-auth'
 import { useTranslation } from '@/hooks/use-translation'
 import { retryingLazy } from '@/lib/retrying-import'
-import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewCapacityPayments, canReviewOrganizationAdmissions, canSendBroadcast, canViewCapacityOrders, canViewClawbook } from '@/lib/types/auth'
+import { canManageInvitations, canReviewAdmissions, canReviewAgentDeletions, canReviewCapacityPayments, canReviewOrganizationAdmissions, canSendBroadcast, canViewCapacityOrders, canViewClawbook } from '@/lib/types/auth-guards'
 import { PlatformAdminRoute } from '@/routes/platform-admin'
 import { ProtectedRoute } from '@/routes/protected'
-import { TransferReviewRoute } from '@/routes/transfer-review'
 
+// The shell (with the session Query scope, motion and every Query hook it reads) and the payment gate download after sign-in.
+const SessionShell = retryingLazy(() => import('@/routes/session-shell').then((module) => module.SessionShell))
+const TransferReviewRoute = retryingLazy(() => import('@/routes/transfer-review').then((module) => module.TransferReviewRoute))
 const BroadcastPage = retryingLazy(() => import('@/pages/broadcast').then((module) => module.BroadcastPage))
 const InvitationsPage = retryingLazy(() => import('@/pages/invitations').then((module) => module.InvitationsPage))
 const ForgotPasswordPage = retryingLazy(() => import('@/pages/forgot-password').then((module) => module.ForgotPasswordPage))
@@ -92,7 +93,7 @@ export function AppRouter() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
 
           <Route element={<ProtectedRoute />}>
-            <Route element={<AdminShell />}>
+            <Route element={<SessionShell />}>
               <Route element={<RouteErrorBoundary />}>
                 <Route index element={<OverviewPage />} />
                 <Route path="account" element={<Navigate to="/settings" replace />} />

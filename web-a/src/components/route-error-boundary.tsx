@@ -1,7 +1,7 @@
 import { Component, useTransition, type ReactNode } from 'react'
 import { Outlet, useLocation, useOutletContext } from 'react-router-dom'
 
-import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button-variants'
 import { useTranslation } from '@/hooks/use-translation'
 import { ChunkLoadError } from '@/lib/retrying-import'
 
@@ -22,9 +22,9 @@ function RouteError({ download, onRetry }: { readonly download: boolean; readonl
         </p>
       </div>
       {/* A transition keeps this message on screen while the page downloads again. */}
-      <Button type="button" variant="outline" onClick={() => startRetry(onRetry)}>
+      <button type="button" data-slot="button" className={buttonVariants({ variant: 'outline' })} onClick={() => startRetry(onRetry)}>
         {retrying ? t('Loading…') : t('Try again')}
-      </Button>
+      </button>
     </div>
   )
 }

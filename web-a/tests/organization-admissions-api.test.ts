@@ -7,7 +7,7 @@ import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import {
   decideOrganizationAdmission, fetchOrganizationAdmissionEvidence, fetchOrganizationAdmissions, retryOrganizationAdmissionEmail,
 } from '../src/lib/organization-admissions-api.ts'
-import { canReviewAdmissions, canReviewOrganizationAdmissions } from '../src/lib/types/auth.ts'
+import { canReviewAdmissions, canReviewOrganizationAdmissions } from '../src/lib/types/auth-guards.ts'
 import { adminUser } from './helpers.ts'
 import { approvedOrganizationAdmission, organizationAdmission } from './organization-admission-fixtures.ts'
 

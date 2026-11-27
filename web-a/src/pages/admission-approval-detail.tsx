@@ -1,4 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useDistance } from '@/hooks/use-distance'
 import { useTranslation } from '@/hooks/use-translation'
 import { type ComponentProps, useId, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -30,7 +31,8 @@ const statusVariants = {
 } as const satisfies Record<AdmissionDetail['status'], ComponentProps<typeof Badge>['variant']>
 
 function AdmissionReview({ request, ready }: { readonly request: AdmissionDetail; readonly ready: boolean }) {
-  const { t, distance, owned } = useTranslation()
+  const { t, owned } = useTranslation()
+  const distance = useDistance()
   const reasonId = useId()
   const submitting = useRef(false)
   const [confirmed, setConfirmed] = useState(false)

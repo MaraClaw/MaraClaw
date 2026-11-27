@@ -11,7 +11,7 @@ import { adminSession } from '@/lib/admin-session'
 import { fetchBroadcastHistory } from '@/lib/broadcast-api'
 import { ApiError } from '@/lib/http'
 import { runOwned } from '@/lib/session-policy'
-import { canSendBroadcast } from '@/lib/types/auth'
+import { canSendBroadcast } from '@/lib/types/auth-guards'
 
 const timeFormat = { dateStyle: 'medium', timeStyle: 'short' } as const satisfies Intl.DateTimeFormatOptions
 const actionClass = 'h-auto min-h-11 whitespace-normal motion-reduce:active:scale-100 motion-reduce:transition-none'

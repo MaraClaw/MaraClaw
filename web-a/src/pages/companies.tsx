@@ -18,7 +18,7 @@ import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { useSessionMutation as useMutation } from '@/hooks/use-session-mutation'
 import { ApiError } from '@/lib/http'
 import { formatPhone } from '@/lib/phone'
-import { isPlatformAdminUser } from '@/lib/types/auth'
+import { isPlatformAdminUser } from '@/lib/types/auth-guards'
 import { useTranslation } from '@/hooks/use-translation'
 
 export function CompaniesPage() {

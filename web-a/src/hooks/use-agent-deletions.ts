@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type { AgentDeletionFilter, AgentDeletionId } from '@/lib/agent-deletion-api'
-import { canReviewAgentDeletions } from '@/lib/types/auth'
+import { canReviewAgentDeletions } from '@/lib/types/auth-guards'
 import { agentDeletionApprovalOptions, agentDeletionDetailOptions, agentDeletionListOptions } from './agent-deletion-options'
 import { useAuth } from './use-auth'
 import { useSessionMutation } from './use-session-mutation'

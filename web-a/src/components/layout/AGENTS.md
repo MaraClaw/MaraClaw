@@ -14,7 +14,7 @@ Scope: console navigation, notification entry point and shared screen chrome.
 1. Desktop and compact mobile navigation share `NavItems` and `navItems`.
    Notifications follows Overview for both admin roles. Visibility filters run before password-lock rendering.
    `tests/admin-navigation.test.ts` regex-parses `navItems` from source; keep flat object literals.
-2. Each gated entry has a flag matching the route guard in `routes/` and the predicate in `src/lib/types/auth.ts`
+2. Each gated entry has a flag matching the route guard in `routes/` and the predicate in `src/lib/types/auth-guards.ts`
    (or `transfer-review-access.ts`). Change entry, guard and predicate together.
 3. `platformAdminOnly` marks `/companies`, `/search-engine`, `/openclaw-updates`, `/upgrade-signals`.
    `isPlatformAdminUser` accepts the platform flag or the `platform_admin` role.

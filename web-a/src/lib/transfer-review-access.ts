@@ -1,5 +1,6 @@
 import type { TransferSummary } from './transfer-reviews-api.ts'
-import { canReviewAdmissions, isPlatformAdminUser, type UserOut } from './types/auth.ts'
+import type { UserOut } from './types/auth.ts'
+import { canReviewAdmissions, isPlatformAdminUser } from './types/auth-guards.ts'
 
 export function canReviewTransferPayments(user: UserOut | null | undefined): boolean {
   return user?.is_active === true && isPlatformAdminUser(user)
