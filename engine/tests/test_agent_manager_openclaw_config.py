@@ -36,12 +36,6 @@ def fake_token_preparation(monkeypatch):
     monkeypatch.setattr(agent_mcp_server_dao, "list_for_agent", AsyncMock(return_value=[]))
 
 
-@pytest.fixture(autouse=True)
-def blank_embedding_settings(monkeypatch):
-    for name in ("EMBEDDING_MODEL", "EMBEDDING_DIMS", "EMBEDDING_PROVIDER_URL", "EMBEDDING_API_KEY"):
-        monkeypatch.setattr(agent_manager_module.settings, name, "")
-
-
 class RecordingContainerApi:
     def __init__(self, inspect_result=None, inspect_error=None, stop_error=None, remove_error=None):
         self.inspect_result = inspect_result
@@ -115,10 +109,7 @@ class GuestSettings:
         return getattr(self.wrapped_settings, name)
 
 
-UPSTREAM_MEMORY_SEARCH = {"enabled": True, "rememberAcrossConversations": False}
-
-
-def test_generate_openclaw_config_uses_native_keyword_memory(monkeypatch, tmp_path):
+def test_generate_openclaw_config_leaves_the_memory_plugin_to_the_guest_image(monkeypatch, tmp_path):
     # Given
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
@@ -129,9 +120,9 @@ def test_generate_openclaw_config_uses_native_keyword_memory(monkeypatch, tmp_pa
     config: dict[str, Any] = manager._generate_openclaw_config(agent, model=None)
 
     # Then
-    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
+    assert "memory" not in config
+    assert "plugins" not in config
     assert "memorySearch" not in config["agents"]["defaults"]
-    assert config["plugins"] == {"slots": {"memory": "memory-core"}}
 
 
 def test_generate_openclaw_config_confines_session_tools_to_the_current_conversation(monkeypatch, tmp_path):
@@ -146,9 +137,17 @@ def test_generate_openclaw_config_confines_session_tools_to_the_current_conversa
 
     # Then
     assert config["tools"] == {
-        "deny": ["web_search"],
-        "web": {"search": {"enabled": False}},
+        "deny": ["web_search", "web_fetch"],
+        "web": {"search": {"enabled": False}, "fetch": {"enabled": False}},
         "sessions": {"visibility": "self"},
+        "toolSearch": {
+            "exclude": [
+                {"source": "openclaw", "name": "knowledge_remember"},
+                {"source": "openclaw", "name": "knowledge_grep"},
+                {"source": "openclaw", "name": "knowledge_lookup"},
+                {"source": "openclaw", "name": "knowledge_record"},
+            ]
+        },
     }
 
 
@@ -300,7 +299,7 @@ def test_generate_openclaw_config_maps_grok_subscription_to_xai_plugin(monkeypat
     assert config["gateway"]["mode"] == "local"
     assert config["gateway"]["bind"] == "lan"
     assert "heartbeat" not in config["agents"]["defaults"]
-    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
+    assert "memory" not in config
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["env"]["vars"]["MARACLAW_API_BASE"] == "http://maraclaw-engine:8000"
 
@@ -328,7 +327,7 @@ def test_generate_openclaw_config_omits_invalid_xai_console_key(monkeypatch):
     assert "auth" not in config
 
 
-def test_write_guest_config_refreshes_native_memory_with_empty_process_cache(monkeypatch, tmp_path) -> None:
+def test_write_guest_config_keeps_the_guest_memory_plugin_with_empty_process_cache(monkeypatch, tmp_path) -> None:
     # Given
     settings = GuestSettings(agent_manager_module.settings, storage_root=str(tmp_path))
     monkeypatch.setattr(agent_manager_module, "settings", settings)
@@ -345,8 +344,11 @@ def test_write_guest_config_refreshes_native_memory_with_empty_process_cache(mon
             {
                 "memory": {"search": {"enabled": False, "provider": "auto"}},
                 "plugins": {
-                    "slots": {"memory": "none"},
-                    "entries": {"custom": {"enabled": True, "config": {"keep": "custom-value"}}},
+                    "slots": {"memory": "knowledge"},
+                    "entries": {
+                        "custom": {"enabled": True, "config": {"keep": "custom-value"}},
+                        "knowledge": {"enabled": True},
+                    },
                 },
             }
         ),
@@ -359,11 +361,14 @@ def test_write_guest_config_refreshes_native_memory_with_empty_process_cache(mon
     # Then
     assert path == config_path
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
+    assert "memory" not in config
     assert "memorySearch" not in config["agents"]["defaults"]
     assert config["plugins"] == {
-        "slots": {"memory": "memory-core"},
-        "entries": {"custom": {"enabled": True, "config": {"keep": "custom-value"}}},
+        "slots": {"memory": "knowledge"},
+        "entries": {
+            "custom": {"enabled": True, "config": {"keep": "custom-value"}},
+            "knowledge": {"enabled": True},
+        },
     }
 
 
@@ -600,7 +605,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     )
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
 
-    async def materialize_agent_dir(requested_agent_id):
+    async def materialize_agent_dir(requested_agent_id, *, restored=frozenset()):
         assert requested_agent_id == agent_id
         return agent_dir
 
@@ -625,7 +630,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert host_config_path.exists()
     assert not (agent_dir / ".openclaw" / "openclaw.json").exists()
     config = json.loads(host_config_path.read_text(encoding="utf-8"))
-    assert config["plugins"] == {"slots": {"memory": "memory-core"}}
+    assert "plugins" not in config
     assert (agent_dir / ".maraclaw-rpc.mjs").is_file()
 
     run_kwargs = docker_client.run_kwargs
@@ -686,7 +691,7 @@ async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_p
     docker_client = RecordingDockerClient()
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
 
-    async def materialize_agent_dir(requested_agent_id):
+    async def materialize_agent_dir(requested_agent_id, *, restored=frozenset()):
         assert requested_agent_id == agent_id
         return agent_dir
 
@@ -708,9 +713,9 @@ async def test_start_container_refreshes_native_memory_config(monkeypatch, tmp_p
     # Then
     assert container_id == "container-1234567890"
     config = json.loads((agent_dir / "openclaw.json").read_text(encoding="utf-8"))
-    assert config["memory"]["search"] == UPSTREAM_MEMORY_SEARCH
+    assert "memory" not in config
     assert "memorySearch" not in config["agents"]["defaults"]
-    assert config["plugins"] == {"slots": {"memory": "memory-core"}}
+    assert "plugins" not in config
 
 
 async def test_start_container_returns_none_when_pywhales_client_is_missing(monkeypatch, tmp_path):
@@ -728,7 +733,7 @@ async def test_start_container_returns_none_when_pywhales_client_is_missing(monk
     docker_client = RecordingDockerClient(run_error=FakeClientNotFoundError("docker cli missing"))
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
 
-    async def materialize_agent_dir(requested_agent_id):
+    async def materialize_agent_dir(requested_agent_id, *, restored=frozenset()):
         assert requested_agent_id == agent_id
         return agent_dir
 

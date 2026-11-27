@@ -18,7 +18,7 @@ from app.services import agent_manager as module
 from app.services.agent_manager import AgentManager, guest_container_name
 from app.services.guest_admission import GuestStartPreflightError
 from app.services.guest_resource_config import preserve_guest_resources
-from test_agent_manager_openclaw_config import UPSTREAM_MEMORY_SEARCH, RecordingDockerClient
+from test_agent_manager_openclaw_config import RecordingDockerClient
 
 type Writer = Literal["refresh", "recreate"]
 
@@ -37,8 +37,6 @@ def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
     monkeypatch.setattr(module.settings, "STORAGE_LOCAL_ROOT", str(tmp_path))
     monkeypatch.setattr(module.settings, "TAVILY_PROXY_ENABLED", False)
     monkeypatch.setattr(module.settings, "TAVILY_API_KEY", "")
-    for name in ("EMBEDDING_MODEL", "EMBEDDING_DIMS", "EMBEDDING_PROVIDER_URL", "EMBEDDING_API_KEY"):
-        monkeypatch.setattr(module.settings, name, "")
     monkeypatch.setattr(module, "_guest_config_fingerprints", {})
     agent = AgentRecord(id=uuid4(), name="Resource Agent", creator_id=uuid4())
     directory = tmp_path / str(agent.id)
@@ -47,7 +45,7 @@ def guest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Guest:
     docker = RecordingDockerClient()
     monkeypatch.setattr(manager, "docker_client", docker, raising=False)
 
-    async def materialize(agent_id: UUID) -> Path:
+    async def materialize(agent_id: UUID, *, restored: frozenset[str] = frozenset()) -> Path:
         assert agent_id == agent.id
         return directory
 
@@ -153,7 +151,7 @@ async def test_platform_config_wins_over_stale_guest_settings(guest: Guest, writ
                 "skills": {"entries": {"tavily-search": {"enabled": False, "env": {"TAVILY_API_KEY": "stale"}}}},
                 "plugins": {
                     "enabled": False,
-                    "slots": {"memory": "stale"},
+                    "slots": {"memory": "knowledge"},
                     "entries": {"custom": {"enabled": True}},
                 },
             }
@@ -172,7 +170,7 @@ async def test_platform_config_wins_over_stale_guest_settings(guest: Guest, writ
     assert "auth" not in stored
     assert stored["skills"] == generated["skills"]
     assert stored["plugins"] == {
-        "slots": {"memory": "memory-core"},
+        "slots": {"memory": "knowledge"},
         "entries": {"custom": {"enabled": True}},
     }
 
@@ -224,7 +222,7 @@ def test_guest_owned_fields_survive_while_stale_platform_fields_are_replaced(tmp
                 },
                 "channels": {"slack": {"enabled": True}},
                 "memory": {"citations": "off", "search": {"remote": {"apiKey": "stale-embedding-key"}}},
-                "plugins": {"enabled": False, "slots": {"memory": "stale"}, "load": {"paths": ["/custom/plugin"]}},
+                "plugins": {"enabled": False, "slots": {"memory": "knowledge"}, "load": {"paths": ["/custom/plugin"]}},
                 "models": {"providers": {"retired": {"apiKey": "stale-provider-key"}}},
                 "env": {"vars": {"RETIRED_API_KEY": "stale-provider-key"}},
                 "auth": {"profiles": {"retired": {"provider": "retired", "mode": "oauth"}}},
@@ -242,8 +240,6 @@ def test_guest_owned_fields_survive_while_stale_platform_fields_are_replaced(tmp
     }
     generated: JsonObject = {
         "agents": {"defaults": platform_defaults},
-        "memory": {"search": {"enabled": True}},
-        "plugins": {"slots": {"memory": "memory-core"}},
         "env": {"vars": {"NEW_API_KEY": "fresh"}},
         "gateway": {"auth": {"token": "fresh-token"}},
         "tools": {"deny": ["web_search"]},
@@ -263,8 +259,8 @@ def test_guest_owned_fields_survive_while_stale_platform_fields_are_replaced(tmp
             "entries": GUEST_ENTRIES,
         },
         "channels": {"slack": {"enabled": True}},
-        "memory": {"citations": "off", "search": {"enabled": True}},
-        "plugins": {"load": {"paths": ["/custom/plugin"]}, "slots": {"memory": "memory-core"}},
+        "memory": {"citations": "off"},
+        "plugins": {"slots": {"memory": "knowledge"}, "load": {"paths": ["/custom/plugin"]}},
         "env": generated["env"],
         "gateway": generated["gateway"],
         "tools": generated["tools"],
@@ -355,7 +351,7 @@ def test_assigned_openrouter_slots_are_exactly_authorized(guest: Guest, duplicat
 
 @pytest.mark.parametrize("writer", ["refresh", "recreate"])
 @pytest.mark.parametrize("config_exists", [False, True])
-async def test_native_memory_and_custom_data_survive_config_rewrites(
+async def test_knowledge_memory_and_custom_data_survive_config_rewrites(
     guest: Guest, writer: Writer, config_exists: bool
 ) -> None:
     # Given
@@ -367,16 +363,21 @@ async def test_native_memory_and_custom_data_survive_config_rewrites(
         "memory/main.sqlite": b"SQLite format 3\x00native-state\xff",
         "extensions/custom/index.js": b"export default {};\n",
         "extensions/custom/data/memory.sqlite": b"SQLite format 3\x00custom-state\xff",
+        "knowledge/registry.sqlite": b"SQLite format 3\x00knowledge-registry\xff",
+        "knowledge/stores/vault-1/vault/private/claims/orchid.md": b"Project codename: orchid.\n",
     }
     for relative, content in saved.items():
         path = guest.path.parent / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
-    previous_entries: JsonObject = {"custom": {"enabled": True, "config": {"keep": "custom-value"}}}
+    previous_plugins: JsonObject = {
+        "slots": {"memory": "knowledge"},
+        "entries": {"custom": {"enabled": True, "config": {"keep": "custom-value"}}, "knowledge": {"enabled": True}},
+    }
     if config_exists:
-        guest.path.write_text(json.dumps({"plugins": {"entries": previous_entries}}), encoding="utf-8")
+        guest.path.write_text(json.dumps({"plugins": previous_plugins}), encoding="utf-8")
 
-    # When: cold refresh, cached refresh, and recreation must preserve native and custom data.
+    # When: cold refresh, cached refresh, and recreation must preserve Knowledge and custom data.
     await rewrite(guest, writer)
     guest.manager.write_guest_config(guest.agent, primary=None)
     module._guest_config_fingerprints.clear()
@@ -385,11 +386,8 @@ async def test_native_memory_and_custom_data_survive_config_rewrites(
 
     # Then
     stored = json_loads_object(guest.path.read_text(encoding="utf-8"))
-    assert json_object_from(stored["memory"])["search"] == UPSTREAM_MEMORY_SEARCH
-    plugins: JsonObject = {"slots": {"memory": "memory-core"}}
-    if config_exists:
-        plugins["entries"] = previous_entries
-    assert stored["plugins"] == plugins
+    assert "memory" not in stored
+    assert stored.get("plugins") == (previous_plugins if config_exists else None)
     assert {relative: (guest.path.parent / relative).read_bytes() for relative in saved} == saved
 
 

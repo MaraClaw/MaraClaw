@@ -59,11 +59,6 @@ from app.services.openclaw_gateway_config import (
     guest_engine_base_url,
     prepare_native_gateway_files,
 )
-from app.services.openclaw_memory_embeddings import (
-    memory_embedding_config,
-    memory_embedding_fingerprint,
-    memory_search_block,
-)
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.tavily_runtime import TAVILY_SEARCH_SKILL_FOLDER, tavily_default_skill_folder_names
 
@@ -433,7 +428,7 @@ class AgentManager:
         primary: LLMModelRecord | None,
         fallback: LLMModelRecord | None,
     ) -> str:
-        parts: list[str] = ["native-gateway-rpc-v2"]
+        parts: list[str] = ["native-gateway-rpc-v3"]
         for row in (primary, fallback):
             ref = guest_model_ref(row) or ""
             expires = getattr(row, "token_expires_at", None) if row is not None else None
@@ -443,7 +438,6 @@ class AgentManager:
             )
             digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret.strip("|") else ""
             parts.append(f"{ref}:{kind}:{expires}:{digest}")
-        parts.append(memory_embedding_fingerprint(memory_embedding_config(settings)))
         parts.extend(
             str(value)
             for value in (
@@ -523,11 +517,8 @@ class AgentManager:
             defaults["bootstrapTotalMaxChars"] = settings.OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS
         if aliases:
             defaults["models"] = aliases
-        config: JsonObject = {
-            "agents": {"defaults": defaults},
-            "memory": {"search": memory_search_block(memory_embedding_config(settings))},
-            "plugins": {"slots": {"memory": "memory-core"}},
-        }
+        # The guest image selects and enables the Knowledge memory plugin; the engine leaves `plugins` and `memory` alone.
+        config: JsonObject = {"agents": {"defaults": defaults}}
         if gateway_token is None:
             agent_dir = self._agent_dir(agent.id)
             gateway_token = ensure_gateway_token(agent_dir) if agent_dir.exists() else secrets.token_urlsafe(24)
@@ -565,16 +556,28 @@ class AgentManager:
                 for folder_name in tavily_default_skill_folder_names()
             },
         }
-        # OpenClaw enables native web_search unless it is explicitly denied.
+        # OpenClaw enables native web_search and web_fetch unless they are explicitly denied. Agents reach the web
+        # through the Tavily skills, which call the engine's Tavily proxy, and hand deep_research the pages as documents.
         config["tools"] = {
-            "deny": ["web_search"],
+            "deny": ["web_search", "web_fetch"],
             "web": {
                 "search": {
+                    "enabled": False,
+                },
+                "fetch": {
                     "enabled": False,
                 },
             },
             # Agents shared across users keep one private conversation per user: session tools see only their own.
             "sessions": {"visibility": "self"},
+            # Tool Search defers plugin tool schemas by default. With Knowledge's save and recall tools deferred, agents
+            # wrote "remember this" requests to MEMORY.md, which Knowledge never reads, so these four stay visible.
+            "toolSearch": {
+                "exclude": [
+                    {"source": "openclaw", "name": name}
+                    for name in ("knowledge_remember", "knowledge_grep", "knowledge_lookup", "knowledge_record")
+                ]
+            },
         }
 
         return config

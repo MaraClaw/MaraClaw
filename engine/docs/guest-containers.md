@@ -298,7 +298,7 @@ only a container labelled with this agent's `maraclaw.agent_id`.
 
 Calls that carry their own deadline keep it: native gateway turns
 ([RPC](../app/services/openclaw_gateway_rpc.py),
-[stream](../app/services/openclaw_gateway_stream.py)), which use a fixed 940 seconds,
+[stream](../app/services/openclaw_gateway_stream.py)), which use a fixed 960 seconds,
 and image pulls. The pull deadline is `OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS`, for
 a registry or digest-pinned guest image on ordinary starts and replacements and on
 [OpenClaw upgrades](openclaw-updates.md#image-preparation-and-retry). The sandbox
@@ -567,9 +567,11 @@ The seeding notice is absent on the next gateway startup with that config.
 This change does not proactively migrate or restart existing guests.
 
 Config writes retain guest-owned fields, including agent identity and model policy,
-alongside MCP/skill/plugin entries and custom skill roots. Platform model selections,
-aliases, provider credentials, embedding search, gateway and tool settings remain
-authoritative; retired managed values are removed rather than merged back in.
+alongside MCP/skill/plugin entries, the plugin slots and custom skill roots. The guest image
+selects the memory plugin (Knowledge) in `plugins.slots`, so the engine writes no `plugins` or `memory`
+keys. Platform model selections, aliases, provider credentials, gateway and tool settings remain
+authoritative; retired managed values, such as the former embedding-backed `memory.search`, are removed
+rather than merged back in.
 
 ### Optional latency experiments
 

@@ -43,6 +43,7 @@ const deltaByteCap = 1024 * 1024;
 const result = early ?? await new Promise((resolve) => {
   const socket = new WebSocket("ws://127.0.0.1:18789");
   const connectId = randomUUID();
+  const sessionRequestId = randomUUID();
   const agentId = randomUUID();
   let phase = "challenge";
   let runId = null;
@@ -57,7 +58,7 @@ const result = early ?? await new Promise((resolve) => {
   let deltaTimer = null;
   let capped = false;
   let blocked = false;
-  const totalTimer = setTimeout(() => fail("total_timeout"), 930_000);
+  const totalTimer = setTimeout(() => fail("total_timeout"), 950_000);
 
   function stamp(step) {
     timing[step] = Math.round(performance.now());
@@ -151,7 +152,7 @@ const result = early ?? await new Promise((resolve) => {
   }
 
   function fail(code) {
-    if (phase === "challenge" || phase === "connect") {
+    if (phase === "challenge" || phase === "connect" || phase === "session") {
       finish({ kind: "not_admitted", admission: "not_submitted", code });
     } else {
       finish({ kind: "uncertain", admission: phase === "accepted" ? "accepted" : "unknown", runId, code });
@@ -161,6 +162,25 @@ const result = early ?? await new Promise((resolve) => {
   function deadline(ms, code) {
     clearTimeout(timer);
     timer = setTimeout(() => fail(code), ms);
+  }
+
+  function submitAgent() {
+    const params = { message: request.message, sessionKey: request.sessionKey,
+      idempotencyKey: request.messageId, deliver: false, timeout: request.timeoutSeconds };
+    if (request.extraSystemPrompt !== undefined) params.extraSystemPrompt = request.extraSystemPrompt;
+    if (request.modelRef !== null) {
+      const separator = request.modelRef.indexOf("/");
+      params.provider = request.modelRef.slice(0, separator);
+      params.model = request.modelRef.slice(separator + 1);
+    }
+    try {
+      socket.send(JSON.stringify({ type: "req", id: agentId, method: "agent", params }));
+    } catch {
+      fail("send_failed");
+      return;
+    }
+    phase = "submitted";
+    deadline(20_000, "admission_timeout");
   }
 
   deadline(10_000, "connect_timeout");
@@ -216,22 +236,23 @@ const result = early ?? await new Promise((resolve) => {
         return;
       }
       stamp("helloOk");
-      const params = { message: request.message, sessionKey: request.sessionKey,
-        idempotencyKey: request.messageId, deliver: false, timeout: request.timeoutSeconds };
-      if (request.extraSystemPrompt !== undefined) params.extraSystemPrompt = request.extraSystemPrompt;
-      if (request.modelRef !== null) {
-        const separator = request.modelRef.indexOf("/");
-        params.provider = request.modelRef.slice(0, separator);
-        params.model = request.modelRef.slice(separator + 1);
-      }
+      // Knowledge grants memory only to sessions with a durable chat type, which an `agent` request never records.
+      // An operator `sessions.create` gives a new key one and adopts an existing one unchanged. A key that an earlier
+      // bare `agent` request created never gains one and may be refused, so any answer sends the turn (that session
+      // runs without Knowledge); until `agent` is sent nothing was submitted, so a missing answer is retryable.
       try {
-        socket.send(JSON.stringify({ type: "req", id: agentId, method: "agent", params }));
+        socket.send(JSON.stringify({ type: "req", id: sessionRequestId, method: "sessions.create",
+          params: { key: request.sessionKey, idempotencyKey: `${request.messageId}:session` } }));
       } catch {
         fail("send_failed");
         return;
       }
-      phase = "submitted";
-      deadline(20_000, "admission_timeout");
+      phase = "session";
+      deadline(20_000, "session_timeout");
+      return;
+    }
+    if (phase === "session" && frame.id === sessionRequestId) {
+      submitAgent();
       return;
     }
     if ((phase !== "submitted" && phase !== "accepted") || frame.id !== agentId) return;

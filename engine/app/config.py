@@ -496,11 +496,6 @@ class Settings(BaseSettings):
         return self
 
     GOGCLI_ENABLED: bool = True
-    # Optional OpenAI-compatible memory embeddings for guests. Active only when all four are non-blank.
-    EMBEDDING_MODEL: str = ""
-    EMBEDDING_DIMS: str = ""
-    EMBEDDING_PROVIDER_URL: str = ""
-    EMBEDDING_API_KEY: str = ""
 
     # ChatGPT browser OAuth. The engine serves the redirect URI's path itself (app/api/chatgpt_oauth_callback.py),
     # read once at startup; empty disables ChatGPT sign-in.
