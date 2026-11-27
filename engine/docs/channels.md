@@ -41,8 +41,7 @@ content each carry one skipped-files notice, and text after the cutoff, includin
 interleaved with images in a rich post, is kept. The receipt fingerprint still covers
 every original attachment ID, so a retry that changes only a skipped attachment conflicts
 with the durable receipt. Personal Zalo, Telegram and WhatsApp media keep their own limits.
-The Slack fallback for events with neither `ts` nor `event_id` applies the same count and notice; a Feishu
-post without a message id has no retrievable images, so its text is processed with no media work.
+A Feishu post without a message id has no retrievable images, so its text is processed with no media work.
 
 `CHANNEL_MEDIA_ACK_BUDGET_SECONDS` (above 0 up to 30, default 2) bounds the wall-clock time a Slack,
 Telegram or WhatsApp Cloud webhook spends starting fetches and stores for its attachments before it answers; Slack
@@ -81,8 +80,20 @@ provider redelivers:
 
 A claim left by a dead process expires, and with Redis unavailable the webhook behaves as it did before. The
 claim is advisory: the durable receipt stays the only dedupe, and a replay after acceptance still answers
-through it. The Slack fallback for events with neither `ts` nor `event_id` has no event identity to claim and
-keeps no deadline.
+through it.
+
+A Slack event with neither `ts` nor `event_id` has no identity to claim or dedupe. Slack sends `event_id` on every
+callback and `ts` on every message and app mention
+([Events API](https://docs.slack.dev/apis/events-api), [`message`](https://docs.slack.dev/reference/events/message),
+[`app_mention`](https://docs.slack.dev/reference/events/app_mention)), so such an event is refused with `400` and
+`Slack event ID is required`, like a Discord, WeCom or DingTalk event without an ID, before any claim, download,
+sender resolution or write.
+
+A signed Slack event from a sender who is not a linked member (an unlinked or unbound account) is acknowledged with
+`200` and `{"ok": true}` and ignored, as WhatsApp does: nothing is accepted or stored, and no reply is posted into Slack,
+because a group channel would get one per message. The delivery's in-flight claim is released as for any delivery that
+ends, so a redelivery is processed again rather than refused with `503`. Returning an error instead would only make
+Slack redeliver the event three times.
 
 WhatsApp validates the raw-body signature before processing, visits every message
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed

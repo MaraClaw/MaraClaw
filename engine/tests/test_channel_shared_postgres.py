@@ -68,7 +68,7 @@ async def test_signed_group_message_stays_in_its_group_session(live_channel):
 
 @pytest.mark.parametrize(
     ("revocation", "expected_status"),
-    [("identity", 401), ("membership", 401), ("password", 403), ("tenant", 200), ("access", 403), ("unbound", 200)],
+    [("identity", 401), ("membership", 401), ("password", 403), ("tenant", 403), ("access", 403), ("unbound", 200)],
 )
 async def test_direct_http_checks_fresh_authority_after_an_accepted_turn(live_channel, revocation, expected_status):
     # Given an already accepted human whose authority is then revoked in PostgreSQL.

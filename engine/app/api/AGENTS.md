@@ -77,7 +77,7 @@ Flat FastAPI routers. Most export `router` and are mounted from `app/main.py`.
 
 ## Hotspots
 
-- Large: `feishu.py` (event/file still in-router; LLM is `channels/llm_bridge.py`), `okr.py` (schemas + period math extracted; gap/outreach still here), `enterprise.py`, `auth.py`, `files.py`, `agentbay_control.py`, `websocket.py`, `agents.py`, `tools.py`, `skills.py`, `wecom.py`, `gateway.py`, `tenants.py`, `teams.py`, `admin.py`, `slack.py`.
+- Large: `feishu.py` (event/file still in-router; LLM is `channels/llm_bridge.py`), `okr.py` (schemas + period math extracted; gap/outreach still here), `enterprise.py`, `auth.py`, `files.py`, `agentbay_control.py`, `websocket.py`, `agents.py`, `tools.py`, `skills.py`, `wecom.py`, `gateway.py`, `tenants.py`, `teams.py`, `admin.py`.
 - Split new domain logic out of those files. Do not expose secrets in response models.
 
 ## Agent deletion and ownership

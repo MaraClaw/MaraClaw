@@ -9,13 +9,13 @@ import httpx
 import pytest
 
 from app.core.outbound_policy import OutboundPolicyError
-from app.services.channels import inbound, slack_submissions
-from channel_shared_webhook_fixtures import context, pipeline, webhook_pipeline
+from app.services.channels import slack_submissions
+from channel_shared_webhook_fixtures import context, pipeline
 from provider_download_fixtures import dns_answers, download_wire, ordinary_api, response_bytes
 from test_outbound_transport import RecordingBackend, RecordingStream
-from test_slack_webhook import legacy_slack, slack_acceptance, slack_body
+from test_slack_webhook import slack_acceptance, slack_body
 
-__all__ = ["context", "download_wire", "legacy_slack", "pipeline", "slack_acceptance", "webhook_pipeline"]
+__all__ = ["context", "download_wire", "pipeline", "slack_acceptance"]
 
 
 @dataclass(frozen=True)
@@ -24,27 +24,15 @@ class SlackDownload:
     upload: AsyncMock
 
 
-@pytest.fixture(params=["native", "fallback"])
-def slack_download(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> SlackDownload:
-    match request.param:
-        case "native":
-            config, upload, *_ = request.getfixturevalue("slack_acceptance")
+@pytest.fixture
+def slack_download(slack_acceptance, monkeypatch: pytest.MonkeyPatch) -> SlackDownload:
+    config, upload, *_ = slack_acceptance
 
-            async def deliver(url: str) -> None:
-                assert await slack_submissions.accept_slack_event(
-                    config, slack_body([{"id": "F1", "name": "photo.png", "url_private_download": url}])
-                )
+    async def deliver(url: str) -> None:
+        await slack_submissions.accept_slack_event(
+            config, slack_body([{"id": "F1", "name": "photo.png", "url_private_download": url}])
+        )
 
-        case "fallback":
-            legacy = request.getfixturevalue("legacy_slack")
-            upload = legacy.upload
-            monkeypatch.setattr(inbound, "persist_user_message", AsyncMock())
-
-            async def deliver(url: str) -> None:
-                await legacy.deliver([{"id": "F1", "name": "photo.png", "url_private_download": url}])
-
-        case _:
-            raise AssertionError(request.param)
     ordinary_api(monkeypatch, lambda _: httpx.Response(200, json={"ok": True}))
     return SlackDownload(deliver, upload)
 

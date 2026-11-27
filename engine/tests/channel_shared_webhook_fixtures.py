@@ -51,7 +51,6 @@ def webhook_pipeline(pipeline, monkeypatch):
     monkeypatch.setattr(feishu.feishu_service, "send_message", AsyncMock(return_value={}))
     monkeypatch.setattr(feishu.feishu_service, "download_message_resource", AsyncMock(return_value=b"image-bytes"))
     upload = AsyncMock(return_value=("key", "workspace/uploads/upload.bin", "path"))
-    monkeypatch.setattr(slack, "store_agent_upload", upload)
     monkeypatch.setattr(feishu, "store_agent_upload", upload)
     monkeypatch.setattr(slack_submissions, "store_agent_upload", upload)
     monkeypatch.setattr(feishu_submissions, "store_agent_upload", upload)
@@ -110,13 +109,12 @@ async def invoke_webhook(name, webhook_pipeline, monkeypatch, *, group=False, na
                 "user": "U123",
                 "channel": "C123" if group else "D123",
                 "text": "" if name == "slack_file_only" else "hello",
+                "ts": native_id,
             }
             if name != "slack":
                 event["files"] = [
                     {"id": "native-file", "name": "upload.bin", "url_private_download": "https://provider.invalid/file"}
                 ]
-            if native_id:
-                event["ts"] = native_id
             payload = {"type": "event_callback", "event": event}
             stamp = str(int(time.time()))
             signature = hmac.new(

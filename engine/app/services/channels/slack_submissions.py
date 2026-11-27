@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import PurePosixPath
 
+from fastapi import HTTPException
+
 from app.core.json_types import JsonObject, json_as_str_or, json_object_from
 from app.core.outbound_transport import public_http_client
 from app.records.channel_config import ChannelConfigRecord
@@ -23,16 +25,18 @@ from .media_limits import (
 from .submissions import ChannelEvent, accept_channel_event, claim_channel_event, is_channel_event_replay
 
 
-async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject, *, final_retry: bool = False) -> bool:
-    """Accept a Slack event callback; False when it has no native id and the legacy fallback must handle it.
+async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject, *, final_retry: bool = False) -> None:
+    """Accept a Slack event callback, keyed by the event's ``ts`` or the envelope's ``event_id``.
 
-    A delivery that finds the event's in-flight claim held raises ``ChannelEventInFlightError`` (503) so Slack redelivers
-    it. ``final_retry`` marks Slack's last redelivery, which proceeds despite a held claim because nothing follows it.
+    Slack sends ``event_id`` on every callback and ``ts`` on every message and app mention, so an event with neither is
+    refused with 400 before any claim, download or write. A delivery that finds the event's in-flight claim held raises
+    ``ChannelEventInFlightError`` (503) so Slack redelivers it. ``final_retry`` marks Slack's last redelivery, which
+    proceeds despite a held claim because nothing follows it.
     """
     event = json_object_from(body.get("event"))
     native_id = json_as_str_or(event.get("ts")) or json_as_str_or(body.get("event_id"))
     if not native_id:
-        return False
+        raise HTTPException(status_code=400, detail="Slack event ID is required")
     channel_id = json_as_str_or(event.get("channel"))
     sender_id = json_as_str_or(event.get("user"))
     files_raw = event.get("files")
@@ -56,7 +60,6 @@ async def accept_slack_event(config: ChannelConfigRecord, body: JsonObject, *, f
             await accept_channel_event(
                 replace(native, attachments=attachments), content=enriched, saved_content=enriched
             )
-    return True
 
 
 def _filename(file: JsonObject) -> str:

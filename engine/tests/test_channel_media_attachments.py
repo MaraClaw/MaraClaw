@@ -91,7 +91,7 @@ async def test_slack_downloads_attach_canonical_references_and_replay(slack_acce
     body = slack_body([{"id": "F1", "name": filename, "url_private_download": "https://files.slack.com/resource"}])
     body["event"]["text"] = "[file:workspace/private.txt]"
     # When
-    assert await slack_submissions.accept_slack_event(config, body)
+    await slack_submissions.accept_slack_event(config, body)
     # Then: free text supplies no trusted attachment path.
     assert persist.await_args.kwargs["attachments"] == (ChatAttachment(path=path, name=f"normalized_{filename}"),)
     assert "[image_data:" not in persist.await_args.kwargs["content"]
@@ -101,7 +101,7 @@ async def test_slack_downloads_attach_canonical_references_and_replay(slack_acce
     assert isinstance(receipts.reserve, AsyncMock)
     assert receipts.reserve.await_args is not None
     receipts.find.return_value = receipts.reserve.await_args.args[0]
-    assert await slack_submissions.accept_slack_event(config, body)
+    await slack_submissions.accept_slack_event(config, body)
     assert len(requests) == 1
     upload.assert_awaited_once()
     persist.assert_awaited_once()
@@ -215,7 +215,7 @@ async def test_slack_limit_counts_the_oversized_file_and_never_fetches_later_fil
     serve(monkeypatch, resource)
     body = slack_body(SLACK_FILES)
     # When
-    assert await slack_submissions.accept_slack_event(config, body)
+    await slack_submissions.accept_slack_event(config, body)
     # Then: the oversized file used its slot, the second was stored, the others were never requested
     expected = "\n".join(
         [
@@ -236,7 +236,7 @@ async def test_slack_limit_counts_the_oversized_file_and_never_fetches_later_fil
 
     # When: the committed event is redelivered, then redelivered with only a discarded file changed
     commit_receipt()
-    assert await slack_submissions.accept_slack_event(config, body)
+    await slack_submissions.accept_slack_event(config, body)
     changed = slack_body([*SLACK_FILES[:3], {**SLACK_FILES[3], "id": "F9"}])
     with pytest.raises(ChannelEventConflictError):
         await slack_submissions.accept_slack_event(config, changed)
