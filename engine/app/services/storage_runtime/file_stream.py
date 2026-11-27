@@ -1,9 +1,9 @@
-"""Serve an open local file as an HTTP response without reopening it by name."""
+"""Serve an open local file, or a stored object read in ranged chunks, as an HTTP response."""
 
 import os
 import re
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import UTC
 from email.utils import formatdate, parsedate_to_datetime
 from typing import BinaryIO
@@ -11,6 +11,9 @@ from typing import BinaryIO
 from starlette.background import BackgroundTask
 from starlette.datastructures import Headers
 from starlette.responses import Response, StreamingResponse
+
+from app.core.logging import logger
+from app.services.storage_runtime.base import StorageBackend, StorageReadChangedError, StorageVersion
 
 _CHUNK_BYTES = 1024 * 1024
 # One `bytes=` range of `a-b`, `a-` or `-n`. Eighteen digits per bound keep `int` far from any limit; a longer number is
@@ -74,6 +77,35 @@ def file_response(
         headers=response_headers,
         background=BackgroundTask(stream.close),
     )
+
+
+def storage_response(
+    storage: StorageBackend, key: str, version: StorageVersion, *, media_type: str, headers: Mapping[str, str]
+) -> Response:
+    """Answer a GET with the whole object `version` describes, announcing its size and reading it chunk by chunk."""
+    return StreamingResponse(
+        _storage_chunks(storage, key, version),
+        media_type=media_type,
+        headers={**headers, "Content-Length": str(version.size)},
+    )
+
+
+async def _storage_chunks(storage: StorageBackend, key: str, version: StorageVersion) -> AsyncIterator[bytes]:
+    """Read `version.size` bytes in ranged reads of at most `_CHUNK_BYTES`, every one from `version`.
+
+    A chunk is sent only after the key is looked up again and still carries `version`'s token, so bytes of two
+    versions never reach the client. A changed key or a short read raises before the chunk goes out, and the
+    transfer ends short of its `Content-Length`.
+    """
+    position = 0
+    while position < version.size:
+        wanted = min(_CHUNK_BYTES, version.size - position)
+        chunk = await storage.read_bytes_bounded(key, wanted, offset=position)
+        if len(chunk) != wanted or (await storage.get_version(key)).token != version.token:
+            logger.warning(f"Download of {key} stopped at byte {position} of {version.size}: the file changed")
+            raise StorageReadChangedError(key)
+        position += wanted
+        yield chunk
 
 
 def _is_not_modified(request_headers: Headers, etag: str, mtime: float) -> bool:

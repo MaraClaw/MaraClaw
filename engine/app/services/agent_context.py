@@ -6,26 +6,29 @@ workspace files and composes a comprehensive system prompt.
 
 import uuid
 from pathlib import Path
+from typing import Final
 
 from app.config import get_settings
 from app.core.domain.channels import ChannelType
 from app.core.json_types import is_str_dict
 from app.core.logging import logger
 from app.services.storage import get_storage_backend, normalize_storage_key
+from app.services.storage_runtime.text_head import read_text_capped, read_text_head
 
 settings = get_settings()
 
+SKILL_HEAD_BYTES: Final = 64 * 1024
+"""Bytes of a skill file read for its index row. Frontmatter whose closing `---` lies beyond them is parsed like a file
+without a closing `---`: the name stays the file's own and the description is its first plain line."""
+
 
 async def _read_file_safe(key: str, max_chars: int = 3000) -> str:
-    """Read a storage-backed text file, return empty string if missing."""
+    """Read the start of a storage-backed text file, cut to max_chars; empty string if missing."""
     storage = get_storage_backend()
     if not await storage.exists(key) or not await storage.is_file(key):
         return ""
     try:
-        content = (await storage.read_text(key, encoding="utf-8", errors="replace")).strip()
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n...(truncated)"
-        return content
+        return await read_text_capped(storage, key, max_chars)
     except Exception:
         return ""
 
@@ -101,7 +104,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
                     skill_md_key = f"{entry_key}/skill.md"
                 if await storage.exists(skill_md_key):
                     try:
-                        content = (await storage.read_text(skill_md_key, encoding="utf-8", errors="replace")).strip()
+                        content = (await read_text_head(storage, skill_md_key, SKILL_HEAD_BYTES)).text.strip()
                         name, desc = _parse_skill_frontmatter(content, entry.name)
                         skills.append((name, desc, f"{entry.name}/SKILL.md"))
                     except Exception:
@@ -110,7 +113,7 @@ async def _load_skills_index(agent_id: uuid.UUID) -> str:
             # Case 2: Flat file - skills/<name>.md
             elif Path(entry.name).suffix == ".md":
                 try:
-                    content = (await storage.read_text(entry_key, encoding="utf-8", errors="replace")).strip()
+                    content = (await read_text_head(storage, entry_key, SKILL_HEAD_BYTES)).text.strip()
                     name, desc = _parse_skill_frontmatter(content, Path(entry.name).stem)
                     skills.append((name, desc, entry.name))
                 except Exception:

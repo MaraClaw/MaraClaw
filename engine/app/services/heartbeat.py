@@ -28,8 +28,11 @@ from app.services.llm.router import load_agent_model_bundle, select_turn_model
 from app.services.llm.types import LLMToolCall, LLMToolFunction, ToolPayload
 from app.services.quota_guard import QuotaExceeded, consume_agent_llm_call
 from app.services.storage import agent_storage_key, get_storage_backend
+from app.services.storage_runtime.text_head import read_text_capped
 
 HEARTBEAT_INTERVAL_SECONDS = 60.0
+HEARTBEAT_MD_MAX_CHARS: Final = 16_000
+"""Characters of HEARTBEAT.md that go into the heartbeat instruction; a longer file is cut and ends in a marker."""
 PROGRESS_BUDGET_SECONDS: Final = 300.0
 HEARTBEAT_CONCURRENCY: Final = 10
 """Heartbeats one worker runs at once, and the most agents a tick selects as due."""
@@ -263,8 +266,7 @@ async def _run_heartbeat(agent_id: uuid.UUID) -> None:
         hb_key = agent_storage_key(agent_id, "HEARTBEAT.md")
         if await storage.exists(hb_key):
             try:
-                custom = await storage.read_text(hb_key, encoding="utf-8", errors="replace")
-                custom = custom.strip()
+                custom = await read_text_capped(storage, hb_key, HEARTBEAT_MD_MAX_CHARS)
                 if custom:
                     heartbeat_instruction = (
                         custom

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from tests.bounded_read_fakes import RecordingStorage
 from tests.health_caller_fakes import ModelPair, install_model_pair
 from tests.llm_retry_fakes import install_provider_health, trip
 from tests.test_background_llm import BackgroundClient
@@ -16,6 +17,7 @@ from app.services import heartbeat
 from app.services.llm.provider_health import Admission, is_unavailable, model_key
 from app.services.llm.retry_policy import LLMHTTPError
 from app.services.llm.types import LLMResponse, LLMToolCall, ToolPayload
+from app.services.storage_runtime.text_head import TRUNCATED_MARKER, head_bytes_for_chars
 from test_finish_protocol import _finish_response, _model
 from worker_progress_fixtures import WorkerHTTP, worker_http
 
@@ -215,6 +217,61 @@ def _wire(monkeypatch: pytest.MonkeyPatch, pair: ModelPair, unread: Sequence[Sim
         lambda message, *args: seams.warnings.append(message.format(*args) if args else message),
     )
     return seams
+
+
+async def _heartbeat_instruction(
+    monkeypatch: pytest.MonkeyPatch, heartbeat_md: bytes | None
+) -> tuple[str, RecordingStorage, str]:
+    pair = install_model_pair(monkeypatch, [_finish_response("done")])
+    _ = _wire(monkeypatch, pair)
+    key = heartbeat.agent_storage_key(pair.agent.id, "HEARTBEAT.md")
+    storage = RecordingStorage({} if heartbeat_md is None else {key: heartbeat_md})
+    monkeypatch.setattr(heartbeat, "get_storage_backend", lambda: storage)
+
+    await heartbeat._run_heartbeat(pair.agent.id)
+
+    (messages,) = pair.primary_client.messages_seen
+    instruction = messages[1].content
+    assert isinstance(instruction, str)
+    return instruction, storage, key
+
+
+async def test_a_small_heartbeat_file_is_the_instruction_followed_by_the_posting_rules(monkeypatch):
+    custom = "Check the garden \u20ac"
+    text, storage, key = await _heartbeat_instruction(monkeypatch, f"\n {custom} \n".encode())
+
+    assert text.startswith(custom)
+    assert not text.removeprefix(custom).startswith(TRUNCATED_MARKER)
+    assert storage.reads == [(key, head_bytes_for_chars(heartbeat.HEARTBEAT_MD_MAX_CHARS), 0)]
+    assert storage.whole_reads == []
+
+
+async def test_a_huge_heartbeat_file_is_cut_with_the_same_rules_after_it(monkeypatch):
+    short, _, _ = await _heartbeat_instruction(monkeypatch, b"short")
+    rules = short.removeprefix("short")
+    limit = heartbeat.HEARTBEAT_MD_MAX_CHARS
+
+    text, storage, key = await _heartbeat_instruction(monkeypatch, b"h" * (limit * 10))
+
+    assert text == "h" * limit + TRUNCATED_MARKER + rules
+    assert storage.reads == [(key, head_bytes_for_chars(limit), 0)]
+    assert storage.whole_reads == []
+
+
+async def test_a_character_cut_at_the_end_of_the_heartbeat_head_is_dropped(monkeypatch):
+    padding = head_bytes_for_chars(heartbeat.HEARTBEAT_MD_MAX_CHARS) - 4
+
+    text, _, _ = await _heartbeat_instruction(monkeypatch, b" " * padding + "\u20ac".encode() * 5)
+
+    assert text.startswith("\u20ac" + TRUNCATED_MARKER)
+    assert "\ufffd" not in text
+
+
+@pytest.mark.parametrize("heartbeat_md", [None, b" \n\t "])
+async def test_a_missing_or_blank_heartbeat_file_keeps_the_default_instruction(monkeypatch, heartbeat_md):
+    text, _, _ = await _heartbeat_instruction(monkeypatch, heartbeat_md)
+
+    assert text.startswith(heartbeat.DEFAULT_HEARTBEAT_INSTRUCTION)
 
 
 async def _run(path: str, agent_id: uuid.UUID) -> None:
