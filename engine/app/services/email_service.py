@@ -4,27 +4,38 @@ Supports all major email providers via preset configurations.
 Each agent stores its own email credentials in per-agent tool config.
 """
 
+import base64
 import email as email_lib
 import imaplib
+import os
+import secrets
 import smtplib
 import ssl
+import tempfile
 import uuid
 from datetime import UTC, datetime
-from email import encoders
 from email.header import decode_header
 from email.message import Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.policy import compat32
 from email.utils import make_msgid, parseaddr
+from functools import partial
 from pathlib import Path
-from typing import NotRequired, TypedDict, cast
+from typing import IO, BinaryIO, NotRequired, TypedDict, cast
+
+import anyio
 
 from app.config import get_settings
-from app.core.email import force_ipv4, send_smtp_email
+from app.core.email import force_ipv4, send_smtp_email, send_smtp_stream
 from app.core.json_types import json_as_bool, json_as_str_or
 from app.core.logging import logger
-from app.services.storage_runtime.base import StorageReadLimitExceededError
+from app.services.storage_runtime.base import (
+    StorageBackend,
+    StorageReadChangedError,
+    StorageReadLimitExceededError,
+)
 
 
 class EmailProviderPreset(TypedDict):
@@ -220,27 +231,110 @@ class AttachmentRefusedError(Exception):
     """An attachment cannot go out, so the message does not; the text is the tool's reply."""
 
 
-async def _read_attachments(agent_prefix: str, attachments: list[str]) -> list[tuple[str, bytes]]:
-    """Read each attachment from storage as ``(filename, bytes)``, within ``EMAIL_ATTACHMENTS_MAX_BYTES`` in all.
+# Raw bytes per read: a whole number of 57-byte groups, so every base64 line of a chunk is full and only the last
+# chunk of a file ends in padding.
+_CHUNK_BYTES = 57 * 8192
+# A message up to this size is built in memory; a larger one rolls over to a temporary file that is deleted on close.
+_SPOOL_BYTES = 256 * 1024
+_WIRE_POLICY = compat32.clone(linesep="\r\n")
+
+
+def _attachment_key(agent_prefix: str, rel_path: str) -> str | None:
+    """The storage key of an attachment, or None when it is not under the agent's own prefix.
 
     A key is normalized as every storage key is, then must still sit under the agent's own prefix: ``..`` pops
     segments, so without that check it would reach another agent's files or climb out of the storage root.
     """
-    from app.services.storage import get_storage_backend, normalize_storage_key
+    from app.services.storage import normalize_storage_key
+
+    clean_rel = rel_path.replace("\\", "/").strip().lstrip("/")
+    storage_key = normalize_storage_key(f"{agent_prefix}/{clean_rel}")
+    return storage_key if storage_key.startswith(f"{agent_prefix}/") else None
+
+
+def _write_base64(out: IO[bytes], chunk: bytes) -> None:
+    _ = out.write(base64.encodebytes(chunk).replace(b"\n", b"\r\n"))
+
+
+def _write_base64_read(out: IO[bytes], stream: BinaryIO, size: int) -> int:
+    chunk = stream.read(size)
+    _write_base64(out, chunk)
+    return len(chunk)
+
+
+async def _copy_attachment(storage: StorageBackend, key: str, budget: int, out: IO[bytes]) -> int:
+    """Append the base64 of the file at `key` to `out` in chunks, and return its size in bytes.
+
+    A file over `budget` raises `StorageReadLimitExceededError` before a byte is read, a missing file or a directory
+    `FileNotFoundError`, and a file that changes or comes up short while it is read `StorageReadChangedError`.
+    A local file is read through the descriptor the storage opened, whose `fstat` before and after tells whether it
+    changed; its version call hashes the whole file. Any other key is read in ranged requests between two version
+    lookups that must agree.
+    """
+    if (opened := await storage.open_local_file(key)) is not None:
+        stream, info = opened
+        try:
+            if info.st_size > budget:
+                raise StorageReadLimitExceededError(budget, info.st_size)
+            left = info.st_size
+            while left:
+                wanted = min(_CHUNK_BYTES, left)
+                if await anyio.to_thread.run_sync(_write_base64_read, out, stream, wanted) != wanted:
+                    raise StorageReadChangedError(key)
+                left -= wanted
+            after = await anyio.to_thread.run_sync(os.fstat, stream.fileno())
+            if (after.st_mtime_ns, after.st_size) != (info.st_mtime_ns, info.st_size):
+                raise StorageReadChangedError(key)
+        finally:
+            stream.close()
+        return info.st_size
+    version = await storage.get_version_bounded(key, budget)
+    if not version.exists or version.is_dir:
+        raise FileNotFoundError(key)
+    for position in range(0, version.size, _CHUNK_BYTES):
+        wanted = min(_CHUNK_BYTES, version.size - position)
+        chunk = await storage.read_bytes_bounded(key, wanted, offset=position)
+        if len(chunk) != wanted:
+            raise StorageReadChangedError(key)
+        await anyio.to_thread.run_sync(_write_base64, out, chunk)
+    if (await storage.get_version(key)).token != version.token:
+        raise StorageReadChangedError(key)
+    return version.size
+
+
+async def _write_message(msg: MIMEMultipart, agent_prefix: str, attachments: list[str], out: IO[bytes]) -> None:
+    """Write `msg` to `out` as the wire message, each attachment read from storage within `EMAIL_ATTACHMENTS_MAX_BYTES`.
+
+    The email package lays out the whole message (headers, boundaries, RFC 2231 filenames) around a one-line stand-in
+    for every attachment body; each stand-in is replaced by the file's base64 as the file is read, so memory is a few
+    chunks however large the files are. A missing, unreadable, out-of-workspace, changed or over-budget file raises
+    `AttachmentRefusedError` for the first such file in list order; nothing has been sent by then.
+    """
+    from app.services.storage import get_storage_backend
 
     storage = get_storage_backend()
     limit = get_settings().EMAIL_ATTACHMENTS_MAX_BYTES
     remaining = limit
-    files: list[tuple[str, bytes]] = []
+    planned: list[tuple[str, str | None, bytes]] = []
     for rel_path in attachments:
-        clean_rel = rel_path.replace("\\", "/").strip().lstrip("/")
-        storage_key = normalize_storage_key(f"{agent_prefix}/{clean_rel}")
-        if not storage_key.startswith(f"{agent_prefix}/"):
+        storage_key = _attachment_key(agent_prefix, rel_path)
+        stand_in = secrets.token_hex(16)
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(stand_in)
+        part["Content-Transfer-Encoding"] = "base64"
+        part.add_header("Content-Disposition", "attachment", filename=Path(storage_key or rel_path).name)
+        msg.attach(part)
+        planned.append((rel_path, storage_key, stand_in.encode("ascii")))
+    rest = msg.as_bytes(policy=_WIRE_POLICY)
+    for rel_path, storage_key, stand_in in planned:
+        before, _, rest = rest.partition(stand_in)
+        _ = out.write(before)
+        if storage_key is None:
             raise AttachmentRefusedError(
                 f"❌ Attachment {rel_path} is not a file inside the workspace. Nothing was sent."
             )
         try:
-            data = await storage.read_bytes_bounded(storage_key, remaining)
+            remaining -= await _copy_attachment(storage, storage_key, remaining, out)
         except StorageReadLimitExceededError:
             raise AttachmentRefusedError(
                 f"❌ Attachment {rel_path} takes the message past the {limit}-byte limit on attachments. "
@@ -248,14 +342,16 @@ async def _read_attachments(agent_prefix: str, attachments: list[str]) -> list[t
             ) from None
         except FileNotFoundError:
             raise AttachmentRefusedError(f"❌ Attachment not found: {rel_path}. Nothing was sent.") from None
+        except StorageReadChangedError:
+            raise AttachmentRefusedError(
+                f"❌ Attachment {rel_path} changed while it was being read. Nothing was sent."
+            ) from None
         except Exception as error:
             logger.warning(f"Could not read email attachment {storage_key}: {error}")
             raise AttachmentRefusedError(
                 f"❌ Could not read attachment {rel_path}: {str(error)[:200]}. Nothing was sent."
             ) from error
-        remaining -= len(data)
-        files.append((Path(storage_key).name, data))
-    return files
+    _ = out.write(rest)
 
 
 async def send_email(
@@ -277,7 +373,8 @@ async def send_email(
         body: Email body text
         cc: CC recipients, comma-separated
         attachments: List of workspace-relative file paths to attach. Every file is read from storage; a missing,
-            unreadable or out-of-workspace file, or a total past ``EMAIL_ATTACHMENTS_MAX_BYTES``, refuses the send
+            unreadable or out-of-workspace file, a file that changes while it is read, or a total past
+            ``EMAIL_ATTACHMENTS_MAX_BYTES`` refuses the send
         workspace_path: Agent workspace directory; its name is the storage prefix when ``agent_id`` is not given
         agent_id: Optional UUID of the agent whose storage prefix the attachments are read from
     """
@@ -299,40 +396,58 @@ async def send_email(
 
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    if attachments is not None and attachments and workspace_path is not None:
-        try:
-            files = await _read_attachments(str(agent_id) if agent_id else workspace_path.name, attachments)
-        except AttachmentRefusedError as refusal:
-            return str(refusal)
-        for filename, file_bytes in files:
-            part = MIMEBase("application", "octet-stream")
-            part.set_payload(file_bytes)
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", "attachment", filename=filename)
-            msg.attach(part)
-
     try:
         recipients = [r.strip() for r in to.split(",")]
         if cc not in (None, ""):
             recipients += [r.strip() for r in cc.split(",")]
 
-        send_smtp_email(
-            host=cfg["smtp_host"],
-            port=cfg["smtp_port"],
-            user=addr,
-            password=password,
-            from_addr=addr,
-            to_addrs=recipients,
-            msg_string=msg.as_string(),
-            use_ssl=cfg.get("smtp_ssl", True),
-            timeout=15,
-        )
+        with tempfile.SpooledTemporaryFile(max_size=_SPOOL_BYTES) as outgoing:
+            if attachments is not None and attachments and workspace_path is not None:
+                try:
+                    await _write_message(msg, str(agent_id) if agent_id else workspace_path.name, attachments, outgoing)
+                except AttachmentRefusedError as refusal:
+                    return str(refusal)
+            else:
+                _ = outgoing.write(msg.as_bytes(policy=_WIRE_POLICY))
+            _ = outgoing.seek(0)
+            _ = await anyio.to_thread.run_sync(
+                partial(
+                    send_smtp_stream,
+                    host=cfg["smtp_host"],
+                    port=cfg["smtp_port"],
+                    user=addr,
+                    password=password,
+                    from_addr=addr,
+                    to_addrs=recipients,
+                    message=outgoing,
+                    use_ssl=cfg.get("smtp_ssl", True),
+                    timeout=15,
+                )
+            )
 
         return f"✅ Email sent to {to}" + (f" (CC: {cc})" if cc not in (None, "") else "")
     except smtplib.SMTPAuthenticationError:
         return "❌ SMTP authentication failed. Please check your email address and authorization code."
     except Exception as e:
         return f"❌ Failed to send email: {str(e)[:200]}"
+
+
+async def _send_off_loop(cfg: ResolvedEmailConfig, to_addrs: list[str], msg_string: str, socket_timeout: int) -> None:
+    """Send a small message on a worker thread, so its SMTP round trips never hold the event loop."""
+    await anyio.to_thread.run_sync(
+        partial(
+            send_smtp_email,
+            host=cfg["smtp_host"],
+            port=cfg["smtp_port"],
+            user=cfg["email_address"],
+            password=cfg["auth_code"],
+            from_addr=cfg["email_address"],
+            to_addrs=to_addrs,
+            msg_string=msg_string,
+            use_ssl=cfg.get("smtp_ssl", True),
+            timeout=socket_timeout,
+        )
+    )
 
 
 async def read_emails(
@@ -490,17 +605,7 @@ async def reply_email(
             reply_msg.attach(MIMEText(body, "plain", "utf-8"))
 
             # Send
-            send_smtp_email(
-                host=cfg["smtp_host"],
-                port=cfg["smtp_port"],
-                user=addr,
-                password=password,
-                from_addr=addr,
-                to_addrs=[reply_to],
-                msg_string=reply_msg.as_string(),
-                use_ssl=cfg.get("smtp_ssl", True),
-                timeout=15,
-            )
+            await _send_off_loop(cfg, [reply_to], reply_msg.as_string(), 15)
 
             return f"✅ Reply sent to {reply_to} (Subject: {reply_subject})"
 
@@ -542,16 +647,11 @@ async def test_connection(config: EmailConfig) -> EmailConnectionResult:
 
     # Test SMTP
     try:
-        send_smtp_email(
-            host=cfg["smtp_host"],
-            port=cfg["smtp_port"],
-            user=addr,
-            password=password,
-            from_addr=addr,
-            to_addrs=[addr],  # Send to self for test
-            msg_string=f"From: {addr}\nTo: {addr}\nSubject: MaraClaw Connection Test\n\nSMTP Connection Successful.",
-            use_ssl=cfg.get("smtp_ssl", True),
-            timeout=10,
+        await _send_off_loop(
+            cfg,
+            [addr],  # Send to self for test
+            f"From: {addr}\nTo: {addr}\nSubject: MaraClaw Connection Test\n\nSMTP Connection Successful.",
+            10,
         )
         result["smtp"] = "✅ SMTP connected"
     except smtplib.SMTPAuthenticationError:
