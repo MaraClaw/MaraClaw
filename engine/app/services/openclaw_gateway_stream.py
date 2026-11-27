@@ -141,8 +141,8 @@ class DeltaRelay:
         pending = bytearray()
         last = ""
         with (
-            observation(EXEC_POLICY, deadline=monotonic() + 940, cancel=cancel),
-            client.container.execute(container_id, argv, stream=True, timeout=940) as output,
+            observation(EXEC_POLICY, deadline=monotonic() + 960, cancel=cancel),
+            client.container.execute(container_id, argv, stream=True, timeout=960) as output,
         ):
             for source, chunk in output:
                 if source != "stdout":

@@ -63,7 +63,7 @@ async def test_web_chunks_arrive_in_order_before_authoritative_done(monkeypatch,
     @contextmanager
     def execute(_container, argv, *, stream, timeout):
         assert stream is True
-        assert timeout == 940
+        assert timeout == 960
         payload = json.loads((tmp_path / argv[-1].split("/")[-1]).read_text())
         assert payload["version"] == 2
         assert payload["stream"] is True
