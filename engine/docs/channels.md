@@ -43,7 +43,7 @@ every original attachment ID, so a retry that changes only a skipped attachment 
 with the durable receipt. Personal Zalo, Telegram and WhatsApp media keep their own limits.
 
 `CHANNEL_MEDIA_ACK_BUDGET_SECONDS` (above 0 up to 30, default 2) bounds the wall-clock time a Slack,
-Telegram or WhatsApp Cloud webhook spends starting fetches and stores for its attachments before it answers; Slack
+Telegram, WhatsApp Cloud or WeCom webhook spends starting fetches and stores for its attachments before it answers; Slack
 gives up after 3 seconds. Once it passes, no further file is requested and no further store starts: a fetch in
 progress is abandoned (a host that sends nothing is cut off too), and the transcript and model content carry one
 note for each file left out, next to the oversize and skipped-files notes. A store that started before the deadline
@@ -55,7 +55,7 @@ text and the files already stored are still accepted, and the receipt fingerprin
 attachment ID. Accepting the event (`accept_channel_event`, one database transaction) and the replay check before
 the fetch run outside the budget.
 
-Those webhooks also take a short in-flight claim before they fetch (Redis, keyed like the event receipt,
+Slack, Telegram and WhatsApp Cloud also take a short in-flight claim before they fetch (Redis, keyed like the event receipt,
 lasting the budget plus ten seconds, which covers the replay check and the acceptance transaction that run
 outside the budget). A provider redelivery that arrives while the first delivery still holds the claim is
 refused with a retryable `503`, a `Retry-After` header (the claim's lifetime) and `detail.code`
@@ -131,14 +131,25 @@ A WeCom text, image, file or video callback without a `MsgId` has no identity to
 webhook refuses it with `400` and `WeCom message ID is required` before acceptance, sender resolution or any media
 download; the `503` every other failure gets would make WeCom retry it. A KF sync page is read, not delivered, so one
 message that cannot be accepted must not hold back the rest: a message without `msgid`, or an image, file or video
-without `media_id`, is logged as a warning and skipped, and the page goes on (cursor handling is unchanged). A message
+without `media_id`, is logged as a warning and skipped, and unsupported origins and kinds are skipped too. A message
 from a sender who is not a linked member is acknowledged with `success` and ignored on the callback, inside a KF page
 and over the AI Bot WebSocket, with no reply and nothing written; over the WebSocket the stream is finished with an
 empty reply, as for an accepted message, and a message without an ID is logged and finished the same way. A WebSocket
 text, image, file, mixed or video frame that names no sender is logged as a warning with the frame's keys and answered
 with a fixed "unable to identify the sender" reply before any download, storage or acceptance. Every other
 failure (access token, `sync_msg`, storage, database, a 403 from authorization, a conflicting event) still answers
-`503`, so WeCom redelivers and the receipts dedupe what was already accepted.
+`503` without saving a checkpoint. Receipts dedupe what was already accepted if WeCom calls again.
+
+WeCom KF sends the callback token and saved cursor on every 20-message pull. The PostgreSQL
+`wecom_kf_cursors` checkpoint is scoped to channel config, corp and customer-service account (empty for an
+unscoped pull), expires after three days, and is removed on config deletion. The idempotent table is installed
+by rerunning the baseline; no backfill is needed. The callback saves the latest fully settled page with a
+compare-and-set. If a peer wins the checkpoint or the callback runs out of time, it answers `200 success`.
+`WECOM_KF_CALLBACK_BUDGET_SECONDS` (above 0 up to 4, default 3.5) starts at callback entry, limits each provider
+pull, and leaves time to save the checkpoint. A clean budget stop logs `budget_stopped` and increments
+`maraclaw_wecom_kf_budget_stopped_total`. A fetch for one message uses the smaller of the two budgets.
+If another drain holds a KF media claim, this drain skips that message, continues with the others, and writes
+no checkpoint. Durable acceptance and any storage write already started continue outside cancellation scopes.
 
 WhatsApp validates the raw-body signature before processing, visits every message
 in a batch, and returns a retryable failure when acceptance fails. Earlier committed
@@ -234,7 +245,10 @@ takes a transaction-scoped advisory lock (key `personal_bridge_fleet:whatsapp` o
 live (`claim_token` set and `lease_until` in the future); at the ceiling it is refused, the process stops
 claiming for that poll, and `fleet_ceiling_reached` logs once per episode with the fleet-wide count. A bridge
 renews its 30-second lease about every second, so a process that died stops counting after at most 30
-seconds (its row stays claimed until teardown, as before). A connection row locked elsewhere (the creator's
+seconds (its row stays claimed until teardown, as before). An idle bridge costs one owner check, one lease renewal and one
+lock-free probe of the pending-send indexes each second (Zalo probes text and media separately); only a probe that finds a
+pending send, or a dispatched send still waiting for its result, leads to dispatch authorization, a media job or the
+uncertain-send sweep, so unlinking or stopping an idle bridge still ends it within about a second. A connection row locked elsewhere (the creator's
 start, a revoke, another claimer) is declined without waiting. Each claim is abandoned after 10 seconds and
 handled like a failed one (the per-connection cooldown); because a hung claim usually has a shared cause
 (a stuck lock holder or the database), the timeout also ends that poll's claims, so one poll spends at most

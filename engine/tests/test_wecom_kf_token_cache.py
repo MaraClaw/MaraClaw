@@ -59,6 +59,7 @@ async def kf_callback(monkeypatch):
         created_at=None,
     )
     monkeypatch.setattr(wecom.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    monkeypatch.setattr(wecom.wecom_kf_cursor_dao, "read", AsyncMock(return_value=None))
     cache = install_token_cache(monkeypatch)
     app = FastAPI()
     app.include_router(wecom.router)

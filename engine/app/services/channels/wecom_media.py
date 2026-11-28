@@ -24,7 +24,9 @@ from app.services.wecom_service import get_wecom_access_token
 
 from .media_limits import (
     MediaBudget,
+    MediaDeadlineError,
     MediaTooLargeError,
+    deadline_note,
     limit_attachments,
     read_capped,
     skipped_attachments_note,
@@ -126,7 +128,7 @@ async def _download(media: WeComMedia, config: ChannelConfigRecord, budget: Medi
                         if int(content_range[3]) > limit:
                             raise MediaTooLargeError(limit, offset)
                     try:
-                        part = await read_capped(response, limit - offset + (32 if media.aes_key else 0))
+                        part = await read_capped(response, limit - offset + (32 if media.aes_key else 0), budget)
                     except MediaTooLargeError as error:
                         raise MediaTooLargeError(limit, offset + error.read) from error
                     if (
@@ -153,26 +155,38 @@ async def _download(media: WeComMedia, config: ChannelConfigRecord, budget: Medi
     return data, name
 
 
-async def accept_wecom_media(native: ChannelEvent, config: ChannelConfigRecord, media: tuple[WeComMedia, ...]) -> None:
+async def accept_wecom_media(
+    native: ChannelEvent,
+    config: ChannelConfigRecord,
+    media: tuple[WeComMedia, ...],
+    *,
+    budget: MediaBudget | None = None,
+) -> None:
     """Authorize the original before I/O, then enrich only attachment refs and accepted content."""
     if await is_channel_event_replay(native):
         return
     content = native.text
     attachments: list[ChatAttachment] = []
-    budget = MediaBudget()
+    if budget is None:
+        budget = MediaBudget() if native.stream_source is not None else MediaBudget.for_acknowledgement()
     retrieved, skipped = limit_attachments(media)
     for item in retrieved:
         if native.stream_source is not None:
             await authorize_stream_source(native.stream_source)
         try:
-            data, name = await _download(item, config, budget)
+            async with budget.window():
+                data, name = await _download(item, config, budget)
+            if native.stream_source is not None:
+                await authorize_stream_source(native.stream_source)
+            budget.check()
         except MediaTooLargeError as error:
             budget.spend(error.read)
             content = f"{content}\n{too_large_note(item.filename, error.limit)}".strip()
             continue
+        except MediaDeadlineError:
+            content = f"{content}\n{deadline_note(item.filename)}".strip()
+            continue
         budget.spend(len(data))
-        if native.stream_source is not None:
-            await authorize_stream_source(native.stream_source)
         _, path, _ = await store_agent_upload(config.agent_id, name, data)
         attachments.append(ChatAttachment(path=path, name=PurePosixPath(path).name))
         content = f"{content}\n[file:{path}]".strip()

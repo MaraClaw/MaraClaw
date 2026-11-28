@@ -1207,6 +1207,12 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_ac
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_created_at ON agent_activity_logs (created_at)$ddl$);
 
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_timeline
+    ON agent_activity_logs (agent_id, created_at DESC, id DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_schedule_history
+    ON agent_activity_logs (agent_id, (detail_json ->> 'schedule_id'), created_at DESC, id DESC)
+    WHERE action_type = 'schedule_run'$ddl$);
+
 CREATE TABLE IF NOT EXISTS agent_agent_relationships (
 	id UUID NOT NULL, 
 	agent_id UUID NOT NULL, 
@@ -1462,6 +1468,11 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_lo
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_user_id ON audit_logs (user_id)$ddl$);
 
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_recent
+    ON audit_logs (created_at DESC, id DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_agent_recent
+    ON audit_logs (agent_id, created_at DESC, id DESC)$ddl$);
+
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
 	id UUID NOT NULL,
 	actor_id UUID,
@@ -1507,6 +1518,15 @@ CREATE TABLE IF NOT EXISTS channel_configs (
 );
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_channel_configs_agent_id ON channel_configs (agent_id)$ddl$);
+
+CREATE TABLE IF NOT EXISTS wecom_kf_cursors (
+    channel_config_id UUID NOT NULL REFERENCES channel_configs(id) ON DELETE CASCADE,
+    corp_id TEXT NOT NULL,
+    open_kfid TEXT NOT NULL,
+    cursor TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (channel_config_id, corp_id, open_kfid)
+);
 
 CREATE TABLE IF NOT EXISTS whatsapp_personal_connections (
     config_id UUID PRIMARY KEY,

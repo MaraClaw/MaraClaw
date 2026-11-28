@@ -72,6 +72,7 @@ from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.dao.trigger_dao import agent_trigger_dao, trigger_execution_dao
 from app.dao.user_dao import user_dao
 from app.dao.web_search_event_dao import web_search_event_dao
+from app.dao.wecom_kf_cursor_dao import wecom_kf_cursor_dao
 from app.dao.workspace_dao import workspace_edit_lock_dao, workspace_file_revision_dao
 from app.dao.workspace_mirror_entry_dao import workspace_mirror_entry_dao
 
@@ -155,6 +156,7 @@ __all__ = [
     "user_dao",
     "user_tenant_onboarding_dao",
     "web_search_event_dao",
+    "wecom_kf_cursor_dao",
     "work_report_dao",
     "workspace_edit_lock_dao",
     "workspace_file_revision_dao",
