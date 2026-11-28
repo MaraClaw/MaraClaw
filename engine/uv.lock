@@ -1883,7 +1883,7 @@ wheels = [
 
 [[package]]
 name = "maraclaw"
-version = "1.1.20"
+version = "1.1.25"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
