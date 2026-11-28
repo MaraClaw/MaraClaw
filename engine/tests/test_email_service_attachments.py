@@ -541,8 +541,30 @@ async def test_a_recipient_the_server_refuses_does_not_fail_the_send_of_the_othe
         result = await box.send(["workspace/a.txt"])
 
         session = box.server.sessions.get(timeout=10)
-    assert result.startswith("\u2705")
     assert session.accepted == ["to@example.test"]
+    assert session.refused == ["cc@example.test"]
+    assert session.message_path is not None
+    assert result.startswith("⚠️")
+    accepted, _, refused = result.partition("Refused:")
+    assert "to@example.test" in accepted
+    assert "cc@example.test" not in accepted
+    assert "cc@example.test" in refused
+    assert "to@example.test" not in refused
+    assert "550" not in result
+
+
+async def test_a_server_that_refuses_all_recipients_receives_no_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    script = SMTPScript(refused_recipients=frozenset({"to@example.test", "cc@example.test"}))
+    with outbox_on(monkeypatch, tmp_path, RecordingStorage, script) as box:
+        result = await box.send([])
+        session = box.server.sessions.get(timeout=10)
+
+    assert result.startswith("\u274c Failed to send email:")
+    assert session.accepted == []
+    assert session.refused == ["to@example.test", "cc@example.test"]
+    assert session.message_path is None
 
 
 @pytest.fixture(scope="module")
