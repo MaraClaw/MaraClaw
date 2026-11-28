@@ -143,4 +143,80 @@ export async function runWindowScenarios({ scenario, capture }) {
       await capture(page, `window-${role}-late-${status}`)
     })
   }
+
+  const clockStart = Date.parse('2026-11-01T12:00:00.000Z')
+  for (const role of ['platform_admin', 'org_admin']) for (const [mobile, scheme] of [[false, 'light'], [true, 'dark']]) {
+    await scenario({ name: `${role} ${mobile ? 'phone' : 'desktop'} ${scheme} window presets fill elapsed UTC bounds without querying until Apply`, mobile, scheme, user: { role, is_platform_admin: role === 'platform_admin' } }, async (page, state) => {
+      await expect(page.getByRole('heading', { name: '2 recent events' })).toBeVisible()
+      const timeWindow = page.getByRole('group', { name: 'Time window (optional)', exact: true })
+      await expect(timeWindow.getByRole('button', { name: 'Last 24 hours', exact: true })).toBeVisible()
+      await expect(timeWindow.getByRole('button', { name: 'Last 7 days', exact: true })).toBeVisible()
+      const startField = page.getByLabel('Start time', { exact: true })
+      const endField = page.getByLabel('End time', { exact: true })
+      const params = { limit: '100', action: 'user.activate', target_type: 'tenant', ...(role === 'platform_admin' ? { tenant_id: tenantId, actor_id: actorId } : {}) }
+      await page.getByLabel('Action', { exact: true }).fill('user.activate')
+      await page.getByLabel('Target type', { exact: true }).fill('tenant')
+      if (role === 'platform_admin') {
+        await page.getByLabel('Tenant ID', { exact: true }).fill(tenantId)
+        await page.getByLabel('Actor ID', { exact: true }).fill(actorId)
+      }
+      state.result = [{ ...event, action: 'preset.prior' }]
+      await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
+      await expect(page.getByRole('heading', { name: 'preset.prior', exact: true })).toBeVisible()
+      assert.deepEqual(state.exchanges.at(-1).params, params)
+      await startField.fill('yesterday')
+      await page.getByRole('button', { name: 'Apply filters', exact: true }).press('Enter')
+      await expect(page.getByRole('alert')).toContainText('RFC 3339')
+      const count = state.exchanges.length
+      let bounds
+      for (const [name, hours, key] of [['Last 24 hours', 24, 'Enter'], ['Last 7 days', 7 * 24, 'Space']]) {
+        const preset = timeWindow.getByRole('button', { name, exact: true })
+        await preset.focus()
+        // Every read advances one second, so bounds taken from two reads cannot span the exact duration.
+        await page.evaluate((base) => {
+          const reads = []
+          globalThis.presetClock = { now: Date.now, reads }
+          Date.now = () => { const value = base + 1000 * reads.length; reads.push(value); return value }
+        }, clockStart)
+        await preset.press(key)
+        const reads = await page.evaluate(() => { Date.now = globalThis.presetClock.now; return globalThis.presetClock.reads })
+        bounds = { start_at: await startField.inputValue(), end_at: await endField.inputValue() }
+        assert.ok(reads.map((value) => new Date(value).toISOString()).includes(bounds.end_at), `${name} end ${bounds.end_at} is not a click-time Date.now read`)
+        assert.equal(new Date(Date.parse(bounds.start_at)).toISOString(), bounds.start_at)
+        assert.equal(Date.parse(bounds.end_at) - Date.parse(bounds.start_at), hours * 3_600_000)
+        await expect(preset).toBeFocused()
+        await expect(page.getByRole('alert')).toHaveCount(0)
+        await expect(startField).toHaveAttribute('aria-invalid', 'false')
+        await flush(page)
+        assert.equal(state.exchanges.length, count)
+        await expect(page.getByRole('heading', { name: 'preset.prior', exact: true })).toBeVisible()
+        await expect(page.getByText('Applied UTC window:', { exact: false })).toHaveCount(0)
+      }
+      await capture(page, `window-${role}-${mobile}-${scheme}-preset-draft`)
+
+      const wire = (value) => value.replace(/Z$/, '000Z')
+      state.result = [{ ...event, action: 'preset.window' }]
+      await page.getByRole('button', { name: 'Apply filters', exact: true }).press('Enter')
+      await expect(page.getByRole('heading', { name: 'preset.window', exact: true })).toBeVisible()
+      await flush(page)
+      assert.equal(state.exchanges.length, count + 1)
+      assert.deepEqual(state.exchanges.at(-1).params, { ...params, start_at: wire(bounds.start_at), end_at: wire(bounds.end_at) })
+      await expect(page.getByText(`Applied UTC window: ${wire(bounds.start_at)} (inclusive) to ${wire(bounds.end_at)} (exclusive).`, { exact: true })).toBeVisible()
+      await capture(page, `window-${role}-${mobile}-${scheme}-preset-applied`)
+
+      await startField.fill('2026-10-30T00:00:00Z')
+      state.result = [{ ...event, action: 'preset.manual' }]
+      await page.getByRole('button', { name: 'Apply filters', exact: true }).click()
+      await expect(page.getByRole('heading', { name: 'preset.manual', exact: true })).toBeVisible()
+      assert.deepEqual(state.exchanges.at(-1).params, { ...params, start_at: '2026-10-30T00:00:00.000000Z', end_at: wire(bounds.end_at) })
+      await page.getByRole('button', { name: 'Clear filters', exact: true }).click()
+      await expect(startField).toHaveValue('')
+      await expect(endField).toHaveValue('')
+      await expect(page.getByLabel('Action', { exact: true })).toHaveValue('')
+      await expect(page.getByLabel('Target type', { exact: true })).toHaveValue('')
+      await expect(page.getByText('Applied UTC window:', { exact: false })).toHaveCount(0)
+      await page.getByRole('button', { name: 'Refresh activity', exact: true }).click()
+      await expect.poll(() => JSON.stringify(state.exchanges.at(-1)?.params)).toBe(JSON.stringify({ limit: '100' }))
+    })
+  }
 }
