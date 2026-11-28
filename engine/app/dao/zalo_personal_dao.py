@@ -92,10 +92,10 @@ def same_claim(current: ZaloConnection, owned: ZaloConnection) -> bool:
     )
 
 
-async def fenced(connection: ZaloConnection, *, connected: bool = False) -> ZaloConnection:
+async def fenced(connection: ZaloConnection, *, connected: bool = False, lock: bool = True) -> ZaloConnection:
     agent, owner = await zalo_owner(connection.agent_id, authorization_only=True)
     require_running(agent)
-    current = await get_personal(agent.id, lock=True)
+    current = await get_personal(agent.id, lock=lock)
     if (
         current is None
         or not same_claim(current, connection)
@@ -110,9 +110,13 @@ async def fenced(connection: ZaloConnection, *, connected: bool = False) -> Zalo
     return current
 
 
-async def renew(connection: ZaloConnection) -> bool:
+async def renew(connection: ZaloConnection, current: ZaloConnection | None = None) -> bool:
+    """Extend the lease. The UPDATE alone fails closed on a replaced claim, generation or auth epoch, a revoked
+    desire or an expired lease; pass the row ``fenced`` returned earlier in this transaction to skip the second
+    owner check, otherwise it is fenced here."""
     async with connection_ctx() as db:
-        await fenced(connection)
+        if current is None:
+            await fenced(connection)
         return bool(
             await db.fetchval(
                 "UPDATE zalo_personal_connections SET lease_until=now()+interval '30 seconds',updated_at=now() "

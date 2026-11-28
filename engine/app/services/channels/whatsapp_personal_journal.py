@@ -96,6 +96,53 @@ class PersonalSendPendingError(Exception):
         return "personal_send_pending"
 
 
+async def has_pending(current: PersonalConnection) -> bool:
+    """Lock-free peek at `ix_whatsapp_personal_pending`: whether `authorize_dispatch` has a candidate.
+
+    Keep its fences identical to that call's; authorization itself stays there."""
+    async with connection_ctx() as db:
+        return bool(
+            await db.fetchval(
+                "SELECT TRUE FROM whatsapp_personal_sends WHERE config_id=%(config)s AND auth_epoch=%(epoch)s "
+                "AND generation=%(generation)s AND account_id=%(account)s AND state='pending' LIMIT 1",
+                {
+                    "config": current.config_id,
+                    "epoch": current.auth_epoch,
+                    "generation": current.generation,
+                    "account": current.account_id,
+                },
+            )
+        )
+
+
+class InFlight(BaseModel):
+    command_id: UUID
+    silent: bool
+
+
+async def settle_uncertain(current: PersonalConnection, dispatched: frozenset[UUID]) -> frozenset[UUID]:
+    """Close dispatched sends the bridge left unanswered for 25 seconds as `uncertain`; return those still in flight.
+
+    A read by primary key finds them, because no index covers `dispatch_started`; only a silent one is written."""
+    async with connection_ctx() as db:
+        rows = [
+            InFlight.model_validate(row)
+            for row in await db.fetchall(
+                "SELECT command_id,dispatched_at<now()-interval '25 seconds' AS silent FROM whatsapp_personal_sends "
+                "WHERE command_id=ANY(%(ids)s) AND state='dispatch_started'",
+                {"ids": list(dispatched)},
+            )
+        ]
+        silent = [row.command_id for row in rows if row.silent]
+        if silent:
+            await db.execute(
+                "UPDATE whatsapp_personal_sends SET state='uncertain',finished_at=now() WHERE command_id=ANY(%(ids)s) "
+                "AND config_id=%(config)s AND claim_token=%(claim)s AND state='dispatch_started'",
+                {"ids": silent, "config": current.config_id, "claim": current.claim_token},
+            )
+    return frozenset(row.command_id for row in rows if not row.silent)
+
+
 async def authorize_dispatch(connection: PersonalConnection) -> PersonalSend | None:
     async with connection_ctx() as db:
         await personal_owner(connection.agent_id, authorization_only=True)

@@ -7,7 +7,17 @@ import anyio
 import pytest
 from fastapi import HTTPException
 from tests.channel_submission_fixtures import ChannelDatabase
-from tests.zalo_personal_fixtures import bind, channel_db, claimed, message_for, receipt_db, route_for
+from tests.personal_tick_fixtures import (
+    TickStoppedError,
+    between_ticks,
+    planned_with_index,
+    queries,
+    record_frames,
+    record_statements,
+    touching,
+)
+from tests.test_whatsapp_personal_surfaces import use_pool
+from tests.zalo_personal_fixtures import bind, channel_db, claimed, connected, message_for, receipt_db, route_for
 from tests.zalo_personal_lifecycle_fixtures import BRIDGE
 
 from app.dao.agent_dao import agent_dao
@@ -22,6 +32,7 @@ from app.services import gateway_report_relay, gateway_report_wake, openclaw_rou
 from app.services.agent_manager import agent_manager
 from app.services.channels import zalo_personal_child as child_module
 from app.services.channels.whatsapp_personal_journal import PersonalSendTerminalError
+from app.services.channels.zalo_personal_access import zalo_owner
 from app.services.channels.zalo_personal_child import ZaloChild
 from app.services.channels.zalo_personal_control import disconnect, start, status
 from app.services.channels.zalo_personal_events import handle_frame
@@ -215,3 +226,38 @@ async def test_pair_to_reply_relink_and_disconnect_commits_across_real_child(
             )
     finally:
         await close_pool()
+
+
+async def test_idle_tick_runs_one_owner_check_one_renewal_and_lock_free_probes(
+    channel_db: ChannelDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a connected account with nothing to send.
+    f = channel_db
+    use_pool(f, monkeypatch)
+    async with transaction(f.db.first):
+        owned = await connected(f)
+    statements = record_statements(monkeypatch)
+    async with transaction(f.db.first):
+        await zalo_owner(owned.agent_id, authorization_only=True)
+    owner_check = len(statements)
+    statements.clear()
+    frames = record_frames(monkeypatch, ZaloChild)
+    between_ticks(monkeypatch)
+    # When it ticks once.
+    with anyio.fail_after(10), pytest.raises(TickStoppedError):
+        await ZaloChild(owned).tick()
+    # Then it spent one owner check, one connection read, one renewal and two probes, and took no row lock.
+    assert len(statements) == owner_check + 4
+    assert touching(statements, "zalo_personal_") == [
+        ("SELECT", "zalo_personal_connections"),
+        ("UPDATE", "zalo_personal_connections"),
+        ("SELECT", "zalo_personal_sends"),
+        ("SELECT", "zalo_personal_media_sends"),
+    ]
+    assert not queries(statements, "FOR UPDATE")
+    # And each probe reads its pending partial index, and the lease frame is the only frame, with 30000 ms.
+    for probe, index in zip(
+        statements[-2:], ("ix_zalo_personal_pending", "ix_zalo_personal_media_sends_pending"), strict=True
+    ):
+        assert index in await planned_with_index(f.db.first, probe)
+    assert [(frame["type"], frame["lease_ms"]) for frame in frames] == [("lease", 30000)]

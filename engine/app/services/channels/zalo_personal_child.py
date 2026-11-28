@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import final
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import anyio
 from anyio.abc import Process, TaskGroup
@@ -23,9 +23,11 @@ from app.db.errors import DbError, UniqueViolationError
 from app.db.session import connection_ctx
 from app.records.channel_media import StoredFile
 from app.records.zalo_personal import ZaloConnection
+from app.services.channels.zalo_personal_dispatch_probe import has_pending, settle_uncertain
 from app.services.channels.zalo_personal_events import handle_frame
 from app.services.channels.zalo_personal_journal import authorize_dispatch
 from app.services.channels.zalo_personal_media_jobs import consume_media, dispatch_file, send_pending_media
+from app.services.channels.zalo_personal_media_journal import has_pending_media
 from app.services.channels.zalo_personal_media_transport import MediaTransferError, MediaTransport
 from app.services.channels.zalo_personal_protocol import (
     ChildFrame,
@@ -66,6 +68,7 @@ class ZaloChild:
         self.tasks: TaskGroup | None = None
         self.media_busy = False
         self.media_results: dict[str, anyio.Event] = {}
+        self.dispatched: frozenset[UUID] = frozenset()
 
     async def write(self, value: dict[str, JsonValue]) -> None:
         process = self.process
@@ -156,8 +159,9 @@ class ZaloChild:
 
     async def tick(self) -> None:
         while True:
-            async with connection_ctx() as db:
-                current = await fenced(self.connection)
+            waiting = media_waiting = False
+            async with connection_ctx():
+                current = await fenced(self.connection, lock=False)
                 if current.expires_at is not None and current.expires_at <= datetime.now(UTC):
                     if current.account_id is not None and await has_auth(current):
                         await interrupted(self.connection)
@@ -165,21 +169,21 @@ class ZaloChild:
                         await fail(self.connection, "qr_expired")
                     self.settled = True
                     return
-                if not await renew(self.connection):
+                if not await renew(self.connection, current):
                     return
-                await db.execute(
-                    "UPDATE zalo_personal_sends SET state='uncertain',finished_at=now() "
-                    "WHERE config_id=%(id)s AND claim_token=%(claim)s AND state='dispatch_started' "
-                    "AND dispatched_at<now()-interval '25 seconds'",
-                    {"id": current.config_id, "claim": current.claim_token},
-                )
+                if self.dispatched:
+                    self.dispatched = await settle_uncertain(current, self.dispatched)
+                if current.state == "connected":
+                    waiting = await has_pending(current)
+                    media_waiting = await has_pending_media(current)
             await self.write({"type": "lease", "id": uuid4().hex, "token": self.token, "lease_ms": 30000})
             if current.state == "connected":
-                if self.tasks is not None and not self.media_busy:
+                if media_waiting and self.tasks is not None and not self.media_busy:
                     self.media_busy = True
                     self.tasks.start_soon(send_pending_media, self)
-                command = await authorize_dispatch(self.connection)
+                command = await authorize_dispatch(self.connection) if waiting else None
                 if command is not None:
+                    self.dispatched = self.dispatched | {command.command_id}
                     await self.write(
                         {
                             "type": "send",
