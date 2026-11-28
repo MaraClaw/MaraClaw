@@ -65,18 +65,38 @@ def test_cached_image_delivers_real_jpeg_with_desktop_grid_options(tool_name: st
 
 
 def test_expired_cache_degrades_without_disk_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given an image expired by the existing lazy pruning policy.
+    # An idle cache must enforce the deadline even without a later store to prune it.
     monkeypatch.setattr(vision_inject.time, "monotonic", lambda: 0.0)
     image_id = vision_inject.store_temp_screenshot(b"expired")
     monkeypatch.setattr(vision_inject.time, "monotonic", lambda: 121.0)
-    trigger_id = vision_inject.store_temp_screenshot(b"prune trigger")
-    vision_inject.pop_temp_screenshot(trigger_id)
     # When the expired image marker is used alongside an obsolete path.
     result = vision_inject.try_inject_screenshot_vision(
         "agentbay_computer_screenshot", f"[ImageID: {image_id}] workspace/screenshot_1234.png"
     )
     # Then no vision content is delivered.
     assert result is None
+
+
+@pytest.mark.parametrize(("entry_cap", "byte_cap"), [(2, 20), (10, 6)])
+def test_image_cache_evicts_the_oldest_under_either_limit(
+    monkeypatch: pytest.MonkeyPatch, entry_cap: int, byte_cap: int
+) -> None:
+    monkeypatch.setattr(vision_inject, "_CACHE_MAX_ENTRIES", entry_cap)
+    monkeypatch.setattr(vision_inject, "_CACHE_MAX_BYTES", byte_cap)
+    monkeypatch.setattr(vision_inject.time, "monotonic", lambda: 200.0)
+    oldest, second, newest = (vision_inject.store_temp_screenshot(item) for item in (b"aaa", b"bbb", b"ccc"))
+    assert vision_inject.pop_temp_screenshot(oldest) is None
+    assert vision_inject.pop_temp_screenshot(second) == (b"bbb", {})
+    assert vision_inject.pop_temp_screenshot(newest) == (b"ccc", {})
+
+
+def test_image_larger_than_the_cache_does_not_evict_a_usable_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vision_inject, "_CACHE_MAX_BYTES", 4)
+    monkeypatch.setattr(vision_inject.time, "monotonic", lambda: 200.0)
+    fits = vision_inject.store_temp_screenshot(b"abcd")
+    skips = vision_inject.store_temp_screenshot(b"abcde")
+    assert vision_inject.pop_temp_screenshot(skips) is None
+    assert vision_inject.pop_temp_screenshot(fits) == (b"abcd", {})
 
 
 def test_history_sanitization_replaces_image_markers_and_preserves_saved_links() -> None:
