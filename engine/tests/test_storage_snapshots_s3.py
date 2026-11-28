@@ -27,6 +27,7 @@ async def test_s3_snapshot_uses_get_identity_with_separate_actual_sha256(monkeyp
             raise AssertionError("snapshot identity must come from GET")
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     snapshot = await backend.read_snapshot_bounded("report.bin", 8)
 
@@ -49,6 +50,7 @@ async def test_s3_snapshot_actual_byte_bound_ignores_underreported_length(monkey
             return {"Body": body, "ContentLength": 0, "ETag": '"opaque"'}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     if size > limit:
         with pytest.raises(StorageReadLimitExceededError) as raised:
@@ -70,6 +72,7 @@ async def test_s3_snapshot_known_oversize_closes_without_consuming(monkeypatch):
             return {"Body": body, "ContentLength": 20}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     with pytest.raises(StorageReadLimitExceededError) as raised:
         await backend.read_snapshot_bounded("report.bin", 8)
@@ -100,6 +103,7 @@ async def test_s3_snapshot_preserves_provider_failures_and_read_cleanup(monkeypa
             return {"Body": body}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
     error = {
         "missing": FileNotFoundError,
         "denied": ClientError,

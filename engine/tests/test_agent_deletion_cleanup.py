@@ -1,6 +1,7 @@
 import errno
 import fcntl
 import json
+import shutil
 import sys
 from collections.abc import Sequence
 from itertools import pairwise
@@ -20,6 +21,7 @@ from app.services.agent_deletion_archive import publish_deletion_archive
 from app.services.agent_deletion_cleanup import _remove_remaining_writers
 from app.services.agent_state_snapshot import agent_prefix
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError
+from host_disk_fakes import FLOOR, full_disk
 from state_snapshot_fakes import MemoryStore
 
 
@@ -52,6 +54,43 @@ def test_archive_copy_publishes_with_only_a_same_directory_rename(tmp_path, monk
     assert (job.archive_path / "SOUL.md").read_text() == "Workspace"
     assert (job.archive_path / "task_history.json").read_text() == job.task_history
     assert list(job.archive_path.parent.iterdir()) == [job.archive_path]
+
+
+def test_a_short_host_disk_refuses_the_archive_copy_before_writing_and_keeps_the_workspace(tmp_path, monkeypatch):
+    # Given a deleted agent's workspace and a host disk one byte short of its headroom.
+    job = make_job(tmp_path)
+    disk = full_disk(monkeypatch)
+    # When publication tries to copy the workspace into the archive.
+    with pytest.raises(OSError) as refused:
+        publish_deletion_archive(job)
+    # Then it failed as a full disk like any copy failure, wrote no staging or archive tree, and kept the source.
+    assert refused.value.errno == errno.ENOSPC
+    assert not job.archive_path.parent.exists()
+    assert (job.workspace_path / "SOUL.md").read_text() == "Workspace"
+    assert disk.asked == [tmp_path]
+    # And the replay publishes the archive once the disk has room.
+    disk.free = FLOOR
+    publish_deletion_archive(job)
+    assert (job.archive_path / "SOUL.md").read_text() == "Workspace"
+    assert not job.workspace_path.exists()
+
+
+def test_an_enospc_during_archive_copy_keeps_the_source_and_removes_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = make_job(tmp_path)
+
+    def partial_copy(_source: Path, staging: Path, *, symlinks: bool) -> Path:
+        staging.mkdir()
+        (staging / "partial").touch()
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(shutil, "copytree", partial_copy)
+    with pytest.raises(OSError) as failed:
+        publish_deletion_archive(job)
+    assert failed.value.errno == errno.ENOSPC
+    assert list(job.archive_path.parent.iterdir()) == []
+    assert (job.workspace_path / "SOUL.md").read_text() == "Workspace"
 
 
 @pytest.mark.parametrize("conflict", ["identity", "history"])

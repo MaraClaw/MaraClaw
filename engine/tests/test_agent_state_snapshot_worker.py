@@ -2,6 +2,8 @@
 
 import asyncio
 import fcntl
+import os
+import shutil
 import tarfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,7 +18,11 @@ from pywhales import DockerClient
 
 from app.config import get_settings
 from app.records.agent import AgentRecord
-from app.services import agent_state_snapshot_worker as worker
+from app.services import (
+    agent_state_snapshot as snapshots,
+    agent_state_snapshot_tracker as tracking,
+    agent_state_snapshot_worker as worker,
+)
 from app.services.agent_state_snapshot import (
     AGENT_DB,
     GUEST_STATE_DIR,
@@ -28,20 +34,24 @@ from app.services.agent_state_snapshot import (
     work_root,
 )
 from app.services.agent_state_snapshot_archive import ASSET_PAYLOAD
-from app.services.agent_state_snapshot_worker import SnapshotOutcome, SnapshotTracker
+from app.services.agent_state_snapshot_tracker import SnapshotOutcome, SnapshotTracker
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
 from app.services.storage_runtime.base import ConditionalWriteResult, WriteCondition
 from app.services.storage_runtime.upload_source import UploadSource
+from host_disk_fakes import FLOOR, full_disk
 from im_token_cache_fakes import captured_app_log
 from state_snapshot_fakes import (
     ARCHIVE_ROOT,
+    Clock,
     MemoryStore,
     ScriptedDocker,
     agent_database,
     backup_of,
     backup_report,
+    crashed,
     flock_free,
     openclaw_state,
+    write_file,
 )
 from worker_progress_fixtures import WorkerHTTP, worker_http
 
@@ -111,6 +121,18 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
     monkeypatch.setattr(worker, "assert_no_active_run", allowed)
     monkeypatch.setattr(worker, "assert_transfer_ready", allowed)
     return World(root, agent, store, agents, ScriptedDocker(backup_of()), SnapshotTracker())
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
+    """The tracker's monotonic clock, stepped by the test."""
+    clock = Clock()
+    monkeypatch.setattr(tracking, "_monotonic", clock)
+    return clock
+
+
+def interval() -> float:
+    return get_settings().AGENT_STATE_SNAPSHOT_INTERVAL_SECONDS
 
 
 async def test_a_changed_agent_is_backed_up_under_both_locks_then_published_and_pruned_under_the_snapshot_flock(
@@ -252,8 +274,8 @@ async def test_a_tenant_change_between_backup_and_upload_discards_the_snapshot(w
         pytest.param("too large", id="over the size limit"),
     ],
 )
-async def test_a_rejected_backup_keeps_the_previous_snapshot_and_is_retried_next_pass(
-    world: World, monkeypatch: pytest.MonkeyPatch, spoil: str
+async def test_a_rejected_backup_keeps_the_previous_snapshot_and_is_retried_only_after_its_backoff(
+    world: World, clock: Clock, monkeypatch: pytest.MonkeyPatch, spoil: str
 ) -> None:
     # Given a current snapshot, then a change whose backup must not be published.
     assert await world.snapshot() == SnapshotOutcome.PUBLISHED
@@ -270,23 +292,177 @@ async def test_a_rejected_backup_keeps_the_previous_snapshot_and_is_retried_next
             monkeypatch.setattr(get_settings(), "AGENT_STATE_SNAPSHOT_MAX_BYTES", 64)
     # When the worker snapshots the change.
     assert await world.snapshot() == SnapshotOutcome.REJECTED
-    # Then the previous snapshot stays current and the agent is tried again on the next pass.
+    # Then the previous snapshot stays current and the agent is left alone for two intervals.
     assert world.names() == previous
+    clock.advance(2 * interval() - 1)
+    assert await world.snapshot() == SnapshotOutcome.BACKING_OFF
+    assert len(world.docker.runs) == 2
+    # And once they have passed it is tried again.
+    clock.advance(1)
     assert await world.snapshot() == SnapshotOutcome.REJECTED
     assert len(world.docker.runs) == 3
 
 
+async def test_failures_back_off_twice_as_long_each_time_up_to_the_cap_and_a_published_snapshot_clears_it(
+    world: World, clock: Clock
+) -> None:
+    # Given a backup container that keeps failing.
+    world.docker.act = crashed()
+    # When each retry comes the moment its backoff ends.
+    for intervals in (2, 4, 8, 16, 24, 24):
+        assert await world.snapshot() == SnapshotOutcome.FAILED
+        # Then it waited twice as long as the retry before, up to 24 intervals.
+        clock.advance(intervals * interval() - 1)
+        assert await world.snapshot() == SnapshotOutcome.BACKING_OFF
+        clock.advance(1)
+    # And a published snapshot clears it: the next failure waits two intervals again.
+    world.docker.act = backup_of()
+    assert await world.snapshot() == SnapshotOutcome.PUBLISHED
+    _ = write_file(world.agent_dir / ".openclaw-gateway-token", b"rotated", mode=0o600)
+    world.docker.act = crashed()
+    assert await world.snapshot() == SnapshotOutcome.FAILED
+    clock.advance(2 * interval() - 1)
+    assert await world.snapshot() == SnapshotOutcome.BACKING_OFF
+    clock.advance(1)
+    assert await world.snapshot() == SnapshotOutcome.FAILED
+
+
+async def test_an_unchanged_result_clears_the_backoff(world: World, clock: Clock) -> None:
+    # Given a current snapshot and a change whose backup fails twice, so the next wait is eight intervals.
+    assert await world.snapshot() == SnapshotOutcome.PUBLISHED
+    token = world.agent_dir / ".openclaw-gateway-token"
+    original, stamp = token.read_bytes(), token.stat().st_mtime_ns
+    _ = write_file(token, b"rotated", mode=0o600)
+    world.docker.act = crashed()
+    for intervals in (2, 4):
+        assert await world.snapshot() == SnapshotOutcome.FAILED
+        clock.advance(intervals * interval())
+    # When the state goes back to what was published.
+    _ = write_file(token, original, mode=0o600)
+    os.utime(token, ns=(stamp, stamp))
+    assert await world.snapshot() == SnapshotOutcome.UNCHANGED
+    # Then a later failure waits two intervals, not eight.
+    _ = write_file(token, b"rotated again", mode=0o600)
+    assert await world.snapshot() == SnapshotOutcome.FAILED
+    clock.advance(2 * interval())
+    assert await world.snapshot() == SnapshotOutcome.FAILED
+
+
+async def test_a_backing_off_agent_is_skipped_before_its_digest_and_before_either_lock(
+    world: World, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given an agent whose backup failed, and a turn holding its setup lock.
+    world.docker.act = crashed()
+    assert await world.snapshot() == SnapshotOutcome.FAILED
+    digests: list[Path] = []
+    digest = worker.state_digest
+
+    def counting(agent_dir: Path, tenant: str) -> str:
+        digests.append(agent_dir)
+        return digest(agent_dir, tenant)
+
+    monkeypatch.setattr(worker, "state_digest", counting)
+    world.lock(".lock").parent.mkdir(parents=True, exist_ok=True)
+    with world.lock(".lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # When the worker reaches the agent inside its backoff.
+        async with asyncio.timeout(5):
+            outcome = await world.snapshot()
+    # Then it is skipped as backing off: not busy, with no digest walked and no second container.
+    assert (outcome, digests, len(world.docker.runs)) == (SnapshotOutcome.BACKING_OFF, [], 1)
+
+
+async def test_an_ineligible_pass_does_not_start_a_backoff(world: World) -> None:
+    # Given an agent whose row is gone.
+    row = world.agents.rows.pop(world.agent.id)
+    assert await world.snapshot() == SnapshotOutcome.INELIGIBLE
+    # When its row is back, the very next pass snapshots it.
+    world.agents.rows[row.id] = row
+    assert await world.snapshot() == SnapshotOutcome.PUBLISHED
+
+
+async def test_a_busy_pass_does_not_extend_a_backoff_that_has_run_out(world: World, clock: Clock) -> None:
+    # Given a failed backup and a backoff that has run out.
+    world.docker.act = crashed()
+    assert await world.snapshot() == SnapshotOutcome.FAILED
+    clock.advance(2 * interval())
+    # When a turn holds the setup lock at the next pass.
+    world.lock(".lock").parent.mkdir(parents=True, exist_ok=True)
+    with world.lock(".lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert await world.snapshot() == SnapshotOutcome.BUSY
+    # Then the pass after it is not delayed.
+    world.docker.act = backup_of()
+    assert await world.snapshot() == SnapshotOutcome.PUBLISHED
+
+
+@pytest.mark.parametrize("growth", ["before the backup", "while the backup runs"])
+async def test_a_tree_past_the_walk_bound_is_rejected_unpublished_and_backed_off(
+    world: World, clock: Clock, monkeypatch: pytest.MonkeyPatch, growth: str
+) -> None:
+    # Given a current snapshot and a change, in a tree past the walk bound before the backup or by its end.
+    assert await world.snapshot() == SnapshotOutcome.PUBLISHED
+    previous, limit = world.names(), snapshots.WALK_MAX_ENTRIES
+    _ = write_file(world.agent_dir / ".openclaw-gateway-token", b"rotated", mode=0o600)
+    backup = world.docker.act
+
+    def outgrown() -> None:
+        monkeypatch.setattr(snapshots, "WALK_MAX_ENTRIES", 2)
+
+    def growing(mounts: dict[str, Path]) -> str:
+        outgrown()
+        return backup(mounts)
+
+    if growth == "before the backup":
+        outgrown()
+    else:
+        world.docker.act = growing
+    # When the worker snapshots the change.
+    assert await world.snapshot() == SnapshotOutcome.REJECTED
+    # Then nothing was published, no work directory is left, and the agent backs off instead of looking changed.
+    assert world.names() == previous
+    assert list((work_root(world.root) / "create").iterdir()) == []
+    assert len(world.docker.runs) == (1 if growth == "before the backup" else 2)
+    clock.advance(2 * interval() - 1)
+    assert await world.snapshot() == SnapshotOutcome.BACKING_OFF
+    # And once the tree fits the bound again, the next attempt publishes it.
+    monkeypatch.setattr(snapshots, "WALK_MAX_ENTRIES", limit)
+    world.docker.act = backup
+    clock.advance(1)
+    assert await world.snapshot() == SnapshotOutcome.PUBLISHED
+
+
+async def test_a_short_host_disk_fails_the_pass_before_any_scratch_directory_and_keeps_the_previous_snapshot(
+    world: World, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a current snapshot, a change, and a host disk one byte short of its headroom.
+    assert await world.snapshot() == SnapshotOutcome.PUBLISHED
+    previous, runs = world.names(), len(world.docker.runs)
+    shutil.rmtree(work_root(world.root))
+    _ = write_file(world.agent_dir / ".openclaw-gateway-token", b"rotated", mode=0o600)
+    disk = full_disk(monkeypatch)
+    # When the worker snapshots the change.
+    assert await world.snapshot() == SnapshotOutcome.FAILED
+    # Then no container ran and no scratch directory was created, and the previous snapshot stays current.
+    assert (len(world.docker.runs), world.names(), work_root(world.root).exists()) == (runs, previous, False)
+    assert disk.asked == [world.root]
+    # And the agent backs off; once the disk has room again its next pass publishes.
+    disk.free = FLOOR
+    clock.advance(2 * interval())
+    assert await world.snapshot() == SnapshotOutcome.PUBLISHED
+    assert world.names() != previous
+
+
 def test_an_agent_left_without_a_snapshot_for_three_intervals_is_logged(monkeypatch: pytest.MonkeyPatch) -> None:
-    clock = [1000.0]
-    monkeypatch.setattr(worker, "_monotonic", lambda: clock[0])
-    interval = get_settings().AGENT_STATE_SNAPSHOT_INTERVAL_SECONDS
+    clock = Clock()
+    monkeypatch.setattr(tracking, "_monotonic", clock)
     tracker, agent_id = SnapshotTracker(), uuid4()
     with captured_app_log() as lines:
         tracker.behind(agent_id)
-        clock[0] += 3 * interval
+        clock.advance(3 * interval())
         tracker.behind(agent_id)
         assert not any(str(agent_id) in line for line in lines)
-        clock[0] += 1
+        clock.advance(1)
         tracker.behind(agent_id)
         assert any(f"agent={agent_id} has had no current snapshot" in line for line in lines)
     tracker.current(agent_id)

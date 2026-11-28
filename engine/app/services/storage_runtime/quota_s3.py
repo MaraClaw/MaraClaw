@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from itertools import batched
 from pathlib import Path
-from typing import assert_never, override
+from typing import Final, assert_never, override
 from uuid import UUID
 
 from botocore.config import Config
@@ -43,13 +43,8 @@ from app.services.storage_runtime.upload_source import UploadSource, open_upload
 from app.services.storage_runtime.utils import normalize_storage_key
 
 _PROVIDER_ERRORS = (BotoCoreError, ClientError, OSError)
-
-
-def _require_config(config: object) -> Config:
-    """``Config.merge`` comes from an untyped SDK; what it returns must still be a ``Config``."""
-    if not isinstance(config, Config):
-        raise TypeError("Invalid S3 client configuration")
-    return config
+# A hidden SDK retry can land, then return a rejection from a later attempt. One attempt is classifiable.
+_ONE_ATTEMPT: Final = {"total_max_attempts": 1, "mode": "standard"}
 
 
 class ManagedS3StorageBackend(S3StorageBackend):
@@ -62,10 +57,7 @@ class ManagedS3StorageBackend(S3StorageBackend):
 
     @override
     def _boto_config(self) -> Config:
-        # A hidden SDK retry can land, then return a rejection from a later attempt. One attempt is classifiable.
-        return _require_config(
-            super()._boto_config().merge(Config(retries={"total_max_attempts": 1, "mode": "standard"}))
-        )
+        return self._endpoint_config(_ONE_ATTEMPT)
 
     @override
     async def write_bytes(self, key: str, data: bytes, content_type: str | None = None) -> None:

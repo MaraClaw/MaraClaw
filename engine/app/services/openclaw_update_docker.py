@@ -14,7 +14,7 @@ from pywhales import DockerClient
 from pywhales.exceptions import NoSuchContainer, NoSuchImage
 
 from app.config import get_settings
-from app.services.guest_identity import AGENT_LABEL
+from app.services.guest_identity import AGENT_LABEL, GUEST_STOP_TIMEOUT_SECONDS
 from app.services.guest_image import image_repository, is_local_reference
 from app.services.guest_probe import probe_guest
 
@@ -97,7 +97,7 @@ class UpgradeDocker:
         return True
 
     def stop(self, reference: str) -> None:
-        self.client.container.stop(reference, time=10)
+        self.client.container.stop(reference, time=GUEST_STOP_TIMEOUT_SECONDS)
 
     def start(self, reference: str) -> None:
         _ = self.client.container.start(reference)

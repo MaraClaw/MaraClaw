@@ -6,6 +6,7 @@ from threading import Event, Lock, Semaphore
 import pytest
 
 from app.core.thread_lanes import ThreadLane
+from app.core.thread_slots import SlotsBusyError
 from app.services.storage_runtime.s3 import S3StorageBackend
 from s3_wire_server import S3Server
 from thread_lane_fixtures import forbid_shared_threads
@@ -102,6 +103,21 @@ async def test_a_call_cancelled_while_waiting_for_a_slot_never_runs_and_holds_no
     assert await asyncio.wait_for(running, 10) == "done"
     assert await asyncio.wait_for(lane.run(later.work), 10) == "done"
     assert skipped.started == 0
+
+
+async def test_a_full_lane_refuses_the_next_call_without_running_it_and_the_rest_complete():
+    lane, held, queued, refused = ThreadLane(1, max_waiters=1), Probe(), Probe(), Probe()
+    queued.gate.set()
+    running = asyncio.create_task(lane.run(held.work))
+    await held.wait_entered(1)
+    waiting = asyncio.create_task(lane.run(queued.work))
+    await asyncio.sleep(0)
+    with pytest.raises(SlotsBusyError):
+        await lane.run(refused.work)
+    held.gate.set()
+    assert await asyncio.wait_for(asyncio.gather(running, waiting), 10) == ["done", "done"]
+    assert refused.started == 0
+    assert await asyncio.wait_for(lane.run(lambda: 7), 10) == 7
 
 
 async def test_work_errors_reach_the_caller_and_free_the_slot():

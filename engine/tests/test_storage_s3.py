@@ -346,6 +346,7 @@ async def test_s3_bounded_read_counts_stream_not_metadata_and_closes(monkeypatch
             return {"Body": body, "ContentLength": 1}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     if size > limit:
         with pytest.raises(StorageReadLimitExceededError) as raised:
@@ -374,6 +375,7 @@ async def test_s3_bounded_read_at_the_workspace_content_limit_never_pulls_more_t
             return {"Body": body, "ContentLength": 1}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     if extra > 0:
         with pytest.raises(StorageReadLimitExceededError) as raised:
@@ -403,6 +405,7 @@ async def test_s3_bounded_read_closes_body_on_read_error(monkeypatch):
             return {"Body": body}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     with pytest.raises(OSError, match="stream failed"):
         await backend.read_bytes_bounded("report.bin", 8)
@@ -450,6 +453,7 @@ async def test_s3_cancelled_awaiter_leaves_worker_owning_body_until_close(monkey
             return {"Body": body}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
     operation = backend.read_snapshot_bounded if snapshot else backend.read_bytes_bounded
     task = asyncio.create_task(operation("report.bin", 8))
     try:
@@ -480,6 +484,7 @@ async def test_s3_bounded_read_preserves_provider_errors_except_missing_key(monk
             raise ClientError({"Error": {"Code": code}}, "GetObject")
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     with pytest.raises(ClientError if code in {"AccessDenied", "NoSuchBucket"} else FileNotFoundError):
         await backend.read_bytes_bounded("report.bin", 8)
@@ -529,6 +534,7 @@ async def test_s3_materialize_creates_no_file_for_a_missing_key(monkeypatch, tem
             raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
     # When / Then
     with pytest.raises(FileNotFoundError):
         await backend.materialize("agent/gone.xlsx")
@@ -946,6 +952,7 @@ async def test_s3_snapshot_treats_the_null_version_as_none(monkeypatch):
             return {"Body": CountedBody(b"abc"), "ContentLength": 3, "ETag": '"e"', "VersionId": "null"}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     snapshot = await backend.read_snapshot_bounded("report.bin", 8)
 

@@ -26,6 +26,7 @@ from app.services.agent_state_snapshot import (
     tenant_token,
 )
 from app.services.storage_runtime.local import LocalStorageBackend
+from app.services.workspace_mirror_scope import WalkLimitError
 from state_snapshot_fakes import MemoryStore, openclaw_state, write_file
 
 TENANT = "5d0c1b8e-4f3a-4c55-9a51-1f0f4c1b2a3d"
@@ -129,12 +130,14 @@ def test_any_change_to_covered_state_changes_the_digest(tmp_path: Path, change: 
     assert state_digest(agent_dir, "none") != base
 
 
-def test_a_tree_past_the_walk_bound_counts_as_changed_on_every_pass(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(("bound", "limit"), [("WALK_MAX_ENTRIES", 2), ("WALK_SECONDS", 0.0)])
+def test_a_tree_past_the_walk_bound_has_no_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bound: str, limit: float
 ) -> None:
     agent_dir = openclaw_state(tmp_path / "agent")
-    monkeypatch.setattr(snapshots, "WALK_MAX_ENTRIES", 2)
-    assert state_digest(agent_dir, "none") != state_digest(agent_dir, "none")
+    monkeypatch.setattr(snapshots, bound, limit)
+    with pytest.raises(WalkLimitError):
+        _ = state_digest(agent_dir, "none")
 
 
 @pytest.mark.parametrize(

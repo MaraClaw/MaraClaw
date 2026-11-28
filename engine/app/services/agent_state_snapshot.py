@@ -6,9 +6,8 @@ S3 under `state-snapshots/<agent id>/`, an unmetered quota passthrough prefix. C
 
 import hashlib
 import re
-import secrets
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager, aclosing, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,7 +26,7 @@ from app.services.storage_runtime.base import StorageBackend
 from app.services.storage_runtime.channel_files import lstat_guest_path
 from app.services.workspace_mirror import durable_store, primary_store
 from app.services.workspace_mirror_local import MARKER
-from app.services.workspace_mirror_scope import WalkLimitError, in_scope, walk_local
+from app.services.workspace_mirror_scope import LocalFile, in_scope, walk_local
 
 PREFIX: Final = "state-snapshots"
 GUEST_STATE_DIR: Final = "/home/node/custom-state"
@@ -166,23 +165,24 @@ def placeable(rel: str) -> bool:
     return not _excluded(rel) and not rel.casefold().endswith(_SIDECARS)
 
 
+def walk_covered(root: Path, include: Callable[[str], bool]) -> list[LocalFile]:
+    """The regular files below `root` that `include` accepts, walked within the one bound publication and restore share.
+
+    `WalkLimitError` past `WALK_MAX_ENTRIES` entries or `WALK_SECONDS` seconds. A restore walks the archived tree with this
+    same call, so a tree the digest could walk is a tree a restore can place.
+    """
+    return walk_local(
+        root, deadline_seconds=WALK_SECONDS, max_entries=WALK_MAX_ENTRIES, descend=covered_directory, include=include
+    )
+
+
 def state_digest(agent_dir: Path, tenant: str) -> str:
     """16 hex digits over `tenant` and the path, size and mtime of every file snapshots cover; never follows a symlink.
 
-    A tree past the walk's bounds gets a random digest, so it counts as changed on every pass instead of never.
+    A tree past the walk bound raises `WalkLimitError`: a restore could not place it, so it is never snapshotted.
     """
-    try:
-        files = walk_local(
-            agent_dir,
-            deadline_seconds=WALK_SECONDS,
-            max_entries=WALK_MAX_ENTRIES,
-            descend=covered_directory,
-            include=_digested,
-        )
-    except WalkLimitError:
-        return secrets.token_hex(8)
     digest = hashlib.sha256(tenant.encode())
-    for file in files:
+    for file in walk_covered(agent_dir, _digested):
         digest.update(f"\0{file.rel}\0{file.size}\0{file.mtime_ns}".encode(errors="surrogateescape"))
     return digest.hexdigest()[:16]
 

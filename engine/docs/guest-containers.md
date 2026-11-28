@@ -935,7 +935,9 @@ The archive is published at `<STORAGE_LOCAL_ROOT or AGENT_DATA_DIR>/_archived/<i
 using staging and rename, with frozen `task_history.json` and a deletion identity
 marker. Retry resumes across copy, publication, source-removal or completion
 interruption without creating a second archive. An existing conflicting archive
-fails rather than being overwritten. Source workspace removal follows archive
+fails rather than being overwritten. A host disk short of its
+[headroom](agent-state-snapshots.md#host-disk-headroom) refuses the copy before anything is
+written; the job stays pending and the source workspace untouched. Source workspace removal follows archive
 publication; the outbox completes only after cleanup succeeds. With an S3 primary,
 cleanup then deletes the agent's state snapshots; a busy snapshot flock or a storage
 error keeps the job pending
@@ -1092,7 +1094,9 @@ distinct from upgrade run ids), clears the pin with a compare-and-set and starts
 the configured image. Success drops the snapshot. Failure removes owned guests the
 attempt left, restores the snapshot and re-pins the old image only if the pin is
 still empty. If that removal fails, the snapshot is kept rather than restored under
-a live guest, and the next published start drops it.
+a live guest, and the next published start drops it. A host disk short of its
+[headroom](agent-state-snapshots.md#host-disk-headroom) fails the snapshot before anything
+is written: the endpoint answers 502 `guest_start_failed` and the pin stays.
 
 **Running observation:** native dispatch clears only a `container_stopped` loss
 when the owned guest is observed running. The delete checks the reason in the

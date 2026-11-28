@@ -11,15 +11,18 @@ import tarfile
 import time
 import zlib
 from contextlib import closing
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Final
 
 from pydantic import TypeAdapter
 
 from app.core.json_types import is_any_list, is_str_dict, json_loads_value
+from app.services import agent_state_snapshot as snapshots
 from app.services.agent_state_snapshot import AGENT_DB, GUEST_STATE_DIR
+from app.services.workspace_mirror_scope import MAX_DEPTH
 
 ASSET_PAYLOAD: Final = "payload/posix" + GUEST_STATE_DIR
+_PAYLOAD_PARTS = PurePosixPath(ASSET_PAYLOAD).parts
 # Databases are extracted to be checked; this bounds the disk the extraction takes.
 SQLITE_MAX_BYTES: Final = 8 * 1024**3
 CHECK_SECONDS: Final = 120.0
@@ -78,11 +81,13 @@ def inspect_archive(archive: Path, scratch: Path, max_bytes: int) -> None:
     databases: list[Path] = []
     agent_db: Path | None = None
     extracted = 0
+    entries: set[str] = set()
     try:
         with tarfile.open(archive, "r:gz") as tar:
             for member in tar:
                 if time.monotonic() >= deadline:
                     raise SnapshotRejectedError("The archive checks ran out of time")
+                _count_payload_entry(member, entries)
                 name = member.name
                 if not member.isfile():
                     continue
@@ -103,6 +108,25 @@ def inspect_archive(archive: Path, scratch: Path, max_bytes: int) -> None:
         _check_integrity(database, deadline)
     if agent_db is not None:
         _check_quiescent(agent_db, deadline)
+
+
+def _count_payload_entry(member: tarfile.TarInfo, entries: set[str]) -> None:
+    """Count what placement walks, including implicit directories, rather than trusting the live source tree."""
+    parts = PurePosixPath(member.name).parts
+    start = 1 + len(_PAYLOAD_PARTS)
+    if parts[1:start] != _PAYLOAD_PARTS or len(parts) <= start:
+        return
+    payload = parts[start:]
+    if not snapshots.covered_directory(payload[0]):
+        payload = payload[:1]
+    if len(payload) - int(not member.isdir()) > MAX_DEPTH:
+        raise SnapshotRejectedError("The archived state exceeds the placement limit for directory depth")
+    entry = "/".join(payload)
+    while entry and entry not in entries:
+        entries.add(entry)
+        if len(entries) > snapshots.WALK_MAX_ENTRIES:
+            raise SnapshotRejectedError("The archived state exceeds the placement limit for entries")
+        entry = entry.rpartition("/")[0]
 
 
 def _connect(database: Path, deadline: float) -> sqlite3.Connection:

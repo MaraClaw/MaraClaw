@@ -45,10 +45,12 @@ async def test_delete_sends_exact_object_key(s3):
 @pytest.mark.parametrize("contents", [[], [{"Key": "tenant/dir/one"}, {"Key": "tenant/dir/two"}]])
 async def test_delete_tree_deletes_listed_objects_or_nothing(s3, contents):
     backend, stubber = s3
-    stubber.add_response("list_objects_v2", {"Contents": contents}, {"Bucket": "bucket", "Prefix": "tenant/dir/"})
     if contents:
         stubber.add_response("delete_objects", {}, {"Bucket": "bucket", "Delete": {"Objects": contents}})
-    await backend.delete_tree("dir")
+    with Stubber(backend._read_client_or_raise()) as listing:
+        listing.add_response("list_objects_v2", {"Contents": contents}, {"Bucket": "bucket", "Prefix": "tenant/dir/"})
+        await backend.delete_tree("dir")
+        listing.assert_no_pending_responses()
 
 
 @pytest.mark.parametrize("operation", ["write_bytes", "delete", "delete_tree", "create_bytes_if_absent"])
@@ -67,6 +69,7 @@ async def test_mutation_errors_propagate(operation, monkeypatch):
         delete_objects = fail
 
     monkeypatch.setattr(backend, "_client_or_raise", OfflineClient)
+    monkeypatch.setattr(backend, "_read_client_or_raise", OfflineClient)
     if operation in {"write_bytes", "create_bytes_if_absent"}:
         mutation = getattr(backend, operation)("dir", b"data")
     else:
@@ -98,6 +101,7 @@ async def test_mutation_runs_off_loop_and_waits_for_worker_when_cancelled(operat
         delete_objects = mutate
 
     monkeypatch.setattr(backend, "_client_or_raise", BlockingClient)
+    monkeypatch.setattr(backend, "_read_client_or_raise", BlockingClient)
 
     async def run_mutation():
         with anyio.CancelScope() as scope:

@@ -29,6 +29,7 @@ from app.config import get_settings
 from app.core.logging import logger
 from app.core.permissions import check_agent_access
 from app.core.security import decode_access_token, get_current_user, load_user_from_access_token, security
+from app.core.thread_slots import SlotsBusyError
 from app.dao.skill_dao import skill_dao
 from app.dao.workspace_dao import workspace_file_revision_dao
 from app.db.session import connection_ctx, optional_connection_ctx
@@ -729,6 +730,8 @@ async def _read_storage_companion(
             if not await storage.is_file(key):
                 continue
             content = await _read_text_within_limit(storage, key)
+        except SlotsBusyError:
+            raise
         except OSError, UnicodeError, HTTPException:
             continue
         if content:
@@ -872,6 +875,8 @@ async def preview_file(
             if companion_rel is not None and not path.startswith("enterprise_info"):
                 payload["companion_path"] = companion_rel
             return payload
+        except SlotsBusyError:
+            raise
         except Exception as exc:
             return {
                 "path": path,

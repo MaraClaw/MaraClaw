@@ -29,7 +29,7 @@ async def delete_managed_tree(storage: S3Connection, managed: ManagedKey, key: s
     Objects the provider did not confirm deleted, or that an unresolved write holds back, stay charged and make the
     call raise once the whole listing has been processed.
     """
-    client = storage._client_or_raise()
+    client = storage._read_client_or_raise()
     prefix = storage._object_key(key).rstrip("/") + "/"
     token = ""
     remaining = 0

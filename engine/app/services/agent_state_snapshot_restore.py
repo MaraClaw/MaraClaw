@@ -1,7 +1,7 @@
 """Restore an agent's newest usable state snapshot before a start on a host that has no OpenClaw state.
 
-Contract: docs/agent-state-snapshots.md. Transient failures fail the start with nothing placed; a snapshot this image
-must not restore gets a held marker and the start goes on fresh.
+Contract: docs/agent-state-snapshots.md. Transient failures, a short or full host disk included, fail the start with
+nothing placed; a snapshot this image must not restore gets a held marker and the start goes on fresh.
 """
 
 import errno
@@ -28,11 +28,8 @@ from app.services.agent_state_snapshot import (
     GUEST_STATE_DIR,
     STATE_DBS,
     STORAGE_ERRORS,
-    WALK_MAX_ENTRIES,
-    WALK_SECONDS,
     SnapshotBusyError,
     SnapshotName,
-    covered_directory,
     has_host_state,
     list_snapshots,
     new_work_dir,
@@ -41,13 +38,15 @@ from app.services.agent_state_snapshot import (
     snapshot_lock,
     snapshot_store,
     tenant_token,
+    walk_covered,
     work_root,
 )
 from app.services.agent_state_snapshot_archive import ASSET_PAYLOAD
 from app.services.docker_capacity import DockerBusyError, run_docker
+from app.services.host_disk_headroom import require_headroom
 from app.services.storage_runtime.base import StorageBackend
 from app.services.storage_runtime.channel_files import delete_guest_file, link_guest_file
-from app.services.workspace_mirror_scope import WalkLimitError, walk_local
+from app.services.workspace_mirror_scope import WalkLimitError
 
 RESTORE_ROLE: Final = "restore"
 DOWNLOAD_CHUNK_BYTES: Final = 8 * 1024 * 1024
@@ -65,6 +64,7 @@ _RESTORE_ENVS: Final = {
 }
 _IMAGE_VERSION = re.compile(r"OpenClaw (\S+)")
 _VERSION = re.compile(r"(\d+(?:\.\d+)+)(?:[-+][0-9A-Za-z.-]+)?")
+_NO_SPACE = re.compile(r"\bENOSPC\b|no space left on device", re.IGNORECASE)
 _BLOCKED_PATH_ERRNOS = frozenset({errno.ELOOP, errno.ENOTDIR})
 
 
@@ -83,6 +83,7 @@ async def restore_agent_state(
 
     The caller holds the exclusive setup lock and goes on to pull the mirror and materialize storage, which must leave
     the returned paths alone. Without a snapshot store, with host state, or with no usable snapshot nothing happens.
+    Any local failure, a short or full host disk included, is an `AgentStateRestoreError`, never a refusal.
     """
     store = snapshot_store()
     if store is None or await to_thread.run_sync(has_host_state, agent_dir):
@@ -92,6 +93,10 @@ async def restore_agent_state(
             return await _restore(store, client, agent, agent_dir, guest_image)
     except SnapshotBusyError as exc:
         raise AgentStateRestoreError("A state snapshot of this agent is being taken or deleted") from exc
+    except AgentStateRestoreError:
+        raise
+    except (OSError, WalkLimitError) as exc:
+        raise AgentStateRestoreError(f"A local step of the restore failed: {type(exc).__name__}") from exc
 
 
 async def _restore(
@@ -106,9 +111,10 @@ async def _restore(
         return frozenset()
     max_bytes = get_settings().AGENT_STATE_SNAPSHOT_MAX_BYTES
     if listing.sizes[chosen] > max_bytes:
+        await to_thread.run_sync(require_headroom, work_root(agent_dir.parent))
         await _hold(store, agent.id, chosen, f"the archive is over the {max_bytes} byte limit")
         return frozenset()
-    work = await to_thread.run_sync(_new_restore_dir, agent_dir.parent, agent.id)
+    work = await to_thread.run_sync(_new_restore_dir, agent_dir.parent, agent.id, listing.sizes[chosen])
     try:
         await _download(store, chosen.key(agent.id), work / "in" / ARCHIVE_NAME, max_bytes)
         try:
@@ -118,23 +124,29 @@ async def _restore(
         try:
             payload = await to_thread.run_sync(restored_payload, work)
         except SnapshotRefusedError as exc:
+            await to_thread.run_sync(require_headroom, work)
             await _hold(store, agent.id, chosen, str(exc))
             return frozenset()
-        try:
-            placed = await to_thread.run_sync(place_restored_state, payload, agent_dir)
-        except (OSError, WalkLimitError) as exc:
-            raise AgentStateRestoreError(f"Placing the restored state failed: {type(exc).__name__}") from exc
+        placed = await to_thread.run_sync(place_restored_state, payload, agent_dir)
     finally:
         await to_thread.run_sync(partial(shutil.rmtree, work.parent, ignore_errors=True))
     logger.info("[StateSnapshot] restored agent={} snapshot={} files={}", agent.id, chosen.file_name, len(placed))
     return placed
 
 
-def _new_restore_dir(agents: Path, agent_id: UUID) -> Path:
-    """A fresh work directory, after removing what a crashed restore of the same agent left (this flock is held)."""
+def _new_restore_dir(agents: Path, agent_id: UUID, archive_bytes: int) -> Path:
+    """A fresh work directory, after removing what a crashed restore of the same agent left (this flock is held).
+
+    The host disk is checked for the archive about to be downloaded before anything is created.
+    """
     shutil.rmtree(work_root(agents) / RESTORE_ROLE / str(agent_id), ignore_errors=True)
+    require_headroom(work_root(agents), archive_bytes)
     work = new_work_dir(agents, RESTORE_ROLE, str(agent_id))
-    (work / "in").mkdir()
+    try:
+        (work / "in").mkdir()
+    except OSError:
+        shutil.rmtree(work.parent, ignore_errors=True)
+        raise
     return work
 
 
@@ -182,7 +194,8 @@ def _version(text: str) -> tuple[int, ...] | None:
 def restored_payload(work: Path) -> Path:
     """The restored state directory below the stage, after the restore's outcome, manifest and version check out.
 
-    `AgentStateRestoreError` when the restore never finished, `SnapshotRefusedError` when this image must not use it.
+    `AgentStateRestoreError` when the restore never finished, `SnapshotRefusedError` when this image must not use it. A
+    restore that exited non-zero on a host disk that is now short may have run out of room, so it is not a refusal.
     """
     try:
         exit_code = int(_read_report(work / "exit_code").strip())
@@ -191,11 +204,15 @@ def restored_payload(work: Path) -> Path:
     if exit_code == _KILLED:
         raise AgentStateRestoreError("The restore was killed before it finished")
     if exit_code != 0:
+        for path in (work / "restore.log", work / "result.json"):
+            with suppress(FileNotFoundError):
+                if _NO_SPACE.search(_read_report(path)):
+                    raise AgentStateRestoreError("The restore container ran out of host disk space")
         raise SnapshotRefusedError(f"openclaw backup restore rejected the archive (exit code {exit_code})")
     try:
         image_line = _IMAGE_VERSION.search(_read_report(work / "version.txt"))
         result = json_loads_value(_read_report(work / "result.json"))
-    except (OSError, ValueError) as exc:
+    except (FileNotFoundError, ValueError) as exc:
         raise SnapshotRefusedError(f"The restore reports are unreadable: {type(exc).__name__}") from exc
     image_version = None if image_line is None else _version(image_line.group(1))
     if image_version is None:
@@ -207,7 +224,7 @@ def restored_payload(work: Path) -> Path:
         raise SnapshotRefusedError("The restore reported no usable archive root")
     try:
         manifest = json_loads_value(_read_report(work / "stage" / root / "manifest.json"))
-    except (OSError, ValueError) as exc:
+    except (FileNotFoundError, ValueError) as exc:
         raise SnapshotRefusedError(f"The archive manifest is unreadable: {type(exc).__name__}") from exc
     if not is_str_dict(manifest):
         raise SnapshotRefusedError("The archive manifest is not an object")
@@ -236,13 +253,7 @@ def place_restored_state(payload: Path, agent_dir: Path) -> frozenset[str]:
     OpenClaw databases go last, so an interrupted placement leaves the host without state and the next start restores
     again. A failure unlinks what this call placed and raises.
     """
-    files = walk_local(
-        payload,
-        deadline_seconds=WALK_SECONDS,
-        max_entries=WALK_MAX_ENTRIES,
-        descend=covered_directory,
-        include=placeable,
-    )
+    files = walk_covered(payload, placeable)
     agent_dir.mkdir(parents=True, exist_ok=True)
     placed: list[str] = []
     try:

@@ -4,6 +4,9 @@ Threads call `acquire` (the `threading.BoundedSemaphore` signature). Tasks `awai
 future and is resumed by `release`, so no waiter thread and no timer loop exists. Slots are handed to async waiters in
 arrival order, and the holder that released is never the one that wakes them, so a slot is only ever owned by code that
 is running.
+
+A gate built with `max_waiters` bounds that queue: a task that finds every slot taken and `max_waiters` tasks already
+waiting raises `SlotsBusyError` at once. The default (`None`) queues without limit.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from threading import Condition
+from typing import ClassVar
 
 
 @dataclass(eq=False)
@@ -35,13 +39,29 @@ def _resolve(future: asyncio.Future[None]) -> None:
         future.set_result(None)
 
 
+class SlotsBusyError(OSError):
+    """Every slot is taken and the wait queue is full, so nothing was started; retry shortly.
+
+    An `OSError`, so workers that already treat a storage `OSError` as transient retry it next round. HTTP boundaries
+    answer 503 with `Retry-After`.
+    """
+
+    retry_after_seconds: ClassVar[int] = 5
+
+    def __init__(self) -> None:
+        super().__init__("Every slot is taken and the wait queue is full; retry shortly")
+
+
 class ThreadSlots:
     """`size` slots shared by threads and tasks; a slot is returned with `release` by whoever holds it."""
 
-    def __init__(self, size: int) -> None:
+    def __init__(self, size: int, *, max_waiters: int | None = None) -> None:
         if size < 1:
             raise ValueError("A slot gate needs at least one slot")
+        if max_waiters is not None and max_waiters < 0:
+            raise ValueError("A waiter limit cannot be negative")
         self.size: int = size
+        self.max_waiters: int | None = max_waiters
         self._in_use: int = 0
         self._condition: Condition = Condition()
         self._waiters: deque[_AsyncWaiter] = deque()
@@ -56,11 +76,16 @@ class ThreadSlots:
             return self._take_locked()
 
     async def acquire_async(self) -> None:
-        """Take a slot from a task. Cancelled while waiting, the task leaves the queue and holds nothing."""
+        """Take a slot from a task. Cancelled while waiting, the task leaves the queue and holds nothing.
+
+        With a waiter limit, a task that finds the queue full raises `SlotsBusyError` and never joins it.
+        """
         waiter: _AsyncWaiter
         with self._condition:
             if self._take_locked():
                 return
+            if self.max_waiters is not None and len(self._waiters) >= self.max_waiters:
+                raise SlotsBusyError
             loop = asyncio.get_running_loop()
             waiter = _AsyncWaiter(loop, loop.create_future())
             self._waiters.append(waiter)

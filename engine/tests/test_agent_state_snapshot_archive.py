@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.services import agent_state_snapshot as snapshots
 from app.services.agent_state_snapshot import AGENT_DB, ARCHIVE_NAME
 from app.services.agent_state_snapshot_archive import SnapshotRejectedError, check_backup_report, inspect_archive
 from state_snapshot_fakes import (
@@ -123,6 +124,18 @@ def test_an_archive_over_the_size_limit_is_rejected(tmp_path: Path) -> None:
     _inspect(tmp_path, archive, max_bytes=archive.stat().st_size)
     with pytest.raises(SnapshotRejectedError, match="limit"):
         _inspect(tmp_path / "again", archive, max_bytes=archive.stat().st_size - 1)
+
+
+def test_the_archive_itself_must_fit_the_placement_entry_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(snapshots, "WALK_MAX_ENTRIES", 4)
+    state = tmp_path / "state"
+    for name in ("workspace/a", "workspace/b", "sessions/a", "sessions/b"):
+        _ = write_file(state / name, b"data")
+    _inspect(tmp_path, write_archive(tmp_path / "fit.tar.gz", state))
+
+    _ = write_file(state / "sessions" / "c", b"one extra entry")
+    with pytest.raises(SnapshotRejectedError, match="placement limit"):
+        _inspect(tmp_path / "second", write_archive(tmp_path / "too-many.tar.gz", state))
 
 
 @pytest.mark.parametrize("damage", ["not gzip", "truncated"])

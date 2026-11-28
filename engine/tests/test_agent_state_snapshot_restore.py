@@ -17,7 +17,12 @@ from pywhales.exceptions import DockerException
 
 from app.config import get_settings
 from app.records.agent import AgentRecord
-from app.services import agent_manager as manager_module, agent_materialize, agent_state_snapshot_restore as restore
+from app.services import (
+    agent_manager as manager_module,
+    agent_materialize,
+    agent_state_snapshot as snapshots,
+    agent_state_snapshot_restore as restore,
+)
 from app.services.agent_manager import AgentManager, _GuestModels
 from app.services.agent_state_snapshot import (
     AGENT_DB,
@@ -25,11 +30,14 @@ from app.services.agent_state_snapshot import (
     SnapshotName,
     agent_prefix,
     new_snapshot_name,
+    state_digest,
     tenant_token,
     work_root,
 )
 from app.services.agent_state_snapshot_restore import AgentStateRestoreError, place_restored_state
 from app.services.docker_capacity import DockerBusyError
+from app.services.workspace_mirror_scope import WalkLimitError
+from host_disk_fakes import FLOOR, fake_disk, full_disk
 from state_snapshot_fakes import (
     IMAGE_VERSION,
     STATE_ASSET,
@@ -167,7 +175,17 @@ def _unavailable(operation: str) -> ClientError:
 
 @pytest.mark.parametrize(
     "failure",
-    ["listing", "download", "docker busy", "container failed", "restore killed", "snapshot busy", "placement"],
+    [
+        "listing",
+        "download",
+        "docker busy",
+        "container failed",
+        "restore killed",
+        "snapshot busy",
+        "placement",
+        "short disk",
+        "disk full while staging",
+    ],
 )
 async def test_a_transient_failure_fails_the_start_with_nothing_placed_or_held(
     host: Host, monkeypatch: pytest.MonkeyPatch, failure: str
@@ -203,6 +221,14 @@ async def test_a_transient_failure_fails_the_start_with_nothing_placed_or_held(
             host.docker.act = restore_by(exit_code=137)
         case "snapshot busy":
             pass
+        case "short disk":
+            _ = full_disk(monkeypatch)
+        case "disk full while staging":
+
+            def disk_full(_agents: Path, *_parts: str) -> Path:
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+            monkeypatch.setattr(restore, "new_work_dir", disk_full)
         case _:
             monkeypatch.setattr(restore, "link_guest_file", link_then_fail)
     lock = host.root / "_setup_locks" / f"{host.agent.id}.snapshot.lock"
@@ -216,6 +242,70 @@ async def test_a_transient_failure_fails_the_start_with_nothing_placed_or_held(
     # Then the start fails as a preflight OSError with nothing placed, held or left in the work directory.
     assert isinstance(raised.value, OSError)
     assert (host.files(), host.held(), host.leftovers()) == ([], [], [])
+
+
+async def test_the_archive_needs_the_floor_and_its_own_size_free_before_anything_is_staged(
+    host: Host, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a snapshot and a disk one byte short of the floor plus the archive's size.
+    name = host.publish(1)
+    size = len(host.store.objects[name.key(host.agent.id)])
+    disk = fake_disk(monkeypatch, free=FLOOR + size - 1)
+    # When the start restores.
+    with pytest.raises(AgentStateRestoreError):
+        _ = await host.restore()
+    # Then nothing was staged, run or held, and the check measured the volume the work directory would be created on.
+    assert (host.docker.runs, work_root(host.root).exists(), host.held()) == ([], False, [])
+    assert disk.asked == [host.root]
+    # And with the room, the next start restores the same snapshot.
+    disk.free = FLOOR + size
+    assert await host.restore() == STATE_FILES
+
+
+async def test_a_restore_that_leaves_the_disk_short_is_transient_where_the_same_exit_with_room_is_a_refusal(
+    host: Host, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a restore container that exits non-zero while the disk it extracted onto is now short.
+    name = host.publish(1)
+    disk = fake_disk(monkeypatch, free=FLOOR + len(host.store.objects[name.key(host.agent.id)]))
+    rejected = restore_by(exit_code=1)
+
+    def filling(mounts: dict[str, Path]) -> str:
+        disk.free = FLOOR - 1
+        return rejected(mounts)
+
+    host.docker.act = filling
+    # When the start restores.
+    with pytest.raises(AgentStateRestoreError):
+        _ = await host.restore()
+    # Then the snapshot is not held, nothing is placed or left, and the start may retry.
+    assert (host.files(), host.held(), host.leftovers()) == ([], [], [])
+    # And the same exit with room is the documented refusal.
+    disk.free = FLOOR + len(host.store.objects[name.key(host.agent.id)])
+    host.docker.act = rejected
+    assert await host.restore() == frozenset()
+    assert host.held() == [name.held_key(host.agent.id)]
+
+
+@pytest.mark.parametrize("floor", [0, FLOOR])
+async def test_container_disk_full_is_transient_even_if_no_headroom_check_now_detects_it(
+    host: Host, monkeypatch: pytest.MonkeyPatch, floor: int
+) -> None:
+    name = host.publish(1)
+    _ = fake_disk(monkeypatch, free=floor + len(host.store.objects[name.key(host.agent.id)]), floor=floor)
+    failed = restore_by(exit_code=1)
+
+    def fail_with_full_disk(mounts: dict[str, Path]) -> str:
+        _ = failed(mounts)
+        _ = write_file(mounts["/work"] / "restore.log", b"Error: ENOSPC: no space left on device")
+        return ""
+
+    host.docker.act = fail_with_full_disk
+    with pytest.raises(AgentStateRestoreError):
+        _ = await host.restore()
+    assert (host.files(), host.held(), host.leftovers()) == ([], [], [])
+    host.docker.act = restore_by()
+    assert await host.restore() == STATE_FILES
 
 
 @pytest.mark.parametrize("refusal", ["newer runtime", "archive rejected", "foreign asset", "two assets", "too large"])
@@ -301,6 +391,32 @@ def test_placement_leaves_the_mirror_sidecars_existing_files_and_symlinked_paths
     assert sorted(path.relative_to(agent_dir).as_posix() for path in agent_dir.rglob("*") if path.is_file()) == sorted(
         placed | {"openclaw.json"}
     )
+
+
+def test_placement_walks_a_payload_within_the_same_bound_the_digest_does_and_no_further(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a state tree and the smallest walk bound its digest fits in.
+    payload = openclaw_state(tmp_path / "payload")
+
+    def digests_within(bound: int) -> bool:
+        monkeypatch.setattr(snapshots, "WALK_MAX_ENTRIES", bound)
+        try:
+            _ = state_digest(payload, "none")
+        except WalkLimitError:
+            return False
+        return True
+
+    fits = next(bound for bound in range(1, 200) if digests_within(bound))
+    # When the same tree is placed under that bound, it is placed.
+    assert place_restored_state(payload, tmp_path / "placed") == STATE_FILES
+    # And under a bound one entry smaller, neither the digest nor the placement walks it, and nothing is created.
+    monkeypatch.setattr(snapshots, "WALK_MAX_ENTRIES", fits - 1)
+    with pytest.raises(WalkLimitError):
+        _ = state_digest(payload, "none")
+    with pytest.raises(WalkLimitError):
+        _ = place_restored_state(payload, tmp_path / "refused")
+    assert not (tmp_path / "refused").exists()
 
 
 def test_placement_creates_missing_directories_with_their_archived_modes(tmp_path: Path) -> None:

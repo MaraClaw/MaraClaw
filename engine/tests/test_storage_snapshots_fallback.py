@@ -128,6 +128,7 @@ async def test_fallback_snapshot_propagates_managed_quota_refusal_without_provid
         raise refusal
 
     monkeypatch.setattr(primary, "_client_or_raise", MissingClient)
+    monkeypatch.setattr(primary, "_read_client_or_raise", MissingClient)
     monkeypatch.setattr(primary, "_admit_write", refuse)
 
     with pytest.raises(type(refusal)) as raised:

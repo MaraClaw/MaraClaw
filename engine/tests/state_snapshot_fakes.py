@@ -227,6 +227,19 @@ class Containers:
 type Act = Callable[[dict[str, Path]], str]
 
 
+@dataclass
+class Clock:
+    """A monotonic clock a test steps by hand."""
+
+    now: float = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class ScriptedDocker:
     """A Docker CLI whose `run` hands its bind mounts (target -> host source) to `act` and returns what it prints.
 
@@ -257,6 +270,15 @@ def backup_of(report: str | None = None) -> Act:
     def act(mounts: dict[str, Path]) -> str:
         _ = write_archive(mounts["/out"] / ARCHIVE_NAME, mounts[GUEST_STATE_DIR])
         return backup_report() if report is None else report
+
+    return act
+
+
+def crashed(*, exit_code: int = 1) -> Act:
+    """A one-off container that exits non-zero without leaving anything."""
+
+    def act(_mounts: dict[str, Path]) -> str:
+        raise DockerException(["docker", "run"], exit_code, b"", b"")
 
     return act
 

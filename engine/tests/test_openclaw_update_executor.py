@@ -25,6 +25,7 @@ from app.services.guest_identity import GuestOwnershipError
 from app.services.openclaw_update_docker import ContainerInfo
 from app.services.openclaw_update_executor import READY_PASSES, UpgradeExecutor
 from app.services.openclaw_update_snapshot import commit_snapshot, drop_snapshot, restore_snapshot, snapshot_path
+from host_disk_fakes import full_disk
 from openclaw_update_fakes import (
     NEW_IMAGE,
     OLD_IMAGE,
@@ -186,6 +187,25 @@ async def test_new_container_start_failure_rolls_back_state_and_restarts_the_ori
     assert original.restart == "unless-stopped"
     assert h.stored_agent.openclaw_image_id == OLD_IMAGE
     assert h.stored_agent.container_id == "old-id"
+
+
+async def test_a_short_host_disk_fails_the_cutover_before_the_snapshot_and_brings_the_original_back(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a host disk one byte short of its headroom.
+    disk = full_disk(monkeypatch)
+    # When the run executes.
+    await h.executor.process(h.run.id)
+    # Then the snapshot failed like any copy failure: nothing was copied, the new image never started.
+    assert (h.stored_run.state, h.stored_run.failure_code) == ("failed", "cutover_failed")
+    assert not snapshot_path(h.agent_dir, h.run.id).parent.exists()
+    assert h.manager.starts == []
+    assert disk.asked == [h.agent_dir.parent]
+    # And the original guest is canonical and running again with its state as it was.
+    original = h.docker.containers["old-id"]
+    assert (original.name, original.running) == (guest_container_name(h.agent.id), True)
+    assert (h.agent_dir / "workspace" / "memory.md").read_text(encoding="utf-8") == "before"
+    assert (h.stored_agent.container_id, h.stored_agent.openclaw_image_id) == ("old-id", OLD_IMAGE)
 
 
 async def test_readiness_failure_removes_new_writer_before_restoring_state(h: Harness):

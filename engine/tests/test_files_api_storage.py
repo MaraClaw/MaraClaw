@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from app.api import files
 from app.core.domain.users import UserRole
+from app.core.thread_slots import SlotsBusyError
 from app.records.agent import AgentRecord
 from app.records.user import UserRecord
 from app.services.agent_manager import AgentManager
@@ -527,6 +528,36 @@ async def test_s3_spreadsheet_preview_releases_its_copy_when_extraction_raises(
     result = await preview(agent_id, "report.xlsx")
     # Then
     assert result["text"] == "Preview extraction failed: extractor crashed"
+    assert temp_files(temp_root) == []
+
+
+@pytest.mark.parametrize("name", ["report.docx", "report.xlsx"])
+async def test_a_busy_storage_lane_is_not_returned_as_preview_content(
+    monkeypatch: pytest.MonkeyPatch, temp_root: Path, agent_id: uuid.UUID, name: str
+) -> None:
+    source = preview_over_s3(monkeypatch, agent_id, name, b"office-bytes")
+    storage = files.get_storage_backend()
+    is_file = storage.is_file
+    checks: list[str] = []
+
+    async def check_sidecar(key: str) -> bool:
+        checks.append(key)
+        if key.endswith(".md"):
+            raise SlotsBusyError
+        return await is_file(key)
+
+    async def materialize(_key: str) -> MaterializedFile:
+        raise SlotsBusyError
+
+    monkeypatch.setattr(storage, "is_file", check_sidecar)
+    if name.endswith(".xlsx"):
+        monkeypatch.setattr(storage, "materialize", materialize)
+
+    with pytest.raises(SlotsBusyError):
+        _ = await preview(agent_id, name)
+
+    assert len(checks) == (1 if name.endswith(".xlsx") else 2)
+    assert source.get_calls == 0
     assert temp_files(temp_root) == []
 
 

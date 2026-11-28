@@ -55,7 +55,7 @@ class S3StorageBackend(S3CreateBackend):
 
     async def _object_exists(self, key: str) -> bool:
         object_key = self._object_key(key)
-        client = self._client_or_raise()
+        client = self._read_client_or_raise()
         response = await self.lane.run(
             partial(client.list_objects_v2, Bucket=self.bucket, Prefix=object_key, MaxKeys=1)
         )
@@ -64,7 +64,7 @@ class S3StorageBackend(S3CreateBackend):
     @override
     async def is_dir(self, key: str) -> bool:
         prefix = self._object_key(key).rstrip("/") + "/"
-        client = self._client_or_raise()
+        client = self._read_client_or_raise()
         response = await self.lane.run(
             partial(client.list_objects_v2, Bucket=self.bucket, Prefix=prefix, Delimiter="/", MaxKeys=1)
         )
@@ -174,7 +174,7 @@ class S3StorageBackend(S3CreateBackend):
                     yield self._file_entry(item, _strip_prefix(raw, self.prefix))
 
     async def _list_page(self, arguments: S3ListArguments) -> Mapping[str, object]:
-        client = self._client_or_raise()
+        client = self._read_client_or_raise()
         return await self.lane.run(partial(client.list_objects_v2, **arguments), abandon_on_cancel=True)
 
     async def _list_pages(self, arguments: S3ListArguments) -> AsyncGenerator[Mapping[str, object]]:
@@ -199,7 +199,7 @@ class S3StorageBackend(S3CreateBackend):
 
     @override
     async def read_bytes(self, key: str) -> bytes:
-        client = self._client_or_raise()
+        client = self._read_client_or_raise()
         get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
         return await self.lane.run(partial(read_object, get_object, None), abandon_on_cancel=True)
 
@@ -207,7 +207,7 @@ class S3StorageBackend(S3CreateBackend):
     async def read_bytes_bounded(self, key: str, max_bytes: int, *, offset: int | None = None) -> bytes:
         if max_bytes < 0 or (offset is not None and offset < 0):
             raise ValueError("max_bytes and offset must be nonnegative")
-        client = self._client_or_raise()
+        client = self._read_client_or_raise()
         arguments: S3GetArguments = {"Bucket": self.bucket, "Key": self._object_key(key)}
         if offset is not None:
             if max_bytes == 0:
@@ -220,7 +220,7 @@ class S3StorageBackend(S3CreateBackend):
     async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
         if max_bytes < 0:
             raise ValueError("max_bytes must be nonnegative")
-        client = self._client_or_raise()
+        client = self._read_client_or_raise()
         get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
         return await self.lane.run(
             partial(read_object_snapshot, get_object, normalize_storage_key(key), max_bytes), abandon_on_cancel=True
@@ -386,7 +386,7 @@ class S3StorageBackend(S3CreateBackend):
 
     @override
     async def materialize(self, key: str) -> MaterializedFile:
-        client = self._client_or_raise()
+        client = self._read_client_or_raise()
         get_object = partial(client.get_object, Bucket=self.bucket, Key=self._object_key(key))
         return await materialize_object(self.lane, get_object, Path(normalize_storage_key(key)).suffix)
 

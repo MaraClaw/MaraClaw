@@ -12,6 +12,8 @@ threads, so slow work in one subsystem (S3 calls, document conversion) never que
   able to leave at a deadline (a conversion), because nobody awaits it.
 - The lane slot belongs to the thread, not the caller: an abandoned call keeps its slot until the thread returns, so
   abandoned work can never push the lane past its size.
+- `max_waiters` (default `None`: unbounded) bounds the calls waiting for a slot. A `run` that finds every slot taken
+  and the queue full raises `SlotsBusyError` before it starts anything and holds nothing. Only the S3 lane sets it.
 
 Users: `S3Connection.lane` (`app/services/storage_runtime/AGENTS.md`), the document conversion lane
 (`app/services/document_conversion/conversion_lane.py`), the agent email lane (`email_service.AGENT_EMAIL_LANE`) and the
@@ -33,9 +35,9 @@ from app.core.thread_slots import ThreadSlots
 class ThreadLane:
     """A bounded set of dedicated threads; at most `size` calls run at once, the rest wait for a slot."""
 
-    def __init__(self, size: int, name: str = "thread-lane") -> None:
+    def __init__(self, size: int, name: str = "thread-lane", *, max_waiters: int | None = None) -> None:
         self.size: int = size
-        self._slots: ThreadSlots = ThreadSlots(size)
+        self._slots: ThreadSlots = ThreadSlots(size, max_waiters=max_waiters)
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=size, thread_name_prefix=name)
 
     async def run[T](self, work: Callable[[], T], *, abandon_on_cancel: bool = False) -> T:

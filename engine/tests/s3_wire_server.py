@@ -7,6 +7,10 @@ stored and whether the provider was reached at all. It also keeps the bucket's `
 
 GetObject answers a single ``Range`` as S3 does (``_select_range``) and records the header of each ranged GET as a
 ``RANGE`` call next to its ``GET``; ``state.ranges(key)`` lists them in request order.
+
+``state.throttles`` scripts a brownout: a ``Throttle`` keyed by (verb, key) refuses the next ``remaining`` GET, HEAD, PUT
+or DELETE (key) or LIST (prefix) requests with a throttling error and no effect, then serves them normally. Every refused request
+is still recorded in ``state.calls``, so a test counts the attempts the client made.
 """
 
 import hashlib
@@ -36,6 +40,15 @@ class Gate:
 
 
 @dataclass
+class Throttle:
+    """Answer the next `remaining` matching requests with a throttling error and no effect, then serve them normally."""
+
+    status: int = 503
+    code: str = "SlowDown"
+    remaining: int = 1
+
+
+@dataclass
 class S3State:
     objects: dict[str, bytes] = field(default_factory=dict)
     content_types: dict[str, str] = field(default_factory=dict)
@@ -44,6 +57,7 @@ class S3State:
     gates: dict[str, Gate] = field(default_factory=dict)
     refused_deletes: set[str] = field(default_factory=set)
     delete_faults: dict[str, DeleteFault] = field(default_factory=dict)
+    throttles: dict[tuple[str, str], Throttle] = field(default_factory=dict)
     multi_delete_status: int = 200
     versioning: str = ""
     lifecycle: bytes | None = None
@@ -122,6 +136,18 @@ class _Handler(BaseHTTPRequestHandler):
         body = f"<Error><Code>{code}</Code><Message>{code}</Message></Error>".encode()
         self._reply(status, body, {"Content-Type": "application/xml", **(headers or {})})
 
+    def _throttled(self, verb: str, key: str) -> bool:
+        """Refuse this request when a scripted throttle for it has attempts left."""
+        state = self._state()
+        with state.lock:
+            throttle = state.throttles.get((verb, key))
+            if throttle is None or throttle.remaining < 1:
+                return False
+            throttle.remaining -= 1
+            status, code = throttle.status, throttle.code
+        self._error(status, code)
+        return True
+
     def _target(self) -> tuple[str, dict[str, list[str]]]:
         parts = urlsplit(self.path)
         _, _, key = unquote(parts.path).lstrip("/").partition("/")
@@ -187,6 +213,8 @@ class _Handler(BaseHTTPRequestHandler):
             state.calls.append(("PUT", key))
             fault, gate = state.put_faults.get(key), state.gates.get(key)
             occupied = key in state.objects
+        if self._throttled("PUT", key):
+            return
         if self.headers.get("If-None-Match") == "*" and occupied:
             self._error(412, "PreconditionFailed")
             return
@@ -238,6 +266,8 @@ class _Handler(BaseHTTPRequestHandler):
         with state.lock:
             state.calls.append(("HEAD", key))
             data = state.objects.get(key)
+        if self._throttled("HEAD", key):
+            return
         if data is None:
             self._reply(404)
             return
@@ -258,6 +288,8 @@ class _Handler(BaseHTTPRequestHandler):
                 if requested is not None:
                     state.calls.append(("RANGE", f"{requested}@{key}"))
                 data = state.objects.get(key)
+            if self._throttled("GET", key):
+                return
             if data is None:
                 self._error(404, "NoSuchKey")
             else:
@@ -269,6 +301,8 @@ class _Handler(BaseHTTPRequestHandler):
             state.calls.append(("LIST", prefix))
             keys = sorted(k for k in state.objects if k.startswith(prefix) and k > after)
             listed = {k: state.objects[k] for k in keys[:PAGE_SIZE]}
+        if self._throttled("LIST", prefix):
+            return
         page, truncated = keys[:PAGE_SIZE], len(keys) > PAGE_SIZE
         contents = "".join(
             f"<Contents><Key>{escape(k)}</Key><Size>{len(listed[k])}</Size>"
@@ -298,6 +332,9 @@ class _Handler(BaseHTTPRequestHandler):
         state = self._state()
         with state.lock:
             state.calls.append(("DELETE", key))
+        if self._throttled("DELETE", key):
+            return
+        with state.lock:
             fault = state.delete_faults.get(key)
             refused = key in state.refused_deletes
             if not refused and fault != "reject_500":

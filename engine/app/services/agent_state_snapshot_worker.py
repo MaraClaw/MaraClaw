@@ -1,11 +1,8 @@
 """The `agent_state_snapshot` loop: keep each agent's changed OpenClaw state as its one current S3 snapshot."""
 
 import shutil
-import time
 from contextlib import AsyncExitStack, suppress
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import Final
@@ -28,8 +25,6 @@ from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
 from app.services.agent_state_snapshot import (
     ARCHIVE_NAME,
-    CONTAINER_TMP,
-    GUEST_STATE_DIR,
     ONE_OFF_TIMEOUT_SECONDS,
     ROLE_LABEL,
     STORAGE_ERRORS,
@@ -39,8 +34,6 @@ from app.services.agent_state_snapshot import (
     has_host_state,
     list_snapshots,
     new_snapshot_name,
-    new_work_dir,
-    run_one_off,
     snapshot_lock,
     snapshot_store,
     state_digest,
@@ -53,12 +46,16 @@ from app.services.agent_state_snapshot_archive import (
     check_backup_report,
     inspect_archive,
 )
+from app.services.agent_state_snapshot_backup import CREATE_ROLE, new_out_dir, run_backup
+from app.services.agent_state_snapshot_tracker import SnapshotOutcome, SnapshotTracker
 from app.services.company_transfer_runtime_gate import assert_transfer_ready
 from app.services.docker_capacity import DockerBusyError, DockerPriority, run_docker
+from app.services.host_disk_headroom import require_headroom
 from app.services.openclaw_update_gate import OpenClawUpdateGateError, assert_no_active_run
 from app.services.storage_runtime.base import StorageBackend, WriteCondition
 from app.services.storage_runtime.upload_source import open_upload_source
 from app.services.workspace_mirror import agent_state_dir, agents_root
+from app.services.workspace_mirror_scope import WalkLimitError
 
 PAGE_SIZE: Final = 50
 DB_RETRY_BASE_SECONDS: Final = 1.0
@@ -69,61 +66,10 @@ TRANSFER_SECONDS: Final = 600.0
 # The loop beats after every agent, one at a time, so one agent bounds the silence after a page read: two digest walks,
 # the backup container, the archive checks and the transfers. A slower upload turns the loop stale without cancelling it.
 AGENT_SECONDS: Final = 2 * WALK_SECONDS + ONE_OFF_TIMEOUT_SECONDS + CHECK_SECONDS + TRANSFER_SECONDS
-STARVED_INTERVALS: Final = 3
-CREATE_ROLE: Final = "create"
-_BACKUP_SCRIPT: Final = (
-    "exec timeout -s KILL 120 openclaw backup create --no-include-workspace --verify --json "
-    f"--output /out/{ARCHIVE_NAME} 2>/out/backup.log"
-)
-_GUEST_ENVS: Final = {
-    "HOME": "/home/node",
-    "OPENCLAW_HOME": "/home/node",
-    "OPENCLAW_STATE_DIR": GUEST_STATE_DIR,
-    "OPENCLAW_CONFIG_PATH": f"{GUEST_STATE_DIR}/openclaw.json",
-    "TMPDIR": CONTAINER_TMP,
-}
-_monotonic = time.monotonic
 
 
 def progress_budget_seconds() -> float:
     return get_settings().AGENT_STATE_SNAPSHOT_INTERVAL_SECONDS + PAGE_READ_SECONDS + AGENT_SECONDS
-
-
-class SnapshotOutcome(StrEnum):
-    NO_STATE = "no_state"
-    UNCHANGED = "unchanged"
-    BUSY = "busy"
-    INELIGIBLE = "ineligible"
-    FAILED = "failed"
-    REJECTED = "rejected"
-    PUBLISHED = "published"
-
-
-@dataclass(slots=True)
-class SnapshotTracker:
-    """What one worker process remembers: each agent's last published digest, and since when it has lacked one."""
-
-    digests: dict[UUID, str] = field(default_factory=dict)
-    behind_since: dict[UUID, float] = field(default_factory=dict)
-
-    async def published_digest(self, store: StorageBackend, agent_id: UUID) -> str:
-        """The digest of the agent's newest snapshot; a miss is seeded by one listing, an empty string when none."""
-        if agent_id not in self.digests:
-            newest = (await list_snapshots(store, agent_id)).newest()
-            self.digests[agent_id] = "" if newest is None else newest.digest
-        return self.digests[agent_id]
-
-    def current(self, agent_id: UUID, digest: str | None = None) -> None:
-        if digest is not None:
-            self.digests[agent_id] = digest
-        _ = self.behind_since.pop(agent_id, None)
-
-    def behind(self, agent_id: UUID) -> None:
-        """Note a pass that left the agent without a current snapshot; warn once that has lasted three intervals."""
-        now = _monotonic()
-        since = self.behind_since.setdefault(agent_id, now)
-        if now - since > STARVED_INTERVALS * get_settings().AGENT_STATE_SNAPSHOT_INTERVAL_SECONDS:
-            logger.warning("[StateSnapshot] agent={} has had no current snapshot for {:.0f}s", agent_id, now - since)
 
 
 async def start_agent_state_snapshot_worker() -> None:
@@ -154,7 +100,9 @@ async def start_agent_state_snapshot_worker() -> None:
             continue
         failures = 0
         for agent in page:
-            await _snapshot(client, agent, tracker)
+            outcome = await snapshot_agent(client, agent, tracker)
+            if outcome not in (SnapshotOutcome.NO_STATE, SnapshotOutcome.UNCHANGED, SnapshotOutcome.PUBLISHED):
+                tracker.behind(agent.id)
             progress.beat()
         progress.beat()
         if len(page) == PAGE_SIZE:
@@ -181,21 +129,33 @@ def _remove_backup_containers(client: DockerClient) -> None:
             client.container.remove(listed.id, force=True)
 
 
-async def _snapshot(client: DockerClient, agent: AgentRecord, tracker: SnapshotTracker) -> None:
+async def snapshot_agent(client: DockerClient, agent: AgentRecord, tracker: SnapshotTracker) -> SnapshotOutcome:
+    """Run one pass over the agent unless its failure backoff is still running.
+
+    The backoff is checked before the digest and before any lock. A FAILED pass, an error included, and a REJECTED one,
+    a tree past the walk bound included, start or extend it; a BUSY or INELIGIBLE pass never does.
+    """
+    if tracker.backing_off(agent.id):
+        return SnapshotOutcome.BACKING_OFF
     try:
-        outcome = await snapshot_agent(client, agent, tracker)
+        outcome = await _attempt(client, agent, tracker)
+    except WalkLimitError as exc:
+        logger.warning("[StateSnapshot] agent={} has more state than a restore can place: {}", agent.id, exc)
+        outcome = SnapshotOutcome.REJECTED
     except Exception as exc:
         logger.bind(exception_type=type(exc).__name__).warning("[StateSnapshot] snapshot failed agent={}", agent.id)
         outcome = SnapshotOutcome.FAILED
-    if outcome not in (SnapshotOutcome.NO_STATE, SnapshotOutcome.UNCHANGED, SnapshotOutcome.PUBLISHED):
-        tracker.behind(agent.id)
+    if outcome in (SnapshotOutcome.FAILED, SnapshotOutcome.REJECTED):
+        tracker.failed(agent.id)
+    return outcome
 
 
-async def snapshot_agent(client: DockerClient, agent: AgentRecord, tracker: SnapshotTracker) -> SnapshotOutcome:
+async def _attempt(client: DockerClient, agent: AgentRecord, tracker: SnapshotTracker) -> SnapshotOutcome:
     """Publish a new snapshot of the agent when its state changed and no turn is running; the current one stays otherwise.
 
     Lock order is the exclusive setup lock, taken without waiting, then the snapshot flock. The backup runs under both;
-    the checks, the upload and the prune run under the snapshot flock alone, so turns wait only for the backup.
+    the checks, the upload and the prune run under the snapshot flock alone, so turns wait only for the backup. The host
+    disk is checked before the backup's scratch directory exists, so a full disk fails the pass and writes nothing.
     """
     store = snapshot_store()
     agent_dir = agent_state_dir(agent.id)
@@ -214,8 +174,9 @@ async def snapshot_agent(client: DockerClient, agent: AgentRecord, tracker: Snap
                 fresh = await _eligible(agent.id, tenant, agent_dir)
                 if fresh is None:
                     return SnapshotOutcome.INELIGIBLE
-                out = await to_thread.run_sync(_new_out_dir, agent_dir.parent)
-                stdout = await run_docker(_backup, client, fresh, agent_dir, out, priority=DockerPriority.BACKGROUND)
+                await to_thread.run_sync(require_headroom, work_root(agent_dir.parent))
+                out = await to_thread.run_sync(new_out_dir, agent_dir.parent)
+                stdout = await run_docker(run_backup, client, fresh, agent_dir, out, priority=DockerPriority.BACKGROUND)
                 # Taken after the backup so its own bookkeeping row in state/openclaw.sqlite is not a change.
                 digest = await to_thread.run_sync(state_digest, agent_dir, tenant)
             return await _publish(store, agent.id, tenant, digest, stdout, out, tracker)
@@ -246,25 +207,6 @@ async def _eligible(agent_id: UUID, tenant: str, agent_dir: Path) -> AgentRecord
     except OpenClawUpdateGateError, HTTPException:
         return None
     return fresh if await to_thread.run_sync(has_host_state, agent_dir) else None
-
-
-def _new_out_dir(agents: Path) -> Path:
-    out = new_work_dir(agents, CREATE_ROLE) / "out"
-    out.mkdir()
-    return out
-
-
-def _backup(client: DockerClient, agent: AgentRecord, agent_dir: Path, out: Path) -> str:
-    return run_one_off(
-        client,
-        agent.openclaw_image_id or get_settings().MARACLAW_OPENCLAW_IMAGE,
-        _BACKUP_SCRIPT,
-        name=f"maraclaw-state-snapshot-{agent.id}",
-        role=CREATE_ROLE,
-        agent_id=agent.id,
-        mounts={agent_dir: GUEST_STATE_DIR, out: "/out"},
-        envs=_GUEST_ENVS,
-    )
 
 
 def _inspect(out: Path) -> None:

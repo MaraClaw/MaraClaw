@@ -70,6 +70,7 @@ def preview_s3(preview_context, monkeypatch):
     storage = S3StorageBackend(bucket="attachments", prefix="tenant")
     client = PreviewS3(f"tenant/{ctx.agent_id}/workspace/report.docx")
     monkeypatch.setattr(storage, "_client_or_raise", lambda: client)
+    monkeypatch.setattr(storage, "_read_client_or_raise", lambda: client)
     monkeypatch.setattr(file_previews, "get_storage_backend", lambda: storage)
     return client
 

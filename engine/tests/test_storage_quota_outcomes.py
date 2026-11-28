@@ -10,10 +10,18 @@ from botocore.exceptions import (
     ReadTimeoutError,
 )
 
-from app.services.storage_runtime.base import AtomicCreateUnsupportedError, StorageConditionalRaceError
+from app.core.thread_slots import SlotsBusyError
+from app.services.storage_runtime.base import (
+    AtomicCreateUnsupportedError,
+    ConditionalWriteResult,
+    StorageConditionalRaceError,
+    StorageVersion,
+)
 from app.services.storage_runtime.quota_errors import ManagedKeyError
 from app.services.storage_runtime.quota_keys import ManagedKey, parse_managed_key
+from app.services.storage_runtime.quota_ledger import Reservation
 from app.services.storage_runtime.quota_outcomes import Outcome, failure_outcome
+from app.services.storage_runtime.quota_s3 import ManagedS3StorageBackend
 
 
 def client_error(status: int) -> ClientError:
@@ -30,6 +38,7 @@ def client_error(status: int) -> ClientError:
         ConnectTimeoutError(endpoint_url="http://s3.invalid", error="no route"),
         AtomicCreateUnsupportedError("S3", "key"),
         StorageConditionalRaceError("key", 3),
+        SlotsBusyError(),
     ],
 )
 def test_failures_that_cannot_have_changed_the_provider_are_rejections(failure: BaseException):
@@ -50,6 +59,49 @@ def test_failures_that_cannot_have_changed_the_provider_are_rejections(failure: 
 )
 def test_failures_that_may_have_been_applied_stay_unknown(failure: BaseException):
     assert failure_outcome(failure) is Outcome.UNKNOWN
+
+
+def _reservation() -> Reservation:
+    return Reservation(agent_id=uuid4(), object_key="report", operation_id=uuid4(), previous_bytes=0, size_bytes=4)
+
+
+def _backend_recording_settlements(monkeypatch: pytest.MonkeyPatch) -> tuple[ManagedS3StorageBackend, list[Outcome]]:
+    backend = ManagedS3StorageBackend(bucket="bucket")
+    settled: list[Outcome] = []
+
+    async def finish(_reservation: Reservation, outcome: Outcome, adopted_bytes: int = 0) -> None:
+        settled.append(outcome)
+
+    monkeypatch.setattr(backend, "_finish", finish)
+    return backend, settled
+
+
+async def test_a_call_the_full_lane_refused_is_released_not_held_pending(monkeypatch: pytest.MonkeyPatch):
+    backend, settled = _backend_recording_settlements(monkeypatch)
+
+    async def refused() -> None:
+        raise SlotsBusyError
+
+    with pytest.raises(SlotsBusyError):
+        await backend._call(_reservation(), refused)
+
+    assert settled == [Outcome.REJECTED]
+
+
+async def test_a_lookup_the_full_lane_refused_after_a_lost_create_race_stays_charged(monkeypatch: pytest.MonkeyPatch):
+    backend, settled = _backend_recording_settlements(monkeypatch)
+    conflict = ConditionalWriteResult(ok=False, conflict=True)
+
+    async def lost_race() -> ConditionalWriteResult:
+        return conflict
+
+    async def refused(_key: str) -> StorageVersion:
+        raise SlotsBusyError
+
+    monkeypatch.setattr(backend, "get_version", refused)
+
+    assert await backend._create_with(_reservation(), "report", lost_race) is conflict
+    assert settled == [Outcome.UNKNOWN]
 
 
 def test_agent_keys_map_to_their_agent_and_relative_path():
