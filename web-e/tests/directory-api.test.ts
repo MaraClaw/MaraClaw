@@ -5,6 +5,7 @@ import { ZodError } from 'zod'
 import { authSession } from '../src/lib/auth-session.ts'
 import { listOrgUsersPage } from '../src/lib/directory-api.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const user = {
   id: '47f8d9a9-17eb-4b58-a0e3-fbc6a00d18db', display_name: 'Dana Woods',
@@ -16,20 +17,23 @@ const page = { items: [user], next_cursor: 'opaque+/=&? %_ cursor' }
 for (const cursor of [null, page.next_cursor]) {
   test(`People requests a bodyless bounded GET with ${cursor ? 'an opaque cursor' : 'no cursor'}`, async (context) => {
     // Given
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       const url = new URL(path, 'https://fixture.test')
       assert.equal(url.pathname, '/api/org/users/page')
       assert.deepEqual([...url.searchParams], [['search', 'dana %_'], ['limit', '50'], ...(cursor ? [['cursor', cursor]] : [])])
       assert.equal(init.method, 'GET')
       assert.equal(init.body, undefined)
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       return Response.json(page)
     })
     // When
     const result = await listOrgUsersPage({ cursor, search: '  DANA %_  ', signal, owner: authSession.capture() })
     // Then
     assert.deepEqual(result, page)
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -17,8 +18,9 @@ from app.dao.tool_dao import agent_tool_dao, tool_dao
 from app.services.tool_config import SENSITIVE_FIELD_KEYS, get_tenant_tool_config
 from app.services.tool_runtime.provenance import ConfigLayer, merge_layers
 
-_tool_config_cache: dict[tuple[str | None, str], tuple[JsonObject, datetime]] = {}
+_tool_config_cache: OrderedDict[tuple[str | None, str], tuple[JsonObject, datetime]] = OrderedDict()
 _TOOL_CONFIG_CACHE_TTL_SECONDS = 60
+_TOOL_CONFIG_CACHE_MAX_ENTRIES = 1024
 
 
 class ToolConfigDecryptionError(ValueError):
@@ -60,11 +62,6 @@ def _as_tool_config_schema(value: object) -> ToolConfigSchema | None:
     if not isinstance(value, dict):
         candidate = dict(cast("Mapping[object, object]", value)) if isinstance(value, Mapping) else {}
     return candidate if _is_tool_config_schema(candidate) else None
-
-
-def _legacy_local_now() -> datetime:
-    """Produce the legacy naive local timestamp from a timezone-aware clock."""
-    return datetime.now(UTC).astimezone().replace(tzinfo=None)
 
 
 def decrypt_sensitive_fields(
@@ -110,7 +107,7 @@ def get_cached_tool_config(
     if cached is None:
         return None
     config, expiry = cached
-    if (_legacy_local_now() if now is None else now) < expiry:
+    if (datetime.now(UTC) if now is None else now) < expiry:
         return config
     del cache_store[cache_key]
     return None
@@ -126,11 +123,16 @@ def set_cached_tool_config(
     now: datetime | None = None,
 ) -> None:
     """Store a configuration under the legacy cache key and TTL semantics."""
+    if not config:
+        return
     cache_store = _tool_config_cache if cache is None else cache
     ttl = _TOOL_CONFIG_CACHE_TTL_SECONDS if ttl_seconds is None else ttl_seconds
     cache_key = (str(agent_id) if agent_id else None, tool_name)
-    timestamp = _legacy_local_now() if now is None else now
+    timestamp = datetime.now(UTC) if now is None else now
+    cache_store.pop(cache_key, None)
     cache_store[cache_key] = (config, timestamp + timedelta(seconds=ttl))
+    while len(cache_store) > _TOOL_CONFIG_CACHE_MAX_ENTRIES:
+        del cache_store[next(iter(cache_store))]
 
 
 def _decrypt_layer(

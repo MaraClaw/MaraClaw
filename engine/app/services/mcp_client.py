@@ -10,7 +10,8 @@ before the call was sent, so a tool never runs twice. Only that refusal pins a c
 
 Agent tool calls reuse one initialized session per agent, server URL and credential through ``mcp_session_pool``;
 calls without an agent, probes, catalog import, Atlassian and discovery build per-call clients. Every response body
-is read under ``MCP_MAX_RESPONSE_BYTES`` before it is parsed.
+is read under ``MCP_MAX_RESPONSE_BYTES`` before it is parsed, and every ``tools/call`` runs under one overall
+``MCP_TOOL_CALL_DEADLINE_SECONDS`` deadline, which keepalive pings on an event stream cannot extend.
 Reference: https://modelcontextprotocol.io/docs
 """
 
@@ -42,6 +43,11 @@ MCP_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MCP_MAX_REDIRECT_BODY_BYTES = 16 * 1024
 MCP_MAX_TOOL_TEXT_CHARS = 100_000
 MCP_TOOL_TEXT_TRUNCATION_MARKER = f"[MCP tool output truncated to {MCP_MAX_TOOL_TEXT_CHARS} characters]"
+MCP_TOOL_CALL_DEADLINE_SECONDS = 300.0
+MCP_TOOL_DEADLINE_EXCEEDED_TEXT = (
+    f"❌ MCP tool call exceeded its {MCP_TOOL_CALL_DEADLINE_SECONDS:g} second deadline and was not retried; "
+    "the server may still have run it"
+)
 MCP_SESSION_POOL_MAX_ENTRIES = 256
 MCP_SESSION_IDLE_TTL_SECONDS = 300.0
 MCP_SESSION_SHUTDOWN_TIMEOUT_SECONDS = 2.0
@@ -100,7 +106,8 @@ def _credential_fingerprint(api_key: str | None) -> str:
     return hmac.new(_PROCESS_SALT, api_key.encode(), hashlib.sha256).hexdigest()[:32]
 
 
-def _cap_tool_text(text: str) -> str:
+def cap_tool_text(text: str) -> str:
+    """The tool text every MCP result path returns: at most ``MCP_MAX_TOOL_TEXT_CHARS`` characters plus a marker."""
     if len(text) <= MCP_MAX_TOOL_TEXT_CHARS:
         return text
     return f"{text[:MCP_MAX_TOOL_TEXT_CHARS]}\n{MCP_TOOL_TEXT_TRUNCATION_MARKER}"
@@ -609,12 +616,28 @@ class MCPClient:
             return response.status_code
 
     async def call_tool(self, tool_name: str, arguments: Mapping[str, JsonValue]) -> str:
-        """Execute a tool on the MCP server. Failures come back as error text; a sent call is never retried."""
+        """Execute a tool on the MCP server. Failures come back as error text; a sent call is never retried.
+
+        The whole call, handshake included, runs under one ``MCP_TOOL_CALL_DEADLINE_SECONDS`` deadline on top of httpx's
+        per-read timeouts, so pings on an event stream cannot hold it open. A call that runs out of time is reported as
+        failed like any other, and is neither retried nor replayed.
+        """
+        deadline = asyncio.timeout(MCP_TOOL_CALL_DEADLINE_SECONDS)
         try:
-            data = await self._detect_and_request(
-                "tools/call",
-                {"name": tool_name, "arguments": dict(arguments)},
+            async with deadline:
+                data = await self._detect_and_request(
+                    "tools/call",
+                    {"name": tool_name, "arguments": dict(arguments)},
+                )
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            logger.warning(
+                "[MCPClient] tools/call on {} exceeded its {} s deadline",
+                _host(self.server_url),
+                MCP_TOOL_CALL_DEADLINE_SECONDS,
             )
+            return MCP_TOOL_DEADLINE_EXCEEDED_TEXT
         except httpx.HTTPError as e:
             logger.warning("[MCPClient] tools/call on {} failed: {}", _host(self.server_url), type(e).__name__)
             return f"❌ MCP connection failed: {(str(e) or type(e).__name__)[:200]}"
@@ -630,12 +653,12 @@ class MCPClient:
 
         result = data.get("result", {})
         if isinstance(result, str):
-            return _cap_tool_text(result)
+            return cap_tool_text(result)
 
         # MCP returns content as list of content blocks
         raw_blocks = result.get("content") if is_json_object(result) else None
         if not isinstance(raw_blocks, list):
-            return _cap_tool_text(str(result))
+            return cap_tool_text(str(result))
         content_blocks: list[object] = list(raw_blocks)
         texts: list[str] = []
         for block in content_blocks:
@@ -652,7 +675,7 @@ class MCPClient:
             else:
                 texts.append(str(block))
 
-        return _cap_tool_text("\n".join(texts) if texts else str(result))
+        return cap_tool_text("\n".join(texts) if texts else str(result))
 
 
 # ── Session pool ─────────────────────────────────────────────

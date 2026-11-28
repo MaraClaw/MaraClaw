@@ -7,7 +7,7 @@ import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { deleteCompany, getCompanyDeletionPreview } from '../src/lib/companies-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { runOwned, StaleSessionError } from '../src/lib/session-policy.ts'
-import { createFixture } from './helpers.ts'
+import { createFixture, assertForwardsCancellation } from './helpers.ts'
 
 const counts = { users_count: 7, agents_count: 3, schedules_count: 11 }
 const deleted = { status: 'deleted', fallback_tenant_id: 'another-company' }
@@ -23,7 +23,7 @@ test('preview uses a read-only encoded GET and returns all advisory counts', asy
   assert.equal(url, '/api/tenants/company%2Fa%20%2B%3F/deletion-preview')
   assert.equal(options?.method, 'GET')
   assert.equal(options?.body, undefined)
-  assert.strictEqual(options?.signal, controller.signal)
+  assertForwardsCancellation(options?.signal, controller)
   assert.deepEqual(result, counts)
   assert.equal(Object.isFrozen(result), true)
 })

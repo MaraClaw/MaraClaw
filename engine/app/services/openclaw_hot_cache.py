@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections import OrderedDict
 from uuid import UUID
 
 from app.records.agent import AgentRecord
@@ -15,9 +16,12 @@ from app.services.llm.turn import ModelBundle
 
 _DEFAULT_TTL_SECONDS = 45.0
 _SWEEP_ABOVE = 4096
+_MAX_ENTRIES = 8192
+_SWEEP_INTERVAL_SECONDS = 5.0
 type CacheValue = AgentRecord | ModelBundle | str | bool
 
-_store: dict[str, tuple[float, CacheValue]] = {}
+_store: OrderedDict[str, tuple[float, CacheValue]] = OrderedDict()
+_next_sweep_at = 0.0
 
 
 def _now() -> float:
@@ -36,14 +40,19 @@ def cache_get(key: str) -> CacheValue | None:
 
 
 def cache_set(key: str, value: CacheValue, *, ttl: float = _DEFAULT_TTL_SECONDS) -> None:
+    global _next_sweep_at
     if ttl <= 0:
         return
     now = _now()
-    if len(_store) >= _SWEEP_ABOVE:
+    if len(_store) >= _SWEEP_ABOVE and now >= _next_sweep_at:
+        _next_sweep_at = now + _SWEEP_INTERVAL_SECONDS
         for stale, (expires, _value) in list(_store.items()):
             if now >= expires:
                 del _store[stale]
     _store[key] = (now + ttl, value)
+    _store.move_to_end(key)
+    while len(_store) > _MAX_ENTRIES:
+        _ = _store.popitem(last=False)
 
 
 def cache_drop(key: str) -> None:
@@ -69,7 +78,9 @@ def drop_cached_agent(agent_id: UUID) -> None:
 
 def reset() -> None:
     """Test helper."""
+    global _next_sweep_at
     _store.clear()
+    _next_sweep_at = 0.0
 
 
 def _slot_key(agent: AgentRecord) -> str:

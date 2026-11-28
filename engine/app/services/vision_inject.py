@@ -15,6 +15,7 @@ import base64
 import re
 import time
 import uuid as _uuid_mod
+from collections import OrderedDict
 from collections.abc import Mapping
 from io import BytesIO
 from typing import TYPE_CHECKING, Literal, TypedDict
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
 
 # ─── Memory Image Cache ────────────────────────────────────────────────────────
 # Maps a short UUID key -> (raw_bytes, created_at_timestamp, grid_options).
-# Items older than _CACHE_TTL_SECONDS are pruned lazily on each store() call.
+# Fixed TTLs and monotonic insertion order let the oldest entry decide when pruning can stop.
 type GridOptions = dict[str, int | float]
 
 
@@ -48,8 +49,11 @@ class VisionImageContent(TypedDict):
 type VisionContent = VisionTextContent | VisionImageContent
 
 
-_memory_image_cache: dict[str, tuple[bytes, float, GridOptions]] = {}
+_memory_image_cache: OrderedDict[str, tuple[bytes, float, GridOptions]] = OrderedDict()
+_memory_image_bytes = 0
 _CACHE_TTL_SECONDS = 120  # Safety TTL to prevent leaks if the consumer never fires
+_CACHE_MAX_ENTRIES = 128
+_CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 
 def store_temp_screenshot(raw_bytes: bytes, *, grid_options: Mapping[str, int | float] | None = None) -> str:
@@ -64,32 +68,27 @@ def store_temp_screenshot(raw_bytes: bytes, *, grid_options: Mapping[str, int | 
     Returns:
         A short UUID string that identifies this image in the cache.
     """
-    # Lazily prune expired entries to prevent unbounded memory growth
-    _prune_expired_cache()
-
+    global _memory_image_bytes
     img_id = str(_uuid_mod.uuid4())
-    _memory_image_cache[img_id] = (raw_bytes, time.monotonic(), dict(grid_options or {}))
+    size = len(raw_bytes)
+    if size > _CACHE_MAX_BYTES:
+        return img_id  # The consumer takes the normal miss path.
+    now = time.monotonic()
+    while _memory_image_cache:
+        _, created, _ = next(iter(_memory_image_cache.values()))
+        if (
+            now - created <= _CACHE_TTL_SECONDS
+            and len(_memory_image_cache) < _CACHE_MAX_ENTRIES
+            and _memory_image_bytes + size <= _CACHE_MAX_BYTES
+        ):
+            break
+        _, (removed, _, _) = _memory_image_cache.popitem(last=False)
+        _memory_image_bytes -= len(removed)
+    _memory_image_cache[img_id] = (raw_bytes, now, dict(grid_options or {}))
+    _memory_image_bytes += size
     cache_size = len(_memory_image_cache)
     logger.debug(f"[VisionInject] Stored temp screenshot id={img_id}, cache_size={cache_size}")
     return img_id
-
-
-def _prune_expired_cache() -> None:
-    """Remove entries older than _CACHE_TTL_SECONDS from the memory cache."""
-    now = time.monotonic()
-    expired_keys: list[str] = []
-    for key, entry in _memory_image_cache.items():
-        try:
-            ts = entry[1]
-        except IndexError, TypeError:
-            expired_keys.append(key)
-            continue
-        if now - ts > _CACHE_TTL_SECONDS:
-            expired_keys.append(key)
-    for k in list[str](expired_keys):
-        del _memory_image_cache[k]
-    if expired_keys:
-        logger.debug(f"[VisionInject] Pruned {len(expired_keys)} expired cache entries")
 
 
 def pop_temp_screenshot(img_id: str) -> tuple[bytes, GridOptions] | None:
@@ -97,10 +96,14 @@ def pop_temp_screenshot(img_id: str) -> tuple[bytes, GridOptions] | None:
 
     Returns raw bytes if found, None otherwise (already consumed or expired).
     """
+    global _memory_image_bytes
     entry = _memory_image_cache.pop(img_id, None)
     if entry is None:
         return None
-    raw_bytes, _, grid_options = entry
+    raw_bytes, created, grid_options = entry
+    _memory_image_bytes -= len(raw_bytes)
+    if time.monotonic() - created > _CACHE_TTL_SECONDS:
+        return None
     return raw_bytes, grid_options
 
 

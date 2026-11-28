@@ -18,6 +18,7 @@ from app.records.company_transfer_cleanup import TransferCleanupRecord
 from app.runtime.tasks import loop_progress
 from app.services.agent_manager import _guest_config_fingerprints, agent_manager
 from app.services.agent_setup_lock import WorkspaceLockTimeoutError, setup_workspace_lock
+from app.services.agent_state_snapshot import SnapshotBusyError, SnapshotDeleteError, delete_agent_snapshots
 from app.services.company_transfer_connectors import stop_free_transfer_connectors
 from app.services.company_transfer_credentials import scrub_credentials
 from app.services.docker_capacity import DockerBusyError, background_docker
@@ -74,6 +75,7 @@ async def complete_cleanup(item: TransferCleanupRecord) -> str | None:
                 )
             case _:
                 assert_never(item.choice)
+        await delete_agent_snapshots(agent_manager._agent_dir(agent.id), agent.id)
         _ = await agent_dao.update(db_obj=agent, obj_in={"container_id": None, "container_port": None})
         await cleanup.record_attempt(item.agent_id, None)
     return None
@@ -94,6 +96,11 @@ async def reconcile_transfer_cleanup() -> bool:
             error = "workspace_busy"
         except DockerBusyError:
             error = "docker_busy"
+        except SnapshotBusyError:
+            error = "snapshot_busy"
+        except SnapshotDeleteError as exc:
+            error = "snapshot_delete_failed"
+            logger.opt(exception=exc).warning("Transfer runtime cleanup failed agent_id={}", item.agent_id)
         except (
             DbError,
             RuntimeError,

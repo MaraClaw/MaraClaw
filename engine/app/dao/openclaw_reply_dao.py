@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from typing import ClassVar, final
-from uuid import UUID, uuid5
+from uuid import NIL, UUID, uuid5
 
 from pydantic import ValidationError
 
@@ -57,9 +57,10 @@ class OpenClawReplyDAO(BaseDAO[OpenClawReplyBinding]):
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT b.* FROM openclaw_reply_bindings b WHERE b.agent_id IN ("
-                "SELECT agent_id FROM openclaw_reply_bindings WHERE (%(after)s::uuid IS NULL OR agent_id > %(after)s) "
+                "SELECT agent_id FROM openclaw_reply_bindings "
+                "WHERE agent_id >= %(start)s AND agent_id IS DISTINCT FROM %(after)s "
                 "GROUP BY agent_id ORDER BY agent_id LIMIT %(limit)s) ORDER BY b.agent_id, b.id",
-                {"after": after, "limit": AGENT_PAGE},
+                {"start": after or NIL, "after": after, "limit": AGENT_PAGE},
             )
             return tuple(OpenClawReplyBinding.from_row(row) for row in rows)
 

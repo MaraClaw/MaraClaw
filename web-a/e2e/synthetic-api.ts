@@ -68,10 +68,6 @@ export async function installSyntheticApi(context: BrowserContext, baseURL: stri
     const url = new URL(request.url())
     const method = request.method()
     const path = url.pathname
-    if (method === 'GET' && url.origin === 'https://fonts.googleapis.com' && path === '/css2') {
-      await route.fulfill({ contentType: 'text/css', body: '/* External fonts omitted for offline browser tests. */' })
-      return
-    }
     if (url.origin === new URL(baseURL).origin && !/^\/(api|ws|p)(\/|$)/.test(path)) return route.continue()
     state.requests.push({ method, path, body: request.postData() ? request.postDataJSON() : null })
     let body: unknown

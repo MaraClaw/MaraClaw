@@ -134,8 +134,6 @@ def test_experiment_settings_reject_invalid_values(setting, value):
 
 def test_unset_experiments_keep_original_generated_json_bytes(monkeypatch):
     settings = manager_module.settings
-    for name in ("EMBEDDING_MODEL", "EMBEDDING_DIMS", "EMBEDDING_PROVIDER_URL", "EMBEDDING_API_KEY"):
-        monkeypatch.setattr(settings, name, "")
     monkeypatch.setattr(settings, "TAVILY_PROXY_ENABLED", False)
     monkeypatch.setattr(settings, "OPENCLAW_ENGINE_BASE_URL", "http://maraclaw-engine:8000")
     agent = AgentRecord(id=uuid4(), name="Guest", creator_id=uuid4())
@@ -148,8 +146,6 @@ def test_unset_experiments_keep_original_generated_json_bytes(monkeypatch):
                 "modelPolicy": {"allow": ["openai/gpt-6.2-sol"]},
             }
         },
-        "memory": {"search": {"enabled": True, "rememberAcrossConversations": False}},
-        "plugins": {"slots": {"memory": "memory-core"}},
         "gateway": {
             "mode": "local",
             "bind": "lan",
@@ -166,9 +162,17 @@ def test_unset_experiments_keep_original_generated_json_bytes(monkeypatch):
             },
         },
         "tools": {
-            "deny": ["web_search"],
-            "web": {"search": {"enabled": False}},
+            "deny": ["web_search", "web_fetch"],
+            "web": {"search": {"enabled": False}, "fetch": {"enabled": False}},
             "sessions": {"visibility": "self"},
+            "toolSearch": {
+                "exclude": [
+                    {"source": "openclaw", "name": "knowledge_remember"},
+                    {"source": "openclaw", "name": "knowledge_grep"},
+                    {"source": "openclaw", "name": "knowledge_lookup"},
+                    {"source": "openclaw", "name": "knowledge_record"},
+                ]
+            },
         },
     }
     assert json.dumps(actual, indent=2).encode() == json.dumps(expected, indent=2).encode()

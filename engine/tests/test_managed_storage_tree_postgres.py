@@ -3,8 +3,10 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
+import botocore.endpoint
 import pytest
 
 from agent_deletion_fixtures import deletion_scenario
@@ -22,6 +24,7 @@ from app.services.storage_runtime.quota_keys import ManagedKey
 from app.services.storage_runtime.quota_ledger import Reservation, reserve_write
 from app.services.storage_runtime.quota_s3 import ManagedS3StorageBackend
 from managed_storage_fixtures import StorageWorld, quota_world
+from s3_wire_server import Throttle
 
 __all__ = ["deletion_scenario", "quota_world"]
 
@@ -57,6 +60,26 @@ async def test_deleting_a_tree_larger_than_one_listing_page_removes_and_refunds_
     assert sum(key.startswith(f"{agent}/tree-sibling/") for key in world.s3.state.objects) == 3
     assert await world.usage(agent) == 30
     assert world.s3.state.count("LIST") == 3
+
+
+async def test_a_throttled_managed_tree_listing_retries_without_repeating_the_delete(
+    quota_world: StorageWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = quota_world
+    agent = await world.agent()
+    await seed_tree(world, agent, 1)
+    prefix = f"{agent}/tree"
+    delays: list[float] = []
+    monkeypatch.setattr(botocore.endpoint, "time", SimpleNamespace(sleep=delays.append))
+    world.s3.state.throttles[("LIST", f"{prefix}/")] = Throttle(remaining=2)
+
+    await world.backend.delete_tree(prefix)
+
+    assert world.s3.state.count("LIST", f"{prefix}/") == 3
+    assert world.s3.state.count("MULTIDELETE", f"{prefix}/") == 1
+    assert len(delays) == 2
+    assert world.s3.state.objects == {}
+    assert await world.usage(agent) == 0
 
 
 async def test_objects_the_provider_refuses_to_delete_stay_charged_and_the_call_reports_them(

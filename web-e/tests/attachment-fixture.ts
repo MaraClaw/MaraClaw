@@ -26,7 +26,7 @@ export function attachmentFixture(fetchRequest: typeof fetch = () => Promise.res
   const scope = createSessionQueryScope(store, store.capture(), queryClient)
   const unsubscribe = scope.subscribe()
   const cache = createAttachmentCache(store)
-  const http = createHttpClient(store, fetchRequest, (path) => `https://api.example${path}`)
+  const http = createHttpClient(store, { fetch: fetchRequest, url: (path) => `https://api.example${path}` })
   const previews = createAttachmentPreviewClient({
     metadata(resource, { owner, signal }) {
       return http.apiRequest(

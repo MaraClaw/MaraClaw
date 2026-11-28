@@ -7,7 +7,7 @@ import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { fetchTransferPolicy, updateTransferPolicy } from '../src/lib/transfer-policy-api.ts'
-import { createFixture } from './helpers.ts'
+import { createFixture, assertForwardsCancellation } from './helpers.ts'
 
 const policy = { fee_amount_minor: 3719, currency: 'EUR', instructions: 'Arrange payment with the platform team.\nInclude the request reference.' } as const
 
@@ -21,7 +21,7 @@ test('policy read uses the admin endpoint, cancellation signal and server values
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/admin/transfer-policy')
   assert.equal(options?.method, 'GET')
-  assert.equal(options?.signal, controller.signal)
+  assertForwardsCancellation(options?.signal, controller)
   assert.deepEqual(result, policy)
   assert.equal(Object.isFrozen(result), true)
 })

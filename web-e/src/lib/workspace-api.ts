@@ -1,4 +1,4 @@
-import { ApiError, apiFormRequest, apiRequest } from './http.ts'
+import { ApiError, apiFormRequest, apiRequest, transferTimeoutMs } from './http.ts'
 import type { ChatMessage } from './chat/message.ts'
 import { FileContentSchema } from './engine-contracts.generated.ts'
 export { listFilesPage } from './agent-files-api.ts'
@@ -72,7 +72,7 @@ export async function uploadChatFile(file: File, agentId: string): Promise<{
   const form = new FormData()
   form.append('file', file)
   form.append('agent_id', agentId)
-  return apiFormRequest('/api/chat/upload', form)
+  return apiFormRequest('/api/chat/upload', form, { timeoutMs: transferTimeoutMs(file.size) })
 }
 
 export async function listFiles(agentId: string, path = '', signal?: AbortSignal): Promise<FileInfo[]> {
@@ -131,7 +131,9 @@ export async function deleteFileContent(agentId: string, path: string): Promise<
 export async function uploadWorkspaceFile(agentId: string, file: File, path = 'workspace/knowledge_base'): Promise<unknown> {
   const form = new FormData()
   form.append('file', file)
-  return apiFormRequest(`/api/agents/${agentId}/files/upload?path=${encodeURIComponent(path)}`, form)
+  return apiFormRequest(`/api/agents/${agentId}/files/upload?path=${encodeURIComponent(path)}`, form, {
+    timeoutMs: transferTimeoutMs(file.size),
+  })
 }
 
 export async function listSkills(): Promise<SkillRow[]> {

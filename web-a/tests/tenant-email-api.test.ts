@@ -7,7 +7,7 @@ import { ownMutationOptions } from '../src/hooks/session-mutation.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { fetchTenantEmail, resetTenantEmail, sendTenantEmailTest, updateTenantEmail } from '../src/lib/tenant-email-api.ts'
-import { createFixture } from './helpers.ts'
+import { createFixture, assertForwardsCancellation } from './helpers.ts'
 
 const tenant = '11111111-1111-4111-8111-111111111111'
 const saved = { enabled: true, from_address: 'sender@example.test', from_name: 'Team', smtp_host: 'smtp.example.test', smtp_port: 587, smtp_username: 'mailer', smtp_ssl: false, smtp_timeout_seconds: 12, has_password: true, effective_source: 'tenant' } as const
@@ -22,7 +22,7 @@ test('SMTP read scopes the tenant, forwards cancellation and discards any return
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, `/api/enterprise/tenant-email?tenant_id=${tenant}`)
-  assert.equal(options?.signal, controller.signal)
+  assertForwardsCancellation(options?.signal, controller)
   assert.deepEqual(result, saved)
   assert.equal(Object.isFrozen(result), true)
 })

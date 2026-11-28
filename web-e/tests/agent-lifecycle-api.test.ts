@@ -6,6 +6,7 @@ import { getAgentLifecycle, retryAgentMCP } from '../src/lib/agent-lifecycle-api
 import { authSession } from '../src/lib/auth-session.ts'
 import { StaleSessionError } from '../src/lib/http.ts'
 import { lifecycle, mcpWarning } from './agent-lifecycle-fixture.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 test('lifecycle reads the typed projection with cancellation and no-store', async (t) => {
   // Given
@@ -20,7 +21,7 @@ test('lifecycle reads the typed projection with cancellation and no-store', asyn
   // Then
   assert.deepEqual(result, lifecycle)
   assert.equal(path, '/api/agents/agent%2Fwith%20spaces/lifecycle')
-  assert.equal(request?.signal, controller.signal)
+  assertForwardsCancellation([request?.signal], controller)
   assert.equal(request?.cache, 'no-store')
 })
 

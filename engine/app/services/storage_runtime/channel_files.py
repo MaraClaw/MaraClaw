@@ -219,6 +219,34 @@ def delete_guest_file_if_unchanged(root: Path, relative: str, expected: GuestSta
         return False
 
 
+def link_guest_file(source_root: Path, root: Path, relative: str) -> bool:
+    """Hard-link the file at `relative` below `source_root` to the same path below `root`; False when one exists.
+
+    Both paths are entered one O_NOFOLLOW component at a time, so a symlink on either raises `OSError` (ELOOP or
+    ENOTDIR). A missing destination parent is created with its source directory's mode, since OpenClaw refuses state
+    directories wider than it left them. The link shares the source's inode and mode and never replaces anything: an
+    existing destination is left untouched.
+    """
+    path = _relative(relative)
+    with ExitStack() as stack:
+        source = os.open(source_root, _DIRECTORY)
+        stack.callback(os.close, source)
+        directory = os.open(root, _DIRECTORY)
+        stack.callback(os.close, directory)
+        for part in path.parts[:-1]:
+            source = os.open(part, _DIRECTORY, dir_fd=source)
+            stack.callback(os.close, source)
+            with suppress(FileExistsError):
+                os.mkdir(part, mode=stat.S_IMODE(os.fstat(source).st_mode), dir_fd=directory)
+            directory = os.open(part, _DIRECTORY, dir_fd=directory)
+            stack.callback(os.close, directory)
+        try:
+            os.link(path.name, path.name, src_dir_fd=source, dst_dir_fd=directory, follow_symlinks=False)
+        except FileExistsError:
+            return False
+    return True
+
+
 def ensure_guest_directory(root: Path, relative: str) -> None:
     """Create a guest directory and its parents one O_NOFOLLOW component at a time.
 

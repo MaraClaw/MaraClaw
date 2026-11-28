@@ -167,8 +167,8 @@ def _execute(container_id: str, payload_name: str, cancel: Event) -> str:
     argv = guarded_argv(
         ["node", "/home/node/custom-state/.maraclaw-rpc.mjs", f"/home/node/custom-state/{payload_name}"]
     )
-    with observation(_policy, deadline=monotonic() + 940, cancel=cancel):
-        return client.container.execute(container_id, argv, stream=False, timeout=940)
+    with observation(_policy, deadline=monotonic() + 960, cancel=cancel):
+        return client.container.execute(container_id, argv, stream=False, timeout=960)
 
 
 async def execute_gateway_turn(

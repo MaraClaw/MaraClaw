@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import httpx
@@ -6,7 +6,6 @@ import pytest
 
 from app.core.json_types import JsonValue
 from app.dao.activity_log_dao import agent_activity_log_dao
-from app.db.session import connection_ctx
 from app.records.schedule import AgentScheduleRecord
 from app.schemas.schedule_history import ScheduleHistoryPage
 from test_schedule_occurrence_postgres import (
@@ -19,13 +18,10 @@ __all__ = ["live_schedule", "manual_http", "manual_schedule"]
 
 
 @pytest.mark.parametrize("outcome", ["all", "success", "failure", "cancelled", "unknown"])
-async def test_live_history_normalizes_json_before_null_tie_keyset_limit(
+async def test_live_history_normalizes_json_before_tied_keyset_limit(
     manual_schedule: AgentScheduleRecord, manual_http: httpx.AsyncClient, outcome: str
 ) -> None:
-    # Given mixed historical JSON shapes, timestamp ties, NULL timestamps and unrelated rows.
-    async with connection_ctx() as db:
-        # Only this isolated test schema permits the nullable timestamps found in legacy history.
-        await db.execute("ALTER TABLE agent_activity_logs ALTER COLUMN created_at DROP NOT NULL")
+    # Given mixed historical JSON shapes, ties in both timestamp groups and an unrelated schedule.
     details: list[JsonValue] = [
         {"status": "success"},
         {"status": "failed"},
@@ -56,7 +52,7 @@ async def test_live_history_normalizes_json_before_null_tie_keyset_limit(
                 "action_type": "schedule_run",
                 "summary": "Historical",
                 "detail_json": {"schedule_id": str(manual_schedule.id), **detail},
-                "created_at": now if index < 6 else None,
+                "created_at": now if index < 6 else now - timedelta(days=1),
             }
         )
     await agent_activity_log_dao.create(

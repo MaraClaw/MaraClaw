@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { toast } from 'sonner'
+import { RequestTimeoutError } from '../src/lib/http.ts'
 import { showRequestError } from '../src/lib/request-error-toast.ts'
 
 test('request presentation reports shared failures once and permits a later request', () => {
@@ -27,6 +28,16 @@ test('request presentation ignores retired and aborted requests', () => {
     showRequestError(error.message, error)
   }
   assert.equal(toast.getHistory().length, before)
+})
+
+test('request presentation shows a timed-out request, unlike an aborted one', () => {
+  const before = toast.getHistory().length
+  const error = new RequestTimeoutError(90_000, new DOMException('signal timed out', 'TimeoutError'))
+  showRequestError(error.message, error)
+  assert.equal(toast.getHistory().length, before + 1)
+  const latest = toast.getHistory().at(-1)
+  assert.ok(latest && 'title' in latest)
+  assert.equal(latest.title, error.message)
 })
 
 test('request presentation never puts proxy markup into Sonner', () => {

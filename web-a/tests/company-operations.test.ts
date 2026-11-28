@@ -7,6 +7,7 @@ import { companyActivationOptions, companyRuntimeOptions, companyTierChangeOptio
 import { changeCompanyTier, getCompanyRuntime, previewCompanyTier, toggleCompany } from '../src/lib/companies-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { companyId, runtimePage, tierPreview } from './company-operations-fixtures.ts'
+import { assertForwardsCancellation } from './helpers.ts'
 
 test('desired activation sends an encoded id and explicit state, and validates restore counts', async t => {
   const result = { ok: true, is_active: true, restored_members: 3, inactive_members: 2 }
@@ -21,13 +22,14 @@ test('desired activation sends an encoded id and explicit state, and validates r
 })
 
 test('tier preview and apply use independent validated endpoints and preserve expected tier', async t => {
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
   const fetch = t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, _init?: RequestInit) => Response.json(String(url).endsWith('/preview')
     ? tierPreview : { tenant_id: companyId, previous_tier: 'max', tier: 'pro', changed: true, closed_pressure_episodes: 2 }))
   const preview = await previewCompanyTier('company/+', 'pro', signal)
   assert.equal(preview.accounts.over_limit, 4)
   assert.equal(preview.running_guests.length, 1)
-  assert.equal(fetch.mock.calls[0]?.arguments[1]?.signal, signal)
+  assertForwardsCancellation(fetch.mock.calls[0]?.arguments[1]?.signal, caller)
   await changeCompanyTier('company/+', { target_tier: 'pro', expected_tier: 'max' })
   assert.deepEqual(fetch.mock.calls.map(call => [call.arguments[0], call.arguments[1]?.method, JSON.parse(String(call.arguments[1]?.body))]), [
     ['/api/admin/companies/company%2F%2B/tier/preview', 'POST', { target_tier: 'pro' }],
@@ -38,14 +40,15 @@ test('tier preview and apply use independent validated endpoints and preserve ex
 })
 
 test('runtime pages bind company and opaque cursor, forward cancellation and preserve zero diagnostics', async t => {
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json(runtimePage))
   const result = await getCompanyRuntime('company/+', 'opaque/+ ?=', signal)
   const [url, init] = fetch.mock.calls[0]?.arguments ?? []
   const request = new URL(String(url), 'https://example.test')
   assert.equal(request.pathname, '/api/admin/companies/company%2F%2B/runtime')
   assert.deepEqual(Object.fromEntries(request.searchParams), { limit: '50', cursor: 'opaque/+ ?=' })
-  assert.equal(init?.signal, signal)
+  assertForwardsCancellation(init?.signal, caller)
   assert.equal(result.items[0]?.observation.exit_code, 0)
   assert.equal(result.items[0]?.observation.running, false)
   assert.equal(result.items[0]?.observation.oom_killed_since_last_start, false)

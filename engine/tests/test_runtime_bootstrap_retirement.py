@@ -11,7 +11,8 @@ from app.config import get_settings
 from app.dao.tenant_dao import tenant_dao
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
-from app.runtime.bootstrap import bootstrap
+from app.runtime import bootstrap as bootstrap_module
+from app.runtime.bootstrap import bootstrap, sync_default_skills
 from app.services.platform_admin_seeder import PlatformAdminSeedError
 from app.services.system_org_seeder import SystemOrgSeedError
 
@@ -25,7 +26,6 @@ SEEDS = (
     "tool_seeder.get_atlassian_api_key",
     "template_seeder.seed_agent_templates",
     "skill_seeder.seed_skills",
-    "skill_seeder.push_default_skills_to_existing_agents",
     "agent_seeder.seed_okr_agent",
     "agent_seeder.patch_existing_okr_agent",
 )
@@ -102,6 +102,34 @@ async def test_bootstrap_continues_other_boundaries_after_optional_seed_failure(
     await bootstrap()
     # Then: the failed tools block skips its cleanup, but later seeds remain ordered.
     assert seed_calls == list(SEEDS[:3] + SEEDS[5:])
+
+
+async def test_bootstrap_leaves_the_default_skill_push_to_the_runtime(
+    monkeypatch: pytest.MonkeyPatch, seed_calls: list[str]
+) -> None:
+    # Given: the push to existing agents is observable.
+    push = AsyncMock()
+    monkeypatch.setattr("app.services.skill_seeder.push_default_skills_to_existing_agents", push)
+    # When
+    await bootstrap()
+    # Then: the skills are seeded but startup never waits for the sweep over existing agents.
+    assert "skill_seeder.seed_skills" in seed_calls
+    push.assert_not_awaited()
+
+
+async def test_a_failed_default_skill_sync_is_logged_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: the sweep fails.
+    monkeypatch.setattr(
+        "app.services.skill_seeder.push_default_skills_to_existing_agents",
+        AsyncMock(side_effect=RuntimeError("storage down")),
+    )
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        bootstrap_module.logger, "warning", lambda message, *args: warnings.append(message.format(*args))
+    )
+    # When / Then: the owning task ends cleanly and the failure is only a warning.
+    await sync_default_skills()
+    assert any("storage down" in warning for warning in warnings)
 
 
 async def test_bootstrap_stops_when_transfer_policy_cannot_be_seeded(

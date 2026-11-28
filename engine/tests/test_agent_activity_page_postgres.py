@@ -9,7 +9,7 @@ from app.api import activity
 from app.core.domain.activity import ActivityAction
 from app.core.security import get_current_user, load_user_principal
 from app.dao.activity_log_dao import agent_activity_log_dao
-from app.db.session import bind_crud_connection, connection_ctx
+from app.db.session import bind_crud_connection
 from app.records.schedule import AgentScheduleRecord
 from app.records.user import UserRecord
 from test_schedule_occurrence_postgres import live_schedule
@@ -59,14 +59,13 @@ async def test_live_unknown_action_filter_returns_empty_page(
 
 
 @pytest.mark.parametrize("limit", [1, 2, 3])
-async def test_live_timeline_traverses_ties_and_nulls_once_in_order(
+async def test_live_timeline_traverses_each_timestamp_tie_once_in_order(
     live_schedule: AgentScheduleRecord, manager_http: httpx.AsyncClient, limit: int
 ) -> None:
-    # Given timestamp ties, distinct timestamps, NULL timestamps and another agent's row.
-    async with connection_ctx() as db:
-        await db.execute("ALTER TABLE agent_activity_logs ALTER COLUMN created_at DROP NOT NULL")
+    # Given ties in both timestamp groups on the production schema.
     agent_id = live_schedule.agent_id
-    layout = [(10, NOW), (9, NOW), (8, NOW), (7, NOW - timedelta(days=1)), (6, None), (5, None), (4, None)]
+    older = NOW - timedelta(days=1)
+    layout = [(10, NOW), (9, NOW), (8, NOW), (7, NOW), (6, older), (5, older), (4, older)]
     for value, created_at in layout:
         await agent_activity_log_dao.create(
             obj_in={
@@ -78,17 +77,12 @@ async def test_live_timeline_traverses_ties_and_nulls_once_in_order(
                 "created_at": created_at,
             }
         )
-        if created_at is None:
-            async with connection_ctx() as db:
-                await db.execute(
-                    "UPDATE agent_activity_logs SET created_at = NULL WHERE id = %(id)s", {"id": UUID(int=value)}
-                )
     # When paging through the real route.
     everything = await _traverse(manager_http, agent_id, limit)
     errors = await _traverse(manager_http, agent_id, limit, action_type="error")
-    # Then every row appears once in created_at DESC NULLS LAST, id DESC order, filtered exactly.
+    # Then every row appears once in created_at DESC, id DESC order, filtered exactly.
     assert [item["id"] for item in everything] == [str(UUID(int=value)) for value in [10, 9, 8, 7, 6, 5, 4]]
     assert [item["id"] for item in errors] == [str(UUID(int=value)) for value in [9, 7, 5]]
-    assert everything[4]["created_at"] is None
+    assert datetime.fromisoformat(str(everything[4]["created_at"])) == older
     assert {tuple(item) for item in everything} == {("id", "action_type", "summary", "created_at")}
     assert ActivityAction(everything[0]["action_type"]) is ActivityAction.TOOL_CALL

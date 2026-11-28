@@ -138,12 +138,10 @@ async def test_history_uses_only_explicit_terminal_status(
     }
 
 
-async def test_history_keyset_preserves_ties_nulls_and_position_during_new_inserts(
-    api: _HTTP, history: _History
-) -> None:
+async def test_history_keyset_preserves_ties_and_position_during_new_inserts(api: _HTTP, history: _History) -> None:
     expected = [UUID(int=value) for value in [6, 5, 4, 3, 2, 1]]
     for log_id in expected:
-        date = NOW if log_id.int >= 4 else NOW - timedelta(days=1) if log_id.int == 3 else None
+        date = NOW if log_id.int >= 4 else NOW - timedelta(days=1)
         history.add(api.row.agent_id, api.row.id, created_at=date, log_id=log_id)
     cursor = None
     observed: list[str] = []

@@ -7,6 +7,7 @@ import { authSession } from '../src/lib/auth-session.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import type { AdmissionSummary } from '../src/lib/types/company-admissions.ts'
 import { assertBackedOff, focusRefetch, pageVisibility, pollInterval, throttled } from './poll-fixture.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const pending: AdmissionSummary = {
   id: 'pending-request', status: 'pending', source_tenant_id: 'source',
@@ -54,14 +55,16 @@ for (const path of ['/app', '/app/agents', '/app/agents/one/settings', '/app/onb
 test('pending access follows every page and finds a matching second-page applicant', async (context) => {
   // Given
   const owner = authSession.capture()
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   const cursor = 'opaque/+?=&cursor'
   const calls: (string | null)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     const query = new URL(path, 'https://fixture.test').searchParams
     assert.equal(query.get('status'), 'pending')
     assert.equal(query.get('limit'), '100')
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     calls.push(query.get('cursor'))
     return Response.json(query.has('cursor')
       ? { items: [pending], next_cursor: 'unused-next-page' }
@@ -72,6 +75,7 @@ test('pending access follows every page and finds a matching second-page applica
   // Then
   assert.equal(restricted, true)
   assert.deepEqual(calls, [null, cursor])
+  assertForwardsCancellation(forwarded, caller)
 })
 
 test('pending access grants workspace only after exhausting pages without a match', async (context) => {

@@ -29,7 +29,7 @@ def test_native_docker_execute_uses_guarded_owned_container(monkeypatch: pytest.
     assert command[: len(GUARD)] == GUARD
     assert command[-1] == "/home/node/custom-state/payload.json"
     assert stream is False
-    assert timeout == 940
+    assert timeout == 960
 
 
 @pytest.mark.parametrize("primary_owner", ["same", "other", "global", "disabled"])

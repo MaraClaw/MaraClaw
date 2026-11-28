@@ -100,7 +100,7 @@ async def test_state_is_applied_only_between_the_old_guest_stopping_and_the_new_
     agent.gogcli_enabled = True
     monkeypatch.setattr(module.settings, "GOGCLI_ENABLED", True)
 
-    async def hydrate(_agent_id):
+    async def hydrate(_agent_id, *, restored=frozenset()):
         events.append("hydrate")
         (directory / "memory" / "hydrated.md").write_bytes(b"hydrated")
         return directory
@@ -143,7 +143,7 @@ async def test_state_failure_after_the_old_guest_stopped_reports_no_runtime(env,
     directory = manager._agent_dir(agent.id)
     before = _seed(directory)
 
-    async def unavailable(_agent_id):
+    async def unavailable(_agent_id, *, restored=frozenset()):
         raise OSError("storage unavailable")
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", unavailable)
@@ -166,7 +166,7 @@ async def test_state_failure_without_an_old_guest_is_a_plain_preparation_failure
     agent.container_port = None
     agent.status = AgentStatus.STOPPED
 
-    async def unavailable(_agent_id):
+    async def unavailable(_agent_id, *, restored=frozenset()):
         raise OSError("storage unavailable")
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", unavailable)

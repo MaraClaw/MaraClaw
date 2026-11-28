@@ -1,6 +1,6 @@
 # MaraClaw web-a - production SPA Caddy site
 # - Plain HTTP on non-privileged port 8080 (TLS is terminated in front of this container)
-# - Long-cache hashed assets, no-cache HTML
+# - Long-cache hashed assets, revalidated theme and font bootstrap files, no-cache HTML
 # - SPA fallback to index.html (React Router)
 # - Basic security headers + compression
 # - Access log without request targets, queries or headers
@@ -97,6 +97,7 @@ http://:8080 {
 
 	@hidden path_regexp /\.
 	@static path_regexp (?i)\.(svg|ico|png|jpe?g|gif|webp|woff2?)$
+	@early path /theme-init.js /fonts/fonts.css
 
 	# Health probe for container orchestrators.
 	handle /healthz {
@@ -141,9 +142,17 @@ http://:8080 {
 		file_server
 	}
 
+	# Render-blocking files with fixed names (the pre-paint theme script, the font faces): browsers keep a copy and
+	# revalidate it with the ETag / Last-Modified that file_server sends, so a deploy reaches the next page load.
+	handle @early {
+		log_skip
+		header Cache-Control no-cache
+		header X-Content-Type-Options nosniff
+		file_server
+	}
+
 	# HTML entry + client routes: never long-cache index.html.
 	# connect-src allows same-origin API (/api via this proxy) and optional absolute VITE_API_BASE_URL hosts (https:).
-	# Google Fonts used by the SPA.
 	handle {
 		log_append route spa
 		header {
@@ -153,7 +162,7 @@ http://:8080 {
 			X-Frame-Options SAMEORIGIN
 			Referrer-Policy strict-origin-when-cross-origin
 			Permissions-Policy "camera=(), microphone=(), geolocation=()"
-			Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; connect-src 'self' https:"
+			Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https:"
 		}
 		try_files {path} {path}/ /index.html
 		file_server

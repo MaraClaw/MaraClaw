@@ -17,8 +17,10 @@ from tests.llm_retry_fakes import (
     FIXED_NOW,
     OPENAI_COMPATIBLE,
     PROMPT,
+    STREAM_READ_PARAMS,
     Mode,
     Outcome,
+    PacedResponse,
     ProviderCase,
     ScriptedHttpClient,
     ScriptedResponse,
@@ -38,7 +40,9 @@ from app.services.llm.provider_health import ProviderUnavailableError, guarded, 
 from app.services.llm.providers import GeminiClient, OpenAICompatibleClient
 from app.services.llm.registry import PROVIDER_ALIASES, PROVIDER_CLIENTS, PROVIDER_REGISTRY
 from app.services.llm.retry_policy import LLMHTTPError, RetryPolicy, call_with_retry
+from app.services.llm.stream_deadline import STREAM_DEADLINE_SECONDS, StreamDeadlineError
 from app.services.llm.types import LLMMessage, LLMResponse
+from loop_clock_fixtures import freeze_loop_clock
 
 
 @pytest.fixture(autouse=True)
@@ -408,21 +412,11 @@ async def test_gemini_openai_compatible_base_retries_through_its_fallback_client
     assert sleeps == [0.75]
 
 
-@pytest.mark.parametrize("fallback_recovers", [True, False])
-async def test_failover_falls_back_exactly_once_after_the_retry_budget_is_spent(
-    monkeypatch: pytest.MonkeyPatch, fallback_recovers: bool, sleeps: list[float]
-) -> None:
-    # Given a primary provider that keeps answering 503, and a fallback that is healthy or just as unwell.
+async def _failover_over_anthropic(
+    monkeypatch: pytest.MonkeyPatch, http_by_model: dict[str, ScriptedHttpClient]
+) -> tuple[list[str], str]:
     primary: Any = SimpleNamespace(provider="anthropic", model="primary")
     fallback: Any = SimpleNamespace(provider="anthropic", model="fallback")
-    unwell = [ScriptedResponse(503, body="upstream busy") for _ in range(3)]
-    http_by_model = {
-        "primary": ScriptedHttpClient(*unwell),
-        "fallback": ScriptedHttpClient(
-            ANTHROPIC.ok() if fallback_recovers else ScriptedResponse(503, body="upstream busy"),
-            *([] if fallback_recovers else [ScriptedResponse(503, body="upstream busy") for _ in range(2)]),
-        ),
-    }
     calls: list[str] = []
 
     async def call_llm_over_real_client(model: SimpleNamespace, *_args: object, **_kwargs: object) -> str:
@@ -441,13 +435,48 @@ async def test_failover_falls_back_exactly_once_after_the_retry_budget_is_spent(
         return response.content
 
     monkeypatch.setattr(caller, "call_llm", call_llm_over_real_client)
-    # When the failover wrapper runs.
     result = await caller.call_llm_with_failover(primary, fallback, [], "Agent", "role", agent_id=uuid4())
+    return calls, result
+
+
+@pytest.mark.parametrize("fallback_recovers", [True, False])
+async def test_failover_falls_back_exactly_once_after_the_retry_budget_is_spent(
+    monkeypatch: pytest.MonkeyPatch, fallback_recovers: bool, sleeps: list[float]
+) -> None:
+    # Given a primary provider that keeps answering 503, and a fallback that is healthy or just as unwell.
+    unwell = [ScriptedResponse(503, body="upstream busy") for _ in range(3)]
+    http_by_model = {
+        "primary": ScriptedHttpClient(*unwell),
+        "fallback": ScriptedHttpClient(
+            ANTHROPIC.ok() if fallback_recovers else ScriptedResponse(503, body="upstream busy"),
+            *([] if fallback_recovers else [ScriptedResponse(503, body="upstream busy") for _ in range(2)]),
+        ),
+    }
+    # When the failover wrapper runs.
+    calls, result = await _failover_over_anthropic(monkeypatch, http_by_model)
     # Then the primary spent its budget, the fallback was tried exactly once, and nothing else was.
     assert calls == ["primary", "fallback"]
     assert len(http_by_model["primary"].requests) == 3
     assert len(http_by_model["fallback"].requests) == (1 if fallback_recovers else 3)
     assert (result == "Hello") if fallback_recovers else result.startswith("⚠️ Model call failed")
+
+
+async def test_failover_falls_back_after_a_stream_deadline_without_retrying_the_primary(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    # Given a primary whose stream keeps sending keepalives forever, and a healthy fallback.
+    clock = freeze_loop_clock(monkeypatch)
+    stalled = PacedResponse(clock, STREAM_DEADLINE_SECONDS / 3, stalls=True)
+    http_by_model = {"primary": ScriptedHttpClient(stalled), "fallback": ScriptedHttpClient(ANTHROPIC.ok())}
+    # When the failover wrapper runs.
+    calls, result = await _failover_over_anthropic(monkeypatch, http_by_model)
+    # Then the deadline counted as the primary's provider timeout: one request, no wait, one fallback call.
+    assert calls == ["primary", "fallback"]
+    assert len(http_by_model["primary"].requests) == 1
+    assert len(http_by_model["fallback"].requests) == 1
+    assert sleeps == []
+    assert stalled.closed
+    assert result == "Hello"
 
 
 def _guarded_call(
@@ -524,3 +553,47 @@ async def test_a_client_error_whose_body_mentions_a_timeout_never_opens_the_circ
     # Then each one reached the provider and the circuit is still closed.
     assert not is_unavailable(model)
     assert sleeps == []
+
+
+@pytest.mark.parametrize(("case", "mode"), STREAM_READ_PARAMS)
+async def test_a_stream_kept_alive_past_its_deadline_fails_once_as_a_provider_timeout(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, mode: Mode, sleeps: list[float]
+) -> None:
+    # Given a server that answers every read with a keepalive and never finishes, on a clock only the test moves.
+    clock = freeze_loop_clock(monkeypatch)
+    clock.now = 0.0  # Keep whole-second ticks exact regardless of the real loop clock's origin.
+    stalled = PacedResponse(clock, STREAM_DEADLINE_SECONDS / 3, stalls=True)
+    http = ScriptedHttpClient(stalled)
+    # When the client reads it, whichever way it was called.
+    with pytest.raises(StreamDeadlineError) as raised:
+        _ = await call_provider(monkeypatch, case, mode, http)
+    # Then the total deadline ended it as a retryable provider timeout, once: no second request, no wait.
+    assert classify_error(raised.value) is FailoverErrorType.RETRYABLE
+    assert clock.now >= STREAM_DEADLINE_SECONDS
+    assert len(http.requests) == 1
+    assert sleeps == []
+    assert stalled.closed
+
+
+@pytest.mark.parametrize(("case", "mode"), STREAM_READ_PARAMS)
+async def test_stream_deadlines_count_toward_opening_the_circuit(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, mode: Mode, sleeps: list[float]
+) -> None:
+    # Given a model whose provider stalls every stream, and a circuit that opens after two failures.
+    _tracker, _health_clock = install_provider_health(monkeypatch, threshold=2)
+    clock = freeze_loop_clock(monkeypatch)
+    model = health_model()
+
+    def stalled() -> ScriptedHttpClient:
+        return ScriptedHttpClient(PacedResponse(clock, STREAM_DEADLINE_SECONDS / 3, stalls=True))
+
+    # When two calls each run into their deadline.
+    for _ in range(2):
+        with pytest.raises(StreamDeadlineError):
+            _ = await _guarded_call(monkeypatch, model, case, mode, stalled())
+    # Then the circuit is open and the next call is refused before any request leaves the process.
+    assert is_unavailable(model)
+    idle = ScriptedHttpClient()
+    with pytest.raises(ProviderUnavailableError):
+        _ = await _guarded_call(monkeypatch, model, case, mode, idle)
+    assert idle.requests == []

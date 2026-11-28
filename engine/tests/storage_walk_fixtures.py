@@ -102,6 +102,7 @@ class PagedS3Client:
 def s3_backend(client: PagedS3Client, monkeypatch: pytest.MonkeyPatch, prefix: str = "") -> S3StorageBackend:
     backend = S3StorageBackend(bucket="bucket", prefix=prefix)
     monkeypatch.setattr(backend, "_client_or_raise", lambda: client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", lambda: client)
     return backend
 
 

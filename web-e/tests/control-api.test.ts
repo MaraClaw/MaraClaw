@@ -7,6 +7,7 @@ import { createCredential, listCredentials, listPublishedPages, updateCredential
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { listFiles } from '../src/lib/workspace-api.ts'
 import { DiscoveryBodyResponse } from './discovery-fixture.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const credential = {
   id: '09bc8102-a06b-4cb5-b034-3e32ea78f67a', agent_id: '5458ec51-a954-4306-8626-68e16921d95f', revision: 7,
@@ -140,7 +141,9 @@ for (const resource of ['files', 'pages'] as const) {
     assert.deepEqual(await list(), [])
     assert.deepEqual(await list(controller.signal), [])
     const url = resource === 'files' ? '/api/agents/agent-a/files/?path=workspace%2Fa%20%26%20b' : '/api/pages/list?agent_id=agent-a'
-    assert.deepEqual(requests, [{ url, signal: undefined }, { url, signal: controller.signal }])
+    assert.deepEqual(requests.map((request) => request.url), [url, url])
+    assertForwardsCancellation([requests[1]?.signal], controller)
+    assert.equal(requests[0]?.signal?.aborted, false)
   })
 
   for (const interruption of ['abort', 'replacement'] as const) {

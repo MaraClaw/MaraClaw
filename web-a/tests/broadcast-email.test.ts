@@ -12,7 +12,7 @@ import {
 } from '../src/lib/broadcast-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
-import { createFixture } from './helpers.ts'
+import { createFixture, assertForwardsCancellation } from './helpers.ts'
 
 const id = broadcastIdSchema.parse('0d75651c-8c6c-4404-9046-50e1b3ff6dd2')
 const status = { broadcast_id: id, available: true, queued: 11, claimed: 7, smtp_accepted: 5, failed: 3, cancelled: 2 }
@@ -28,7 +28,7 @@ test('email status uses a tenant-local GET and forwards cancellation to the tran
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, `/api/notifications/broadcast/${id}/email-status`)
   assert.equal(options?.method, 'GET')
-  assert.equal(options?.signal, controller.signal)
+  assertForwardsCancellation(options?.signal, controller)
   assert.deepEqual(result, status)
   assert.equal(Object.isFrozen(result), true)
 })

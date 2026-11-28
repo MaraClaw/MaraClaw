@@ -101,18 +101,22 @@ class FakeRedis:
             self.store.pop(key, None)
 
     async def get(self, key: str) -> str | None:
+        self.round_trips += 1
         self.commands.append("get")
         return self.read(key)
 
     async def set(self, key: str, value: str, ex: int | None = None, nx: bool = False) -> bool:
+        self.round_trips += 1
         self.commands.append("set")
         return self.write(key, value, ex=ex, nx=nx)
 
     async def delete(self, *keys: str) -> None:
+        self.round_trips += 1
         self.commands.append("delete")
         self.remove(*keys)
 
     async def incr(self, key: str) -> int:
+        self.round_trips += 1
         self.commands.append("incr")
         if self.fail:
             raise RuntimeError("redis down")
@@ -121,6 +125,7 @@ class FakeRedis:
         return nxt
 
     async def expire(self, key: str, ttl: int) -> None:
+        self.round_trips += 1
         self.commands.append("expire")
         if self.fail:
             raise RuntimeError("redis down")
@@ -428,10 +433,12 @@ async def test_failed_invalidations_log_warnings_and_do_not_trip_the_circuit(
     # Then one WARNING covers the batch
     assert logger.warning.call_count == 1
     # And immediate invalidations warn too, without being gated by or tripping the circuit
+    guarded_before = _guarded_calls()
     await redis_cache.cache_delete("sess")
     await redis_cache.bump_version("other")
     assert logger.warning.call_count == 3
     assert not redis_cache._cooling_down()
+    assert _guarded_calls() == guarded_before
     fake_cache.fail = False
     await redis_cache.bump_version("other")
     assert fake_cache.store["other"]
@@ -693,6 +700,68 @@ async def test_a_busy_pool_or_a_cancelled_probe_neither_trips_nor_closes_the_bre
     assert not circuit.refusing()
     assert await redis_cache.guarded(_healthy()) == "ok"
     assert not circuit.refusing()
+
+
+def _guarded_calls() -> dict[str, float]:
+    family = next(f for f in redis_cache.metric_families() if f.name == "maraclaw_cache_redis_calls_total")
+    return {dict(sample.labels)["outcome"]: sample.value for sample in family.samples}
+
+
+async def test_guarded_counts_ok_refused_pool_busy_and_failed_and_never_a_cancellation(
+    breaker: tuple[redis_cache.CacheBreaker, _Clock],
+) -> None:
+    _, clock = breaker
+    before = _guarded_calls()
+
+    async def busy() -> str:
+        raise events.RedisPoolOverloadError("busy")
+
+    started = asyncio.Event()
+
+    async def stalled() -> str:
+        started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    assert await redis_cache.guarded(_healthy()) == "ok"
+    with pytest.raises(redis_cache.CacheUnavailableError):
+        await redis_cache.guarded(busy)
+    with pytest.raises(redis_cache.CacheUnavailableError):
+        await redis_cache.guarded(_outage())
+    with pytest.raises(redis_cache.CacheUnavailableError, match="circuit open"):
+        await redis_cache.guarded(_healthy())
+    clock.now += 2.0
+    probe = asyncio.create_task(redis_cache.guarded(stalled))
+    await started.wait()
+    _ = probe.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await probe
+
+    after = _guarded_calls()
+    assert {outcome: after[outcome] - before[outcome] for outcome in after} == {
+        "ok": 1,
+        "refused": 1,
+        "pool_busy": 1,
+        "failed": 1,
+    }
+
+
+async def test_the_breaker_gauge_reads_the_state_without_taking_the_probe_slot(
+    breaker: tuple[redis_cache.CacheBreaker, _Clock],
+) -> None:
+    circuit, clock = breaker
+
+    def gauge() -> float:
+        family = next(f for f in redis_cache.metric_families() if f.name == "maraclaw_cache_redis_breaker_open")
+        return family.samples[0].value
+
+    assert gauge() == 0
+    circuit.trip()
+    clock.now += 2.0
+    assert [gauge(), gauge()] == [1, 1]
+    # Past the cooldown the first real call is still the probe; its success closes the breaker.
+    assert await redis_cache.guarded(_healthy()) == "ok"
+    assert gauge() == 0
 
 
 async def test_a_straggler_failure_does_not_extend_an_open_breaker(

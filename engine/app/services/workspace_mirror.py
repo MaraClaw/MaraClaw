@@ -6,11 +6,9 @@ or unprovable freezes for a pass instead of being read as a delete. Lock order i
 `guest_write_section`) then the mirror lock; never the other way round.
 """
 
-import fcntl
 import stat
 import time
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -27,7 +25,7 @@ from app.dao.workspace_mirror_entry_dao import workspace_mirror_entry_dao
 from app.records.agent import AgentRecord
 from app.records.workspace_mirror_entry import WorkspaceMirrorEntryRecord
 from app.services.agent_context_cache import invalidate_for_workspace_paths
-from app.services.agent_setup_lock import WorkspaceLockTimeoutError, wait_for_flock
+from app.services.agent_setup_lock import WorkspaceLockTimeoutError, agent_flock
 from app.services.openclaw_update_exclusion import guest_write_section
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError
 from app.services.storage import get_storage_backend
@@ -140,16 +138,26 @@ class ReconcileReport:
         return not (self.budget_exhausted or self.remote_missing_guarded)
 
 
+def agents_root() -> Path:
+    """The engine-side directory holding every agent's state directory, the setup locks beside them."""
+    settings = get_settings()
+    return Path(settings.STORAGE_LOCAL_ROOT or settings.AGENT_DATA_DIR)
+
+
 def agent_state_dir(agent_id: UUID) -> Path:
     """The engine-side directory bind-mounted at /home/node/custom-state in the agent's guest container."""
-    settings = get_settings()
-    return Path(settings.STORAGE_LOCAL_ROOT or settings.AGENT_DATA_DIR) / str(agent_id)
+    return agents_root() / str(agent_id)
 
 
 def durable_store() -> StorageBackend | None:
     """The store guest files are mirrored into, or None when storage already is the guest directory (local mode)."""
     if not get_settings().WORKSPACE_MIRROR_ENABLED:
         return None
+    return primary_store()
+
+
+def primary_store() -> StorageBackend | None:
+    """The S3 store storage writes through first, whatever the mirror setting; None in local mode."""
     match get_storage_backend():
         case LocalStorageBackend():
             return None
@@ -333,23 +341,10 @@ async def reconcile_agent(
     return report
 
 
-@asynccontextmanager
-async def mirror_lock(agent_dir: Path, *, wait_seconds: float) -> AsyncGenerator[None]:
+def mirror_lock(agent_dir: Path, *, wait_seconds: float) -> AbstractAsyncContextManager[None]:
     """Exclusive per-agent mirror flock beside the setup lock; `MirrorBusyError` when it stays taken."""
-    lock_dir = agent_dir.parent / "_setup_locks"
-    await anyio.Path(lock_dir).mkdir(parents=True, exist_ok=True)
-    lock = (lock_dir / f"{agent_dir.name}.mirror.lock").open("a+b")
-    try:
-        try:
-            await wait_for_flock(lock, fcntl.LOCK_EX, wait_seconds)
-        except WorkspaceLockTimeoutError as exc:
-            raise MirrorBusyError("Another workspace mirror pass is running for this agent") from exc
-        try:
-            yield
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
-    finally:
-        lock.close()
+    busy = MirrorBusyError("Another workspace mirror pass is running for this agent")
+    return agent_flock(agent_dir, "mirror", wait_seconds=wait_seconds, busy=busy)
 
 
 async def mirror_agent(agent: AgentRecord) -> ReconcileReport | None:

@@ -10,7 +10,7 @@ import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import { NotificationKind, notificationSchema } from '../src/lib/notifications-api.ts'
 import { canReviewAdmissions } from '../src/lib/types/auth-guards.ts'
 import { approvedAdmission, pendingAdmission } from './admission-fixtures.ts'
-import { adminUser } from './helpers.ts'
+import { adminUser, assertForwardsCancellation } from './helpers.ts'
 
 test('admission review listing preserves an opaque cursor and parses a readonly page', async (t) => {
   // Given
@@ -21,7 +21,7 @@ test('admission review listing preserves an opaque cursor and parses a readonly 
   const result = await fetchAdmissionReviews('pending', 'opaque+/= cursor', controller.signal)
   // Then
   assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/review/page?status=pending&limit=50&cursor=opaque%2B%2F%3D+cursor')
-  assert.equal(fetch.mock.calls[0]?.arguments[1]?.signal, controller.signal)
+  assertForwardsCancellation(fetch.mock.calls[0]?.arguments[1]?.signal, controller)
   assert.deepEqual(result, page)
   assert.equal(Object.isFrozen(result), true)
   assert.equal(Object.isFrozen(result.items), true)

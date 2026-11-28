@@ -2,14 +2,17 @@
 
 Nothing here sleeps or touches the network: ``install_retry_policy`` swaps the shared policy's sleep for a
 recorder and ``ScriptedHttpClient`` plays back the outcomes a test queues. ``install_provider_health`` swaps the
-process-wide provider circuit tracker for one on a hand-advanced clock.
+process-wide provider circuit tracker for one on a hand-advanced clock. ``PacedResponse`` and ``IdleResponse`` are the
+streams the stream deadline is proven against: each moves a frozen loop clock (``loop_clock_fixtures``) instead of
+waiting on it.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace, TracebackType
-from typing import Any, Literal
+from typing import Any, Literal, override
 from uuid import uuid4
 
 import httpx
@@ -22,6 +25,7 @@ from app.services.llm.provider_health import Admission, ProviderHealth, model_ke
 from app.services.llm.providers import AnthropicClient, GeminiClient, OpenAICompatibleClient, OpenAIResponsesClient
 from app.services.llm.retry_policy import RetryPolicy
 from app.services.llm.types import LLMMessage, LLMResponse
+from loop_clock_fixtures import LoopClock
 
 API_KEY = "sk-live-SECRET-4f9c"
 PROMPT = "private prompt body 7d21"
@@ -65,6 +69,53 @@ class ScriptedResponse:
             yield line
         if self.disconnect is not None:
             raise self.disconnect
+
+
+MAX_KEEPALIVES = 100
+
+
+class PacedResponse(ScriptedResponse):
+    """A 200 stream whose every line, then every keepalive when it ``stalls``, arrives ``tick`` seconds after the last.
+
+    Time is the frozen loop clock: each line moves it with ``jump``, so a stalled stream keeps answering, never
+    idle, until the stream deadline reads the clock. ``keepalives`` counts the ones sent; a deadline that never fires
+    fails the test at ``MAX_KEEPALIVES`` instead of looping.
+    """
+
+    def __init__(self, clock: LoopClock, tick: float, lines: Iterable[str] = (), *, stalls: bool = False) -> None:
+        super().__init__(lines=lines)
+        self.clock = clock
+        self.tick = tick
+        self.stalls = stalls
+        self.keepalives = 0
+
+    @override
+    async def aiter_lines(self):
+        for line in self.lines:
+            await asyncio.sleep(0)
+            self.clock.jump(self.tick)
+            yield line
+        while self.stalls:
+            assert self.keepalives < MAX_KEEPALIVES, "the stream deadline never fired"
+            await asyncio.sleep(0)
+            self.clock.jump(self.tick)
+            self.keepalives += 1
+            yield ": keepalive"
+
+
+class IdleResponse(ScriptedResponse):
+    """A 200 stream whose server goes quiet after its ``lines``: the next read parks, and ``parked`` is set once it has."""
+
+    def __init__(self, lines: Iterable[str] = ()) -> None:
+        super().__init__(lines=lines)
+        self.parked = asyncio.Event()
+
+    @override
+    async def aiter_lines(self):
+        for line in self.lines:
+            yield line
+        self.parked.set()
+        await asyncio.Event().wait()
 
 
 type Outcome = ScriptedResponse | Exception
@@ -184,10 +235,42 @@ OPENAI_RESPONSES = ProviderCase(
     streams_natively=False,
 )
 
+# Backends that reject ``stream: false`` (Grok and ChatGPT subscriptions): ``complete`` reads their event stream too.
+OPENAI_COMPATIBLE_STREAM_ONLY = ProviderCase(
+    id="openai-compatible-stream-only",
+    make=lambda: OpenAICompatibleClient(API_KEY, model="grok-test", stream_only=True),
+    complete_json={},
+    stream_lines=OPENAI_COMPATIBLE.stream_lines,
+    chunks=OPENAI_COMPATIBLE.chunks,
+    first_chunk_lines=OPENAI_COMPATIBLE.first_chunk_lines,
+)
+OPENAI_RESPONSES_STREAM_ONLY = ProviderCase(
+    id="openai-responses-stream-only",
+    make=lambda: OpenAIResponsesClient(API_KEY, model="gpt-codex", stream_only=True),
+    complete_json={},
+    stream_lines=(
+        'data: {"type":"response.output_text.delta","delta":"Hel"}',
+        'data: {"type":"response.output_text.delta","delta":"lo"}',
+        'data: {"type":"response.completed","response":{"model":"gpt-codex","output":[]}}',
+    ),
+    chunks=("Hel", "lo"),
+    first_chunk_lines=1,
+)
+
 CASES = (OPENAI_COMPATIBLE, ANTHROPIC, GEMINI, OPENAI_RESPONSES)
 CASE_PARAMS = [pytest.param(case, id=case.id) for case in CASES]
 STREAMING_CASE_PARAMS = [pytest.param(case, id=case.id) for case in CASES if case.streams_natively]
 CALLS = [pytest.param(case, mode, id=f"{case.id}-{mode}") for case in CASES for mode in ("complete", "stream")]
+# Every client call that reads an event stream: native streams, and both calls of a stream-only backend.
+STREAM_READS: list[tuple[ProviderCase, Mode]] = [
+    *((case, "stream") for case in (OPENAI_COMPATIBLE, ANTHROPIC, GEMINI)),
+    *(
+        (case, mode)
+        for case in (OPENAI_COMPATIBLE_STREAM_ONLY, OPENAI_RESPONSES_STREAM_ONLY)
+        for mode in ("complete", "stream")
+    ),
+]
+STREAM_READ_PARAMS = [pytest.param(case, mode, id=f"{case.id}-{mode}") for case, mode in STREAM_READS]
 
 FAILURES: list[object] = [
     pytest.param(lambda: ScriptedResponse(429, body="rate limit hit"), id="429"),

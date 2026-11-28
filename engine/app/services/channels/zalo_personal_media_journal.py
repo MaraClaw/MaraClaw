@@ -18,6 +18,25 @@ async def enqueue_media(destination: str, chunk: OutboundFileChunk) -> None:
     await enqueue(destination, chunk)
 
 
+async def has_pending_media(current: ZaloConnection) -> bool:
+    """Lock-free peek at `ix_zalo_personal_media_sends_pending`: whether `pending_media` has a descriptor.
+
+    Keep its fences identical to that call's; authorization itself stays with the dispatch call."""
+    async with connection_ctx() as db:
+        return bool(
+            await db.fetchval(
+                "SELECT TRUE FROM zalo_personal_media_sends WHERE config_id=%(config)s AND auth_epoch=%(epoch)s "
+                "AND generation=%(generation)s AND account_id=%(account)s AND state='pending' LIMIT 1",
+                {
+                    "config": current.config_id,
+                    "epoch": current.auth_epoch,
+                    "generation": current.generation,
+                    "account": current.account_id,
+                },
+            )
+        )
+
+
 async def pending_media(connection: ZaloConnection) -> ZaloMediaSend | None:
     """Return the oldest pending descriptor without authorizing any provider send."""
     async with connection_ctx() as db:

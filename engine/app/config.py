@@ -153,6 +153,8 @@ class Settings(BaseSettings):
     CHAT_SUBMISSION_WINDOW_SECONDS: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     # Days to keep agent_activity_logs rows, counted from created_at; 0 keeps them forever.
     ACTIVITY_LOG_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
+    # Days to keep audit_logs rows, counted from created_at; 0 keeps them forever.
+    AUDIT_LOG_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
     # Days to keep completed/failed trigger_executions rows, counted from finished_at; 0 keeps them forever.
     TRIGGER_EXECUTION_RETENTION_DAYS: int = Field(default=0, ge=0, le=MAX_RETENTION_DAYS)
 
@@ -294,6 +296,8 @@ class Settings(BaseSettings):
     # answers; later files are skipped with a note, and a store already started finishes. Slack gives up after 3 s. The
     # in-flight claim of an event outlives this by a margin.
     CHANNEL_MEDIA_ACK_BUDGET_SECONDS: float = Field(default=2.0, gt=0, le=30)
+    # Time to drain a WeCom KF callback before yielding to the next callback.
+    WECOM_KF_CALLBACK_BUDGET_SECONDS: float = Field(default=3.5, gt=0, le=4, allow_inf_nan=False)
     # Gateway report relay: a failing delivery ends as failed once it has been attempted this many times or is this
     # many hours old, and one tenant takes at most this many rows into a single claim batch.
     GATEWAY_REPORT_MAX_ATTEMPTS: int = Field(default=30, ge=1)
@@ -376,7 +380,7 @@ class Settings(BaseSettings):
 
     # Docker (for Agent containers)
     DOCKER_NETWORK: str = "maraclaw_network"
-    MARACLAW_OPENCLAW_IMAGE: str = "arm64-openclaw:2026.11.3"
+    MARACLAW_OPENCLAW_IMAGE: str = "arm64-openclaw:2026.11.10"
     OPENCLAW_GATEWAY_PORT: int = 18789
     OPENCLAW_THINKING_DEFAULT: (
         Literal["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"] | None
@@ -395,6 +399,8 @@ class Settings(BaseSettings):
     SCHEDULE_RUN_BUDGET_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
     TRIGGER_RUN_BUDGET_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
     HEARTBEAT_RUN_BUDGET_SECONDS: float = Field(default=900.0, gt=0, le=86400, allow_inf_nan=False)
+    # Time before a background task run is cancelled and its claim is released.
+    TASK_RUN_BUDGET_SECONDS: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
     # Trial limits for guests of system agents and of agents with no organization (every organization's agents get
     # their tier's). They apply on creation and when a stopped guest is resumed, never to running guests.
     OPENCLAW_GUEST_MEMORY_LIMIT_BYTES: int = Field(default=2147483648, gt=0)
@@ -442,6 +448,15 @@ class Settings(BaseSettings):
     # How many agents the workspace mirror worker mirrors at once, never two of the same organization. Each in-flight
     # agent holds one transfer buffer, so this also bounds the mirror's memory.
     WORKSPACE_MIRROR_CONCURRENCY: int = Field(default=4, ge=1, le=32)
+    # With the workspace mirror active, a worker keeps one recovery snapshot per agent in S3 of the OpenClaw state the
+    # mirror does not cover (sessions, Knowledge, auth profiles, gateway token); a start on an empty host restores it.
+    AGENT_STATE_SNAPSHOT_ENABLED: bool = True
+    # Seconds between snapshot passes; an agent is snapshotted at most once per pass, and only when its state changed.
+    AGENT_STATE_SNAPSHOT_INTERVAL_SECONDS: float = Field(default=600.0, ge=60, le=86400, allow_inf_nan=False)
+    # Largest snapshot archive kept or restored; a bigger one is discarded and the previous snapshot stays current.
+    AGENT_STATE_SNAPSHOT_MAX_BYTES: int = Field(default=1024**3, ge=1024**2, le=16 * 1024**3)
+    # Free bytes to leave on the guest data volume after staging a large copy; 0 disables the guard.
+    HOST_DISK_HEADROOM_BYTES: int = Field(default=1024**3, ge=0)
     # Lifetime of a guest-minted share link for one workspace file (POST /api/gateway/file-links).
     FILE_SHARE_LINK_TTL_SECONDS: int = Field(default=900, ge=60, le=86400)
     # Seconds between passes of the worker that samples each tier-governed agent's guest memory, CPU and managed
@@ -496,11 +511,6 @@ class Settings(BaseSettings):
         return self
 
     GOGCLI_ENABLED: bool = True
-    # Optional OpenAI-compatible memory embeddings for guests. Active only when all four are non-blank.
-    EMBEDDING_MODEL: str = ""
-    EMBEDDING_DIMS: str = ""
-    EMBEDDING_PROVIDER_URL: str = ""
-    EMBEDDING_API_KEY: str = ""
 
     # ChatGPT browser OAuth. The engine serves the redirect URI's path itself (app/api/chatgpt_oauth_callback.py),
     # read once at startup; empty disables ChatGPT sign-in.

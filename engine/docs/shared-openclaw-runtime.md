@@ -176,10 +176,22 @@ Other conversations retain their conversation ID (message ID only when no
 conversation exists). A user's web and IM turns select the same epoch key until
 its authorization scope changes or history is cleared.
 
-The generated guest config sets `tools.sessions.visibility` to `"self"` and
-`memory.search.rememberAcrossConversations` to `false`, so one user's conversation
-stays out of another user's turns. The config fingerprint prefix is
-`native-gateway-rpc-v2`; a different fingerprint rewrites the file.
+The generated guest config sets `tools.sessions.visibility` to `"self"`, so session
+tools see only the caller's own conversation. Memory is OpenClaw's bundled Knowledge
+plugin, which the guest image selects in `plugins.slots.memory` at every gateway start;
+the engine writes no `plugins` or `memory` keys and drops the retired embedding-backed
+`memory.search` and `agents.defaults.memorySearch` from existing configs. Knowledge grants
+memory only to a session with a durable chat type: every MaraClaw session is a direct,
+owner-private session, so all users of one agent share that agent's single Knowledge vault.
+A fact one user's turn saves is visible to every other user of the same agent. Retrieval is
+keyword search (SQLite FTS5); no embedding service is involved. Native `web_search` and
+`web_fetch` are denied and disabled: agents use the Tavily skills, which call the engine's
+Tavily proxy, and pass the pages they fetched to `deep_research` as documents.
+`tools.toolSearch.exclude` keeps `knowledge_remember`, `knowledge_grep`, `knowledge_lookup`
+and `knowledge_record` directly visible while Tool Search still defers other schemas: with
+every Knowledge tool deferred, a live turn saved "remember this" to `MEMORY.md`, which
+Knowledge never reads. The guest image's `knowledge-soul.md` gives the matching guidance. The config
+fingerprint prefix is `native-gateway-rpc-v3`; a different fingerprint rewrites the file.
 
 The `hook:maraclaw` segment is an opaque, preserved transcript namespace, not a
 requirement to use the retired HTTP hook transport. Native `agent` requests pass
@@ -191,8 +203,14 @@ runs the staged `.maraclaw-rpc.mjs` with Node in the label-proven guest, through
 `bootstrap-agent-container.py exec --`. The adapter connects only to
 `ws://127.0.0.1:18789`, reads the adjacent `.openclaw-gateway-token`, waits for
 `connect.challenge`, and negotiates protocol 4 as a token-authenticated backend
-operator with read/write/admin scopes and no device or Origin. It then sends one
-`agent` request with the stored provider/model when present. There is no HTTP hook,
+operator with read/write/admin scopes and no device or Origin. It then sends
+`sessions.create` with the session key and `<message UUID>:session` as
+`idempotencyKey`: a new key becomes a direct session (the chat type Knowledge requires),
+and an existing key is adopted unchanged with its history. A key that an earlier bare
+`agent` request created never gains a chat type (OpenClaw may also refuse it as "still
+active", even when idle); such a conversation keeps working without Knowledge, because any
+answer to the session step, a refusal included, is followed by one `agent` request with the
+stored provider/model when present. There is no HTTP hook,
 model-driven inbox poll/report loop or local CLI fallback.
 
 An `accepted` response is admission only. The adapter validates the matching
@@ -201,7 +219,10 @@ envelope; a cached terminal can arrive without `accepted`. Bare `ok: true` and
 `in_flight` do not prove completion. Ordered terminal text payloads are joined with
 newlines. The engine settles success text or safe empty/error/timeout notices;
 raw adapter errors are not published. Deadlines are 10 seconds for connection,
-20 for admission, 900 for the turn, 930 total and 940 for Docker execution.
+20 for the session step, 20 for admission, 900 for the turn, 950 total and 960 for
+Docker execution. A session step without an answer is `session_timeout`; like every failure
+before the `agent` request is sent, it is `not_admitted`/`not_submitted` and the engine
+retries the turn.
 
 Once the payload carries a valid message UUID, the adapter never exits without an
 outcome line: an invalid request or a missing, unreadable or empty token is

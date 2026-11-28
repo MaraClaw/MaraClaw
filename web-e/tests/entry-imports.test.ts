@@ -45,3 +45,12 @@ test('Given the entry module graph, zod, the generated contracts and the auth cl
     assert.equal(files.has(path.join(src, lazy)), false, `${lazy} is a static import of main.tsx`)
   }
 })
+
+test('Given the member app shell module graph, framer-motion loads only with the pages that animate', () => {
+  // When
+  const { files, packages } = eagerImports(path.join(src, 'components/layout/app-shell.tsx'))
+  // Then: the walk reaches the nav icons, and no motion package rides along with them.
+  assert.ok(files.has(path.join(src, 'components/layout/nav-icon.tsx')))
+  const motion = ['framer-motion', 'motion', 'motion-dom']
+  assert.deepEqual([...packages].filter((name) => motion.some((pkg) => name === pkg || name.startsWith(`${pkg}/`))), [])
+})

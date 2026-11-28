@@ -5,6 +5,7 @@ import { ZodError } from 'zod'
 import { listAgentActivity } from '../src/lib/activity-api.ts'
 import { authSession } from '../src/lib/auth-session.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const item = { id: 'activity-1', action_type: 'future.action', summary: 'Recorded summary', created_at: '2026-10-30T08:00:00+08:00' }
 const page = { items: [item], next_cursor: 'opaque+/=? older' }
@@ -12,7 +13,9 @@ const page = { items: [item], next_cursor: 'opaque+/=? older' }
 for (const request of [{}, { limit: 1, cursor: page.next_cursor, actionType: ' Tool + / Exact ' }, { limit: 200, actionType: '' }]) {
   test(`activity sends exact optional query values ${JSON.stringify(request)}`, async (context) => {
     // Given
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       const url = new URL(path, 'https://fixture.test')
       assert.equal(url.pathname, '/api/agents/agent%2Fone/activity/page')
@@ -24,13 +27,14 @@ for (const request of [{}, { limit: 1, cursor: page.next_cursor, actionType: ' T
       assert.equal(init.method, 'GET')
       assert.equal(init.body, undefined)
       assert.equal(init.cache, 'no-store')
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       return Response.json(page)
     })
     // When
     const result = await listAgentActivity('agent/one', { ...request, signal, owner: authSession.capture() })
     // Then
     assert.deepEqual(result, page)
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 

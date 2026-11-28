@@ -13,8 +13,17 @@ export type AuthSnapshot = {
   readonly status: 'loading' | 'authenticated' | 'anonymous'
   readonly user: UserOut | null
 }
+/** Runs `retry` after `delayMs`; returns the cancel function. */
+export type ScheduleRetry = (retry: () => void, delayMs: number) => () => void
 
-export function createAuthSession(policy: SessionPolicy, api: AuthApi) {
+const FIRST_RETRY_DELAY_MS = 2_000
+const MAX_RETRY_DELAY_MS = 30_000
+const scheduleTimer: ScheduleRetry = (retry, delayMs) => {
+  const timer = setTimeout(retry, delayMs)
+  return () => { clearTimeout(timer) }
+}
+
+export function createAuthSession(policy: SessionPolicy, api: AuthApi, schedule = scheduleTimer) {
   const initialOwner = policy.capture()
   let snapshot: AuthSnapshot = {
     owner: initialOwner, status: initialOwner.token ? 'loading' : 'anonymous', user: null,
@@ -24,6 +33,13 @@ export function createAuthSession(policy: SessionPolicy, api: AuthApi) {
   let refreshController: AbortController | undefined
   let loginController: AbortController | undefined
   let loginAttempt = 0
+  let cancelRetry: (() => void) | null = null
+  let retries = 0
+
+  function stopRetry() {
+    cancelRetry?.()
+    cancelRetry = null
+  }
 
   function publish(next: AuthSnapshot) {
     snapshot = next
@@ -36,6 +52,7 @@ export function createAuthSession(policy: SessionPolicy, api: AuthApi) {
 
   async function refreshUser(): Promise<SessionOwner | null> {
     const owner = policy.capture()
+    stopRetry()
     refreshController?.abort()
     const controller = new AbortController()
     refreshController = controller
@@ -48,6 +65,7 @@ export function createAuthSession(policy: SessionPolicy, api: AuthApi) {
     try {
       const me = await runOwned(policy, owner, () => api.fetchCurrentUser(token, signal))
       if (signal.aborted) return null
+      retries = 0
       if (!isAdminUser(me)) {
         policy.expire(owner)
         return null
@@ -56,7 +74,22 @@ export function createAuthSession(policy: SessionPolicy, api: AuthApi) {
       return owner
     } catch (error) {
       if (error instanceof StaleSessionError || signal.aborted || !policy.isCurrent(owner)) return null
-      policy.expire(owner)
+      // Only a 401 disproves the token. Any other failure keeps it: a validated admin stays signed in, and an unvalidated
+      // session stays loading, never authenticated without the server's answer, and is checked again with backoff.
+      if (error instanceof ApiError && error.status === 401) {
+        retries = 0
+        policy.expire(owner)
+        return null
+      }
+      const validated = snapshot.owner.generation === owner.generation && snapshot.status === 'authenticated'
+      if (!validated) {
+        const delayMs = Math.min(MAX_RETRY_DELAY_MS, FIRST_RETRY_DELAY_MS * 2 ** retries)
+        retries += 1
+        cancelRetry = schedule(() => {
+          cancelRetry = null
+          if (policy.isCurrent(owner)) void refreshUser()
+        }, delayMs)
+      }
       return null
     }
   }
@@ -120,12 +153,14 @@ export function createAuthSession(policy: SessionPolicy, api: AuthApi) {
     connect() {
       reset(policy.capture())
       const unsubscribe = policy.subscribe((owner, reason) => {
+        stopRetry()
         reset(owner)
         if (reason === 'storage' && owner.token) void refreshUser()
       })
       void refreshUser()
       return () => {
         unsubscribe()
+        stopRetry()
         refreshController?.abort()
         loginController?.abort()
       }

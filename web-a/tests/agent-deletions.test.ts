@@ -13,18 +13,19 @@ import { safeNotificationLink } from '../src/lib/notification-links.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { canReviewAgentDeletions } from '../src/lib/types/auth-guards.ts'
 import { approvedDeletion, deletionRequest } from './agent-lifecycle-fixtures.ts'
-import { adminUser, createFixture } from './helpers.ts'
+import { adminUser, createFixture, assertForwardsCancellation } from './helpers.ts'
 
 test('a deletion list preserves filters and cursor without recording a detail view', async (t) => {
   // Given
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [deletionRequest], next_cursor: 'next' }))
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
   // When
   const page = await fetchAgentDeletionRequests({ status: 'pending', cursor: 'opaque+/=', agentId: deletionRequest.agent_id }, signal)
   // Then
   assert.equal(fetch.mock.callCount(), 1)
   assert.equal(fetch.mock.calls[0]?.arguments[0], `/api/agent-deletion-requests?status=pending&limit=50&cursor=opaque%2B%2F%3D&agent_id=${deletionRequest.agent_id}`)
-  assert.equal(fetch.mock.calls[0]?.arguments[1]?.signal, signal)
+  assertForwardsCancellation(fetch.mock.calls[0]?.arguments[1]?.signal, caller)
   assert.equal(page.items[0]?.id, deletionRequest.id)
   assert.equal('viewer' in (page.items[0] ?? {}), false)
 })

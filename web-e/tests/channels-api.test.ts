@@ -5,6 +5,7 @@ import { ZodError } from 'zod'
 import { authSession } from '../src/lib/auth-session.ts'
 import { CHANNELS, channelDraftBody, getChannelCatalog, getChannel, googleChatCredentialsConfigured, saveChannel, type ChannelConfig } from '../src/lib/channels-api.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const id = '11111111-1111-4111-8111-111111111111'
 const stored: ChannelConfig = {
@@ -38,16 +39,19 @@ test('Google Chat remains inbound-only when no configuration exists', () => {
 })
 
 test('catalog parses engine names and flags and carries request cancellation', async (t) => {
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     assert.equal(String(input), '/api/channel-catalog')
-    assert.equal(init?.signal, signal)
+    forwarded.push(init?.signal)
     return Response.json([capability, { ...capability, channel_type: 'agentbay', transport: 'skill_only' }])
   })
   const catalog = await getChannelCatalog({ owner: authSession.capture(), signal })
   assert.equal(catalog[0]?.display_name, 'Engine Chat')
   assert.equal(catalog[0]?.supports_proactive, false)
   assert.equal(catalog[1]?.channel_type, 'agentbay')
+  assertForwardsCancellation(forwarded, caller)
 })
 
 for (const response of [[{ ...capability, supports_inbound: 'true' }], { channels: [capability] }, [{ ...capability, transport: 'unknown' }]]) {

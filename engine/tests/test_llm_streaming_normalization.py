@@ -9,8 +9,13 @@ from tests.llm_retry_fakes import (
     ANTHROPIC,
     CASE_PARAMS,
     FAILURES,
+    STREAM_READ_PARAMS,
+    STREAM_READS,
     STREAMING_CASE_PARAMS,
+    IdleResponse,
+    Mode,
     Outcome,
+    PacedResponse,
     ProviderCase,
     ScriptedHttpClient,
     ScriptedResponse,
@@ -30,7 +35,9 @@ from app.services.llm.providers import (
     OpenAICompatibleClient,
     OpenAIResponsesClient,
 )
+from app.services.llm.stream_deadline import STREAM_DEADLINE_SECONDS, StreamDeadlineError
 from app.services.llm.types import LLMMessage, LLMResponse
+from loop_clock_fixtures import freeze_loop_clock
 
 
 class FakeStreamResponse:
@@ -574,3 +581,61 @@ async def test_a_probe_stays_in_flight_for_the_whole_stream_and_a_cancelled_stre
     response = await guarded(model, partial(call_provider, monkeypatch, case, "stream", http))
     assert response.content == "Hello"
     assert not is_unavailable(model)
+
+
+@pytest.mark.parametrize(("case", "mode"), STREAM_READ_PARAMS)
+async def test_an_idle_stream_ends_at_the_deadline_on_every_read_path(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, mode: Mode, sleeps: list[float]
+) -> None:
+    # Given a server that sends its first lines and then goes quiet inside a read.
+    clock = freeze_loop_clock(monkeypatch)
+    idle = IdleResponse(case.stream_lines[: case.first_chunk_lines])
+    http = ScriptedHttpClient(idle)
+    reading = asyncio.create_task(call_provider(monkeypatch, case, mode, http))
+    await idle.parked.wait()
+    # When the loop's clock passes the stream deadline.
+    await clock.advance(STREAM_DEADLINE_SECONDS)
+    # Then the read ended as a deadline, once, and the response was closed.
+    assert reading.done()
+    with pytest.raises(StreamDeadlineError):
+        _ = reading.result()
+    assert len(http.requests) == 1
+    assert sleeps == []
+    assert idle.closed
+
+
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.id) for case, mode in STREAM_READS if mode == "stream"])
+async def test_a_deadline_after_a_delivered_chunk_is_raised_and_never_replays_it(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, sleeps: list[float]
+) -> None:
+    # Given a stream that delivers its first chunk and then sends only keepalives.
+    clock = freeze_loop_clock(monkeypatch)
+    stalled = PacedResponse(clock, 100.0, case.stream_lines[: case.first_chunk_lines], stalls=True)
+    http = ScriptedHttpClient(stalled)
+    chunks: list[str] = []
+
+    async def on_chunk(text: str) -> None:
+        chunks.append(text)
+
+    # When the deadline passes.
+    with pytest.raises(StreamDeadlineError):
+        _ = await call_provider(monkeypatch, case, "stream", http, on_chunk=on_chunk)
+    # Then the chunk reached the caller once and no second request could repeat it.
+    assert chunks == [case.chunks[0]]
+    assert len(http.requests) == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(("case", "mode"), STREAM_READ_PARAMS)
+async def test_a_slow_stream_that_finishes_inside_the_deadline_is_not_cut(
+    monkeypatch: pytest.MonkeyPatch, case: ProviderCase, mode: Mode, sleeps: list[float]
+) -> None:
+    # Given a stream whose every line takes a hundred seconds but whose total stays under the deadline.
+    clock = freeze_loop_clock(monkeypatch)
+    slow = PacedResponse(clock, 100.0, case.stream_lines)
+    http = ScriptedHttpClient(slow)
+    # When it is read.
+    response = await call_provider(monkeypatch, case, mode, http)
+    # Then it completes untouched.
+    assert response.content == "".join(case.chunks)
+    assert slow.keepalives == 0

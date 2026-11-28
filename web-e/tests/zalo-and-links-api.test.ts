@@ -6,38 +6,45 @@ import { authSession } from '../src/lib/auth-session.ts'
 import { getChannelLink, issueChannelLinkCode, unlinkChannelAccount } from '../src/lib/channel-links-api.ts'
 import { StaleSessionError } from '../src/lib/http.ts'
 import { changeZaloPersonalConnection, getZaloPersonalStatus, zaloPersonalStatusSchema } from '../src/lib/zalo-api.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const id = '11111111-1111-4111-8111-111111111111'
 const status = { mode: 'personal_qr', generation: null, attempt_id: null, revision: 0, state: 'disconnected', expires_at: null, qr: null, account_hint: null, error_code: null } as const
 const link = { channel: 'telegram', available: true, linked: false, linked_at: null, external_hint: null } as const
 const code = { channel: 'telegram', code: 'ABCDE12345', expires_at: '2030-01-01T00:10:00Z', deep_link: 'https://t.me/synthetic_bot?start=ABCDE12345', account_hint: '@synthetic_bot' } as const
-const context = () => ({ owner: authSession.capture(), signal: new AbortController().signal })
+const context = (caller = new AbortController()) => ({ owner: authSession.capture(), signal: caller.signal })
 
 for (const command of [{ kind: 'start', generation: null }, { kind: 'start', generation: id }, { kind: 'relink', generation: id }, { kind: 'disconnect', generation: id }] as const) {
   test(`Zalo ${command.kind} carries owner cancellation no-store and expected generation`, async (t) => {
-    const ctx = context()
+    const caller = new AbortController()
+    const ctx = context(caller)
+    const forwarded: (AbortSignal | null | undefined)[] = []
     t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
       assert.equal(String(input), `/api/agents/${id}/zalo-channel/personal${command.kind === 'disconnect' ? `?expected_generation=${id}` : `/${command.kind}`}`)
       assert.equal(init?.method, command.kind === 'disconnect' ? 'DELETE' : 'POST')
       assert.equal(init?.body, command.kind === 'disconnect' ? undefined : JSON.stringify({ expected_generation: command.generation }))
       assert.equal(init?.cache, 'no-store')
-      assert.equal(init?.signal, ctx.signal)
+      forwarded.push(init?.signal)
       return Response.json(status)
     })
     assert.deepEqual(await changeZaloPersonalConnection(id, command, ctx), { ...status, resumable: false, diagnostics: null })
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 
 test('Zalo PNG boundary accepts the agreed size and string errors without weakening WhatsApp', async (t) => {
-  const ctx = context()
+  const caller = new AbortController()
+  const ctx = context(caller)
+  const forwarded: (AbortSignal | null | undefined)[] = []
   const large = { ...status, error_code: 'qr_generation_failed', qr: { value: `iVBORw0KGgo${'A'.repeat(768000 - 11)}`, expires_at: '2030-01-01T00:01:00Z' } }
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     assert.equal(String(input), `/api/agents/${id}/zalo-channel/personal`)
     assert.equal(init?.cache, 'no-store')
-    assert.equal(init?.signal, ctx.signal)
+    forwarded.push(init?.signal)
     return Response.json(large)
   })
   assert.equal((await getZaloPersonalStatus(id, ctx)).qr?.value.length, 768000)
+  assertForwardsCancellation(forwarded, caller)
   assert.throws(() => zaloPersonalStatusSchema.parse({ ...large, qr: { ...large.qr, value: `${large.qr.value}A` } }), ZodError)
   assert.throws(() => zaloPersonalStatusSchema.parse({ ...large, qr: { ...large.qr, value: 'https://remote.test/qr.png' } }), ZodError)
 })
@@ -45,12 +52,14 @@ test('Zalo PNG boundary accepts the agreed size and string errors without weaken
 for (const channel of ['telegram', 'zalo'] as const) {
   for (const operation of ['read', 'issue', 'unlink'] as const) {
     test(`${channel} member link ${operation} uses its authenticated no-store endpoint`, async (t) => {
-      const ctx = context()
+      const caller = new AbortController()
+      const ctx = context(caller)
+      const forwarded: (AbortSignal | null | undefined)[] = []
       t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
         assert.equal(String(input), `/api/agents/${id}/channel-links/${channel}${operation === 'issue' ? '/code' : ''}`)
         assert.equal(init?.method, operation === 'read' ? 'GET' : operation === 'issue' ? 'POST' : 'DELETE')
         assert.equal(init?.cache, 'no-store')
-        assert.equal(init?.signal, ctx.signal)
+        forwarded.push(init?.signal)
         assert.equal(init?.body, undefined)
         return operation === 'unlink' ? new Response(null, { status: 204 }) : Response.json(operation === 'issue' ? { ...code, channel } : { ...link, channel }, { status: operation === 'issue' ? 201 : 200 })
       })
@@ -60,6 +69,7 @@ for (const channel of ['telegram', 'zalo'] as const) {
         case 'issue': assert.equal((await issueChannelLinkCode(target, ctx)).code, code.code); break
         case 'unlink': assert.equal(await unlinkChannelAccount(target, ctx), undefined); break
       }
+      assertForwardsCancellation(forwarded, caller)
     })
   }
 }

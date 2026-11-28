@@ -6,18 +6,21 @@ import { authSession } from '../src/lib/auth-session.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { listTriggerExecutions } from '../src/lib/trigger-executions-api.ts'
 import { execution, firstPage, target } from './trigger-executions-fixture.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 for (const cursor of [undefined, firstPage.next_cursor]) {
   test(`history requests a bodyless scoped GET with ${cursor ? 'an encoded cursor' : 'the first page'}`, async (context) => {
     // Given
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       const url = new URL(path, 'https://fixture.test')
       assert.equal(url.pathname, `/api/agents/${target.agentId}/triggers/${target.triggerId}/executions`)
       assert.deepEqual([...url.searchParams], [['limit', '20'], ...(cursor ? [['cursor', cursor]] : [])])
       assert.equal(init.method, 'GET')
       assert.equal(init.body, undefined)
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       assert.equal(new Headers(init.headers).get('Idempotency-Key'), null)
       return Response.json(firstPage)
     })
@@ -25,6 +28,7 @@ for (const cursor of [undefined, firstPage.next_cursor]) {
     const result = await listTriggerExecutions(target, { cursor, signal, owner: authSession.capture() })
     // Then
     assert.deepEqual(result, firstPage)
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 

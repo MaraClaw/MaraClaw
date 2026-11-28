@@ -11,7 +11,7 @@ import { agentTransferSchema, canTransferMemberAgents, fetchAgentTransferTargets
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { agentId, deletionRequest, sourceId, sourceMember, targetId, targetMember, tenantId } from './agent-lifecycle-fixtures.ts'
-import { adminUser, createFixture } from './helpers.ts'
+import { adminUser, createFixture, assertForwardsCancellation } from './helpers.ts'
 
 const scope = { tenantId, sourceUserId: sourceId }
 const input = { from_user_id: sourceId, to_user_id: targetId, agent_ids: [agentId] }
@@ -50,7 +50,7 @@ test('recipient loading requests one server-filtered page with literal search an
   assert.deepEqual(Object.fromEntries(new URL(String(url), 'https://example.test').searchParams), {
     tenant_id: tenantId, search: ' %_Case+? ', limit: '50', cursor: 'cursor+/=', eligible_for: 'agent_transfer', exclude_user_id: sourceId,
   })
-  assert.equal(init?.signal, controller.signal)
+  assertForwardsCancellation(init?.signal, controller)
   assert.deepEqual(result, { items: [targetMember], next_cursor: 'next+/=' })
 })
 

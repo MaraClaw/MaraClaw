@@ -1,9 +1,11 @@
 """Smithery Connect execution and recovery helpers."""
 
+import asyncio
 import uuid
 from typing import cast
 
 from app.core.json_types import JsonObject, is_str_dict, json_as_str, json_loads_value
+from app.services.mcp_client import MCP_TOOL_CALL_DEADLINE_SECONDS, MCP_TOOL_DEADLINE_EXCEEDED_TEXT, cap_tool_text
 
 from .registry import ToolArguments, ToolArgumentValue
 
@@ -24,6 +26,9 @@ async def _execute_via_smithery_connect(
 
     Uses stored namespace/connection or falls back to creating one.
     Smithery Connect returns SSE-format responses that need special parsing.
+
+    The request and any recovery run under the same ``MCP_TOOL_CALL_DEADLINE_SECONDS`` deadline as other MCP calls, and
+    the returned text is capped like theirs. A call that runs out of time is reported as failed and never replayed.
     """
     import json as json_mod
 
@@ -78,8 +83,9 @@ async def _execute_via_smithery_connect(
         "Accept": "application/json, text/event-stream",
     }
 
+    deadline = asyncio.timeout(MCP_TOOL_CALL_DEADLINE_SECONDS)
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        async with deadline, httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             # Call the tool via the existing connection
             tool_resp = await client.post(
                 f"https://api.smithery.ai/connect/{namespace}/{connection_id}/mcp",
@@ -142,7 +148,7 @@ async def _execute_via_smithery_connect(
 
             result = data.get("result", {})
             if isinstance(result, str):
-                return result
+                return cap_tool_text(result)
 
             raw_blocks = result.get("content") if isinstance(result, dict) else None
             content_blocks = list[object](raw_blocks) if isinstance(raw_blocks, list) else []
@@ -161,9 +167,11 @@ async def _execute_via_smithery_connect(
                 else:
                     texts.append(str(block))
 
-            return "\n".join(texts) if texts else str(result)
+            return cap_tool_text("\n".join(texts) if texts else str(result))
 
     except Exception as e:
+        if deadline.expired():
+            return MCP_TOOL_DEADLINE_EXCEEDED_TEXT
         return f"❌ Smithery Connect error: {str(e)[:200]}"
 
 

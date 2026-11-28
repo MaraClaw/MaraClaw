@@ -11,8 +11,15 @@ from app.db.errors import DbError
 from app.services.agent_deletion_archive import publish_deletion_archive
 from app.services.agent_manager import agent_manager
 from app.services.agent_setup_lock import drain_on_cancel, setup_workspace_lock
+from app.services.agent_state_snapshot import delete_agent_snapshots
 from app.services.docker_capacity import DockerBusyError, DockerPriority, background_docker, run_docker
-from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_resolutions, require_guest_owner
+from app.services.guest_identity import (
+    AGENT_LABEL,
+    GUEST_STOP_TIMEOUT_SECONDS,
+    GuestOwnershipError,
+    guest_resolutions,
+    require_guest_owner,
+)
 
 
 def _remove_remaining_writers(client: DockerClient, agent_id: UUID) -> None:
@@ -22,7 +29,7 @@ def _remove_remaining_writers(client: DockerClient, agent_id: UUID) -> None:
             config = guest.config
             require_guest_owner(agent_id, listed.id, (config.labels or {}).get(AGENT_LABEL) if config else None)
             guest_resolutions.drop(agent_id)
-            client.container.stop(guest.id, time=10)
+            client.container.stop(guest.id, time=GUEST_STOP_TIMEOUT_SECONDS)
             type(client.container).remove(client.container, [guest.id])
         except NoSuchContainer:
             continue
@@ -47,6 +54,7 @@ async def _complete_cleanup(agent_id: UUID) -> None:
             )
             await cleanup.progress(agent_id)
             await to_thread.run_sync(publish_deletion_archive, job)
+            await delete_agent_snapshots(job.workspace_path, agent_id)
             await cleanup.progress(agent_id, completed=True)
         except DockerBusyError:
             logger.info("Deleted-agent cleanup skipped, the Docker lane is busy agent_id={}", agent_id)

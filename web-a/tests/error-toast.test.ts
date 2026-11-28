@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { toast } from 'sonner'
 
-import { showErrorToast } from '../src/lib/error-toast.ts'
-import { ApiError } from '../src/lib/http.ts'
+import { requestFailureMessage, showErrorToast } from '../src/lib/error-toast.ts'
+import { ApiError, REQUEST_TIMEOUT_MESSAGE, RequestTimeoutError } from '../src/lib/http.ts'
+import { message } from '../src/lib/i18n.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 
 test('one request failure produces one toast across multiple presentation owners', () => {
@@ -35,4 +36,11 @@ test('presentation never sends markup to Sonner and keeps domain-safe copy', () 
   assert.ok(titles.includes('The server is temporarily unavailable. Please try again shortly.'))
   assert.ok(titles.includes('Check SMTP settings before sending invitations.'))
   assert.ok(titles.every((title) => !String(title).includes('<html>') && !String(title).includes('smtp_password')))
+})
+
+test('a timeout replaces the caller fallback with its own retry message; other failures keep the fallback', () => {
+  const fallback = 'Could not load companies'
+  assert.deepEqual(requestFailureMessage(new RequestTimeoutError(90_000, null), fallback), message(REQUEST_TIMEOUT_MESSAGE))
+  assert.equal(requestFailureMessage(new TypeError('Failed to fetch'), fallback), fallback)
+  assert.equal(requestFailureMessage(new ApiError(503, 'unavailable'), fallback), fallback)
 })

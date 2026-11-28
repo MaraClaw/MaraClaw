@@ -46,15 +46,18 @@ async def pull_durable_state(agent_id: UUID, agent_dir: Path) -> None:
             raise WorkspaceRestoreError("Workspace could not be restored from storage") from exc
 
 
-async def materialize_agent_files(storage: StorageBackend, prefix: str, agent_dir: Path) -> bool:
+async def materialize_agent_files(
+    storage: StorageBackend, prefix: str, agent_dir: Path, *, restored: frozenset[str] = frozenset()
+) -> bool:
     """Write the files storage holds under ``prefix`` into ``agent_dir``; False when storage holds nothing for it.
 
-    With the mirror active only the durable store is listed, and only keys the mirror does not own are written.
-    Otherwise the facade's tree is walked as it always was. Every write is contained in ``agent_dir``.
+    With the mirror active only the durable store is listed, and only keys the mirror does not own are written, never
+    over a path a state snapshot just ``restored``. Otherwise the facade's tree is walked as it always was. Every
+    write is contained in ``agent_dir``.
     """
     store = durable_store()
     if store is not None:
-        await _materialize_durable(store, prefix, agent_dir)
+        await _materialize_durable(store, prefix, agent_dir, restored)
         return True
     if not await storage.exists(prefix) and not await storage.is_dir(prefix):
         return False
@@ -91,14 +94,14 @@ async def _materialize_entry(storage: StorageBackend, storage_key: str, local_ro
     await _place(storage, storage_key, rel, local_root)
 
 
-async def _materialize_durable(store: StorageBackend, prefix: str, agent_dir: Path) -> None:
+async def _materialize_durable(store: StorageBackend, prefix: str, agent_dir: Path, restored: frozenset[str]) -> None:
     root = f"{prefix}/"
     async with aclosing(store.list_files_flat(root)) as entries:
         async for entry in entries:
             rel = entry.key.removeprefix(root)
             if not rel or normalize_storage_key(rel) != rel or "\0" in rel:
                 logger.warning("[Materialize] skipped an unsafe storage key {!r}", entry.key)
-            elif not _owned_elsewhere(rel):
+            elif not _owned_elsewhere(rel) and rel not in restored:
                 await _place(store, entry.key, rel, agent_dir)
 
 

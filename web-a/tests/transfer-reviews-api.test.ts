@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { ApiError } from '../src/lib/http.ts'
 import { canOpenTransferAdmission, canReviewTransferPayments, isPendingTransferPayment } from '../src/lib/transfer-review-access.ts'
 import { decideTransferPayment, fetchTransferDetail, fetchTransferReviews, transferSummarySchema } from '../src/lib/transfer-reviews-api.ts'
-import { adminUser } from './helpers.ts'
+import { adminUser, assertForwardsCancellation } from './helpers.ts'
 import { admittedTransfer, pendingTransfer } from './transfer-review-fixtures.ts'
 
 test('only active platform admins can review payments', () => {
@@ -41,7 +41,8 @@ test('pending predicate selects only paid payment_review records', () => {
 
 test('review page requests the selected view and parses items with a cursor', async (t) => {
   // Given
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [pendingTransfer, admittedTransfer], next_cursor: 'abc_-' }))
   // When
   const result = await fetchTransferReviews('recent', null, signal)
@@ -49,7 +50,7 @@ test('review page requests the selected view and parses items with a cursor', as
   assert.deepEqual(result, { items: [pendingTransfer, admittedTransfer], next_cursor: 'abc_-' })
   assert.equal(Object.isFrozen(result.items), true)
   assert.equal(fetch.mock.calls[0]?.arguments[0], '/api/company-admissions/transfers/review/page?view=recent&limit=50')
-  assert.equal(fetch.mock.calls[0]?.arguments[1]?.signal, signal)
+  assertForwardsCancellation(fetch.mock.calls[0]?.arguments[1]?.signal, caller)
 })
 
 test('review page forwards the opaque cursor URL-encoded and accepts a final page', async (t) => {

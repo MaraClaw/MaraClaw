@@ -6,6 +6,7 @@ import { authSession } from '../src/lib/auth-session.ts'
 import { listMyAdmissionsPage } from '../src/lib/company-admissions-api.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { admissionPageRequestSchema } from '../src/lib/types/company-admissions.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const item = {
   id: 'history-request', status: 'pending', source_tenant_id: null,
@@ -17,19 +18,22 @@ const cursor = 'opaque/+?=&cursor'
 for (const status of ['pending', 'approved', 'rejected', 'withdrawn'] as const) {
   test(`page forwards ${status}, opaque seek cursor and cancellation`, async (context) => {
     // Given
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       const url = new URL(path, 'https://fixture.test')
       assert.equal(url.pathname, '/api/company-admissions/mine/page')
       assert.deepEqual([...url.searchParams], [['status', status], ['limit', '100'], ['cursor', cursor]])
       assert.equal(init.method, 'GET')
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       return Response.json({ items: [{ ...item, status }], next_cursor: cursor })
     })
     // When
     const page = await listMyAdmissionsPage({ status, limit: 100, cursor }, { owner: authSession.capture(), signal })
     // Then
     assert.deepEqual(page, { items: [{ ...item, status }], next_cursor: cursor })
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 

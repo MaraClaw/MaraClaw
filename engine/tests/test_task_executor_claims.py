@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from app.records.agent import AgentRecord
 from app.records.task import TaskClaim, TaskRecord
 from app.services import activity_logger, agent_context, llm, task_executor, task_lease
 from app.services.llm.background_guard import BackgroundCallOutcome
+from loop_clock_fixtures import freeze_loop_clock
 
 
 @pytest.fixture
@@ -225,3 +227,53 @@ async def test_delayed_renewal_response_does_not_extend_the_confirmed_deadline(m
         await task_lease.run_under_lease(TaskClaim(uuid4(), uuid4()), lambda _guard: work())
     assert cancelled.is_set()
     assert renewals == 2
+
+
+@pytest.mark.parametrize("task_type", [TaskType.TODO, TaskType.SUPERVISION])
+async def test_spent_run_budget_cancels_the_work_and_releases_the_claim_while_the_lease_is_renewed(
+    run: TaskRecord, monkeypatch: pytest.MonkeyPatch, task_type: TaskType, logs: list[str], activity: AsyncMock
+) -> None:
+    # Given a model call that never returns, a 150-second budget and a loop clock only the test moves.
+    run.type = task_type
+    clock = freeze_loop_clock(monkeypatch)
+    monkeypatch.setattr(task_executor, "get_settings", lambda: SimpleNamespace(TASK_RUN_BUDGET_SECONDS=150.0))
+    renew = AsyncMock(return_value=True)
+    monkeypatch.setattr(task_executor.task_dao, "renew", renew)
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def call(**_kwargs: object) -> BackgroundCallOutcome:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        return BackgroundCallOutcome("success", "unreachable")
+
+    monkeypatch.setattr(llm, "call_agent_llm_with_tools", call)
+    execution = asyncio.create_task(task_executor.execute_task(run.id, run.agent_id))
+    await started.wait()
+    # When the clock moves in renewal-sized steps up to the budget, so the lease never lapses.
+    for _ in range(5):
+        assert not execution.done()
+        await clock.advance(task_lease.TASK_RENEW_SECONDS)
+    assert execution.done()
+    await execution
+    # Then the work was cancelled, the lease had been renewed along the way, and the claim went back with the budget
+    # reason, not the lease-loss one, without a result or activity entry.
+    assert cancelled.is_set()
+    assert renew.await_count > 1
+    assert run.status == TaskStatus.PENDING
+    assert run.claim_token is None
+    assert logs == [f"❌ {task_executor.RUN_TIMEOUT_ERROR}"]
+    activity.assert_not_awaited()
+
+
+async def test_a_timeout_raised_by_the_work_is_an_execution_error_not_the_run_budget(
+    run: TaskRecord, monkeypatch: pytest.MonkeyPatch, logs: list[str]
+) -> None:
+    monkeypatch.setattr(llm, "call_agent_llm_with_tools", AsyncMock(side_effect=TimeoutError("socket stalled")))
+
+    await task_executor.execute_task(run.id, run.agent_id)
+
+    assert run.status == TaskStatus.PENDING
+    assert logs == ["❌ Execution error: socket stalled"]

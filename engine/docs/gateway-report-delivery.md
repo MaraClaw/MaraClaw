@@ -151,8 +151,11 @@ provider and its error code (`slack: channel_not_found`) or, for an unclassified
 failure, only the exception type name. Every terminal row, failed ones included, is
 eligible for the retention purge; a pending row never is.
 Terminal intents are not reclaimed, retried, revived or rerouted; their lease and
-token are cleared. Raw errors are never stored. These fields belong to the
-fresh-install schema baseline; no migration or upgrade path is provided.
+token are cleared. Raw errors are never stored. [Bootstrap](../app/scripts/AGENTS.md#supported-legacy-upgrades)
+upgrades the supported legacy delivery table in place. Existing rows keep their
+delivery state and get the upgrade time as `created_at`, so pending rows start
+with a full age-based retry window. The attempt limit still uses their stored
+attempt count.
 
 Missing source messages, incomplete/blank results and content changed during
 preparation remain retryable, as do unusable channels, blank external conversation

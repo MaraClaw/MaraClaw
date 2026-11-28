@@ -1,4 +1,4 @@
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { useState } from 'react'
 
 import { cn } from '@/lib/utils'
 
@@ -42,41 +42,28 @@ export function NavIcon({
   active?: boolean
   className?: string
 }) {
-  const reduceMotion = useReducedMotion()
-  const state = active ? 'active' : 'inactive'
-  const src = `/nav-icons/${name}${active ? '' : '-inactive'}.svg`
-
-  if (reduceMotion) {
-    return (
-      <img
-        src={src}
-        alt=""
-        width={48}
-        height={48}
-        aria-hidden
-        draggable={false}
-        className={cn('size-6 shrink-0 select-none object-contain', className)}
-      />
-    )
+  const [shown, setShown] = useState(active)
+  const [swapped, setSwapped] = useState(false)
+  if (shown !== active) {
+    setShown(active)
+    setSwapped(true)
   }
 
   return (
-    <span className={cn('relative inline-flex size-6 shrink-0', className)} aria-hidden>
-      <AnimatePresence mode="popLayout" initial={false}>
-        <motion.img
-          key={state}
-          src={src}
-          alt=""
-          width={48}
-          height={48}
-          draggable={false}
-          className="size-full select-none object-contain"
-          initial={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
-          animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
-          exit={{ opacity: 0, scale: 0.25, filter: 'blur(4px)' }}
-          transition={{ type: 'spring', duration: 0.3, bounce: 0 }}
-        />
-      </AnimatePresence>
-    </span>
+    <img
+      key={active ? 'active' : 'inactive'}
+      src={`/nav-icons/${name}${active ? '' : '-inactive'}.svg`}
+      alt=""
+      width={48}
+      height={48}
+      aria-hidden
+      draggable={false}
+      className={cn(
+        'size-6 shrink-0 select-none object-contain',
+        // A swap remounts the image and grows it in like the old spring; first paint and reduced motion stay still.
+        swapped && 'fade-in zoom-in-25 blur-in-4 animation-duration-300 ease-out motion-safe:animate-in',
+        className,
+      )}
+    />
   )
 }

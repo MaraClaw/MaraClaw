@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from anyio import fail_after, wait_readable
+from anyio.lowlevel import checkpoint
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
@@ -140,6 +141,24 @@ class QuotaFullStorage(MemoryStorage):
 
 
 @dataclass
+class ConcurrencyStorage(MemoryStorage):
+    """Yields on every read so agents that sync at once overlap, and records how many did."""
+
+    inflight: int = 0
+    peak: int = 0
+
+    @override
+    async def read_snapshot_bounded(self, key: str, max_bytes: int) -> StorageSnapshot:
+        self.inflight += 1
+        self.peak = max(self.peak, self.inflight)
+        try:
+            await checkpoint()
+            return await super().read_snapshot_bounded(key, max_bytes)
+        finally:
+            self.inflight -= 1
+
+
+@dataclass
 class SyncSetting:
     value: JsonValue
 
@@ -163,9 +182,9 @@ class Reconciliation:
         self.setting_reads += 1
         return self.setting
 
-    async def list_agents(self) -> list[UUID]:
+    async def list_ids_page(self, *, after_id: UUID | None, limit: int) -> list[UUID]:
         self.agent_reads += 1
-        return self.agent_ids
+        return sorted(agent_id for agent_id in self.agent_ids if after_id is None or agent_id > after_id)[:limit]
 
     def get_storage(self) -> MemoryStorage:
         self.storage_reads += 1
@@ -198,7 +217,7 @@ def reconciliation(monkeypatch: pytest.MonkeyPatch) -> Reconciliation:
     monkeypatch.setattr(skill_seeder.system_setting_dao, "get_by_key", state.get_setting)
     monkeypatch.setattr(skill_seeder.system_setting_dao, "create", state.create_setting)
     monkeypatch.setattr(skill_seeder.system_setting_dao, "update", state.update_setting)
-    monkeypatch.setattr(skill_seeder.agent_dao, "list_all_ids", state.list_agents)
+    monkeypatch.setattr(skill_seeder.agent_dao, "list_ids_page", state.list_ids_page)
     monkeypatch.setattr(storage, "get_storage_backend", state.get_storage)
     return state
 
@@ -592,6 +611,27 @@ async def test_failed_overwrite_keeps_the_previous_record_and_is_retried(
     assert sorted(store.written) == sorted(
         skill_key(agent_id, path) for agent_id in (blocked, healthy) for path in CURRENT
     )
+    assert recorded(reconciliation)["files"] == current_manifest(reconciliation)
+
+
+async def test_the_sweep_pages_agents_by_key_and_bounds_the_agents_synced_at_once(
+    reconciliation: Reconciliation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given: five agents, pages of two, at most two agents in flight, and a storage that yields on every read.
+    monkeypatch.setattr(skill_seeder, "_SWEEP_PAGE_SIZE", 2)
+    monkeypatch.setattr(skill_seeder, "_SWEEP_CONCURRENCY", 2)
+    reconciliation.agent_ids = [uuid4() for _ in range(5)]
+    store = ConcurrencyStorage()
+    reconciliation.storage = store
+
+    # When: the reconciliation runs.
+    await skill_seeder.push_default_skills_to_existing_agents()
+
+    # Then: the ids came in three keyset reads, every agent has the skill, no more than two synced at once, and the
+    # record is persisted.
+    assert reconciliation.agent_reads == 3
+    assert store.peak == 2
+    expect_files(reconciliation, dict.fromkeys(reconciliation.agent_ids, CURRENT))
     assert recorded(reconciliation)["files"] == current_manifest(reconciliation)
 
 

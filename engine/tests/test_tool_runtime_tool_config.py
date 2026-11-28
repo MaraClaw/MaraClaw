@@ -34,6 +34,27 @@ def test_tool_config_cache_normalizes_uuid_and_expires_entries():
     assert cache == {}
 
 
+def test_tool_config_cache_uses_utc_and_evicts_the_oldest_nonempty_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 7, 16, 12, tzinfo=UTC)
+
+    class Clock:
+        @staticmethod
+        def now(zone: object) -> datetime:
+            assert zone is UTC
+            return now
+
+    monkeypatch.setattr(tool_config, "datetime", Clock)
+    monkeypatch.setattr(tool_config, "_TOOL_CONFIG_CACHE_MAX_ENTRIES", 2)
+    cache: dict[tuple[str | None, str], tuple[JsonObject, datetime]] = {}
+    for name in ("first", "second", "third"):
+        tool_config.set_cached_tool_config(None, name, {"name": name}, cache=cache)
+    tool_config.set_cached_tool_config(None, "no config", {}, cache=cache)
+    assert tool_config.get_cached_tool_config(None, "first", cache=cache) is None
+    assert tool_config.get_cached_tool_config(None, "second", cache=cache) == {"name": "second"}
+    assert tool_config.get_cached_tool_config(None, "third", cache=cache) == {"name": "third"}
+    assert tool_config.get_cached_tool_config(None, "no config", cache=cache) is None
+
+
 async def test_tool_config_merges_global_tenant_and_agent_values_in_precedence_order(monkeypatch):
     # Given: one builtin assignment with distinct values at every configuration layer.
     from types import SimpleNamespace

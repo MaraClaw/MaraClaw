@@ -207,6 +207,7 @@ export const vietnamese = {
   '{count} minor units · {currency}': '{count} đơn vị tiền tệ nhỏ nhất · {currency}',
   '{label}, {count} unread': '{label}, {count} chưa đọc',
   'Unable to sign in. Check your connection and try again.': 'Không thể đăng nhập. Kiểm tra kết nối rồi thử lại.',
+  'The server took too long to respond. Check your connection and try again.': 'Máy chủ phản hồi quá lâu. Kiểm tra kết nối rồi thử lại.',
   'Please verify your email to continue.': 'Vui lòng xác minh email để tiếp tục.',
   'Email or password is incorrect.': 'Email hoặc mật khẩu không đúng.',
   'Access denied for this account.': 'Tài khoản này không có quyền truy cập.',

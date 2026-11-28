@@ -93,4 +93,4 @@ Later levers: hibernate idle guests on EC2, so a stopped guest frees its memory 
 - AWS What's New, June 2026: Local Zone in Hanoi, Vietnam.
 - Market references for agent and managed-OpenClaw pricing: Lindy ($29.99 per active user per month with 3,000 credits), Dust (Pro €30 per seat per month), Relevance AI (Team $349 per month), managed OpenClaw hosts ($4 to $79 per month per instance, usually without inference).
 
-Guest memory, startup time and plugin figures were measured on local `arm64-openclaw:2026.11.3` guests on November 13 and 14, 2026, not on AWS.
+Guest memory, startup time and plugin figures were measured on local `arm64-openclaw:2026.11.10` guests on November 13 and 14, 2026, not on AWS.

@@ -59,6 +59,7 @@ async def test_ranges_return_only_the_requested_bytes_without_promoting_partial_
     if kind == "s3":
         s3 = S3StorageBackend(bucket="bucket", prefix="tenant")
         monkeypatch.setattr(s3, "_client_or_raise", lambda: client)
+        monkeypatch.setattr(s3, "_read_client_or_raise", lambda: client)
         backend = s3
     else:
         legacy = LocalStorageBackend(str(tmp_path / "legacy"))
@@ -86,6 +87,7 @@ async def test_s3_range_rejects_ignored_or_wrong_offset_and_closes_the_body(monk
             return {"Body": body, "ContentRange": header}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     with pytest.raises(OSError, match="did not honor"):
         await backend.read_bytes_bounded("data.bin", 8, offset=3)
@@ -127,6 +129,7 @@ async def test_cancelled_s3_range_keeps_body_owned_by_worker_until_it_closes(mon
             return {"Body": body, "ContentRange": "bytes 3-10/100"}
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
 
     async def consume() -> None:
         try:

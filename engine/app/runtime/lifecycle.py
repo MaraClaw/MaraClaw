@@ -5,6 +5,7 @@ import os
 import sys
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from functools import partial
 
 import anyio
@@ -17,7 +18,7 @@ from app.core.incident_reporting import report_exception
 from app.core.logging import configure_logging, intercept_standard_logging, logger, shutdown_logging
 from app.db.pool import close_pool, init_pool
 from app.process_roles import parse_process_roles, role_enabled
-from app.runtime.bootstrap import bootstrap
+from app.runtime.bootstrap import bootstrap, sync_default_skills
 from app.runtime.connectors import ConnectorManager, ReconcileRuntime
 from app.runtime.diagnostics import log_bwrap_startup_status
 from app.runtime.incident_alerts import IncidentAlerts
@@ -73,6 +74,10 @@ class Runtime:
         open_heartbeat_admission()
         open_wake_admission()
         settings = get_settings()
+        restarts = RestartPolicy(
+            budget=settings.WORKER_LOOP_RESTART_BUDGET,
+            max_backoff_seconds=settings.WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS,
+        )
         self.logging_attempted = True
         _ = configure_logging(
             level=settings.LOG_LEVEL,
@@ -89,6 +94,7 @@ class Runtime:
         self.incidents.start()
         if role_enabled(roles, "bootstrap"):
             await bootstrap()
+            self.tasks.start("default_skill_sync", sync_default_skills())
         if any(role_enabled(roles, role) for role in ("api", "worker", "connector")):
             _ = await get_redis()
             self.tasks.start(
@@ -125,6 +131,10 @@ class Runtime:
             from app.services.agent_start_reconciler import (
                 PROGRESS_BUDGET_SECONDS as AGENT_START_BUDGET_SECONDS,
                 agent_start_reconciler_loop,
+            )
+            from app.services.agent_state_snapshot_worker import (
+                progress_budget_seconds as agent_state_snapshot_budget_seconds,
+                start_agent_state_snapshot_worker,
             )
             from app.services.agent_workspace_quota_worker import (
                 progress_budget_seconds as agent_workspace_quota_budget_seconds,
@@ -198,23 +208,24 @@ class Runtime:
                 start_workspace_mirror_worker,
             )
 
-            self.tasks.start(
+            mail_restarts = replace(restarts, before_restart=wait_for_abandoned_sends)
+            self.tasks.start_supervised(
                 "trigger_daemon",
-                start_trigger_daemon(),
-                requirement="loop",
+                start_trigger_daemon,
                 progress_budget_seconds=TRIGGER_DAEMON_BUDGET_SECONDS,
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "heartbeat",
-                start_heartbeat(),
-                requirement="loop",
+                start_heartbeat,
                 progress_budget_seconds=HEARTBEAT_BUDGET_SECONDS,
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "agent_setup",
-                start_agent_setup_worker(),
-                requirement="loop",
+                start_agent_setup_worker,
                 progress_budget_seconds=AGENT_SETUP_BUDGET_SECONDS,
+                policy=restarts,
             )
             self.tasks.start(
                 "agent_start_reconciler",
@@ -222,16 +233,11 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=AGENT_START_BUDGET_SECONDS,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "cache-invalidation-recovery",
-                start_cache_invalidation_worker(),
-                requirement="loop",
+                start_cache_invalidation_worker,
                 progress_budget_seconds=CACHE_INVALIDATION_BUDGET_SECONDS,
-            )
-            mail_restarts = RestartPolicy(
-                budget=settings.WORKER_LOOP_RESTART_BUDGET,
-                max_backoff_seconds=settings.WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS,
-                before_restart=wait_for_abandoned_sends,
+                policy=restarts,
             )
             self.tasks.start_supervised(
                 "auth_email",
@@ -239,11 +245,11 @@ class Runtime:
                 progress_budget_seconds=AUTH_EMAIL_BUDGET_SECONDS,
                 policy=mail_restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "broadcast_fanout",
-                start_broadcast_fanout_worker(),
-                requirement="loop",
+                start_broadcast_fanout_worker,
                 progress_budget_seconds=BROADCAST_FANOUT_BUDGET_SECONDS,
+                policy=restarts,
             )
             self.tasks.start_supervised(
                 "broadcast_email",
@@ -251,65 +257,71 @@ class Runtime:
                 progress_budget_seconds=BROADCAST_EMAIL_BUDGET_SECONDS,
                 policy=mail_restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "chat_history_retention",
-                start_chat_history_retention_worker(),
-                requirement="loop",
+                start_chat_history_retention_worker,
                 progress_budget_seconds=CHAT_HISTORY_RETENTION_BUDGET_SECONDS,
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "agent_workspace_quota",
-                start_agent_workspace_quota_worker(),
-                requirement="loop",
+                start_agent_workspace_quota_worker,
                 progress_budget_seconds=agent_workspace_quota_budget_seconds(),
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "workspace_mirror",
-                start_workspace_mirror_worker(),
-                requirement="loop",
+                start_workspace_mirror_worker,
                 progress_budget_seconds=workspace_mirror_budget_seconds(),
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
+                "agent_state_snapshot",
+                start_agent_state_snapshot_worker,
+                progress_budget_seconds=agent_state_snapshot_budget_seconds(),
+                policy=restarts,
+            )
+            self.tasks.start_supervised(
                 "agent_resource_pressure",
-                start_agent_resource_pressure_worker(),
-                requirement="loop",
+                start_agent_resource_pressure_worker,
                 progress_budget_seconds=agent_resource_pressure_budget_seconds(),
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "capacity_renewal",
-                start_capacity_renewal_worker(),
-                requirement="loop",
+                start_capacity_renewal_worker,
                 progress_budget_seconds=capacity_renewal_budget_seconds(),
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "operational_log_retention",
-                start_operational_log_retention_worker(),
-                requirement="loop",
+                start_operational_log_retention_worker,
                 progress_budget_seconds=OPERATIONAL_LOG_RETENTION_BUDGET_SECONDS,
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "organization_admission_email",
-                start_organization_admission_email_worker(),
-                requirement="loop",
+                start_organization_admission_email_worker,
                 progress_budget_seconds=ADMISSION_EMAIL_BUDGET_SECONDS,
+                policy=mail_restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "web_search_export",
-                start_web_search_export_daemon(),
-                requirement="loop",
+                start_web_search_export_daemon,
                 progress_budget_seconds=WEB_SEARCH_EXPORT_BUDGET_SECONDS,
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "agent_scheduler",
-                start_scheduler(),
-                requirement="loop",
+                start_scheduler,
                 progress_budget_seconds=SCHEDULER_BUDGET_SECONDS,
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "gateway_report_relay",
-                start_gateway_report_relay(),
-                requirement="loop",
+                start_gateway_report_relay,
                 progress_budget_seconds=GATEWAY_REPORT_RELAY_BUDGET_SECONDS,
+                policy=restarts,
             )
             self.tasks.start(
                 "openclaw_update",
@@ -317,23 +329,23 @@ class Runtime:
                 requirement="loop",
                 progress_budget_seconds=OPENCLAW_UPDATE_BUDGET_SECONDS,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "openclaw_dispatch",
-                openclaw_dispatch_reconciler_loop(),
-                requirement="loop",
+                openclaw_dispatch_reconciler_loop,
                 progress_budget_seconds=OPENCLAW_DISPATCH_BUDGET_SECONDS,
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "openclaw_delayed_replies",
-                openclaw_delayed_reply_loop(),
-                requirement="loop",
+                openclaw_delayed_reply_loop,
                 progress_budget_seconds=OPENCLAW_DELAYED_REPLIES_BUDGET_SECONDS,
+                policy=restarts,
             )
-            self.tasks.start(
+            self.tasks.start_supervised(
                 "task_lease_recovery",
-                task_lease_recovery_loop(),
-                requirement="loop",
+                task_lease_recovery_loop,
                 progress_budget_seconds=TASK_LEASE_RECOVERY_BUDGET_SECONDS,
+                policy=restarts,
             )
         if role_enabled(roles, "connector"):
             from app.services.channels.whatsapp_personal_supervisor import (
@@ -366,7 +378,9 @@ class Runtime:
                 progress_budget_seconds=ZALO_PERSONAL_BUDGET_SECONDS,
             )
             for name, manager in self.managers.items():
-                self.tasks.start(name, ReconcileRuntime(name, manager, self.tasks).start(), requirement="setup")
+                self.tasks.start(
+                    name, ReconcileRuntime(name, manager, self.tasks, restarts=restarts).start(), requirement="setup"
+                )
 
             async def reconcile_transfers() -> None:
                 with loop_progress().exempt(restart_on_error=False):

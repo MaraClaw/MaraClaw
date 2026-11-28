@@ -11,6 +11,8 @@ import shutil
 from pathlib import Path
 from uuid import UUID
 
+from app.services.host_disk_headroom import require_headroom
+
 
 def snapshot_path(agent_dir: Path, run_id: UUID) -> Path:
     return agent_dir.parent / "_upgrade_snapshots" / str(run_id)
@@ -21,16 +23,24 @@ def _discard_path(agent_dir: Path, run_id: UUID) -> Path:
 
 
 def commit_snapshot(agent_dir: Path, run_id: UUID) -> Path:
-    """Copy the whole agent directory, then publish it with one atomic rename."""
+    """Copy the whole agent directory, then publish it with one atomic rename.
+
+    `OSError` with `ENOSPC` before anything is written when the host disk is short of its headroom.
+    """
     final = snapshot_path(agent_dir, run_id)
     if final.exists():
         return final
     staging = final.with_name(f"{final.name}.tmp")
-    final.parent.mkdir(parents=True, exist_ok=True)
     if staging.exists():
         shutil.rmtree(staging)
-    _ = shutil.copytree(agent_dir, staging, symlinks=True)
-    staging.rename(final)
+    require_headroom(final.parent)
+    final.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _ = shutil.copytree(agent_dir, staging, symlinks=True)
+        staging.rename(final)
+    except OSError:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     return final
 
 

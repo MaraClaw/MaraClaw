@@ -104,7 +104,7 @@ async def test_start_container_adds_gogcli_secret_mount_when_secret_exists(monke
     docker_client = RecordingDockerClient()
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
 
-    async def materialize_agent_dir(requested_agent_id):
+    async def materialize_agent_dir(requested_agent_id, *, restored=frozenset()):
         assert requested_agent_id == agent_id
         return agent_dir
 
@@ -157,7 +157,7 @@ async def test_start_container_restores_gogcli_state_before_docker_extras(monkey
     docker_client = RecordingDockerClient()
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
 
-    async def materialize_agent_dir(_requested_agent_id):
+    async def materialize_agent_dir(_requested_agent_id, *, restored=frozenset()):
         return agent_dir
 
     async def restore_state(requested_agent_id, restored_agent_dir):
@@ -201,7 +201,7 @@ async def test_start_container_omits_gogcli_env_when_agent_flag_is_false(monkeyp
     docker_client = RecordingDockerClient()
     monkeypatch.setattr(manager, "docker_client", docker_client, raising=False)
 
-    async def materialize_agent_dir(requested_agent_id):
+    async def materialize_agent_dir(requested_agent_id, *, restored=frozenset()):
         assert requested_agent_id == agent_id
         return agent_dir
 

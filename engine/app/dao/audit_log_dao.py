@@ -53,23 +53,47 @@ class AuditLogDAO(BaseDAO[AuditLogRecord]):
         tenant_id: UUID | None = None,
         agent_id: UUID | None = None,
         limit: int = 50,
+        before: tuple[datetime, UUID] | None = None,
     ) -> Sequence[AuditLogRecord]:
         params: dict[str, object] = {"limit": limit}
         clauses: list[str] = []
         if tenant_id is not None:
-            clauses.append("agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tenant_id)s)")
+            clauses.append(
+                "EXISTS (SELECT 1 FROM agents WHERE id = %(agent_id)s AND tenant_id = %(tenant_id)s)"
+                if agent_id is not None
+                else "agent_id IN (SELECT id FROM agents WHERE tenant_id = %(tenant_id)s)"
+            )
             params["tenant_id"] = tenant_id
         if agent_id is not None:
             clauses.append("agent_id = %(agent_id)s")
             params["agent_id"] = agent_id
+        if before is not None:
+            clauses.append("(created_at, id) < (%(before_created_at)s, %(before_id)s)")
+            params["before_created_at"], params["before_id"] = before
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM audit_logs {where} "
-                "ORDER BY created_at DESC NULLS LAST LIMIT %(limit)s",
+                "ORDER BY created_at DESC, id DESC LIMIT %(limit)s",
                 params,
             )
             return [AuditLogRecord.from_row(row) for row in rows]
+
+    async def purge_older_than(self, *, older_than: datetime, limit: int) -> int:
+        """Delete one index-ordered batch of old audit rows, skipping locks held by other transactions."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                """
+                WITH expired AS (
+                    SELECT ctid FROM audit_logs
+                    WHERE created_at < %(cutoff)s
+                    ORDER BY created_at LIMIT %(limit)s FOR UPDATE SKIP LOCKED
+                ) DELETE FROM audit_logs WHERE ctid = ANY(ARRAY(SELECT ctid FROM expired))
+                  RETURNING id
+                """,
+                {"cutoff": older_than, "limit": limit},
+            )
+            return len(rows)
 
 
 audit_log_dao = AuditLogDAO()

@@ -1,7 +1,7 @@
 """Transaction capture and bounded, revision-fenced claims for cache recovery."""
 
 from collections.abc import Sequence
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.db.connection import DbConnection
 from app.db.session import connection_ctx
@@ -41,37 +41,48 @@ class CacheInvalidationDAO:
             )
         return [CacheInvalidationClaim.from_row(row) for row in rows]
 
-    async def settle(self, claim: CacheInvalidationClaim) -> bool:
-        """An old producer or an expired worker cannot acknowledge newer work."""
-        async with connection_ctx() as db:
-            return (
-                await db.fetchone(
-                    """DELETE FROM cache_invalidations
-                   WHERE cache_key = %(key)s AND revision = %(revision)s AND lease_token = %(token)s
-                   RETURNING cache_key""",
-                    {"key": claim.key, "revision": claim.revision, "token": claim.lease_token},
-                )
-                is not None
-            )
+    async def settle_batch(self, claims: Sequence[CacheInvalidationClaim]) -> int:
+        """Acknowledge published claims in one statement; return how many it deleted.
 
-    async def retry(self, claim: CacheInvalidationClaim) -> bool:
-        """Release unsuccessful work with bounded backoff, retaining its durable intent."""
+        A claim whose key was captured again, or whose lease another pass reclaimed, no longer matches on revision and
+        lease token, so an old producer or an expired worker cannot acknowledge newer work.
+        """
+        if not claims:
+            return 0
         async with connection_ctx() as db:
-            return (
-                await db.fetchone(
-                    """UPDATE cache_invalidations SET lease_token = NULL, lease_expires_at = NULL,
-                     available_at = clock_timestamp() + %(delay)s * interval '1 second'
-                   WHERE cache_key = %(key)s AND revision = %(revision)s AND lease_token = %(token)s
-                   RETURNING cache_key""",
-                    {
-                        "key": claim.key,
-                        "revision": claim.revision,
-                        "token": claim.lease_token,
-                        "delay": min(60, 1 << min(claim.attempts, 6)),
-                    },
-                )
-                is not None
+            rows = await db.fetchall(
+                """DELETE FROM cache_invalidations c
+                   USING unnest(%(keys)s::text[], %(revisions)s::uuid[], %(tokens)s::uuid[])
+                     AS d (cache_key, revision, lease_token)
+                   WHERE c.cache_key = d.cache_key AND c.revision = d.revision AND c.lease_token = d.lease_token
+                   RETURNING c.cache_key""",
+                _fence(claims),
             )
+        return len(rows)
+
+    async def retry_batch(self, claims: Sequence[CacheInvalidationClaim]) -> int:
+        """Release unsuccessful claims in one statement, each with its own backoff; return how many it released."""
+        if not claims:
+            return 0
+        async with connection_ctx() as db:
+            rows = await db.fetchall(
+                """UPDATE cache_invalidations c SET lease_token = NULL, lease_expires_at = NULL,
+                     available_at = clock_timestamp() + d.delay * interval '1 second'
+                   FROM unnest(%(keys)s::text[], %(revisions)s::uuid[], %(tokens)s::uuid[], %(delays)s::int[])
+                     AS d (cache_key, revision, lease_token, delay)
+                   WHERE c.cache_key = d.cache_key AND c.revision = d.revision AND c.lease_token = d.lease_token
+                   RETURNING c.cache_key""",
+                {**_fence(claims), "delays": [min(60, 1 << min(claim.attempts, 6)) for claim in claims]},
+            )
+        return len(rows)
+
+
+def _fence(claims: Sequence[CacheInvalidationClaim]) -> dict[str, list[str] | list[UUID]]:
+    return {
+        "keys": [claim.key for claim in claims],
+        "revisions": [claim.revision for claim in claims],
+        "tokens": [claim.lease_token for claim in claims],
+    }
 
 
 cache_invalidation_dao = CacheInvalidationDAO()

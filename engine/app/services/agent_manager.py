@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from fastapi import HTTPException
 from httpx import HTTPError
@@ -40,6 +40,7 @@ from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
 from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token as ensure_grok_token
 from app.services.guest_admission import GuestStartPreflightError, assert_start_active, guest_admission
 from app.services.guest_identity import (
+    GUEST_STOP_TIMEOUT_SECONDS,
     GuestOwnershipError,
     guest_container_name,
     guest_resolutions,
@@ -58,11 +59,6 @@ from app.services.openclaw_gateway_config import (
     gateway_config_block,
     guest_engine_base_url,
     prepare_native_gateway_files,
-)
-from app.services.openclaw_memory_embeddings import (
-    memory_embedding_config,
-    memory_embedding_fingerprint,
-    memory_search_block,
 )
 from app.services.storage import get_storage_backend, normalize_storage_key
 from app.services.tavily_runtime import TAVILY_SEARCH_SKILL_FOLDER, tavily_default_skill_folder_names
@@ -227,6 +223,16 @@ def _clear_runtime(*records: AgentRecord) -> None:
         record.container_port = None
 
 
+def _preparation_failure_code(exc: Exception) -> Literal["runtime_failed", "configuration_failed"]:
+    """The code of a failed creation: only a restore error a later start may clear is retried; the rest park the start."""
+    from app.services.agent_materialize import WorkspaceRestoreError
+    from app.services.agent_state_snapshot_restore import AgentStateRestoreError
+
+    return (
+        "runtime_failed" if isinstance(exc, AgentStateRestoreError | WorkspaceRestoreError) else "configuration_failed"
+    )
+
+
 class ContainerStatus(TypedDict):
     running: bool | None
     status: str | None
@@ -268,13 +274,15 @@ class AgentManager:
     def _template_dir(self) -> Path:
         return Path(settings.AGENT_TEMPLATE_DIR)
 
-    async def _materialize_agent_dir(self, agent_id: uuid.UUID) -> Path:
-        """Create a local working tree from shared storage for container mounting."""
+    async def _materialize_agent_dir(self, agent_id: uuid.UUID, *, restored: frozenset[str] = frozenset()) -> Path:
+        """Create a local working tree from shared storage for container mounting, leaving ``restored`` paths alone."""
         from app.services.agent_materialize import materialize_agent_files
 
         agent_dir = self._agent_dir(agent_id)
         agent_dir.mkdir(parents=True, exist_ok=True)
-        if await materialize_agent_files(get_storage_backend(), self._agent_storage_prefix(agent_id), agent_dir):
+        if await materialize_agent_files(
+            get_storage_backend(), self._agent_storage_prefix(agent_id), agent_dir, restored=restored
+        ):
             self._ensure_openclaw_workspace_layout(agent_dir)
         return agent_dir
 
@@ -433,7 +441,7 @@ class AgentManager:
         primary: LLMModelRecord | None,
         fallback: LLMModelRecord | None,
     ) -> str:
-        parts: list[str] = ["native-gateway-rpc-v2"]
+        parts: list[str] = ["native-gateway-rpc-v3"]
         for row in (primary, fallback):
             ref = guest_model_ref(row) or ""
             expires = getattr(row, "token_expires_at", None) if row is not None else None
@@ -443,7 +451,6 @@ class AgentManager:
             )
             digest = hashlib.sha256(secret.encode()).hexdigest()[:16] if secret.strip("|") else ""
             parts.append(f"{ref}:{kind}:{expires}:{digest}")
-        parts.append(memory_embedding_fingerprint(memory_embedding_config(settings)))
         parts.extend(
             str(value)
             for value in (
@@ -523,11 +530,8 @@ class AgentManager:
             defaults["bootstrapTotalMaxChars"] = settings.OPENCLAW_BOOTSTRAP_TOTAL_MAX_CHARS
         if aliases:
             defaults["models"] = aliases
-        config: JsonObject = {
-            "agents": {"defaults": defaults},
-            "memory": {"search": memory_search_block(memory_embedding_config(settings))},
-            "plugins": {"slots": {"memory": "memory-core"}},
-        }
+        # The guest image selects and enables the Knowledge memory plugin; the engine leaves `plugins` and `memory` alone.
+        config: JsonObject = {"agents": {"defaults": defaults}}
         if gateway_token is None:
             agent_dir = self._agent_dir(agent.id)
             gateway_token = ensure_gateway_token(agent_dir) if agent_dir.exists() else secrets.token_urlsafe(24)
@@ -565,16 +569,28 @@ class AgentManager:
                 for folder_name in tavily_default_skill_folder_names()
             },
         }
-        # OpenClaw enables native web_search unless it is explicitly denied.
+        # OpenClaw enables native web_search and web_fetch unless they are explicitly denied. Agents reach the web
+        # through the Tavily skills, which call the engine's Tavily proxy, and hand deep_research the pages as documents.
         config["tools"] = {
-            "deny": ["web_search"],
+            "deny": ["web_search", "web_fetch"],
             "web": {
                 "search": {
+                    "enabled": False,
+                },
+                "fetch": {
                     "enabled": False,
                 },
             },
             # Agents shared across users keep one private conversation per user: session tools see only their own.
             "sessions": {"visibility": "self"},
+            # Tool Search defers plugin tool schemas by default. With Knowledge's save and recall tools deferred, agents
+            # wrote "remember this" requests to MEMORY.md, which Knowledge never reads, so these four stay visible.
+            "toolSearch": {
+                "exclude": [
+                    {"source": "openclaw", "name": name}
+                    for name in ("knowledge_remember", "knowledge_grep", "knowledge_lookup", "knowledge_record")
+                ]
+            },
         }
 
         return config
@@ -672,13 +688,13 @@ class AgentManager:
 
             try:
                 for guest in guests:
-                    await run_docker(partial(client.container.stop, guest.id, time=10))
+                    await run_docker(partial(client.container.stop, guest.id, time=GUEST_STOP_TIMEOUT_SECONDS))
                     _ = await run_docker(type(client.container).remove, client.container, [guest.id])
                 guest_resolutions.drop(agent.id)
                 agent.container_id = None
                 try:
                     agent_dir, container_envs, gogcli_volumes = await self._apply_guest_state(
-                        agent, models, rehydrate=rehydrate
+                        agent, models, rehydrate=rehydrate, client=client, guest_image=guest_image
                     )
                     guest_state_volume = (str(agent_dir), "/home/node/custom-state", "rw")
                     # A stop seen before Docker creates a container creates nothing.
@@ -690,7 +706,9 @@ class AgentManager:
                         await assert_start_active(operation_id)
                 except (OSError, ValueError, HTTPError, HTTPException) as exc:
                     if not guests:
-                        raise GuestStartPreflightError("Guest start preparation failed") from exc
+                        raise GuestStartPreflightError(
+                            "Guest start preparation failed", code=_preparation_failure_code(exc)
+                        ) from exc
                     _clear_runtime(original, agent)
                     raise GuestStartPreflightError(
                         "Guest state could not be applied after the previous guest stopped", code="runtime_failed"
@@ -712,6 +730,7 @@ class AgentManager:
                         volumes=[guest_state_volume, *gogcli_volumes],
                         envs=container_envs,
                         restart="unless-stopped",
+                        stop_timeout=GUEST_STOP_TIMEOUT_SECONDS,
                         memory=limits.memory_bytes,
                         memory_swap=limits.memory_bytes,
                         cpus=limits.cpus,
@@ -794,14 +813,20 @@ class AgentManager:
             _ = prepare_native_gateway_files(stage)
 
     async def _apply_guest_state(
-        self, agent: AgentRecord, models: _GuestModels, *, rehydrate: bool
+        self, agent: AgentRecord, models: _GuestModels, *, rehydrate: bool, client: DockerClient, guest_image: str
     ) -> tuple[Path, dict[str, str], list[tuple[str, str, str]]]:
-        """Write the guest's mounted state; every old owned writer must already be stopped."""
+        """Write the guest's mounted state; every old owned writer must already be stopped.
+
+        Rehydrating restores the agent's state snapshot first when the host has no OpenClaw state, with
+        ``guest_image``, the image the guest will run.
+        """
         if rehydrate:
             from app.services.agent_materialize import pull_durable_state
+            from app.services.agent_state_snapshot_restore import restore_agent_state
 
+            restored = await restore_agent_state(client, agent, self._agent_dir(agent.id), guest_image)
             await pull_durable_state(agent.id, self._agent_dir(agent.id))
-            agent_dir = await self._materialize_agent_dir(agent.id)
+            agent_dir = await self._materialize_agent_dir(agent.id, restored=restored)
             if settings.GOGCLI_ENABLED and agent.gogcli_enabled:
                 _ = await restore_gogcli_state(agent.id, agent_dir)
         else:

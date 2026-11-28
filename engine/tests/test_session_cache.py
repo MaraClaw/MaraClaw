@@ -37,6 +37,7 @@ def fake_cache(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(redis_cache, "_client", get_cache_redis)
     monkeypatch.setattr(session_cache, "_ttl", lambda: 20)
+    monkeypatch.setattr(user_dao, "_identity_id_of", AsyncMock(return_value=None))
     session_cache._identity_hints.clear()
     yield client
     session_cache._identity_hints.clear()
@@ -100,6 +101,7 @@ async def test_a_session_hit_reads_the_snapshot_and_both_generations_in_one_roun
     await session_cache.set_cached_user(user, observed=await _observation(user))
     clear_row_memo()
     fake_cache.commands.clear()
+    fake_cache.round_trips = 0
 
     # When the next request reads it.
     loaded = await session_cache.get_cached_user(user.id)
@@ -645,6 +647,7 @@ async def test_session_loads_inside_a_transaction_are_never_shared(
         await asyncio.gather(*readers)
 
     assert len(load.calls) == 2
+    assert fake_cache.round_trips == 0
 
 
 async def test_concurrent_tenant_misses_share_one_load(fake_cache: FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:

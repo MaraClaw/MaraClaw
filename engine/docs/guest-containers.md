@@ -94,7 +94,7 @@ is handled by the form of its reference, the same rule
 
 | Missing reference | Outcome |
 |---|---|
-| Bare name without a digest or repository slash (for example `arm64-openclaw:2026.11.3`), or an image ID such as `sha256:...` | Local-only, never pulled. The start fails with a preflight error, code `runtime_failed`. The operator must build the image on that Docker daemon |
+| Bare name without a digest or repository slash (for example `arm64-openclaw:2026.11.10`), or an image ID such as `sha256:...` | Local-only, never pulled. The start fails with a preflight error, code `runtime_failed`. The operator must build the image on that Docker daemon |
 | Namespaced/registry or digest-pinned reference | Pulled once, bounded by `OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS`. A failed or timed-out pull fails the start with `runtime_failed` |
 
 A refusal is logged as a warning with the image reference and its cause. A Docker
@@ -141,6 +141,16 @@ probe, so earlier restarts are not counted. If the inspect fails or times out,
 readiness keeps polling. What the caller does on a readiness failure is unchanged: a
 newly created guest is stopped, and an existing resumed guest is left as is. The
 upgrade executor has its own readiness loop and does not use this early exit.
+
+Every guest stop the engine sends (start replacement, user stop, orphan sweep,
+deletion cleanup, upgrade) gives the guest `GUEST_STOP_TIMEOUT_SECONDS` (30 s,
+[guest identity](../app/services/guest_identity.py)) between SIGTERM and SIGKILL, and
+new guests are created with the same `stop_timeout`, so a daemon shutdown or a manual
+`docker stop` honours it too. The window stays above the image bootstrap's 20 s
+gateway grace: a gateway killed while it holds its ownership lease leaves the lease
+behind, and the next guest on the same state waits 95 s and then refuses to start.
+Guests created before this change keep Docker's 10 s default for stops the engine
+does not send.
 
 Guest start, stop, admission, the image check, readiness, the metrics container
 status and every background Docker sweep (start reconciler, container recovery,
@@ -298,7 +308,7 @@ only a container labelled with this agent's `maraclaw.agent_id`.
 
 Calls that carry their own deadline keep it: native gateway turns
 ([RPC](../app/services/openclaw_gateway_rpc.py),
-[stream](../app/services/openclaw_gateway_stream.py)), which use a fixed 940 seconds,
+[stream](../app/services/openclaw_gateway_stream.py)), which use a fixed 960 seconds,
 and image pulls. The pull deadline is `OPENCLAW_GUEST_IMAGE_PULL_TIMEOUT_SECONDS`, for
 a registry or digest-pinned guest image on ordinary starts and replacements and on
 [OpenClaw upgrades](openclaw-updates.md#image-preparation-and-retry). The sandbox
@@ -478,6 +488,12 @@ Mirrored files count against the managed S3 quota
 allowance above, which measures the host directory and the writable layer. Scope,
 conflict rule, freezes, quota behaviour and limits: [workspace-mirror.md](workspace-mirror.md).
 
+The rest of the OpenClaw state in the agent directory (sessions, Knowledge, auth
+profiles, the gateway token) is covered by state snapshots: the worker loop
+`agent_state_snapshot` keeps one current archive per agent in S3, and a rehydrating
+start on a directory without OpenClaw state restores it before the mirror pull
+([agent-state-snapshots.md](agent-state-snapshots.md)).
+
 ## Resource Pressure Episodes
 
 Platform admins need evidence of which organizations outgrow their tier. The engine
@@ -567,9 +583,11 @@ The seeding notice is absent on the next gateway startup with that config.
 This change does not proactively migrate or restart existing guests.
 
 Config writes retain guest-owned fields, including agent identity and model policy,
-alongside MCP/skill/plugin entries and custom skill roots. Platform model selections,
-aliases, provider credentials, embedding search, gateway and tool settings remain
-authoritative; retired managed values are removed rather than merged back in.
+alongside MCP/skill/plugin entries, the plugin slots and custom skill roots. The guest image
+selects the memory plugin (Knowledge) in `plugins.slots`, so the engine writes no `plugins` or `memory`
+keys. Platform model selections, aliases, provider credentials, gateway and tool settings remain
+authoritative; retired managed values, such as the former embedding-backed `memory.search`, are removed
+rather than merged back in.
 
 ### Optional latency experiments
 
@@ -894,20 +912,20 @@ from [the schema baseline](../scripts/schema_baseline.sql), before deploying API
 and worker code that uses them. Include the associated constraints/indexes and
 `agent_start_retry_state_changed` trigger with its
 `sync_agent_start_retry_metadata` function; the table names alone are not the
-complete prerequisite. The workspace quota (`agent_workspace_usage`, cascading from
-`agents`) and resource-pressure (`agent_resource_pressure_episodes`, cascading from
-`tenants`) tables are also fresh-baseline `CREATE TABLE IF NOT EXISTS` additions: no
-existing table is altered and no upgrade patch is supplied, so existing installations
-need operator-coordinated provisioning before the two worker loops can store results.
+complete prerequisite. The baseline creates missing workspace quota
+(`agent_workspace_usage`, cascading from `agents`) and resource-pressure
+(`agent_resource_pressure_episodes`, cascading from `tenants`) tables.
+[Bootstrap](../app/scripts/AGENTS.md#supported-legacy-upgrades) also upgrades an
+existing legacy workspace quota table in place: it preserves measurements, makes
+`measured_at` nullable, and adds the walk-failure and remeasure-request timestamps.
 Upgrade notice/run tables and `agents.openclaw_image_id`
 have [additional deployment requirements](openclaw-updates.md#existing-installations-deployment-warning).
 
 Schema initialization belongs to [bootstrap](../app/scripts/bootstrap_db.py), not
-process lifespan. The baseline is fresh-only and rerunnable; it is not an upgrade
-migration for existing installations. Existing production databases need
-operator-coordinated schema provisioning. Neither a code deployment nor rerunning
-bootstrap is an automatic existing-schema upgrade, and this change supplies no
-production upgrade patch.
+process lifespan. The baseline is rerunnable and upgrades only the specific
+[supported legacy shapes](../app/scripts/AGENTS.md#supported-legacy-upgrades).
+Other schema differences still need operator-coordinated provisioning before
+starting the affected API or workers.
 
 ## Durable Deletion Cleanup
 
@@ -927,8 +945,13 @@ The archive is published at `<STORAGE_LOCAL_ROOT or AGENT_DATA_DIR>/_archived/<i
 using staging and rename, with frozen `task_history.json` and a deletion identity
 marker. Retry resumes across copy, publication, source-removal or completion
 interruption without creating a second archive. An existing conflicting archive
-fails rather than being overwritten. Source workspace removal follows archive
-publication; the outbox completes only after cleanup succeeds.
+fails rather than being overwritten. A host disk short of its
+[headroom](agent-state-snapshots.md#host-disk-headroom) refuses the copy before anything is
+written; the job stays pending and the source workspace untouched. Source workspace removal follows archive
+publication; the outbox completes only after cleanup succeeds. With an S3 primary,
+cleanup then deletes the agent's state snapshots; a busy snapshot flock or a storage
+error keeps the job pending
+([agent-state-snapshots.md](agent-state-snapshots.md#deletion-and-company-transfer)).
 
 ## Reconciliation And Safe Observations
 
@@ -1081,7 +1104,9 @@ distinct from upgrade run ids), clears the pin with a compare-and-set and starts
 the configured image. Success drops the snapshot. Failure removes owned guests the
 attempt left, restores the snapshot and re-pins the old image only if the pin is
 still empty. If that removal fails, the snapshot is kept rather than restored under
-a live guest, and the next published start drops it.
+a live guest, and the next published start drops it. A host disk short of its
+[headroom](agent-state-snapshots.md#host-disk-headroom) fails the snapshot before anything
+is written: the endpoint answers 502 `guest_start_failed` and the pin stays.
 
 **Running observation:** native dispatch clears only a `container_stopped` loss
 when the owned guest is observed running. The delete checks the reason in the

@@ -6,6 +6,7 @@ import { authSession } from '../src/lib/auth-session.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { getAgentOpenClawUpdate, getOpenClawUpdate, upgradeAgentOpenClaw } from '../src/lib/openclaw-updates-api.ts'
 import { agentId, notice, run, update } from './openclaw-update-fixture.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 test('notice detail parses the full notice and accessible agent update statuses', async (t) => {
   // Given
@@ -29,7 +30,7 @@ test('status requests preserve owner and cancellation and accept a null notice a
   const result = await getAgentOpenClawUpdate(agentId, { owner: authSession.capture(), signal: controller.signal })
   // Then
   assert.deepEqual(result, empty)
-  assert.equal(request?.signal, controller.signal)
+  assertForwardsCancellation([request?.signal], controller)
 })
 
 for (const status of [200, 202]) {

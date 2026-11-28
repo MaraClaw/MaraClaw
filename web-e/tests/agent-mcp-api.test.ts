@@ -6,6 +6,7 @@ import { createAgentMcpServer, listAgentMcpServers, patchAgentMcpServer, removeA
 import { authSession } from '../src/lib/auth-session.ts'
 import { MCPServerSummarySchema } from '../src/lib/engine-contracts.generated.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const summary = MCPServerSummarySchema.parse({
   name: 'research', transport: 'streamable-http', enabled: true, url_configured: true, command_configured: false,
@@ -15,15 +16,17 @@ const summary = MCPServerSummarySchema.parse({
 test('MCP list strips credential values before returning safe summaries and forwards cancellation', async (t) => {
   // Given
   const controller = new AbortController()
+  const forwarded: (AbortSignal | null | undefined)[] = []
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     assert.equal(String(input), '/api/agents/agent%2Fone/mcp/servers')
     assert.equal(init?.method, 'GET')
-    assert.equal(init?.signal, controller.signal)
+    forwarded.push(init?.signal)
     assert.equal(init?.cache, 'no-store')
     return Response.json({ servers: [{ ...summary, url: 'https://private.example/?token=private', command: 'private', args: ['private'], headers: { Authorization: 'private' }, env: { TOKEN: 'private' } }] })
   })
   // When / Then
   assert.deepEqual(await listAgentMcpServers('agent/one', { signal: controller.signal }), { servers: [summary] })
+  assertForwardsCancellation(forwarded, controller)
 })
 
 test('MCP create, merged patch and delete use the dedicated encoded protocol', async (t) => {

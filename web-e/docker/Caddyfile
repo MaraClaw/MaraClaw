@@ -1,6 +1,6 @@
 # MaraClaw web-e - production SPA for the end-user UI (landing + members)
 # - Plain HTTP on non-privileged port 8080 (TLS is terminated in front of this container)
-# - Long-cache hashed assets, no-cache HTML
+# - Long-cache hashed assets, revalidated theme and font bootstrap files, no-cache HTML
 # - SPA fallback to index.html
 # - Basic security headers + compression
 # - Access log without request targets, queries or headers
@@ -95,6 +95,7 @@ http://:8080 {
 
 	@hidden path_regexp /\.
 	@static path_regexp (?i)\.(svg|ico|png|jpe?g|gif|webp|woff2?)$
+	@early path /theme-init.js /fonts/fonts.css
 
 	# Health probe for container orchestrators.
 	handle /healthz {
@@ -145,6 +146,15 @@ http://:8080 {
 	handle @static {
 		log_skip
 		header Cache-Control "public, max-age=604800"
+		header X-Content-Type-Options nosniff
+		file_server
+	}
+
+	# Render-blocking files with fixed names (the pre-paint theme script, the font faces): browsers keep a copy and
+	# revalidate it with the ETag / Last-Modified that file_server sends, so a deploy reaches the next page load.
+	handle @early {
+		log_skip
+		header Cache-Control no-cache
 		header X-Content-Type-Options nosniff
 		file_server
 	}

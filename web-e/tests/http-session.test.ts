@@ -1,49 +1,17 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createAuthSessionStore } from '../src/lib/auth-session.ts'
-import { ApiError, createHttpClient, StaleSessionError } from '../src/lib/http.ts'
-import type { RequestOptions } from '../src/lib/http.ts'
-import type { UserOut } from '../src/lib/types/auth.ts'
-
-const user: UserOut = {
-  id: 'member', email: 'member@example.com', display_name: 'Member',
-  role: 'member', tenant_id: 'tenant-a', email_verified: true,
-}
-
-function fixture(fetchRequest: typeof fetch) {
-  let token: string | null = 'token-a'
-  const store = createAuthSessionStore({
-    read: () => token,
-    write: (value) => { token = value },
-    clear: () => { token = null },
-  })
-  store.applySession(store.capture(), { access_token: 'token-a', user })
-  const client = createHttpClient(store, fetchRequest, (path) => `https://api.example${path}`)
-  return { store, client, stored: () => token }
-}
-
-class DeferredBodyResponse extends Response {
-  readonly started = Promise.withResolvers<void>()
-  readonly bodyResult = Promise.withResolvers<string>()
-  override text(): Promise<string> {
-    this.started.resolve()
-    return this.bodyResult.promise
-  }
-}
+import { ApiError, StaleSessionError } from '../src/lib/http.ts'
+import { DeferredBodyResponse, hang, httpFixture, requestAs, user } from './http-session-fixture.ts'
 
 for (const kind of ['JSON', 'multipart'] as const) {
-  function request(client: ReturnType<typeof createHttpClient>, options: RequestOptions = {}) {
-    return kind === 'JSON'
-      ? client.apiRequest('/resource', options)
-      : client.apiFormRequest('/resource', new FormData(), options)
-  }
+  const request = requestAs(kind)
 
   for (const status of [200, 204, 401, 503]) {
     for (const replacementToken of ['token-b', 'token-a']) {
       test(`${kind} rejects stale ${status} when session is reapplied with ${replacementToken}`, async () => {
         // Given
         const pending = Promise.withResolvers<Response>()
-        const { store, client, stored } = fixture(() => pending.promise)
+        const { store, client, stored } = httpFixture(() => pending.promise)
         const result = request(client)
         const rejected = assert.rejects(result, StaleSessionError)
         store.applySession(store.capture(), { access_token: replacementToken, user })
@@ -62,7 +30,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
     test(`${kind} rejects stale ${status} when replacement occurs during body reading`, async () => {
       // Given
       const response = new DeferredBodyResponse(null, { status })
-      const { store, client, stored } = fixture(() => Promise.resolve(response))
+      const { store, client, stored } = httpFixture(() => Promise.resolve(response))
       const result = request(client)
       const rejected = assert.rejects(result, StaleSessionError)
       await response.started.promise
@@ -80,7 +48,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
   test(`${kind} rejects stale transport failure when the owner changes`, async () => {
     // Given
     const pending = Promise.withResolvers<Response>()
-    const { store, client, stored } = fixture(() => pending.promise)
+    const { store, client, stored } = httpFixture(() => pending.promise)
     const rejected = assert.rejects(request(client), StaleSessionError)
     store.applySession(store.capture(), { access_token: 'token-b', user })
     // When
@@ -93,7 +61,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
   test(`${kind} rejects stale body failure when the owner changes`, async () => {
     // Given
     const response = new DeferredBodyResponse()
-    const { store, client } = fixture(() => Promise.resolve(response))
+    const { store, client } = httpFixture(() => Promise.resolve(response))
     const rejected = assert.rejects(request(client), StaleSessionError)
     await response.started.promise
     store.logout(store.capture())
@@ -105,7 +73,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
 
   test(`${kind} expires provider snapshot and storage when a current authorized request returns 401`, async () => {
     // Given
-    const { store, client, stored } = fixture(() => Promise.resolve(
+    const { store, client, stored } = httpFixture(() => Promise.resolve(
       new Response('{"detail":"expired"}', { status: 401 }),
     ))
     const seen: string[] = []
@@ -122,7 +90,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
 
   test(`${kind} still expires the session on a 401 that carries a Retry-After`, async () => {
     // Given
-    const { store, client, stored } = fixture(() => Promise.resolve(
+    const { store, client, stored } = httpFixture(() => Promise.resolve(
       new Response('{"detail":"expired"}', { status: 401, headers: { 'Retry-After': '7' } }),
     ))
     const seen: string[] = []
@@ -140,7 +108,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
   test(`${kind} preserves the session when a public request returns 401`, async () => {
     // Given
     let authorization: string | null = null
-    const { store, client, stored } = fixture((_url, init) => {
+    const { store, client, stored } = httpFixture((_url, init) => {
       authorization = new Headers(init?.headers).get('Authorization')
       return Promise.resolve(new Response('public denial', { status: 401 }))
     })
@@ -158,7 +126,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
     // Given
     const pending = Promise.withResolvers<Response>()
     let authorization: string | null = null
-    const { store, client } = fixture((_url, init) => {
+    const { store, client } = httpFixture((_url, init) => {
       authorization = new Headers(init?.headers).get('Authorization')
       return pending.promise
     })
@@ -176,7 +144,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
   test(`${kind} refuses obsolete explicit owners before fetch even with identical tokens`, async () => {
     // Given
     let calls = 0
-    const { store, client } = fixture(() => {
+    const { store, client } = httpFixture(() => {
       calls++
       return Promise.resolve(new Response('{}'))
     })
@@ -194,17 +162,19 @@ for (const kind of ['JSON', 'multipart'] as const) {
     const controller = new AbortController()
     const failure = new DOMException('cancelled', 'AbortError')
     let signal: AbortSignal | null | undefined
-    const { client, stored } = fixture((_url, init) => {
+    const { client, stored } = httpFixture((_url, init) => {
       signal = init?.signal
-      return Promise.reject(failure)
+      return hang()
     })
-    controller.abort()
-    // When
     const rejected = assert.rejects(request(client, { signal: controller.signal }),
       (error: unknown) => error === failure)
+    assert.equal(signal?.aborted, false)
+    // When
+    controller.abort(failure)
     // Then
     await rejected
-    assert.equal(signal, controller.signal)
+    assert.equal(signal?.aborted, true)
+    assert.equal(signal?.reason, failure)
     assert.equal(stored(), 'token-a')
   })
 
@@ -213,7 +183,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
       const pending = Promise.withResolvers<Response>()
       const response = new DeferredBodyResponse(null, { status })
       const controller = new AbortController()
-      const { client, stored } = fixture(() => pending.promise)
+      const { client, stored } = httpFixture(() => pending.promise)
       const rejected = assert.rejects(request(client, { signal: controller.signal }), { name: 'AbortError' })
       if (stage === 'body') {
         pending.resolve(response)
@@ -231,7 +201,7 @@ for (const kind of ['JSON', 'multipart'] as const) {
 test('helpers preserve JSON and multipart body/header contracts when requests succeed', async () => {
   // Given
   const received: RequestInit[] = []
-  const { client } = fixture((_url, init) => {
+  const { client } = httpFixture((_url, init) => {
     assert.ok(init)
     received.push(init)
     return Promise.resolve(new Response('{"saved":true}'))

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import ClassVar, final, override
-from uuid import UUID
+from uuid import NIL, UUID
 
 from app.core.access_cache import bump_agent_acl_version, drop_agent_acl_version
 from app.core.domain.agents import AgentStatus, AgentType
@@ -440,6 +440,16 @@ class AgentDAO(BaseDAO[AgentRecord]):
             rows = await db.fetchall("SELECT id FROM agents")
             return uuid_list_from_rows(rows)
 
+    async def list_ids_page(self, *, after_id: UUID | None, limit: int) -> list[UUID]:
+        """Page all agents by primary key with an index bound even in a generic plan."""
+        async with self.session() as db:
+            rows = await db.fetchall(
+                "SELECT id FROM agents WHERE id >= %(start)s AND id IS DISTINCT FROM %(after_id)s "
+                "ORDER BY id LIMIT %(limit)s",
+                {"start": after_id or NIL, "after_id": after_id, "limit": limit},
+            )
+        return uuid_list_from_rows(rows)
+
     async def list_ids_for_creator(self, creator_id: UUID) -> Sequence[UUID]:
         async with self.session() as db:
             rows = await db.fetchall(
@@ -602,8 +612,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents "
                 "WHERE tenant_id IS NOT NULL AND is_system IS NOT TRUE "
-                "AND (%(after_id)s::uuid IS NULL OR id > %(after_id)s) ORDER BY id LIMIT %(limit)s",
-                {"after_id": after_id, "limit": limit},
+                "AND id >= %(start)s AND id IS DISTINCT FROM %(after_id)s ORDER BY id LIMIT %(limit)s",
+                {"start": after_id or NIL, "after_id": after_id, "limit": limit},
             )
             return [AgentRecord.from_row(row) for row in rows]
 
@@ -619,8 +629,8 @@ class AgentDAO(BaseDAO[AgentRecord]):
                 "WHERE tenant_id IS NOT NULL AND is_system IS NOT TRUE "
                 "AND EXISTS (SELECT 1 FROM agent_workspace_usage usage WHERE usage.agent_id = agents.id "
                 "AND (usage.walk_failed_at IS NOT NULL OR usage.remeasure_requested_at IS NOT NULL)) "
-                "AND (%(after_id)s::uuid IS NULL OR id > %(after_id)s) ORDER BY id LIMIT %(limit)s",
-                {"after_id": after_id, "limit": limit},
+                "AND id >= %(start)s AND id IS DISTINCT FROM %(after_id)s ORDER BY id LIMIT %(limit)s",
+                {"start": after_id or NIL, "after_id": after_id, "limit": limit},
             )
             return [AgentRecord.from_row(row) for row in rows]
 
@@ -630,10 +640,11 @@ class AgentDAO(BaseDAO[AgentRecord]):
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM agents "
                 "WHERE agent_type = %(agent_type)s AND status = ANY(%(statuses)s) "
-                "AND (%(after_id)s::uuid IS NULL OR id > %(after_id)s) ORDER BY id LIMIT %(limit)s",
+                "AND id >= %(start)s AND id IS DISTINCT FROM %(after_id)s ORDER BY id LIMIT %(limit)s",
                 {
                     "agent_type": AgentType.OPENCLAW.value,
                     "statuses": [status.value for status in _WORKSPACE_MIRROR_STATUSES],
+                    "start": after_id or NIL,
                     "after_id": after_id,
                     "limit": limit,
                 },

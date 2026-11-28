@@ -176,7 +176,7 @@ async def test_history_retains_deleted_schedule_logs_and_filters_other_schedules
     query, params = fetch.await_args_list[0].args
     assert "action_type = 'schedule_run'" in query
     assert "detail_json ->> 'schedule_id' = %(schedule_id)s" in query
-    assert "ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %(limit)s" in query
+    assert "ORDER BY created_at DESC, id DESC LIMIT %(limit)s" in query
     assert params == {"agent_id": api.row.agent_id, "schedule_id": str(api.row.id), "limit": 20}
 
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -25,6 +25,7 @@ from app.core.cache_contracts import RedisValueRead, SessionKeysRead
 from app.core.events import RedisPoolOverloadError
 from app.core.json_types import is_any_list, json_loads_value
 from app.core.logging import logger
+from app.core.metrics import Family, counter_family, gauge_family
 from app.records.cache_invalidation import CacheInvalidation, CacheInvalidationKind
 
 _COOLDOWN_SECONDS = 2.0
@@ -69,6 +70,10 @@ class CacheBreaker:
         """Whether a call made right now would be refused."""
         return self._opened and (self._probing or self._clock() < self._retry_at)
 
+    def is_open(self) -> bool:
+        """Whether the circuit is not closed (cooling down, or waiting for or running its probe); never admits a call."""
+        return self._opened
+
     def trip(self) -> None:
         self._opened = True
         self._probing = False
@@ -94,6 +99,17 @@ class CacheBreaker:
 
 
 _breaker = CacheBreaker()
+
+
+class _Outcome(StrEnum):
+    OK = "ok"
+    REFUSED = "refused"
+    POOL_BUSY = "pool_busy"
+    FAILED = "failed"
+
+
+# Guarded calls by outcome, per process; only the event loop thread touches it. A cancelled call is none of these.
+_outcomes = dict.fromkeys(_Outcome, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,20 +155,40 @@ async def guarded[T](call: Callable[[], Awaitable[T]]) -> T:
     """
     admission = _breaker.admit()
     if admission is None:
+        _outcomes[_Outcome.REFUSED] += 1
         raise CacheUnavailableError("circuit open")
     try:
         result = await call()
     except RedisPoolOverloadError as exc:
+        _outcomes[_Outcome.POOL_BUSY] += 1
         _breaker.abandoned(admission)
         raise CacheUnavailableError(type(exc).__name__) from exc
     except Exception as exc:
+        _outcomes[_Outcome.FAILED] += 1
         _breaker.failed(admission)
         raise CacheUnavailableError(type(exc).__name__) from exc
     except BaseException:
         _breaker.abandoned(admission)
         raise
+    _outcomes[_Outcome.OK] += 1
     _breaker.succeeded(admission)
     return result
+
+
+def metric_families() -> tuple[Family, ...]:
+    """The cache client's series for a scrape; reads counters and the breaker's state, never calls ``admit()``."""
+    return (
+        counter_family(
+            "maraclaw_cache_redis_calls",
+            "Guarded cache Redis calls by outcome: ok, refused (breaker open), pool_busy or failed.",
+            (((("outcome", outcome.value),), count) for outcome, count in _outcomes.items()),
+        ),
+        gauge_family(
+            "maraclaw_cache_redis_breaker_open",
+            "1 while the cache circuit breaker is open, cooling down or probing, else 0.",
+            (((), float(_breaker.is_open())),),
+        ),
+    )
 
 
 async def _client():
@@ -234,7 +270,7 @@ async def _delete_now(*keys: str) -> None:
         logger.warning("redis_cache delete failed: keys={} error={}", len(keys), type(exc).__name__)
 
 
-def _parse_json(raw: str) -> object | None:
+def parse_json(raw: str) -> object | None:
     try:
         return json_loads_value(raw)
     except TypeError, ValueError:
@@ -243,15 +279,55 @@ def _parse_json(raw: str) -> object | None:
 
 async def cache_get_json(key: str) -> object | None:
     raw = await cache_get(key)
-    return None if raw is None else _parse_json(raw)
+    return None if raw is None else parse_json(raw)
+
+
+def _dump_json(value: object) -> str | None:
+    try:
+        return json.dumps(value, default=_json_default, separators=(",", ":"))
+    except TypeError, ValueError:
+        return None
 
 
 async def cache_set_json(key: str, value: object, *, ttl: int) -> bool:
-    try:
-        payload = json.dumps(value, default=_json_default, separators=(",", ":"))
-    except TypeError, ValueError:
+    payload = _dump_json(value)
+    return payload is not None and await cache_set(key, payload, ttl=ttl)
+
+
+async def cache_fill_json(key: str, value: object, *, ttl: int, fences: Sequence[tuple[str, str]]) -> bool:
+    """Fill a snapshot together with the generation checks that fence it, in one round trip.
+
+    A pipeline cannot make a write depend on a read and Lua and transactions are off the table, so the pipeline reads
+    each fence's generation (version key, generation observed before the source row was read) and then writes the
+    snapshot. The snapshot carries those generations, so a reader refuses it once any has moved; when a reply differs
+    from what was observed the write is removed again (best effort, outside the breaker) and False is returned.
+    """
+    payload = _dump_json(value)
+    if payload is None or ttl <= 0 or len(payload.encode()) > _max_bytes():
         return False
-    return await cache_set(key, payload, ttl=ttl)
+
+    async def fill() -> object:
+        client = await _client()
+        async with client.pipeline(transaction=False) as pipe:
+            for version_key, _observed in fences:
+                _ = pipe.get(version_key)
+            _ = pipe.set(key, payload, ex=ttl)
+            return cast("object", await pipe.execute())
+
+    try:
+        replies = await guarded(fill)
+    except CacheUnavailableError as exc:
+        logger.debug("redis_cache fill skipped: {}", exc)
+        return False
+    if (
+        is_any_list(replies)
+        and len(replies) == len(fences) + 1
+        and replies[-1] is True
+        and [_decoded(reply) for reply in replies[:-1]] == [observed for _key, observed in fences]
+    ):
+        return True
+    await _delete_now(key)
+    return False
 
 
 def _json_default(value: object) -> object:
@@ -272,22 +348,21 @@ def _decoded(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-async def read_session_keys(
-    snapshot_key: str, user_version_key: str, identity_version_key: str | None
-) -> SessionKeysRead | None:
-    """Read a session snapshot and the generations that gate it in one round trip.
+async def read_keys(
+    keys: Sequence[str], *, initialize: Sequence[str] = (), generation_ttl: int = _VERSION_MIN_TTL
+) -> list[str | None] | None:
+    """Read several keys in one round trip: one non-transactional pipeline of single-key GETs.
 
-    One non-transactional pipeline of single-key GETs, every key named by the caller, so a cluster-aware client can
-    route each one. Without ``identity_version_key`` the identity generation is not read and comes back None.
-    Returns None when the cache is unavailable, like ``read_version``; a successful miss has a None snapshot.
+    Every key is named by the caller, so a cluster-aware client can route each one. Returns None when the cache is
+    unavailable, like ``read_version``; a successful miss is a None value. A caller that will fill on a miss can
+    initialize absent generations in the same pipeline using SET NX; it cannot reset a live generation.
     """
-    keys = [snapshot_key, user_version_key]
-    if identity_version_key is not None:
-        keys.append(identity_version_key)
 
     async def read() -> object:
         client = await _client()
         async with client.pipeline(transaction=False) as pipe:
+            for key in initialize:
+                _ = pipe.set(key, uuid4().hex, ex=max(generation_ttl, _VERSION_MIN_TTL), nx=True)
             for key in keys:
                 _ = pipe.get(key)
             return cast("object", await pipe.execute())
@@ -295,15 +370,38 @@ async def read_session_keys(
     try:
         replies = await guarded(read)
     except CacheUnavailableError as exc:
-        logger.debug("redis_cache session read skipped: {}", exc)
+        logger.debug("redis_cache read skipped: {}", exc)
         return None
-    if not is_any_list(replies) or len(replies) != len(keys):
+    if not is_any_list(replies) or len(replies) != len(initialize) + len(keys):
         return None
-    raw_snapshot = _decoded(replies[0])
+    return [_decoded(reply) for reply in replies[len(initialize) :]]
+
+
+async def read_session_keys(
+    snapshot_key: str, user_version_key: str, identity_version_key: str | None, *, generation_ttl: int | None = None
+) -> SessionKeysRead | None:
+    """Read a session snapshot and the generations that gate it in one round trip (``read_keys``).
+
+    Without ``identity_version_key`` the identity generation is not read and comes back None. A successful miss has
+    a None snapshot; an unparseable one reads the same.
+    """
+    keys = (
+        [snapshot_key, user_version_key]
+        if identity_version_key is None
+        else [snapshot_key, user_version_key, identity_version_key]
+    )
+    values = (
+        await read_keys(keys)
+        if generation_ttl is None
+        else await read_keys(keys, initialize=keys[1:], generation_ttl=generation_ttl)
+    )
+    if values is None:
+        return None
+    raw_snapshot = values[0]
     return SessionKeysRead(
-        None if raw_snapshot is None else _parse_json(raw_snapshot),
-        _decoded(replies[1]),
-        None if identity_version_key is None else _decoded(replies[2]),
+        None if raw_snapshot is None else parse_json(raw_snapshot),
+        values[1],
+        None if identity_version_key is None else values[2],
     )
 
 

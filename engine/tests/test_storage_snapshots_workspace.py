@@ -171,6 +171,7 @@ async def test_snapshot_workspace_aggregate_skip_consumes_only_remaining_cap_plu
             raise AssertionError("preparation snapshots must not HEAD")
 
     monkeypatch.setattr(backend, "_client_or_raise", Client)
+    monkeypatch.setattr(backend, "_read_client_or_raise", Client)
     monkeypatch.setattr(workspace_temp, "get_storage_backend", lambda: backend)
     monkeypatch.setattr(workspace_temp.tempfile, "tempdir", str(tmp_path))
     monkeypatch.setattr(workspace_temp, "TOOL_MATERIALIZE_MAX_FILE_BYTES", 8)

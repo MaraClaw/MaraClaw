@@ -11,6 +11,10 @@ const messageId = "72561c0a-7b00-4ea3-a89b-37f06f93c334";
 const fixturePath = join(dirname(fileURLToPath(import.meta.url)), "fixtures/openclaw_agent_events_2026_11_1.jsonl");
 const preload = `
 import { readFileSync } from "node:fs";
+if (process.env.SCENARIO === "session_timeout") {
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => realSetTimeout(fn, ms === 20000 ? 5 : ms, ...args);
+}
 class FakeSocket {
   constructor(url) {
     if (url !== "ws://127.0.0.1:18789") throw Error("wrong endpoint");
@@ -24,6 +28,28 @@ class FakeSocket {
   send(raw) {
     if (process.env.SCENARIO === "connect_send_error") throw new TypeError("boom");
     const frame = JSON.parse(raw);
+    this.methods = [...(this.methods ?? []), frame.method];
+    if (frame.method === "sessions.create") {
+      if (JSON.stringify(this.methods) !== JSON.stringify(["connect", "sessions.create"]) ||
+          JSON.stringify(frame.params) !== JSON.stringify({key:"agent:main:hook:maraclaw:session",
+            idempotencyKey:process.env.MESSAGE_ID + ":session"}))
+        throw Error("bad session request");
+      if (process.env.SCENARIO === "session_send_error") throw new TypeError("boom");
+      queueMicrotask(() => {
+        if (process.env.SCENARIO === "session_timeout") return;
+        if (process.env.SCENARIO === "session_close") { this.listeners.close(); return; }
+        if (process.env.SCENARIO === "session_reject") {
+          this.emit({type:"res",id:frame.id,ok:false,error:{code:"UNAVAILABLE",
+            message:"Session is still active; retry workspace preparation after its work finishes."}});
+          return;
+        }
+        if (process.env.SCENARIO === "session_malformed") { this.emit({type:"res",id:frame.id,ok:true,payload:{ok:true}}); return; }
+        this.emit({type:"res",id:"unrelated",ok:true,payload:{}});
+        this.emit({type:"res",id:frame.id,ok:true,payload:{ok:true,key:frame.params.key,sessionId:"s-1",
+          entry:{chatType:"direct"},runStarted:false}});
+      });
+      return;
+    }
     if (frame.method === "connect") {
       if (frame.params.auth.token !== "secret" || frame.params.minProtocol !== 4 || frame.params.maxProtocol !== 4)
         throw Error("bad connect");
@@ -32,7 +58,10 @@ class FakeSocket {
         auth:{scopes:["operator.read","operator.write","operator.admin"]}}}));
       return;
     }
-    if (frame.method !== "agent" || frame.params.idempotencyKey !== process.env.MESSAGE_ID ||
+    if (frame.method === "agent" && ["session_close", "session_timeout", "session_send_error"].includes(process.env.SCENARIO))
+      process.stderr.write("agent sent");
+    if (frame.method !== "agent" || JSON.stringify(this.methods) !== JSON.stringify(["connect", "sessions.create", "agent"]) ||
+        frame.params.idempotencyKey !== process.env.MESSAGE_ID ||
         frame.params.sessionKey !== "agent:main:hook:maraclaw:session" || frame.params.deliver !== false ||
         frame.params.provider !== "provider" || frame.params.model !== "model/sub" || frame.params.timeout !== 900)
       throw Error("bad agent request");
@@ -188,6 +217,33 @@ test("unexpected send errors after the challenge are conclusively not submitted"
     const { timing, ...outcome } = JSON.parse(child.stdout);
     assert.deepEqual(outcome, {version:1, messageId, kind:"not_admitted", admission:"not_submitted", code:"send_failed"});
     assert.deepEqual(Object.keys(timing), scenario === "connect_send_error" ? [] : ["helloOk"]);
+  }
+});
+
+test("a refused or odd session answer still runs the turn, which is then without Knowledge", () => {
+  for (const scenario of ["session_reject", "session_malformed"]) {
+    const child = spawnAdapter(scenario, {});
+    assert.equal(child.status, 0, `${scenario}: ${child.error ?? ""}${child.stderr}`);
+    assert.equal(child.stderr, "", scenario);
+    const { timing, ...outcome } = JSON.parse(child.stdout);
+    assert.deepEqual(outcome, {version:1, messageId, kind:"terminal", admission:"accepted", runId:messageId,
+      status:"ok", text:"first\nsecond", code:null}, scenario);
+    assert.deepEqual(Object.keys(timing), ["helloOk", "accepted", "terminal"], scenario);
+  }
+});
+
+test("a session step without an answer is conclusively not submitted and no agent request is sent", () => {
+  for (const [scenario, code] of [
+    ["session_close", "socket_closed"],
+    ["session_timeout", "session_timeout"],
+    ["session_send_error", "send_failed"],
+  ]) {
+    const child = spawnAdapter(scenario, {});
+    assert.equal(child.status, 0, `${scenario}: ${child.error ?? ""}${child.stderr}`);
+    assert.equal(child.stderr, "", `${scenario}: no agent request after a failed session step`);
+    const { timing, ...outcome } = JSON.parse(child.stdout);
+    assert.deepEqual(outcome, {version:1, messageId, kind:"not_admitted", admission:"not_submitted", code}, scenario);
+    assert.deepEqual(Object.keys(timing), ["helloOk"], scenario);
   }
 });
 

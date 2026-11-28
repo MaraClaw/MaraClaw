@@ -31,7 +31,7 @@ function fixture(fetchRequest: typeof fetch) {
     clear: () => { token = null },
   })
   store.applySession(store.capture(), { access_token: 'token-a', user })
-  const client = createHttpClient(store, fetchRequest, (path) => `https://api.example${path}`)
+  const client = createHttpClient(store, { fetch: fetchRequest, url: (path) => `https://api.example${path}` })
   return { store, client, stored: () => token }
 }
 
@@ -105,10 +105,10 @@ test('schema request sends the legacy method, headers and JSON body without the 
     return Promise.resolve(new Response(wire))
   })
   const { schema } = memberParser()
-  const { signal } = new AbortController()
+  const caller = new AbortController()
   // When
   await client.apiRequest('/member', {
-    body: { name: 'json' }, token: 'override', idempotencyKey: 'key-1', cache: 'no-store', signal, schema,
+    body: { name: 'json' }, token: 'override', idempotencyKey: 'key-1', cache: 'no-store', signal: caller.signal, schema,
   })
   // Then
   const [init] = received
@@ -118,7 +118,9 @@ test('schema request sends the legacy method, headers and JSON body without the 
   assert.equal(init.method, 'POST')
   assert.equal(init.body, '{"name":"json"}')
   assert.equal(init.cache, 'no-store')
-  assert.equal(init.signal, signal)
+  assert.equal(init.signal?.aborted, false)
+  caller.abort()
+  assert.equal(init.signal?.aborted, true)
   assert.deepEqual(Object.fromEntries(new Headers(init.headers)), {
     accept: 'application/json',
     authorization: 'Bearer override',
@@ -313,17 +315,17 @@ test('schema request preserves an aborted fetch rejection without parsing', asyn
   let signal: AbortSignal | null | undefined
   const { client, stored } = fixture((_url, init) => {
     signal = init?.signal
-    return Promise.reject(failure)
+    return Promise.reject(init?.signal?.reason)
   })
   const { schema, inputs } = memberParser()
-  controller.abort()
+  controller.abort(failure)
   // When
   const rejected = assert.rejects(
     client.apiRequest('/member', { schema, signal: controller.signal }), (error: unknown) => error === failure,
   )
   // Then
   await rejected
-  assert.equal(signal, controller.signal)
+  assert.equal(signal?.reason, failure)
   assert.deepEqual(inputs, [])
   assert.equal(stored(), 'token-a')
 })

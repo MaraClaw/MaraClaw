@@ -938,6 +938,27 @@ CREATE TABLE IF NOT EXISTS agent_workspace_usage (
     remeasure_requested_at TIMESTAMPTZ
 );
 
+-- Explicit legacy upgrade: failed walks can create a row before the first measurement.
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'agent_workspace_usage'::regclass AND attname = 'measured_at' AND attnotnull
+    ) THEN
+        ALTER TABLE agent_workspace_usage ALTER COLUMN measured_at DROP NOT NULL;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = 'agent_workspace_usage'::regclass AND attname = 'walk_failed_at'
+    ) THEN
+        ALTER TABLE agent_workspace_usage ADD COLUMN walk_failed_at TIMESTAMPTZ;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = 'agent_workspace_usage'::regclass AND attname = 'remeasure_requested_at'
+    ) THEN
+        ALTER TABLE agent_workspace_usage ADD COLUMN remeasure_requested_at TIMESTAMPTZ;
+    END IF;
+END $$;
+
 -- Last reconciled state of the durable workspace mirror, one row per agent and workspace-relative path. The local_*
 -- columns fingerprint the guest-visible file (inode, size, mtime and ctime in ns) and content_sha256 its bytes at that
 -- moment, while remote_etag, remote_size and remote_token describe the stored object it matched. A row is written only
@@ -1207,6 +1228,12 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_ac
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_created_at ON agent_activity_logs (created_at)$ddl$);
 
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_timeline
+    ON agent_activity_logs (agent_id, created_at DESC, id DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_activity_logs_schedule_history
+    ON agent_activity_logs (agent_id, (detail_json ->> 'schedule_id'), created_at DESC, id DESC)
+    WHERE action_type = 'schedule_run'$ddl$);
+
 CREATE TABLE IF NOT EXISTS agent_agent_relationships (
 	id UUID NOT NULL, 
 	agent_id UUID NOT NULL, 
@@ -1389,6 +1416,20 @@ CREATE TABLE IF NOT EXISTS agent_triggers (
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
 
+-- Explicit legacy upgrade: the runner computes canonical due times before this transaction commits.
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = 'agent_triggers'::regclass AND attname = 'next_due_at'
+    ) THEN
+        IF current_setting('maraclaw.trigger_due_upgrade', true) IS DISTINCT FROM 'ready' THEN
+            RAISE EXCEPTION 'Legacy agent_triggers needs a schedule backfill'
+                USING HINT = 'Run python -m app.scripts.bootstrap_db instead of applying this SQL directly.';
+        END IF;
+        ALTER TABLE agent_triggers ADD COLUMN next_due_at TIMESTAMP WITH TIME ZONE;
+        PERFORM set_config('maraclaw.trigger_due_upgrade', 'added', true);
+    END IF;
+END $$;
+
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_agent_triggers_agent_id ON agent_triggers (agent_id)$ddl$);
 
 -- Serves agent_trigger_dao.find_webhook_by_token on the public webhook endpoint; the predicate must stay identical to
@@ -1462,6 +1503,11 @@ SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_lo
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_user_id ON audit_logs (user_id)$ddl$);
 
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_recent
+    ON audit_logs (created_at DESC, id DESC)$ddl$);
+SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_audit_logs_agent_recent
+    ON audit_logs (agent_id, created_at DESC, id DESC)$ddl$);
+
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
 	id UUID NOT NULL,
 	actor_id UUID,
@@ -1507,6 +1553,15 @@ CREATE TABLE IF NOT EXISTS channel_configs (
 );
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_channel_configs_agent_id ON channel_configs (agent_id)$ddl$);
+
+CREATE TABLE IF NOT EXISTS wecom_kf_cursors (
+    channel_config_id UUID NOT NULL REFERENCES channel_configs(id) ON DELETE CASCADE,
+    corp_id TEXT NOT NULL,
+    open_kfid TEXT NOT NULL,
+    cursor TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (channel_config_id, corp_id, open_kfid)
+);
 
 CREATE TABLE IF NOT EXISTS whatsapp_personal_connections (
     config_id UUID PRIMARY KEY,
@@ -2057,6 +2112,45 @@ CREATE TABLE IF NOT EXISTS gateway_report_deliveries (
     UNIQUE (message_id, destination_kind, destination_id)
 );
 
+-- Explicit legacy upgrade: preserve delivery state and give existing pending jobs a full retry window.
+DO $$
+DECLARE
+    legacy_constraints TEXT[];
+    legacy_constraint TEXT;
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = 'gateway_report_deliveries'::regclass AND attname = 'created_at'
+    ) THEN
+        ALTER TABLE gateway_report_deliveries ADD COLUMN created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now();
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = 'gateway_report_deliveries'::regclass AND attname = 'failure_detail'
+    ) THEN
+        ALTER TABLE gateway_report_deliveries
+            ADD COLUMN failure_detail TEXT CHECK (char_length(failure_detail) <= 200),
+            ADD CHECK (failure_detail IS NULL OR terminal_at IS NOT NULL);
+    END IF;
+
+    -- Match the historical predicate rather than dropping an unrelated check with a reused name.
+    SELECT array_agg(conname::text) INTO legacy_constraints
+    FROM pg_constraint
+    WHERE conrelid = 'gateway_report_deliveries'::regclass AND contype = 'c'
+        AND pg_get_constraintdef(oid) = $legacy$CHECK ((terminal_reason = ANY (ARRAY['source_agent_unavailable'::text, 'source_tenant_changed'::text, 'destination_agent_unavailable'::text, 'destination_tenant_changed'::text, 'destination_relationship_changed'::text, 'destination_session_unavailable'::text, 'payload_rejected'::text, 'whatsapp_window_unavailable'::text, 'whatsapp_window_expired'::text])))$legacy$;
+    IF legacy_constraints IS NOT NULL THEN
+        FOREACH legacy_constraint IN ARRAY legacy_constraints LOOP
+            EXECUTE format('ALTER TABLE gateway_report_deliveries DROP CONSTRAINT %I', legacy_constraint);
+        END LOOP;
+        ALTER TABLE gateway_report_deliveries
+            ADD CONSTRAINT gateway_report_deliveries_terminal_reason_check CHECK (terminal_reason IN (
+                'source_agent_unavailable', 'source_tenant_changed',
+                'destination_agent_unavailable', 'destination_tenant_changed',
+                'destination_relationship_changed', 'destination_session_unavailable', 'payload_rejected',
+                'whatsapp_window_unavailable', 'whatsapp_window_expired',
+                'provider_permanent_error', 'attempts_exhausted', 'age_exhausted'
+            ));
+    END IF;
+END $$;
+
 -- Explicit legacy upgrade: replace only the catalog-proven v1 plan predicate, regardless of its name.
 -- Other checks, rows, column types and table identity stay untouched; the bootstrap transaction keeps this atomic.
 DO $$
@@ -2584,6 +2678,15 @@ CREATE TABLE IF NOT EXISTS workspace_file_revisions (
 	PRIMARY KEY (id), 
 	FOREIGN KEY(agent_id) REFERENCES agents (id) ON DELETE CASCADE
 );
+
+-- Explicit legacy upgrade: historical revisions kept their content.
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = 'workspace_file_revisions'::regclass AND attname = 'content_omitted'
+    ) THEN
+        ALTER TABLE workspace_file_revisions ADD COLUMN content_omitted BOOLEAN NOT NULL DEFAULT false;
+    END IF;
+END $$;
 
 SELECT pg_temp.baseline_ensure_index($ddl$CREATE INDEX IF NOT EXISTS ix_workspace_file_revisions_agent_id ON workspace_file_revisions (agent_id)$ddl$);
 

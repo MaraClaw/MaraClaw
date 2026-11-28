@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from time import monotonic
-from typing import final, override
+from typing import Final, final, override
 from uuid import UUID
 
 from pywhales import Container, DockerClient
@@ -10,6 +10,9 @@ from pywhales.exceptions import NoSuchContainer
 from app.records.agent import AgentRecord
 
 AGENT_LABEL = "maraclaw.agent_id"
+# Docker's SIGTERM-to-SIGKILL window for guests. It stays above the image bootstrap's 20 s gateway grace, so a stopping
+# gateway releases its ownership lease instead of being killed holding it, which would stall the next guest's start.
+GUEST_STOP_TIMEOUT_SECONDS: Final = 30
 _RESOLUTION_SWEEP_ABOVE = 1024
 
 
@@ -125,7 +128,7 @@ def stop_guest_containers(client: DockerClient, agent: AgentRecord, *, remove: b
     guest_resolutions.drop(agent.id)
     guests = owned_guest_containers(client, agent)
     for guest in guests:
-        client.container.stop(guest.id, time=10)
+        client.container.stop(guest.id, time=GUEST_STOP_TIMEOUT_SECONDS)
         if remove:
             type(client.container).remove(client.container, [guest.id])
     return bool(guests)

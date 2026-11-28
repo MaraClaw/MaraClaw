@@ -6,6 +6,7 @@ import { joinSuggestedOrg, registerRequest, transferOrg } from '../src/lib/auth-
 import { authSession } from '../src/lib/auth-session.ts'
 import { getMyAdmission, listMyAdmissions, withdrawMyAdmission } from '../src/lib/company-admissions-api.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const summary = {
   id: 'request-a', status: 'pending', source_tenant_id: 'source',
@@ -45,16 +46,19 @@ for (const submit of [
 
 test('mine forwards pagination and cancellation and parses persisted summaries', async (context) => {
   // Given
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, '/api/company-admissions/mine?limit=50&offset=50')
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     return Response.json([summary])
   })
   // When
   const rows = await listMyAdmissions({ limit: 50, offset: 50 }, { owner: authSession.capture(), signal })
   // Then
   assert.deepEqual(rows, [summary])
+  assertForwardsCancellation(forwarded, caller)
 })
 
 for (const status of ['pending', 'approved', 'rejected', 'withdrawn'] as const) {
@@ -85,13 +89,15 @@ test('withdraw sends an owner-fenced bodyless POST and accepts repeated terminal
   // Given
   const snapshot = authSession.getSnapshot()
   const owner = authSession.capture()
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, '/api/company-admissions/request%2Fone/withdraw')
     assert.equal(init.method, 'POST')
     assert.equal(init.body, undefined)
     assert.equal(new Headers(init.headers).get('Content-Type'), null)
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     return Response.json(withdrawn)
   })
   // When
@@ -101,6 +107,7 @@ test('withdraw sends an owner-fenced bodyless POST and accepts repeated terminal
   // Then
   assert.deepEqual(results, [withdrawn, withdrawn])
   assert.equal(authSession.getSnapshot(), snapshot)
+  assertForwardsCancellation(forwarded, caller)
 })
 
 test('withdraw preserves a terminal-review conflict for the UI to refresh', async (context) => {

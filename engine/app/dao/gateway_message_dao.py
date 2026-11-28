@@ -85,11 +85,12 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
         Same lane rule as ``lane_head``: heads are pending-only and NULL/empty conversations are per-message
         lanes. Delivered rows and burst readiness stay with the ``claim_*`` methods.
         """
+        after_time, after_id = after or _DISPATCH_START
         async with self.session() as db:
             rows = await db.fetchall(
                 f"SELECT {self._select_list('g')} FROM gateway_messages g "
-                "WHERE g.agent_id = %(agent)s AND g.status = 'pending' AND (%(after_time)s::timestamptz IS NULL "
-                "OR (g.created_at, g.id) > (%(after_time)s, %(after_id)s)) "
+                "WHERE g.agent_id = %(agent)s AND g.status = 'pending' "
+                "AND (g.created_at, g.id) > (%(after_time)s, %(after_id)s) "
                 "AND (g.conversation_id IS NULL OR g.conversation_id = '' OR "
                 "NOT EXISTS (SELECT 1 FROM gateway_messages p WHERE p.agent_id = g.agent_id "
                 "AND p.conversation_id = g.conversation_id AND p.status = 'pending' "
@@ -97,8 +98,8 @@ class GatewayMessageDAO(GatewayMessageDeliveryDAO):
                 "ORDER BY g.created_at, g.id LIMIT %(limit)s",
                 {
                     "agent": agent_id,
-                    "after_time": after[0] if after else None,
-                    "after_id": after[1] if after else None,
+                    "after_time": after_time,
+                    "after_id": after_id,
                     "limit": limit + 1,
                 },
             )

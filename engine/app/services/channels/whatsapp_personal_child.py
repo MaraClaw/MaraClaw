@@ -7,7 +7,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from time import monotonic
 from typing import final
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import anyio
 from anyio.abc import Process
@@ -31,7 +31,7 @@ from app.services.channels.whatsapp_personal_diagnostics import (
     lifecycle,
 )
 from app.services.channels.whatsapp_personal_events import IdentityAmbiguousError, handle_message, interrupted
-from app.services.channels.whatsapp_personal_journal import authorize_dispatch
+from app.services.channels.whatsapp_personal_journal import authorize_dispatch, has_pending, settle_uncertain
 from app.services.channels.whatsapp_personal_media_reader import AuthStoreFailedError, IntakeQueues, read_frames
 from app.services.channels.whatsapp_personal_media_transport import MediaTransferError, MediaTransport
 from app.services.channels.whatsapp_personal_protocol import Closed, Message
@@ -57,6 +57,7 @@ class PersonalChild:
         self.clock = clock
         self.healthy_since: float | None = None
         self.closed: Closed | None = None
+        self.dispatched: frozenset[UUID] = frozenset()
 
     def observe_link(self, *, up: bool) -> None:
         """Only a link that stays up refills the durable retry budget; a socket open alone never does."""
@@ -103,7 +104,8 @@ class PersonalChild:
 
     async def tick(self) -> None:
         while True:
-            async with connection_ctx() as db:
+            waiting = False
+            async with connection_ctx():
                 agent, _ = await personal_owner(self.connection.agent_id, authorization_only=True)
                 current = await get_personal(self.connection.agent_id)
                 stopping = is_agent_expired(agent) or agent.status == "stopped"
@@ -114,19 +116,16 @@ class PersonalChild:
                     if current is None or not await renew(self.connection):
                         return
                     if not expiring:
-                        await db.execute(
-                            "UPDATE whatsapp_personal_sends SET state='uncertain',finished_at=now() "
-                            "WHERE config_id=%(id)s AND claim_token=%(claim)s AND state='dispatch_started' "
-                            "AND dispatched_at<now()-interval '25 seconds'",
-                            {"id": current.config_id, "claim": current.claim_token},
-                        )
-                        if (
-                            current.state == "connected"
-                            and self.healthy_since is not None
-                            and self.clock() - self.healthy_since >= SUSTAINED_SECONDS
-                        ):
-                            self.healthy_since = None
-                            await settle_runtime(current.config_id)
+                        if self.dispatched:
+                            self.dispatched = await settle_uncertain(current, self.dispatched)
+                        if current.state == "connected":
+                            waiting = await has_pending(current)
+                            if (
+                                self.healthy_since is not None
+                                and self.clock() - self.healthy_since >= SUSTAINED_SECONDS
+                            ):
+                                self.healthy_since = None
+                                await settle_runtime(current.config_id)
             if stopping or expiring:
                 # Never upgrade shared owner locks: revalidate after a fresh exclusive acquisition.
                 async with connection_ctx():
@@ -146,8 +145,9 @@ class PersonalChild:
                         return
                 continue
             await self.write({"type": "lease", "id": secrets.token_hex(8), "token": self.token, "lease_ms": 30000})
-            command = await authorize_dispatch(self.connection)
+            command = await authorize_dispatch(self.connection) if waiting else None
             if command is not None:
+                self.dispatched = self.dispatched | {command.command_id}
                 await self.write(
                     {
                         "type": "send",

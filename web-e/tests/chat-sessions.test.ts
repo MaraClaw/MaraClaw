@@ -8,6 +8,7 @@ import { getSession, listSessionsPage, SESSION_PAGE_SIZE } from '../src/lib/chat
 import { chatSessionKey, chatSessionsKey, controlSessionsKey, distinctSessions } from '../src/lib/chat-sessions-query.ts'
 import { controlSessionId, isOwnConversation, isWritableSession } from '../src/lib/chat/sessions.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const me = 'viewer'
 const own = { id: 'own', source_channel: 'web', is_primary: true, user_id: me, writable: true }
@@ -70,7 +71,9 @@ const reservedCursor = 'opaque+/=? page&scope=all'
 for (const cursor of [undefined, null, reservedCursor]) {
   test(`session pages request a bodyless scoped GET ${cursor ? 'with an encoded cursor' : 'for the first page'}`, async (context) => {
     // Given
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       const url = new URL(path, 'https://fixture.test')
       assert.equal(url.pathname, `/api/agents/${agentId}/sessions/page`)
@@ -78,13 +81,14 @@ for (const cursor of [undefined, null, reservedCursor]) {
       if (cursor) assert.match(path, /cursor=opaque%2B%2F%3D%3F\+page%26scope%3Dall$/)
       assert.equal(init.method, 'GET')
       assert.equal(init.body, undefined)
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       return Response.json({ items: [ownRow], next_cursor: null, has_more: false })
     })
     // When
     const page = await listSessionsPage(agentId, 'all', { cursor, signal })
     // Then
     assert.deepEqual(page, { items: [ownRow], next_cursor: null, has_more: false })
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 

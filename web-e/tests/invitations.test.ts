@@ -6,6 +6,7 @@ import { authSession } from '../src/lib/auth-session.ts'
 import { transferOrg } from '../src/lib/auth-api.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { joinInvitation, previewInvitation } from '../src/lib/invitations-api.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const tenant = { id: 'c919ad90-90be-4a1d-b699-1d02138b7f45', name: 'Invited company' }
 const approved = {
@@ -17,11 +18,13 @@ test('preview posts only the code and parses the destination without replacing t
   // Given
   const owner = authSession.capture()
   const before = authSession.getSnapshot()
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, '/api/tenants/invitations/preview')
     assert.equal(init.method, 'POST')
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     assert.deepEqual(JSON.parse(String(init.body)), { invitation_code: 'email-bound-code' })
     return Response.json({ tenant, unrelated: 'not exposed' })
   })
@@ -30,6 +33,7 @@ test('preview posts only the code and parses the destination without replacing t
   // Then
   assert.deepEqual(result, { tenant })
   assert.equal(authSession.getSnapshot(), before)
+  assertForwardsCancellation(forwarded, caller)
 })
 
 for (const status of [200, 400, 401, 503]) {

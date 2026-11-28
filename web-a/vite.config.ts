@@ -14,6 +14,10 @@ export default defineConfig({
       '@': path.resolve(rootDir, './src'),
     },
   },
+  build: {
+    // dist/.vite/manifest.json gives the CI bundle budget each route's static import closure.
+    manifest: true,
+  },
   server: {
     port: 5174,
     host: true,

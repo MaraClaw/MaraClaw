@@ -9,7 +9,7 @@ import os
 import stat
 import time
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -21,6 +21,7 @@ from app.services.workspace_mirror_local import unsettled
 ROOT_FILES = frozenset({"AGENTS.md", "HEARTBEAT.md", "soul.md", "state.json"})
 SETTLE_SECONDS = 5
 MAX_ENTRIES = 20_000
+MAX_DEPTH = 64
 MAX_FILE_BYTES = int(max(OrganizationFileLimitBytes))
 
 _TREE_ROOTS = ("workspace", "memory", "daily_reports", "skills")
@@ -41,7 +42,6 @@ _EXCLUDED_NAMES = (
     "*.part",
 )
 _GUEST_ROOT = "/home/node/custom-state/"
-_MAX_DEPTH = 64
 _DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
@@ -150,11 +150,19 @@ class _Level:
     pending: list[str] = field(default_factory=list)
 
 
-def walk_local(root: Path, *, deadline_seconds: float, max_entries: int = MAX_ENTRIES) -> list[LocalFile]:
-    """List the in-scope regular files below `root` without following or opening anything the guest controls.
+def walk_local(
+    root: Path,
+    *,
+    deadline_seconds: float,
+    max_entries: int = MAX_ENTRIES,
+    descend: Callable[[str], bool] = _directory_in_scope,
+    include: Callable[[str], bool] = in_scope,
+) -> list[LocalFile]:
+    """List the regular files below `root` without following or opening anything the guest controls.
 
-    Symlinks, FIFOs, sockets and devices are skipped without being opened, and directories outside the scope are
-    never entered. Every directory entry examined counts toward `max_entries`. A missing `root` raises
+    By default the walk lists the mirror's scope; `descend` and `include` take the place of its directory and file
+    predicates. Symlinks, FIFOs, sockets and devices are skipped without being opened, and directories `descend`
+    rejects are never entered. Every directory entry examined counts toward `max_entries`. A missing `root` raises
     `FileNotFoundError`; a tree that is too large, too deep or too slow raises `WalkLimitError` because the
     partial listing would make unlisted files look deleted. An entry the guest moved, swapped or made unreadable
     meanwhile is left out, as the mirror proves every unlisted path absent before it reads one as deleted; a host
@@ -176,9 +184,9 @@ def walk_local(root: Path, *, deadline_seconds: float, max_entries: int = MAX_EN
                     raise WalkLimitError("Walk deadline passed")
                 rel = f"{level.rel}/{entry.name}" if level.rel else entry.name
                 if entry.is_dir(follow_symlinks=False):
-                    if _directory_in_scope(rel):
+                    if descend(rel):
                         subdirectories.append(entry.name)
-                elif in_scope(rel):
+                elif include(rel):
                     try:
                         info = os.stat(entry.name, dir_fd=level.fd, follow_symlinks=False)
                     except OSError as exc:
@@ -208,8 +216,8 @@ def walk_local(root: Path, *, deadline_seconds: float, max_entries: int = MAX_EN
                 _ = levels.pop()
                 os.close(level.fd)
                 continue
-            if len(levels) > _MAX_DEPTH:
-                raise WalkLimitError(f"Directories nested deeper than {_MAX_DEPTH} levels")
+            if len(levels) > MAX_DEPTH:
+                raise WalkLimitError(f"Directories nested deeper than {MAX_DEPTH} levels")
             name = level.pending.pop()
             try:
                 fd = os.open(name, _DIRECTORY, dir_fd=level.fd)

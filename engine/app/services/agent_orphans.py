@@ -18,7 +18,7 @@ from app.services.agent_setup_lock import (
     setup_workspace_lock,
 )
 from app.services.docker_capacity import DockerBusyError, run_docker
-from app.services.guest_identity import AGENT_LABEL, guest_resolutions, require_guest_owner
+from app.services.guest_identity import AGENT_LABEL, GUEST_STOP_TIMEOUT_SECONDS, guest_resolutions, require_guest_owner
 from app.services.openclaw_update_gate import OpenClawUpdateInProgressError, assert_no_active_run
 
 ORPHAN_GRACE = timedelta(minutes=2)
@@ -30,7 +30,7 @@ def _inspect_container(client: DockerClient, reference: str) -> Container:
 
 async def _remove_orphan(client: DockerClient, container_id: str, agent_id: UUID) -> None:
     guest_resolutions.drop(agent_id)
-    await run_docker(partial(client.container.stop, container_id, time=10))
+    await run_docker(partial(client.container.stop, container_id, time=GUEST_STOP_TIMEOUT_SECONDS))
     await run_docker(partial(type(client.container).remove, client.container, [container_id]))
     logger.info("Removed orphan container container_id=%s agent_id=%s", container_id, agent_id)
 

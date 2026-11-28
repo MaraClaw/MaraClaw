@@ -36,7 +36,8 @@ class _GuestConfig(TypedDict):
 _GUEST_CONFIG = TypeAdapter(_GuestConfig)
 
 # Paths the generator emits (or that shadow them). A guest value at one of these is stale: it is dropped so the
-# generated value, or its absence (a retired provider's alias, key or auth profile), is authoritative.
+# generated value, or its absence (a retired provider's alias, key or auth profile, or the retired memory-core
+# embedding search), is authoritative. `plugins.slots` is guest-owned: the guest image selects the memory plugin.
 _PLATFORM_PATHS: Final[tuple[tuple[str, ...], ...]] = (
     ("env",),
     ("auth",),
@@ -46,7 +47,6 @@ _PLATFORM_PATHS: Final[tuple[tuple[str, ...], ...]] = (
     ("hooks",),
     ("memory", "search"),
     ("plugins", "enabled"),
-    ("plugins", "slots"),
     ("agents", "defaults", "workspace"),
     ("agents", "defaults", "model"),
     ("agents", "defaults", "models"),

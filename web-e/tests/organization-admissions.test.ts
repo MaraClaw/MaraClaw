@@ -12,6 +12,7 @@ import { fetchOrganizationPlans } from '../src/lib/organization-plans-api.ts'
 import { formatPhone, phoneCountryOptions, toE164 } from '../src/lib/phone.ts'
 import { ownAccountSession } from './auth-account-fixture.ts'
 import { plans, quote } from './organization-quote-fixture.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const request = { organization_name: 'Example Organization', email: 'owner@example.test', phone: '+84912345678', tier: 'ultra', billing: 'annual' } as const
 const receipt = () => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'receipt.png', { type: 'image/png' })
@@ -20,7 +21,7 @@ test('catalog, quote and receipt are public even with a member session, and pres
   // Given
   ownAccountSession(context, { access_token: 'member-token', user: null })
   const snapshot = authSession.getSnapshot()
-  const signal = new AbortController().signal
+  const caller = new AbortController()
   const requests: { path: string; init: RequestInit }[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     requests.push({ path, init })
@@ -29,12 +30,12 @@ test('catalog, quote and receipt are public even with a member session, and pres
     return Response.json({ status: 'pending', reference: quote.reference }, { status: 202 })
   })
   // When
-  assert.deepEqual(await fetchOrganizationPlans(signal), { plans })
+  assert.deepEqual(await fetchOrganizationPlans(caller.signal), { plans })
   assert.deepEqual(await requestOrganizationQuote({ ...request, organization_name: '  Example Organization  ' }), quote)
   assert.deepEqual(await submitOrganizationAdmission(quote.quote_token, receipt()), { status: 'pending', reference: quote.reference })
   // Then
   assert.equal(requests[0]?.path, '/api/organization-plans')
-  assert.equal(requests[0]?.init.signal, signal)
+  assertForwardsCancellation([requests[0]?.init.signal], caller)
   assert.equal(requests[1]?.path, '/api/organization-admissions/quote')
   assert.equal(requests[1]?.init.method, 'POST')
   assert.deepEqual(JSON.parse(String(requests[1]?.init.body)), request)

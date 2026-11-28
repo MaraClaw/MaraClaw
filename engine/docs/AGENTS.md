@@ -20,6 +20,7 @@ Operational and reference docs live here. Keep them source-backed; this is not a
 | OpenClaw upgrades | `openclaw-updates.md` | Global notices, per-agent worker cutover/rollback, work and write gates, HTTP contract |
 | Managed storage quota | `managed-storage-quota.md` | Per-agent S3 byte ledger: scope and exclusive prefix ownership, reservation/settle protocol, ambiguous outcomes, tree delete, transfer preflight, 413/507/503 contract, open retirement decision |
 | Workspace mirror and share links | `workspace-mirror.md` | S3-mode two-way mirror of guest files: scope, decision and conflict rules, freezes, mass-delete guard, generation marker, quota behaviour, locks, limits; public share links (`POST /api/gateway/file-links`, `GET /f/{token}/{filename}`) and the seeded skill |
+| Agent state snapshots | `agent-state-snapshots.md` | S3-mode recovery point of the OpenClaw state the mirror does not cover: coverage, digest and quiescence checks, lock order, key layout and held markers, restore and failure classes, deletion/transfer prefix delete, SSE requirement, lifecycle rule |
 | Web search analytics | `web-search-analytics.md` | `web_search_events` capture/export; never log raw `q` / URL / body |
 | Product contracts | `chat-attachments.md`, `chat-history.md`, `company-admissions.md`, `broadcast-email-delivery.md`, `member-timezone.md`, `system-alerts.md` | One feature each; read the matching file before changing that API or table |
 | Stress tests | `stress-tests/` | Chat-turn database stress test: the recorded 2026-11-12 result, a disposable-PostgreSQL reproduction (`run-stress.sh`) and the regression-test runner; start with its `README.md` |
@@ -38,6 +39,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 - OpenClaw upgrade docs should track `app/api/openclaw_updates.py`, `app/services/openclaw_update_*.py`, `app/dao/openclaw_update_dao.py` and the work seams in `openclaw_routing.py` / `openclaw_gateway_delivery.py`.
 - Managed storage quota docs should track `app/services/storage_runtime/quota_*.py`, `facade.py`, `app/dao/agent_storage_dao.py`, `app/db/pool.py` (`durable_pool`), `app/services/company_transfer_disposition.py` and the `agent_storage_*` tables.
 - Workspace-mirror docs should track `app/services/workspace_mirror*.py`, `agent_materialize.py`, `file_share_links.py`, `file_share_tokens.py`, `app/api/file_shares.py`, the `/file-links` route in `app/api/gateway.py`, `list_files_flat` and `presign_download_url` in `storage_runtime/`, `agent_template/skills/file-share-links/SKILL.md`, `skill_seeder.py` and the `WORKSPACE_MIRROR_*` and `FILE_SHARE_LINK_TTL_SECONDS` settings.
+- State-snapshot docs should track `app/services/agent_state_snapshot*.py`, the restore call in `AgentManager._apply_guest_state`, the `restored` skip in `agent_materialize.py`, the prefix delete in `agent_deletion_cleanup.py` and `company_transfer_cleanup.py`, `scripts/s3_lifecycle.py` and the `AGENT_STATE_SNAPSHOT_*` settings.
 - Search-analytics docs should track `app/services/tavily/`, `app/api/admin_search_analytics.py`, `app/api/tavily_proxy.py`, and `WEB_SEARCH_ANALYTICS_*` env vars.
 - Chat-history docs should track `app/services/chat_history.py`, `app/dao/chat_dao.py` (`purge_history_changes`), `app/services/chat_history_retention_worker.py`, the `chat_history_changes` journal in `scripts/schema_baseline.sql` and `CHAT_HISTORY_RETENTION_DAYS`.
 - gogcli credential docs should track `app/services/gogcli_runtime.py` and the guest image project's `Dockerfile.openclaw` and `docker/openclaw/` scripts.
@@ -50,7 +52,7 @@ Offline API contracts are documented in `../contracts/README.md`, not here.
 - Update docs when runner behavior changes in `start-from-docker.sh`, `entrypoint.sh`, or OpenClaw Docker scripts.
 - Prefer concise operational notes over broad design essays; `../AGENTS.md` carries engine commands and hierarchy.
 - Credential docs may describe paths and rotation, but must not include live tokens, OAuth refresh secrets, keyring passwords, or customer data.
-- Schema-affecting docs must say whether a change is fresh-baseline only (no existing-database upgrade is supplied) or one of the eight explicit baseline exceptions (`../AGENTS.md`); for an upgrade, also give any operator pre-build steps (`chat-history.md`).
+- Schema-affecting docs must say whether a change is fresh-baseline only (no existing-database upgrade is supplied) or a supported legacy upgrade (`../app/scripts/AGENTS.md`); for an upgrade, give any operator pre-build steps (`chat-history.md`).
 
 ## Avoid
 

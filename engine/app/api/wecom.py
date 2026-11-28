@@ -13,6 +13,7 @@ import re
 import struct
 import uuid
 from dataclasses import dataclass
+from time import monotonic
 from typing import TypedDict, overload
 from xml.parsers.expat import ExpatError, ParserCreate
 
@@ -26,7 +27,6 @@ from app.config import get_settings
 from app.core.domain.channels import ChannelType
 from app.core.json_types import (
     JsonObject,
-    json_as_int,
     json_as_str,
     json_as_str_or,
     json_object_from,
@@ -38,6 +38,7 @@ from app.core.request_body import CHANNEL_WEBHOOK_MAX_BODY_SIZE, read_bounded_bo
 from app.core.security import get_current_user
 from app.dao.channel_config_dao import channel_config_dao
 from app.dao.identity_provider_dao import identity_provider_dao
+from app.dao.wecom_kf_cursor_dao import WeComKFCursorKey, wecom_kf_cursor_dao
 from app.process_roles import parse_process_roles, role_enabled
 from app.records.channel_config import ChannelConfigRecord
 from app.records.user import UserRecord
@@ -46,7 +47,10 @@ from app.schemas.schemas import ChannelConfigOut
 from app.services import im_token_cache
 from app.services.channel_user_service import ChannelUserResolutionError
 from app.services.channels.config import get_channel_config_metadata
+from app.services.channels.media_limits import MediaBudget
 from app.services.channels.redact import channel_config_out
+from app.services.channels.submissions import ChannelEventInFlightError, claim_channel_event
+from app.services.channels.wecom_kf import KFBudgetStoppedError, KFDeadline, KFMessage, KFPage, report_budget_stop
 from app.services.channels.wecom_media import WeComMedia, accept_wecom_media
 from app.services.platform_service import platform_service
 from app.services.sso_scan_authority import capture_scan_authority
@@ -375,6 +379,7 @@ async def wecom_event_webhook(
     agent_id: uuid.UUID, request: Request, msg_signature: str = "", timestamp: str = "", nonce: str = ""
 ) -> Response:
     """Handle WeCom message callback (POST request with encrypted XML)."""
+    entered_at = monotonic()
     body_bytes = await read_bounded_body(request, CHANNEL_WEBHOOK_MAX_BODY_SIZE)
     if body_bytes is None:
         return Response(status_code=413)
@@ -441,9 +446,10 @@ async def wecom_event_webhook(
         event = msg_root.findtext("Event", "")
         if event == "kf_msg_or_event":
             try:
-                await _process_wecom_kf_event(agent_id, config, token, open_kfid)
-            except Exception:
-                logger.exception("[WeCom] KF acceptance failed for agent {}", agent_id)
+                deadline = KFDeadline.from_entry(monotonic, entered_at, get_settings().WECOM_KF_CALLBACK_BUDGET_SECONDS)
+                await _process_wecom_kf_event(agent_id, config, token, open_kfid, deadline=deadline)
+            except Exception as error:
+                logger.warning("[WeCom] KF acceptance failed for agent {}: {}", agent_id, type(error).__name__)
                 return Response(status_code=503)
         else:
             logger.info(f"[WeCom] Received event: {event} (not handled)")
@@ -481,100 +487,109 @@ def _require_message_id(message_id: str) -> None:
         raise HTTPException(status_code=400, detail="WeCom message ID is required")
 
 
+async def _fetch_kf_page(
+    client: httpx.AsyncClient, config: ChannelConfigRecord, payload: dict[str, int | str], deadline: KFDeadline
+) -> KFPage:
+    corp_id, secret = config.app_id or "", config.app_secret or ""
+    async with deadline.window():
+        for _ in range(2):
+            token_data = await get_wecom_access_token(corp_id, secret)
+            access_token = json_as_str(token_data.get("access_token"))
+            if access_token in (None, ""):
+                raise HTTPException(503, "WeCom KF token unavailable")
+            response = await client.post(
+                "https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg",
+                params={"access_token": access_token},
+                json=payload,
+                timeout=deadline.remaining(),
+            )
+            _ = response.raise_for_status()
+            data = json_object_from_response(response)
+            if data.get("errcode") == 0:
+                return KFPage.parse(data, json_as_str_or(payload["cursor"]))
+            if data.get("errcode") not in (40014, 42001, 40001):
+                break
+            await im_token_cache.drop_rejected_im_token(
+                im_token_cache.ImTokenKey("wecom", corp_id, secret), access_token
+            )
+    raise HTTPException(503, "WeCom KF sync failed")
+
+
 async def _process_wecom_kf_event(
     agent_id: uuid.UUID,
-    config_obj: ChannelConfigRecord,
+    config: ChannelConfigRecord,
     token: str,
-    open_kfid: str | None = None,
-):
-    _ = config_obj
+    open_kfid: str,
+    *,
+    deadline: KFDeadline,
+) -> None:
+    key = WeComKFCursorKey(config.id, config.app_id or "", open_kfid)
     try:
-        config = await channel_config_dao.get_for_agent(agent_id=agent_id, channel_type=ChannelType.WECOM)
-        if not config:
-            return
+        async with deadline.window():
+            observed = await wecom_kf_cursor_dao.read(key)
+    except KFBudgetStoppedError:
+        report_budget_stop(key)
+        return
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            corp_id, secret = config.app_id or "", config.app_secret or ""
-            current_cursor = token
-            has_more = 1
-
-            while has_more:
-                payload: dict[str, int | str] = {"limit": 20}
-                if open_kfid not in (None, ""):
-                    payload["open_kfid"] = open_kfid
-
-                if current_cursor.startswith("ENC"):
-                    payload["token"] = current_cursor
-                else:
-                    payload["cursor"] = current_cursor
-
-                logger.info(f"[WeCom KF] Calling sync_msg with payload: {payload}")
-                sync_data: JsonObject = {}
-                for _ in range(2):
-                    token_data = await get_wecom_access_token(corp_id, secret)
-                    access_token = json_as_str(token_data.get("access_token"))
-                    if access_token in (None, ""):
-                        raise HTTPException(status_code=503, detail="WeCom KF token unavailable")
-                    sync_resp = await client.post(
-                        "https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg",
-                        params={"access_token": access_token},
-                        json=payload,
-                    )
-                    sync_data = json_object_from_response(sync_resp)
-                    if sync_data.get("errcode") not in (40014, 42001, 40001):
-                        break
-                    await im_token_cache.drop_rejected_im_token(
-                        im_token_cache.ImTokenKey("wecom", corp_id, secret), access_token
-                    )
-                if sync_data.get("errcode") != 0:
-                    raise HTTPException(status_code=503, detail="WeCom KF sync failed")
-
-                has_more = json_as_int(sync_data.get("has_more"))
-                current_cursor = json_as_str_or(sync_data.get("next_cursor"))
-
-                msg_list = sync_data.get("msg_list")
-                for raw_msg in msg_list if isinstance(msg_list, list) else []:
-                    msg = json_object_from(raw_msg)
-                    kind = json_as_str_or(msg.get("msgtype"))
-                    if json_as_int(msg.get("origin")) == 3 and kind in ("text", "image", "file", "video"):
-                        mid = json_as_str_or(msg.get("msgid"))
-                        if not mid:
-                            logger.warning("[WeCom KF] Skipped a {} message without an ID for agent {}", kind, agent_id)
-                            continue
-                        text = json_as_str_or(json_object_from(msg.get("text")).get("content")).strip()
-                        media: tuple[WeComMedia, ...] = ()
-                        if kind != "text":
-                            item = json_object_from(msg.get(kind))
-                            media_id = json_as_str_or(item.get("media_id"))
-                            if not media_id:
-                                logger.warning(
-                                    "[WeCom KF] Skipped a {} message without a media ID for agent {}", kind, agent_id
-                                )
-                                continue
-                            filename = (
-                                json_as_str_or(item.get("file_name"))
-                                or {"image": "image.jpg", "video": "video.mp4", "file": "file.bin"}[kind]
-                            )
-                            media = (WeComMedia(kind, filename, media_id=media_id),)
-                        if text or media:
-                            external_userid = json_as_str_or(msg.get("external_userid"))
-                            logger.info(f"[WeCom KF] Found msg from {external_userid}: {text[:20]}...")
-                            await _process_wecom_text(
-                                agent_id,
-                                config,
-                                external_userid,
-                                text,
-                                is_kf=True,
-                                open_kfid=json_as_str(msg.get("open_kfid")),
-                                kf_msg_id=mid,
-                                kind=kind,
-                                media=media,
-                            )
-                if not has_more:
+    cursor = observed or ""
+    held = False
+    stopped = False
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            while True:
+                payload: dict[str, int | str] = {"limit": 20, "token": token, "cursor": cursor}
+                if key.open_kfid:
+                    payload["open_kfid"] = key.open_kfid
+                page = await _fetch_kf_page(client, config, payload, deadline)
+                for raw in page.messages:
+                    remaining = deadline.remaining()
+                    message = KFMessage.parse(raw, key)
+                    if message is None:
+                        continue
+                    media_budget = None
+                    if message.media:
+                        media_budget = MediaBudget.for_acknowledgement(deadline.clock)
+                        media_budget.deadline = min(media_budget.deadline or deadline.end, deadline.clock() + remaining)
+                    try:
+                        await _process_wecom_text(
+                            agent_id,
+                            config,
+                            message.sender,
+                            message.text,
+                            is_kf=True,
+                            open_kfid=message.open_kfid,
+                            kf_msg_id=message.message_id,
+                            kind=message.kind,
+                            media=message.media,
+                            media_budget=media_budget,
+                        )
+                    except ChannelEventInFlightError:
+                        held = True
+                cursor = page.next_cursor or cursor
+                if not page.has_more:
                     break
-    except Exception as e:
-        logger.error(f"[WeCom KF] Acceptance failed: {e}")
-        raise
+        except KFBudgetStoppedError:
+            stopped = True
+        except httpx.TimeoutException:
+            # HTTPX can report the deadline as a request timeout before the outer cancel scope fires.
+            try:
+                _ = deadline.remaining()
+            except KFBudgetStoppedError:
+                stopped = True
+            if not stopped:
+                raise
+
+    # One CAS for the latest fully settled page. Defer it so a held media claim anywhere in
+    # this callback leaves the original checkpoint in place, even on a later page.
+    if not held and cursor and cursor != observed:
+        try:
+            async with deadline.window(checkpoint=True):
+                if not await wecom_kf_cursor_dao.compare_and_set(key, observed, cursor):
+                    logger.info("[WeCom KF] Another callback advanced the cursor for channel {}", config.id)
+        except KFBudgetStoppedError:
+            stopped = True
+    if stopped:
+        report_budget_stop(key)
 
 
 async def _process_wecom_text(
@@ -589,7 +604,8 @@ async def _process_wecom_text(
     message_id: str = "",
     kind: str = "text",
     media: tuple[WeComMedia, ...] = (),
-):
+    media_budget: MediaBudget | None = None,
+) -> None:
     native_id = kf_msg_id or message_id
     from app.services.channels.submissions import ChannelEvent, accept_channel_event
 
@@ -606,7 +622,10 @@ async def _process_wecom_text(
         is_group=bool(chat_id),
     )
     try:
-        if media:
+        if is_kf and media:
+            async with claim_channel_event(native):
+                await accept_wecom_media(native, config, media, budget=media_budget)
+        elif media:
             await accept_wecom_media(native, config, media)
         else:
             await accept_channel_event(native)

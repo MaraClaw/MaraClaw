@@ -1,4 +1,4 @@
-"""Check or apply the S3 lifecycle rule that expires noncurrent object versions under the engine's agents prefix."""
+"""Check or apply the S3 lifecycle rules that expire noncurrent object versions under the engine's agents prefix."""
 
 import argparse
 import sys
@@ -11,11 +11,14 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from app.config import Settings, get_settings
+from app.services.agent_state_snapshot import PREFIX as STATE_SNAPSHOT_PREFIX
 from app.services.storage_runtime.s3_types import client_error_response, new_s3_client
 from app.services.storage_runtime.utils import normalize_storage_key
 
 RULE_ID: Final = "maraclaw-agent-noncurrent-versions"
+STATE_SNAPSHOT_RULE_ID: Final = "maraclaw-state-snapshot-noncurrent-versions"
 DEFAULT_DAYS: Final = 30
+STATE_SNAPSHOT_NONCURRENT_DAYS: Final = 1
 ABORT_MULTIPART_DAYS: Final = 7
 
 EPILOG: Final = f"""\
@@ -26,12 +29,17 @@ S3_PREFIX means an empty filter: the rule then applies to the whole bucket, obje
 NoncurrentVersionExpiration applies to every key under the prefix: its prefix (Filter.Prefix, the legacy top-level
 Prefix, Filter.And.Prefix without tags or size bounds, or an empty filter) must be a prefix of <S3_PREFIX>/. A tag or
 size filter narrows a rule and so does not cover. A Suspended bucket still keeps noncurrent versions, so it is checked
-like an Enabled one. Exit 1 prints why no rule covers the prefix.
+like an Enabled one. Agent state snapshots under <S3_PREFIX>/{STATE_SNAPSHOT_PREFIX}/ hold secrets, so a versioned
+bucket also needs such a rule for that prefix that keeps no NewerNoncurrentVersions and expires noncurrent versions
+within {STATE_SNAPSHOT_NONCURRENT_DAYS} day. Exit 1 prints why no rule covers a prefix.
 
 --apply puts the rule {RULE_ID}: Filter Prefix <S3_PREFIX>/,
 NoncurrentVersionExpiration after --days (default {DEFAULT_DAYS}), expired delete markers removed and incomplete
-multipart uploads aborted after {ABORT_MULTIPART_DAYS} days. It keeps every other rule exactly as it is and replaces
-a rule with the same ID. It does not read the versioning status, so it also works before versioning is turned on.
+multipart uploads aborted after {ABORT_MULTIPART_DAYS} days; and the rule {STATE_SNAPSHOT_RULE_ID}: Filter
+Prefix <S3_PREFIX>/{STATE_SNAPSHOT_PREFIX}/, NoncurrentVersionExpiration after {STATE_SNAPSHOT_NONCURRENT_DAYS} day,
+expired delete markers removed. Where both rules apply, S3 honours the shorter expiration. It keeps every other rule
+exactly as it is and replaces a rule with either ID. It does not read the versioning status, so it also works before
+versioning is turned on.
 
 Exit codes: 0 covered, versioning off, or applied; 1 not covered (--check); 2 unsupported settings (STORAGE_BACKEND
 is not s3, no S3_BUCKET, a Google Cloud Storage endpoint, which has no S3 lifecycle API), an S3 error (its code is
@@ -145,34 +153,60 @@ def _rule_prefix(rule: LifecycleRule) -> str | None:
     return None if "Tag" in rule_filter or _has_size_bound(rule_filter) else rule_filter.get("Prefix", "")
 
 
-def covers(rules: Sequence[LifecycleRule], prefix: str) -> str | None:
-    """None when an enabled rule expires noncurrent versions of every key under ``prefix``, else why none does."""
+def _expires_within(rule: LifecycleRule, days: int | None) -> bool:
+    expiration = rule.get("NoncurrentVersionExpiration", {})
+    if days is None:
+        return True
+    return "NewerNoncurrentVersions" not in expiration and expiration.get("NoncurrentDays", days + 1) <= days
+
+
+def covers(rules: Sequence[LifecycleRule], prefix: str, *, within_days: int | None = None) -> str | None:
+    """None when an enabled rule expires noncurrent versions of every key under ``prefix``, else why none does.
+
+    With ``within_days`` the rule must also expire them within that many days and keep no newer noncurrent versions.
+    """
     expiring = [rule for rule in rules if rule.get("Status") == "Enabled" and "NoncurrentVersionExpiration" in rule]
     for rule in expiring:
         rule_prefix = _rule_prefix(rule)
-        if rule_prefix is not None and prefix.startswith(rule_prefix):
+        if rule_prefix is not None and prefix.startswith(rule_prefix) and _expires_within(rule, within_days):
             return None
     if not expiring:
         return f"no enabled lifecycle rule expires noncurrent versions {_where(prefix)}"
+    if within_days is not None:
+        return f"no enabled rule expires every noncurrent version {_where(prefix)} within {within_days} day(s)"
     return (
         f"no enabled noncurrent-version rule applies to every key {_where(prefix)}: "
         "each is limited to a narrower prefix, to tags or to an object size"
     )
 
 
+def snapshot_prefix(prefix: str) -> str:
+    """The state snapshot prefix below the lifecycle prefix ``prefix``."""
+    return f"{prefix}{STATE_SNAPSHOT_PREFIX}/"
+
+
 def merge(rules: Sequence[LifecycleRule], prefix: str, days: int) -> list[LifecycleRule]:
-    """``rules`` plus the agent rule, which replaces the rule with its ID; every other rule is kept as it is."""
-    agent_rule: LifecycleRule = {
-        "ID": RULE_ID,
-        "Status": "Enabled",
-        "Filter": {"Prefix": prefix} if prefix else {},
-        "NoncurrentVersionExpiration": {"NoncurrentDays": days},
-        "Expiration": {"ExpiredObjectDeleteMarker": True},
-        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": ABORT_MULTIPART_DAYS},
+    """``rules`` plus the agent and state snapshot rules, each replacing the rule with its ID; others are kept as is."""
+    ours: dict[str, LifecycleRule] = {
+        RULE_ID: {
+            "ID": RULE_ID,
+            "Status": "Enabled",
+            "Filter": {"Prefix": prefix} if prefix else {},
+            "NoncurrentVersionExpiration": {"NoncurrentDays": days},
+            "Expiration": {"ExpiredObjectDeleteMarker": True},
+            "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": ABORT_MULTIPART_DAYS},
+        },
+        STATE_SNAPSHOT_RULE_ID: {
+            "ID": STATE_SNAPSHOT_RULE_ID,
+            "Status": "Enabled",
+            "Filter": {"Prefix": snapshot_prefix(prefix)},
+            "NoncurrentVersionExpiration": {"NoncurrentDays": STATE_SNAPSHOT_NONCURRENT_DAYS},
+            "Expiration": {"ExpiredObjectDeleteMarker": True},
+        },
     }
-    if not any(rule.get("ID") == RULE_ID for rule in rules):
-        return [*rules, agent_rule]
-    return [agent_rule if rule.get("ID") == RULE_ID else rule for rule in rules]
+    merged = [ours.get(rule.get("ID", ""), rule) for rule in rules]
+    present = {rule.get("ID") for rule in rules}
+    return [*merged, *(rule for rule_id, rule in ours.items() if rule_id not in present)]
 
 
 def lifecycle_prefix(s3_prefix: str) -> str:
@@ -232,11 +266,26 @@ def check(client: LifecycleClient, bucket: str, prefix: str) -> int:
     if not status:
         print("OK: bucket versioning is off, so there are no noncurrent versions to expire")
         return 0
-    reason = covers(_lifecycle_configuration(client, bucket).get("Rules", []), prefix)
-    if reason is not None:
-        print(f"FAIL: bucket versioning is {status} and {reason}; run with --apply to add {RULE_ID}")
+    rules = _lifecycle_configuration(client, bucket).get("Rules", [])
+    missing = [
+        (rule_id, reason)
+        for rule_id, reason in (
+            (RULE_ID, covers(rules, prefix)),
+            (
+                STATE_SNAPSHOT_RULE_ID,
+                covers(rules, snapshot_prefix(prefix), within_days=STATE_SNAPSHOT_NONCURRENT_DAYS),
+            ),
+        )
+        if reason is not None
+    ]
+    for rule_id, reason in missing:
+        print(f"FAIL: bucket versioning is {status} and {reason}; run with --apply to add {rule_id}")
+    if missing:
         return 1
-    print(f"OK: bucket versioning is {status} and noncurrent versions {_where(prefix)} expire")
+    print(
+        f"OK: bucket versioning is {status}, noncurrent versions {_where(prefix)} expire, and those "
+        f"{_where(snapshot_prefix(prefix))} within {STATE_SNAPSHOT_NONCURRENT_DAYS} day"
+    )
     return 0
 
 
@@ -250,7 +299,10 @@ def apply(client: LifecycleClient, bucket: str, prefix: str, days: int) -> int:
     if minimum_object_size is not None:
         arguments["TransitionDefaultMinimumObjectSize"] = minimum_object_size
     _ = client.put_bucket_lifecycle_configuration(**arguments)
-    print(f"Applied {RULE_ID}: noncurrent versions {_where(prefix)} expire after {days} days")
+    print(
+        f"Applied {RULE_ID} and {STATE_SNAPSHOT_RULE_ID}: noncurrent versions {_where(prefix)} expire after {days} "
+        f"days, those {_where(snapshot_prefix(prefix))} after {STATE_SNAPSHOT_NONCURRENT_DAYS} day"
+    )
     return 0
 
 

@@ -8,7 +8,7 @@ import { ApiError } from '../src/lib/http.ts'
 import { exportCompanyUsers, listUsers, listUsersPage, type AdminUser } from '../src/lib/users-api.ts'
 import { resetUsersPagination, usersPaginationOptions } from '../src/pages/users-pagination.ts'
 import { createRosterExporter, downloadRosterCsv } from '../src/pages/users-roster-export.ts'
-import { createFixture } from './helpers.ts'
+import { createFixture, assertForwardsCancellation } from './helpers.ts'
 import { ownDownloadDocument, ownRosterSession, rosterTicket, rosterScope } from './roster-export-fixtures.ts'
 
 const row: AdminUser = {
@@ -33,7 +33,7 @@ test('paged users accept username-free rows and encode literal search and opaque
     tenant_id: 'alpha/+', search: ' %_Case+? ', cursor: 'opaque/cursor +?=', limit: '50',
   })
   assert.equal(init?.method, 'GET')
-  assert.strictEqual(init?.signal, controller.signal)
+  assertForwardsCancellation(init?.signal, controller)
   assert.deepEqual(page, { items: [row], next_cursor: 'opaque/next +?=' })
 })
 
@@ -178,7 +178,8 @@ test('same-token session replacement cancels a pending page and cannot repopulat
 test('company export mints a small handoff for literal company/search with cancellation', async (t) => {
   // Given
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json(rosterTicket))
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
   // When
   const result = await exportCompanyUsers({ ...rosterScope, tenantId: 'alpha/+' }, signal)
   // Then
@@ -186,7 +187,7 @@ test('company export mints a small handoff for literal company/search with cance
   const request = new URL(String(url), 'https://example.test')
   assert.equal(request.pathname, '/api/users/export')
   assert.deepEqual(Object.fromEntries(request.searchParams), { tenant_id: 'alpha/+', search: rosterScope.search })
-  assert.strictEqual(init?.signal, signal)
+  assertForwardsCancellation(init?.signal, caller)
   assert.equal(init?.method, 'POST')
   assert.deepEqual(result, rosterTicket)
 })

@@ -31,6 +31,7 @@ WINDOWS: Final = {
     "CHANNEL_EVENT_RECEIPT_RETENTION_DAYS": 21,
     "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS": 10,
     "WORKSPACE_REVISION_RETENTION_DAYS": 180,
+    "AUDIT_LOG_RETENTION_DAYS": 120,
 }
 DAO_ATTRIBUTES: Final = {
     "ACTIVITY_LOG_RETENTION_DAYS": "agent_activity_log_dao",
@@ -41,6 +42,7 @@ DAO_ATTRIBUTES: Final = {
     "CHANNEL_EVENT_RECEIPT_RETENTION_DAYS": "channel_event_receipt_dao",
     "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS": "gateway_report_delivery_dao",
     "WORKSPACE_REVISION_RETENTION_DAYS": "workspace_file_revision_dao",
+    "AUDIT_LOG_RETENTION_DAYS": "audit_log_dao",
 }
 # Retention windows that accept any positive number of days, unlike the three with a floor.
 UNBOUNDED_BELOW: Final = (
@@ -49,6 +51,7 @@ UNBOUNDED_BELOW: Final = (
     "TASK_RETENTION_DAYS",
     "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS",
     "WORKSPACE_REVISION_RETENTION_DAYS",
+    "AUDIT_LOG_RETENTION_DAYS",
 )
 
 
@@ -122,6 +125,7 @@ FAKES: Final[dict[str, type[ScriptedPurge]]] = {
     "CHANNEL_EVENT_RECEIPT_RETENTION_DAYS": ReceiptDAO,
     "GATEWAY_REPORT_DELIVERY_RETENTION_DAYS": DeliveryDAO,
     "WORKSPACE_REVISION_RETENTION_DAYS": RevisionDAO,
+    "AUDIT_LOG_RETENTION_DAYS": ActivityDAO,
 }
 
 

@@ -7,6 +7,7 @@ import pytest
 from psycopg import OperationalError
 
 from app.config import get_settings
+from app.core.thread_slots import SlotsBusyError
 from app.db.errors import DbError
 from app.records.agent import AgentRecord
 from app.services import workspace_mirror_worker as worker
@@ -153,7 +154,12 @@ async def test_an_agent_without_a_local_directory_is_skipped(
 
 @pytest.mark.parametrize(
     "failure",
-    [MirrorReconcileError("stopped", had_base=False), MirrorReconcileError("stopped", had_base=True), OSError("disk")],
+    [
+        MirrorReconcileError("stopped", had_base=False),
+        MirrorReconcileError("stopped", had_base=True),
+        OSError("disk"),
+        SlotsBusyError(),
+    ],
 )
 async def test_one_agents_failure_is_logged_and_the_pass_still_completes(
     monkeypatch: pytest.MonkeyPatch,

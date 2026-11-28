@@ -7,13 +7,19 @@ SQL. Privilege fields are version-gated: writers INCR after commit.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 from uuid import UUID
 
 from app.config import get_settings
-from app.core.cache_contracts import SessionCacheObservation, SessionIdentitySnapshot, SessionSnapshot
+from app.core.cache_contracts import (
+    SessionCacheObservation,
+    SessionIdentitySnapshot,
+    SessionKeysRead,
+    SessionSnapshot,
+)
 from app.core.domain.users import UserRole
 from app.core.json_types import (
     is_json_object,
@@ -27,14 +33,15 @@ from app.core.logging import logger
 from app.core.redis_cache import (
     bump_version,
     cache_delete,
+    cache_fill_json,
     cache_key,
-    cache_set_json,
     ensure_version,
     has_pending_snapshot_writes,
     read_session_keys,
     read_version,
 )
 from app.core.row_memo import memo_drop, memo_drop_kind, memo_get, memo_set
+from app.db.session import get_connection
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
@@ -47,6 +54,10 @@ _identity_hints = OrderedDict[UUID, UUID]()
 
 def _ttl() -> int:
     return get_settings().USER_SESSION_CACHE_TTL_SECONDS or 0
+
+
+def _generation_ttl() -> int:
+    return _ttl() * 40
 
 
 def _sess_key(user_id: UUID) -> str:
@@ -177,7 +188,7 @@ def _from_snapshot(data: object) -> UserRecord | None:
 async def peek_user_version(user_id: UUID) -> str | None:
     if _ttl() <= 0 or has_pending_snapshot_writes():
         return None
-    return await ensure_version(user_version_key(user_id), ttl=_ttl() * 40)
+    return await ensure_version(user_version_key(user_id), ttl=_generation_ttl())
 
 
 async def peek_identity_version(identity_id: UUID | None) -> str | None:
@@ -185,7 +196,7 @@ async def peek_identity_version(identity_id: UUID | None) -> str | None:
         return "0"
     if _ttl() <= 0 or has_pending_snapshot_writes():
         return None
-    return await ensure_version(identity_version_key(identity_id), ttl=_ttl() * 40)
+    return await ensure_version(identity_version_key(identity_id), ttl=_generation_ttl())
 
 
 def _remember_identity(user_id: UUID, identity_id: UUID | None) -> None:
@@ -216,17 +227,19 @@ async def _identity_generation(
     return hinted_generation
 
 
-async def get_cached_user(user_id: UUID) -> UserRecord | None:
-    memo = memo_get(_MEMO_KIND, user_id)
-    if isinstance(memo, UserRecord):
-        return memo
-    if _ttl() <= 0 or has_pending_snapshot_writes():
-        return None
-    hint = _identity_hints.get(user_id)
-    keys = await read_session_keys(
-        _sess_key(user_id), user_version_key(user_id), None if hint is None else identity_version_key(hint)
-    )
-    if keys is None or not is_json_object(keys.snapshot):
+@dataclass(frozen=True, slots=True)
+class SessionLookup:
+    """A session read for a caller that loads from SQL on a miss: the user, or what its fenced fill will observe."""
+
+    user: UserRecord | None = None
+    observation: SessionCacheObservation | None = None
+
+
+async def _validated(
+    user_id: UUID, hint: UUID | None, keys: SessionKeysRead, *, discover_identity: bool
+) -> UserRecord | None:
+    """The snapshot as a user when it is current for both generations that gate it, else None."""
+    if not is_json_object(keys.snapshot):
         return None
     cached = keys.snapshot
     user = _from_snapshot(cached)
@@ -237,13 +250,52 @@ async def get_cached_user(user_id: UUID) -> UserRecord | None:
     if keys.user_version is None or cached.get("u_ver") != keys.user_version:
         return None
     if user.identity_id is not None:
+        if hint is None and not discover_identity:
+            return None  # The SQL probe found no identity; a cached identity cannot stand in for it.
         identity_version = await _identity_generation(user_id, user.identity_id, hint, keys.identity_version)
         if identity_version is None or cached.get("i_ver") != identity_version:
             return None
-    _remember_identity(user_id, user.identity_id)
-    memo_set(_MEMO_KIND, user_id, user)
-    logger.debug("session_cache hit")
     return user
+
+
+async def lookup_cached_user(
+    user_id: UUID, *, find_identity: Callable[[UUID], Awaitable[UUID | None]] | None = None
+) -> SessionLookup:
+    """Return a verified snapshot or the versions observed before the caller's next SQL read.
+
+    A loader supplies a short SQL probe for an unhinted membership so the Redis pipeline can name both keys.
+    A read-only lookup with no probe can discover the identity from its snapshot at the cost of a second read.
+    """
+    memo = memo_get(_MEMO_KIND, user_id)
+    if isinstance(memo, UserRecord):
+        return SessionLookup(user=memo)
+    if get_connection() is not None or _ttl() <= 0 or has_pending_snapshot_writes():
+        return SessionLookup()
+    hint = _identity_hints.get(user_id)
+    if hint is None and find_identity is not None:
+        hint = await find_identity(user_id)
+    keys = await read_session_keys(
+        _sess_key(user_id),
+        user_version_key(user_id),
+        None if hint is None else identity_version_key(hint),
+        generation_ttl=None if find_identity is None else _generation_ttl(),
+    )
+    if keys is None:
+        return SessionLookup()
+    user = await _validated(user_id, hint, keys, discover_identity=find_identity is None)
+    if user is not None:
+        _remember_identity(user_id, user.identity_id)
+        memo_set(_MEMO_KIND, user_id, user)
+        logger.debug("session_cache hit")
+        return SessionLookup(user=user)
+    ident_ver = "0" if hint is None else keys.identity_version
+    if keys.user_version is None or ident_ver is None:
+        return SessionLookup()
+    return SessionLookup(observation=SessionCacheObservation(hint, keys.user_version, ident_ver))
+
+
+async def get_cached_user(user_id: UUID) -> UserRecord | None:
+    return (await lookup_cached_user(user_id)).user
 
 
 async def set_cached_user(
@@ -257,15 +309,11 @@ async def set_cached_user(
     _remember_identity(user.id, user.identity_id)
     if observed is None or user.identity_id != observed.identity_id:
         return
-    user_ver = await read_version(user_version_key(user.id))
-    if user_ver is None or user_ver.value is None or user_ver.value != observed.user_version:
-        return
+    fences = [(user_version_key(user.id), observed.user_version)]
     if user.identity_id is not None:
-        ident_ver = await read_version(identity_version_key(user.identity_id))
-        if ident_ver is None or ident_ver.value is None or ident_ver.value != observed.identity_version:
-            return
+        fences.append((identity_version_key(user.identity_id), observed.identity_version))
     payload = _snapshot(user, observed.user_version, observed.identity_version)
-    _ = await cache_set_json(_sess_key(user.id), payload, ttl=_ttl())
+    _ = await cache_fill_json(_sess_key(user.id), payload, ttl=_ttl(), fences=fences)
 
 
 async def bump_user_session(user_id: UUID | None) -> None:
@@ -274,7 +322,7 @@ async def bump_user_session(user_id: UUID | None) -> None:
     memo_drop(_MEMO_KIND, user_id)
     if _ttl() <= 0:
         return
-    await bump_version(user_version_key(user_id), ttl=_ttl() * 40)
+    await bump_version(user_version_key(user_id), ttl=_generation_ttl())
     await cache_delete(_sess_key(user_id), defer_until_commit=True)
 
 
@@ -284,7 +332,7 @@ async def bump_identity_session(identity_id: UUID | None) -> None:
     memo_drop_kind(_MEMO_KIND, identity_id=identity_id)
     if _ttl() <= 0:
         return
-    await bump_version(identity_version_key(identity_id), ttl=_ttl() * 40)
+    await bump_version(identity_version_key(identity_id), ttl=_generation_ttl())
     members: list[UserRecord] = []
     try:
         from app.dao.user_dao import user_dao

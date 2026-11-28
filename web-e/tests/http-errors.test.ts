@@ -1,15 +1,20 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createAuthSessionStore } from '../src/lib/auth-session.ts'
-import { ApiError, createHttpClient, formatApiDetail, parseRetryAfter, userFacingRequestError } from '../src/lib/http.ts'
+import {
+  ApiError, createHttpClient, formatApiDetail, parseRetryAfter, RequestTimeoutError, userFacingRequestError,
+} from '../src/lib/http.ts'
+import { vietnamese } from '../src/lib/i18n/catalog.ts'
+import { LANGUAGE_STORAGE_KEY, loadVietnamese } from '../src/lib/i18n/translation.ts'
 
 for (const kind of ['JSON', 'multipart', 'binary'] as const) {
   test(`${kind} HTTP failures never expose upstream HTML in display messages`, async () => {
     const html = '<html><head><title>502 Bad Gateway</title></head><body>load-balancer</body></html>'
     const session = createAuthSessionStore({ read: () => null, write: () => undefined, clear: () => undefined })
-    const client = createHttpClient(session, () => Promise.resolve(new Response(html, {
-      status: 502, headers: { 'Content-Type': 'text/html' },
-    })), (path) => `https://api.example${path}`)
+    const client = createHttpClient(session, {
+      fetch: () => Promise.resolve(new Response(html, { status: 502, headers: { 'Content-Type': 'text/html' } })),
+      url: (path) => `https://api.example${path}`,
+    })
 
     const request = kind === 'JSON' ? client.apiRequest('/resource')
       : kind === 'multipart' ? client.apiFormRequest('/resource', new FormData())
@@ -42,8 +47,9 @@ test('a 507 workspace disk quota refusal shows the engine message while other 5x
     message: "This agent's workspace is using 2.51 GiB of its 2.50 GiB disk allowance. Delete files to continue.",
   }
   const session = createAuthSessionStore({ read: () => null, write: () => undefined, clear: () => undefined })
-  const refuse = (status: number) => createHttpClient(session, () => Promise.resolve(Response.json({ detail }, { status })),
-    (path) => `https://api.example${path}`).apiRequest('/resource')
+  const refuse = (status: number) => createHttpClient(session, {
+    fetch: () => Promise.resolve(Response.json({ detail }, { status })), url: (path) => `https://api.example${path}`,
+  }).apiRequest('/resource')
 
   await assert.rejects(refuse(507), (error: unknown) => {
     assert.ok(error instanceof ApiError)
@@ -60,8 +66,9 @@ test('a 507 workspace disk quota refusal shows the engine message while other 5x
 
 test('company cap refusals show the engine message: a 409 account-limit dict and a 403 agent-limit string', async () => {
   const session = createAuthSessionStore({ read: () => null, write: () => undefined, clear: () => undefined })
-  const refuse = (status: number, detail: unknown) => createHttpClient(session, () => Promise.resolve(Response.json({ detail }, { status })),
-    (path) => `https://api.example${path}`).apiRequest('/resource')
+  const refuse = (status: number, detail: unknown) => createHttpClient(session, {
+    fetch: () => Promise.resolve(Response.json({ detail }, { status })), url: (path) => `https://api.example${path}`,
+  }).apiRequest('/resource')
   const accounts = {
     code: 'company_account_limit_reached', limit: 40, used: 40,
     message: 'Your company has used all 40 accounts. An org admin can buy extra accounts on the Users page in the admin console.',
@@ -97,16 +104,19 @@ const noSession = createAuthSessionStore({ read: () => null, write: () => undefi
 const published = Date.parse('Wed, 21 Oct 2026 07:28:00 GMT')
 
 function refuse(status: number, headers: Record<string, string>) {
-  return createHttpClient(noSession, () => Promise.resolve(Response.json({ detail: 'Busy' }, { status, headers })),
-    (path) => `https://api.example${path}`, () => published).apiRequest('/resource')
+  return createHttpClient(noSession, {
+    fetch: () => Promise.resolve(Response.json({ detail: 'Busy' }, { status, headers })),
+    url: (path) => `https://api.example${path}`, now: () => published,
+  }).apiRequest('/resource')
 }
 
 for (const status of [429, 503]) {
   for (const kind of ['JSON', 'multipart', 'binary'] as const) {
     test(`a ${status} ${kind} refusal carries its Retry-After seconds on the error`, async () => {
-      const client = createHttpClient(noSession, () => Promise.resolve(Response.json({ detail: 'Busy' }, {
-        status, headers: { 'Retry-After': '7' },
-      })), (path) => `https://api.example${path}`, () => published)
+      const client = createHttpClient(noSession, {
+        fetch: () => Promise.resolve(Response.json({ detail: 'Busy' }, { status, headers: { 'Retry-After': '7' } })),
+        url: (path) => `https://api.example${path}`, now: () => published,
+      })
       const request = kind === 'JSON' ? client.apiRequest('/resource')
         : kind === 'multipart' ? client.apiFormRequest('/resource', new FormData())
         : client.apiBinaryRequest('/resource')
@@ -149,6 +159,51 @@ test('an invalid Retry-After leaves the error without a wait', async () => {
     assert.equal(error.retryAfterMs, null)
     return true
   })
+})
+
+for (const kind of ['JSON', 'multipart', 'binary'] as const) {
+  test(`a timed-out ${kind} request shows a retry message instead of the caller's fallback`, async () => {
+    // Given
+    const deadline = new AbortController()
+    const client = createHttpClient(noSession, {
+      fetch: () => new Promise<Response>(() => undefined),
+      url: (path) => `https://api.example${path}`,
+      deadline: () => deadline.signal,
+    })
+    const request = kind === 'JSON' ? client.apiRequest('/resource')
+      : kind === 'multipart' ? client.apiFormRequest('/resource', new FormData())
+      : client.apiBinaryRequest('/resource')
+    const rejected = assert.rejects(request, (error: unknown) => {
+      assert.ok(error instanceof RequestTimeoutError)
+      assert.equal(error.cause, deadline.signal.reason)
+      assert.equal(userFacingRequestError(error, 'Unable to load agents.'), error.message)
+      assert.notEqual(error.message, 'Unable to load agents.')
+      return true
+    })
+    // When
+    deadline.abort(new DOMException('signal timed out', 'TimeoutError'))
+    // Then
+    await rejected
+  })
+}
+
+test('a timeout message follows the stored Vietnamese preference', async (t) => {
+  // Given
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {
+    localStorage: { getItem: (key: string) => key === LANGUAGE_STORAGE_KEY ? 'vi' : null },
+  } })
+  t.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  })
+  await loadVietnamese()
+  const error = new RequestTimeoutError(90_000, null)
+  // When
+  const shown = userFacingRequestError(error, 'Không tải được trợ lý.')
+  // Then
+  assert.equal(shown, Object.entries(vietnamese).find(([english]) => english === error.message)?.[1])
+  assert.notEqual(shown, error.message)
 })
 
 test('only 429 and 503 responses carry a Retry-After onto the error', async () => {

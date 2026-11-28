@@ -3,6 +3,7 @@ import { test } from 'node:test'
 
 import { createSchedule, listSchedules, updateSchedule } from '../src/lib/workspace-api.ts'
 import { listScheduleHistory, listScheduleHistoryPage } from '../src/lib/schedules-api.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const saved = {
   id: 'schedule', name: 'Morning report', instruction: 'Summarize updates',
@@ -124,36 +125,41 @@ test('paged history preserves terminal outcomes, output, and the opaque cursor',
 test('older history passes an encoded cursor unchanged and supports cancellation', async (context) => {
   const cursor = 'opaque/+?=& cursor'
   const controller = new AbortController()
+  const forwarded: (AbortSignal | null | undefined)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     const url = new URL(path, 'https://example.test')
     assert.equal(url.pathname, '/api/agents/agent/schedules/schedule/history/page')
     assert.equal(url.searchParams.get('cursor'), cursor)
     assert.equal(url.searchParams.get('limit'), '20')
-    assert.equal(init.signal, controller.signal)
+    forwarded.push(init.signal)
     return Response.json({ items: [], next_cursor: null })
   })
 
   const page = await listScheduleHistoryPage('agent', 'schedule', { cursor, signal: controller.signal })
 
   assert.deepEqual(page, { items: [], next_cursor: null })
+  assertForwardsCancellation(forwarded, controller)
 })
 
 for (const outcome of ['all', 'success', 'failure', 'cancelled', 'unknown'] as const) {
   test(`history forwards ${outcome} alongside its scoped cursor without changing the page contract`, async (context) => {
     // Given
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       const query = new URL(path, 'https://example.test').searchParams
       assert.equal(query.get('outcome'), outcome)
       assert.equal(query.get('cursor'), 'filter/+ cursor')
       assert.equal(query.get('limit'), '20')
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       return Response.json({ items: [], next_cursor: null })
     })
     // When
     const page = await listScheduleHistoryPage('agent', 'schedule', { outcome, cursor: 'filter/+ cursor', signal })
     // Then
     assert.deepEqual(page, { items: [], next_cursor: null })
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 

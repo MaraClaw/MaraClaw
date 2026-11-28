@@ -19,7 +19,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { LanguageToggle } from '@/components/language-toggle'
 import { useTranslation } from '@/hooks/use-translation'
 import { useLocalizedMessage } from '@/hooks/use-localized-message'
-import { message, type LocalMessage } from '@/lib/i18n'
+import { message } from '@/lib/i18n'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
 import { Button } from '@/components/ui/button'
@@ -27,55 +27,14 @@ import { BackButton } from '@/components/ui/back-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth, useSessionCurrent } from '@/hooks/use-auth'
-import { ApiError, formatApiDetail } from '@/lib/http'
+import { parseLoginError } from '@/lib/login-error'
 import { loginSchema, type LoginFormValues } from '@/lib/login-schema'
 import { StaleSessionError } from '@/lib/session-policy'
-import type { NeedsVerificationDetail, TenantChoice } from '@/lib/types/auth'
+import type { TenantChoice } from '@/lib/types/auth'
 import { isMultiTenantResponse, isTokenResponse } from '@/lib/types/auth-guards'
 import { cn } from '@/lib/utils'
 
 const easeOut = [0.23, 1, 0.32, 1] as const
-
-function parseLoginError(error: unknown): {
-  formMessage: string | LocalMessage
-  field?: keyof LoginFormValues
-  needsVerification?: NeedsVerificationDetail
-} {
-  if (!(error instanceof ApiError)) {
-    return { formMessage: message('Unable to sign in. Check your connection and try again.') }
-  }
-
-  const detail = error.detail
-
-  if (detail && typeof detail === 'object' && 'needs_verification' in detail) {
-    const v = detail as NeedsVerificationDetail
-    return {
-      formMessage: formatApiDetail(v.message) ?? message('Please verify your email to continue.'),
-      needsVerification: v,
-    }
-  }
-
-  if (error.status === 401) {
-    return {
-      formMessage: message('Email or password is incorrect.'),
-      field: 'password',
-    }
-  }
-
-  if (error.status === 403) {
-    return { formMessage: formatApiDetail(detail) ?? message('Access denied for this account.') }
-  }
-
-  if (error.status === 404) {
-    return {
-      formMessage: formatApiDetail(detail) ?? message('No organization is linked to this account.'),
-    }
-  }
-
-  return {
-    formMessage: error.message,
-  }
-}
 
 export function LoginPage() {
   const { t, owned } = useTranslation()

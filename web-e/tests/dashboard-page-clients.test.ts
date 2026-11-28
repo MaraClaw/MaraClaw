@@ -4,12 +4,14 @@ import { z } from 'zod'
 
 import { listObjectivePage, listObjectives } from '../src/lib/okr-api.ts'
 import { addRelationship, listRelationshipPage } from '../src/lib/relationships-api.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const period = { periodStart: '2026-10-01', periodEnd: '2026-12-31' }
 const cursor = 'opaque/+?='
 
 test('objective pages encode period and opaque cursor, forward cancellation and keep every key result', async (t) => {
   const controller = new AbortController()
+  const forwarded: (AbortSignal | null | undefined)[] = []
   const objective = { id: 'objective', title: 'Complete objective', owner_type: 'company', status: 'active',
     period_start: period.periodStart, period_end: period.periodEnd, created_at: '2026-10-01T00:00:00Z',
     key_results: Array.from({ length: 60 }, (_, index) => ({ id: `kr-${index}`, objective_id: 'objective', title: `Result ${index}`,
@@ -18,12 +20,13 @@ test('objective pages encode period and opaque cursor, forward cancellation and 
     const url = new URL(String(input), 'http://fixture.test')
     assert.equal(url.pathname, '/api/okr/objectives/page')
     assert.deepEqual(Object.fromEntries(url.searchParams), { period_start: period.periodStart, period_end: period.periodEnd, limit: '50', cursor })
-    assert.equal(init?.signal, controller.signal)
+    forwarded.push(init?.signal)
     return Response.json({ items: [objective], next_cursor: null })
   })
   const result = await listObjectivePage({ ...period, cursor, signal: controller.signal })
   assert.equal(result.items[0]?.key_results?.length, 60)
   assert.equal(result.next_cursor, null)
+  assertForwardsCancellation(forwarded, controller)
 })
 
 test('legacy objective client still reads the unpaged array contract', async (t) => {
@@ -36,6 +39,7 @@ test('legacy objective client still reads the unpaged array contract', async (t)
 
 test('relationship pages forward cursors and signals; adding sends only the selected relationship by POST', async (t) => {
   const controller = new AbortController()
+  const forwarded: (AbortSignal | null | undefined)[] = []
   const body = { member_id: 'selected-member', relation: 'mentor', description: '' }
   const calls: string[] = []
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -48,12 +52,13 @@ test('relationship pages forward cursors and signals; adding sends only the sele
     }
     assert.equal(url.pathname, '/api/agents/agent/relationships/page')
     assert.deepEqual(Object.fromEntries(url.searchParams), { limit: '50', cursor })
-    assert.equal(init?.signal, controller.signal)
+    forwarded.push(init?.signal)
     return Response.json({ items: [], next_cursor: null, has_more: false })
   })
   assert.deepEqual(await listRelationshipPage('agent', { cursor, signal: controller.signal }), { items: [], next_cursor: null, has_more: false })
   await addRelationship('agent', body)
   assert.deepEqual(calls, ['GET', 'POST'])
+  assertForwardsCancellation(forwarded, controller)
 })
 
 for (const malformed of [[], {}, { items: [], next_cursor: 4 }, { items: [null], next_cursor: null }]) {
@@ -72,10 +77,11 @@ test('generated relationship acknowledgement rejects an invalid mutation respons
 for (const domain of ['objectives', 'relationships'] as const) {
   test(`${domain} page rejects a late response after its request is cancelled`, async (t) => {
     const controller = new AbortController()
+    const forwarded: (AbortSignal | null | undefined)[] = []
     const started = Promise.withResolvers<void>()
     const response = Promise.withResolvers<Response>()
     t.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
-      assert.equal(init?.signal, controller.signal)
+      forwarded.push(init?.signal)
       started.resolve()
       return response.promise
     })
@@ -87,5 +93,6 @@ for (const domain of ['objectives', 'relationships'] as const) {
     controller.abort()
     response.resolve(Response.json({ items: [], next_cursor: null, has_more: false }))
     await rejected
+    assert.equal(forwarded[0]?.reason, controller.signal.reason)
   })
 }

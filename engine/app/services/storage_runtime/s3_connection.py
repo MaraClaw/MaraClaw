@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, TypeIs, Unpack
+from typing import TYPE_CHECKING, Final, NotRequired, Protocol, TypedDict, TypeIs, Unpack
 
 if TYPE_CHECKING:
     from botocore.config import Config
@@ -9,6 +9,12 @@ from app.services.storage_runtime.base import StorageBackend
 from app.services.storage_runtime.s3_types import new_s3_client
 from app.services.storage_runtime.upload_source import SizedBody
 from app.services.storage_runtime.utils import normalize_storage_key
+
+# Standard mode backs a throttled call off by rand(0, 1) * 2**i seconds (at most 1, 2, 4), so four attempts ride out a
+# few seconds of S3 throttling. Only the read client gets them: a retried write could land and then report a rejection.
+READ_RETRIES: Final = {"total_max_attempts": 4, "mode": "standard"}
+# Calls that may wait for each lane thread. A saturated lane refuses the next one at once instead of queueing it.
+LANE_WAITERS_PER_THREAD: Final = 8
 
 
 class S3ObjectIdentity(TypedDict):
@@ -112,8 +118,10 @@ class S3Connection(StorageBackend):
         self.secret_access_key: str | None = secret_access_key or None
         self.presign_ttl_seconds: int = presign_ttl_seconds
         self.max_pool_connections: int = max_pool_connections
-        self.lane: ThreadLane = ThreadLane(min(thread_lane_size, max_pool_connections), name="s3-lane")
+        lane_size = min(thread_lane_size, max_pool_connections)
+        self.lane: ThreadLane = ThreadLane(lane_size, name="s3-lane", max_waiters=lane_size * LANE_WAITERS_PER_THREAD)
         self._client: S3Client | None = None
+        self._read_client: S3Client | None = None
 
     def _object_key(self, key: str) -> str:
         normalized = normalize_storage_key(key)
@@ -125,6 +133,14 @@ class S3Connection(StorageBackend):
         return "storage.googleapis.com" in self.endpoint_url
 
     def _boto_config(self) -> Config:
+        """The mutation client's config: the shared endpoint settings and the SDK's own retries."""
+        return self._endpoint_config()
+
+    def _read_boto_config(self) -> Config:
+        """The read client's config: the same endpoint, credentials and pool as the mutation client, with retries."""
+        return self._endpoint_config(READ_RETRIES)
+
+    def _endpoint_config(self, retries: Mapping[str, int | str] | None = None) -> Config:
         from botocore.config import Config
 
         if self._is_gcs():
@@ -142,22 +158,33 @@ class S3Connection(StorageBackend):
             read_timeout=30,
             tcp_keepalive=True,
             region_name=region,
+            retries=None if retries is None else dict(retries),
         )
 
     def _client_or_raise(self) -> S3Client:
+        """The mutation client, for every put, copy, delete and `get_version`; a managed backend sends each exactly once."""
         if self._client is None:
-            try:
-                import boto3
-            except ImportError as exc:
-                raise RuntimeError("boto3 is required for S3 storage backend") from exc
-            client = new_s3_client(
-                boto3.Session(),
-                endpoint_url=self.endpoint_url,
-                aws_access_key_id=self.access_key_id,
-                aws_secret_access_key=self.secret_access_key,
-                config=self._boto_config(),
-            )
-            if not _is_s3_client(client):
-                raise RuntimeError("boto3 S3 client is missing required methods")
-            self._client = client
+            self._client = self._new_client(self._boto_config())
         return self._client
+
+    def _read_client_or_raise(self) -> S3Client:
+        """The read client, for calls that change nothing (listing, GET). Never use it for a write or `get_version`."""
+        if self._read_client is None:
+            self._read_client = self._new_client(self._read_boto_config())
+        return self._read_client
+
+    def _new_client(self, config: Config) -> S3Client:
+        try:
+            import boto3
+        except ImportError as exc:
+            raise RuntimeError("boto3 is required for S3 storage backend") from exc
+        client = new_s3_client(
+            boto3.Session(),
+            endpoint_url=self.endpoint_url,
+            aws_access_key_id=self.access_key_id,
+            aws_secret_access_key=self.secret_access_key,
+            config=config,
+        )
+        if not _is_s3_client(client):
+            raise RuntimeError("boto3 S3 client is missing required methods")
+        return client

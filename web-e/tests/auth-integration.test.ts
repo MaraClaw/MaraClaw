@@ -46,7 +46,9 @@ async function wire(t: TestContext, handle: (request: IncomingMessage, response:
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   })
   authSession.applySession(authSession.capture(), session)
-  return { localStorage, controller: createAuthSessionController(authSession, (token, owner, signal) => fetchCurrentUser(token, signal, owner)) }
+  const controller = createAuthSessionController(authSession, (token, owner, signal) => fetchCurrentUser(token, signal, owner))
+  t.after(() => { controller.cancelRefresh() })
+  return { localStorage, controller }
 }
 
 function send(response: ServerResponse, status: number, body: unknown): void {
@@ -168,7 +170,7 @@ test('ordinary transient refresh preserves the validated identity and owner', as
   assert.equal(authSession.getSnapshot(), current)
 })
 
-test('unvalidated replacement failure ends loading and allows a new sign-in', async (t) => {
+test('unvalidated replacement failure keeps loading without an identity and still allows a new sign-in', async (t) => {
   // Given
   const { controller, localStorage } = await wire(t, (_request, response) => send(response, 503, { detail: 'temporarily unavailable' }))
   const owner = authSession.capture()
@@ -176,9 +178,9 @@ test('unvalidated replacement failure ends loading and allows a new sign-in', as
   const refreshed = await controller.refreshUser(owner, 'replacement')
   // Then
   assert.equal(refreshed, false)
-  assert.equal(authSession.getSnapshot().status, 'anonymous')
+  assert.equal(authSession.getSnapshot().status, 'loading')
   assert.equal(authSession.getSnapshot().user, null)
-  assert.equal(localStorage.getItem('maraclaw-enduser-token'), null)
+  assert.equal(localStorage.getItem('maraclaw-enduser-token'), 'replacement')
   assert.equal(authSession.applySession(authSession.capture(), session), true)
 })
 

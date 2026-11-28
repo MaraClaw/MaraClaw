@@ -27,6 +27,9 @@ def intake(monkeypatch, tmp_path):
     config = channel_config("wecom")
     config.encrypt_key = base64.b64encode(b"a" * 32).decode().rstrip("=")
     monkeypatch.setattr(wecom.channel_config_dao, "get_for_agent", AsyncMock(return_value=config))
+    monkeypatch.setattr(wecom.wecom_kf_cursor_dao, "read", AsyncMock(return_value=None))
+    monkeypatch.setattr(wecom.wecom_kf_cursor_dao, "compare_and_set", AsyncMock(return_value=True))
+    monkeypatch.setattr(submissions, "_take_claim", AsyncMock(return_value=None))
     monkeypatch.setattr(facade, "_storage_backend", None)
     monkeypatch.setattr(
         facade,
@@ -44,7 +47,10 @@ def intake(monkeypatch, tmp_path):
     def respond(request):
         wire.requests.append(request)
         if request.url.path.endswith("sync_msg"):
-            return httpx.Response(200, json={"errcode": 0, "msg_list": wire.sync, "has_more": 0})
+            return httpx.Response(
+                200,
+                json={"errcode": 0, "msg_list": wire.sync, "has_more": 0, "next_cursor": "checkpoint"},
+            )
         return httpx.Response(wire.status, content=wire.payload, headers=wire.headers)
 
     original = httpx.AsyncClient

@@ -8,6 +8,15 @@ import pytest
 from fastapi import HTTPException
 from psycopg.pq import TransactionStatus
 from tests.channel_submission_fixtures import channel_db, receipt_db
+from tests.personal_tick_fixtures import (
+    TickStoppedError,
+    between_ticks,
+    planned_with_index,
+    queries,
+    record_frames,
+    record_statements,
+    touching,
+)
 from tests.test_whatsapp_personal_integration import connected, message_for, target_for
 from tests.test_whatsapp_personal_surfaces import use_pool
 
@@ -28,6 +37,7 @@ from app.services.channels import (
     whatsapp_personal_intake as intake,
     whatsapp_personal_journal as journal,
 )
+from app.services.channels.whatsapp_personal_access import personal_owner
 from app.services.channels.whatsapp_personal_events import handle_frame, interrupted
 from app.services.channels.whatsapp_personal_journal import PersonalSendPendingError
 from app.services.channels.whatsapp_personal_protocol import Identity
@@ -385,3 +395,32 @@ async def test_only_sustained_uptime_refills_the_retry_budget(channel_db, monkey
         runtime = await runtime_for(owner.config_id)
     assert runtime.reconnect_attempts == 0
     assert runtime.retry_at is None
+
+
+async def test_idle_tick_runs_one_owner_check_one_renewal_and_one_lock_free_probe(channel_db, monkeypatch):
+    # Given a connected account with nothing to send.
+    f = channel_db
+    use_pool(f, monkeypatch)
+    async with transaction(f.db.first):
+        owner = await connected(f)
+    statements = record_statements(monkeypatch)
+    async with transaction(f.db.first):
+        await personal_owner(owner.agent_id, authorization_only=True)
+    owner_check = len(statements)
+    statements.clear()
+    frames = record_frames(monkeypatch, child.PersonalChild)
+    between_ticks(monkeypatch)
+    # When it ticks once.
+    with anyio.fail_after(10), pytest.raises(TickStoppedError):
+        await child.PersonalChild(owner).tick()
+    # Then it spent one owner check, one connection read, one renewal and one probe, and took no row lock.
+    assert len(statements) == owner_check + 3
+    assert touching(statements, "whatsapp_personal_") == [
+        ("SELECT", "whatsapp_personal_connections"),
+        ("UPDATE", "whatsapp_personal_connections"),
+        ("SELECT", "whatsapp_personal_sends"),
+    ]
+    assert not queries(statements, "FOR UPDATE")
+    # And the probe reads the pending partial index, the lease frame is the only frame, and it carries 30000 ms.
+    assert "ix_whatsapp_personal_pending" in await planned_with_index(f.db.first, statements[-1])
+    assert [(frame["type"], frame["lease_ms"]) for frame in frames] == [("lease", 30000)]

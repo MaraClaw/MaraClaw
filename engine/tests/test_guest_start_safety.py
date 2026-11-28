@@ -21,9 +21,17 @@ from app.core.domain.agents import AgentStatus
 from app.dao.agent_mcp_dao import agent_mcp_server_dao
 from app.dao.agent_workspace_usage_dao import agent_workspace_usage_dao
 from app.records.agent import AgentRecord
-from app.services import agent_manager as module, agent_materialize, guest_admission as admission, guest_readiness
+from app.services import (
+    agent_manager as module,
+    agent_materialize,
+    agent_state_snapshot_restore,
+    guest_admission as admission,
+    guest_readiness,
+)
 from app.services.agent_manager import AgentManager
+from app.services.agent_materialize import WorkspaceRestoreError
 from app.services.agent_start_store import start_store
+from app.services.agent_state_snapshot_restore import AgentStateRestoreError
 from app.services.guest_admission import GuestAdmissionError, GuestStartPreflightError, GuestStartStoppedError
 from app.services.guest_identity import AGENT_LABEL, GuestOwnershipError, guest_container_name
 from app.services.workspace_mirror import MirrorMode, MirrorReconcileError, ReconcileReport
@@ -176,7 +184,7 @@ def env(tmp_path, monkeypatch):
     directory.mkdir()
     monkeypatch.setattr(manager, "_agent_dir", lambda _id: directory)
 
-    async def materialize(_id):
+    async def materialize(_id, *, restored=frozenset()):
         return directory
 
     monkeypatch.setattr(manager, "_materialize_agent_dir", materialize)
@@ -365,7 +373,7 @@ async def test_new_guest_starts_without_log_options_when_the_daemon_driver_is_un
         pytest.param("registry.example/team/openclaw:1", False, None, 1, True, id="registry-missing-is-pulled"),
         pytest.param("registry.example/team/openclaw:1", False, "pull", 1, False, id="registry-pull-fails"),
         pytest.param("registry.example/team/openclaw:1", False, "inspect", 0, False, id="registry-inspect-malformed"),
-        pytest.param("arm64-openclaw:2026.11.3", False, None, 0, False, id="local-missing-is-never-pulled"),
+        pytest.param("arm64-openclaw:2026.11.10", False, None, 0, False, id="local-missing-is-never-pulled"),
         pytest.param(f"sha256:{'a' * 64}", False, None, 0, False, id="image-id-missing-is-never-pulled"),
     ],
 )
@@ -581,7 +589,7 @@ def mirror_active(
             raise failure
         return ReconcileReport()
 
-    async def materialize(agent_id):
+    async def materialize(agent_id, *, restored=frozenset()):
         events.append(("materialize", (agent_id,)))
         return manager._agent_dir(agent_id)
 
@@ -607,7 +615,7 @@ async def test_rehydration_pulls_the_mirror_before_it_materializes(env, monkeypa
     assert len(docker.runs) == 1
 
 
-@pytest.mark.parametrize(("guest_present", "code"), [(True, "runtime_failed"), (False, "configuration_failed")])
+@pytest.mark.parametrize(("guest_present", "code"), [(True, "runtime_failed"), (False, "runtime_failed")])
 async def test_a_pull_that_stopped_early_without_a_base_fails_the_start(env, monkeypatch, guest_present, code):
     # Given a pull that cannot finish for a directory with no valid mirror base.
     manager, docker, agent = env
@@ -622,6 +630,38 @@ async def test_a_pull_that_stopped_early_without_a_base_fails_the_start(env, mon
     # Then the start fails as a preparation error, before the directory is materialized or a guest is created.
     assert refused.value.code == code
     assert [name for name, _ in events] == ["pull"]
+    assert docker.runs == []
+
+
+@pytest.mark.parametrize(
+    ("failure", "guest_present", "code"),
+    [
+        pytest.param(AgentStateRestoreError("S3 unavailable"), False, "runtime_failed", id="restore error on create"),
+        pytest.param(AgentStateRestoreError("S3 unavailable"), True, "runtime_failed", id="restore error on replace"),
+        pytest.param(WorkspaceRestoreError("no base"), False, "runtime_failed", id="pull error on create"),
+        pytest.param(OSError("disk"), False, "configuration_failed", id="other OSError on create"),
+        pytest.param(ValueError("config"), False, "configuration_failed", id="ValueError on create"),
+        pytest.param(OSError("disk"), True, "runtime_failed", id="other OSError on replace"),
+    ],
+)
+async def test_only_a_restore_error_a_later_start_may_clear_is_retried_when_the_guest_is_created(
+    env, monkeypatch, failure, guest_present, code
+):
+    # Given a rehydrating start whose state restore raises `failure`.
+    manager, docker, agent = env
+    if not guest_present:
+        docker.guests.clear()
+        agent.container_id = None
+
+    async def restoring(*_args: object) -> frozenset[str]:
+        raise failure
+
+    monkeypatch.setattr(agent_state_snapshot_restore, "restore_agent_state", restoring)
+    # When the guest is started.
+    with pytest.raises(GuestStartPreflightError) as refused:
+        await manager.replace_container(agent)
+    # Then creation retries only a restore error, and parks every other failure; a replacement retries them all.
+    assert refused.value.code == code
     assert docker.runs == []
 
 
