@@ -9,7 +9,7 @@ One-off modules. Run from `engine/`: `uv run python -m app.scripts.bootstrap_db`
 
 ## Schema
 
-- `bootstrap_db.py` applies only `scripts/schema_baseline.sql`: fresh databases, plus the eight explicit legacy upgrades below.
+- `bootstrap_db.py` applies `scripts/schema_baseline.sql` to fresh databases and the supported legacy shapes below. It backfills legacy trigger due times in the same transaction when the baseline adds that column.
 - Re-runs rely on idempotent `IF NOT EXISTS` SQL and guarded `DO` blocks. A missing baseline is fatal; the pool is closed in `finally`.
 - One run is one transaction (`_apply_once`): `statement_timeout` is lifted, then `pg_advisory_xact_lock` is taken **first** (replicas queue here with no bound), then the transaction-local `lock_timeout` (`set_config(..., true)`, 5 s) bounds every wait on the schema itself. Do not use plain `SET`, a session-level advisory lock, or set the bound before the lock is held: a queued replica would fail while its peer is still building the schema.
 - `55P03` (lock timeout) and `40P01` (deadlock) roll the whole transaction back and retry it, up to 5 attempts with a growing pause, then the error propagates and the process exits non-zero. Every other SQL error (unique violation on dirty data, syntax, privileges, `57014`) is fatal on the first attempt. `tests/test_bootstrap_runner.py` pins the order and the classification; `tests/test_bootstrap_postgres.py` proves a foreign lock fails within the bound with nothing applied.
@@ -34,6 +34,13 @@ One-off modules. Run from `engine/`: `uv run python -m app.scripts.bootstrap_db`
 - The seventh upgrade adds the missing `telegram` and `zalo` labels to `channel_type_enum` with `ADD VALUE IF NOT EXISTS`. It preserves the enum OID and existing rows, commits before API use, and is covered by `tests/test_bootstrap_postgres.py`.
 
 - The eighth upgrade replaces only the catalog-proven legacy v1 `gateway_report_deliveries.im_plan` check with the named `ck_gateway_report_deliveries_im_plan` check accepting versions 1 and 2. It matches the complete PostgreSQL constraint definition, regardless of its name, preserving every other clause, unrelated checks, rows and table/column types; a conflicting new constraint name fails the bootstrap transaction. Fresh schemas use the same named check, and reruns skip the upgrade. `tests/test_bootstrap_postgres.py` proves fresh file plans, populated legacy upgrade, v1/text and v2/file writes, invalid rejection, custom-check preservation and rerun identity.
+
+- The workspace usage upgrade keeps measurements, makes `measured_at` nullable, and adds nullable `walk_failed_at` and `remeasure_requested_at`. Stored measurements do not enter the priority queue until a new measurement request or failed walk is recorded.
+- The trigger upgrade adds nullable `agent_triggers.next_due_at` and its due index, then computes exact due times for enabled rows in batches using `AgentTriggerDAO.reschedule`, all in the same transaction. Raw SQL refuses this legacy shape and points to the Python runner. Reruns do not backfill; overdue triggers can become eligible on the next worker tick.
+- The gateway delivery upgrade adds `failure_detail` and its checks, uses the upgrade time as `created_at` for old rows so pending jobs get a full retry window, and replaces only the catalog-matched historic terminal-reason check to accept the current failure reasons.
+- The workspace file revision upgrade adds `content_omitted` with a constant false default. Existing revision content is kept.
+
+Before upgrading a database that lacks `agent_triggers.next_due_at`, take a backup and stop older engine processes that can write triggers. Start the upgraded engine with the normal Docker launcher (or run `uv run python -m app.scripts.bootstrap_db` from `engine/` before starting upgraded processes). Do not resume old writers after bootstrap: they can create triggers without due times. An upgrade can hold locks while building indexes and backfilling; schedule a maintenance window.
 
 No other upgrade path or historical backfill; add none without a blocked bootstrap and a preserved-rows PostgreSQL test.
 
