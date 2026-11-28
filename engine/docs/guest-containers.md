@@ -142,6 +142,16 @@ readiness keeps polling. What the caller does on a readiness failure is unchange
 newly created guest is stopped, and an existing resumed guest is left as is. The
 upgrade executor has its own readiness loop and does not use this early exit.
 
+Every guest stop the engine sends (start replacement, user stop, orphan sweep,
+deletion cleanup, upgrade) gives the guest `GUEST_STOP_TIMEOUT_SECONDS` (30 s,
+[guest identity](../app/services/guest_identity.py)) between SIGTERM and SIGKILL, and
+new guests are created with the same `stop_timeout`, so a daemon shutdown or a manual
+`docker stop` honours it too. The window stays above the image bootstrap's 20 s
+gateway grace: a gateway killed while it holds its ownership lease leaves the lease
+behind, and the next guest on the same state waits 95 s and then refuses to start.
+Guests created before this change keep Docker's 10 s default for stops the engine
+does not send.
+
 Guest start, stop, admission, the image check, readiness, the metrics container
 status and every background Docker sweep (start reconciler, container recovery,
 deletion and transfer cleanup, orphan sweep, resource-pressure and workspace-quota
