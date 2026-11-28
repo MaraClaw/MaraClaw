@@ -561,7 +561,7 @@ async def test_a_stream_kept_alive_past_its_deadline_fails_once_as_a_provider_ti
 ) -> None:
     # Given a server that answers every read with a keepalive and never finishes, on a clock only the test moves.
     clock = freeze_loop_clock(monkeypatch)
-    started = clock.now
+    clock.now = 0.0  # Keep whole-second ticks exact regardless of the real loop clock's origin.
     stalled = PacedResponse(clock, STREAM_DEADLINE_SECONDS / 3, stalls=True)
     http = ScriptedHttpClient(stalled)
     # When the client reads it, whichever way it was called.
@@ -569,7 +569,7 @@ async def test_a_stream_kept_alive_past_its_deadline_fails_once_as_a_provider_ti
         _ = await call_provider(monkeypatch, case, mode, http)
     # Then the total deadline ended it as a retryable provider timeout, once: no second request, no wait.
     assert classify_error(raised.value) is FailoverErrorType.RETRYABLE
-    assert clock.now - started >= STREAM_DEADLINE_SECONDS
+    assert clock.now >= STREAM_DEADLINE_SECONDS
     assert len(http.requests) == 1
     assert sleeps == []
     assert stalled.closed
