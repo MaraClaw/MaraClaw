@@ -3,7 +3,11 @@
 import hashlib
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Literal, NotRequired, TypedDict
+from uuid import UUID
+
+import anyio
 
 from app.core.json_types import JsonObject, JsonValue, object_attr, object_mapping_from
 from app.core.logging import logger
@@ -848,6 +852,8 @@ async def seed_skills():
 _SKILL_FILE_READ_LIMIT_BYTES = 1024 * 1024
 _SKILL_FILE_CONTENT_TYPE = "text/plain; charset=utf-8"
 _SYNC_SETTING_KEY = "default_skills_sync_hash"
+_SWEEP_PAGE_SIZE = 100
+_SWEEP_CONCURRENCY = 8
 
 type _FileSync = Literal["created", "updated", "current", "edited", "conflict"]
 
@@ -901,21 +907,80 @@ async def _sync_default_skill_file(
     return "updated" if replaced.ok else "conflict"
 
 
+@dataclass(slots=True)
+class _Sweep:
+    """The default skills to push, what the last complete sync pushed, and what this sweep has done so far."""
+
+    default_skills: Sequence[SkillRecord]
+    previous_checksums: dict[str, str]
+    storage: StorageBackend
+    agents: int = 0
+    pushed: int = 0
+    kept: int = 0
+    failed: int = 0
+
+
+async def _push_to_agent(agent_id: UUID, sweep: _Sweep) -> None:
+    """Sync every default skill file of one agent; a storage failure is logged and counted, never raised."""
+    from app.services.agent_manager import agent_manager
+
+    agent_prefix = agent_manager._agent_storage_prefix(agent_id)
+    try:
+        for skill in sweep.default_skills:
+            for skill_file in skill.files:
+                path = f"{skill.folder_name}/{skill_file.path}"
+                outcome = await _sync_default_skill_file(
+                    sweep.storage,
+                    f"{agent_prefix}/skills/{path}",
+                    skill_file.content,
+                    sweep.previous_checksums.get(path),
+                )
+                if outcome in ("created", "updated"):
+                    sweep.pushed += 1
+                elif outcome in ("edited", "conflict"):
+                    sweep.kept += 1
+                    logger.info(f"[SkillSeeder] Kept {path} for agent {agent_id} ({outcome})")
+    except Exception as exc:
+        sweep.failed += 1
+        logger.warning(f"[SkillSeeder] Could not push default skills to agent {agent_id}: {type(exc).__name__}: {exc}")
+
+
+async def _sweep_agents(sweep: _Sweep) -> None:
+    """Visit every agent in keyset pages, at most ``_SWEEP_CONCURRENCY`` at once; each page read is its own short call."""
+    limiter = anyio.CapacityLimiter(_SWEEP_CONCURRENCY)
+
+    async def visit(agent_id: UUID) -> None:
+        async with limiter:
+            await _push_to_agent(agent_id, sweep)
+
+    after_id: UUID | None = None
+    while True:
+        page = await agent_dao.list_ids_page(after_id=after_id, limit=_SWEEP_PAGE_SIZE)
+        sweep.agents += len(page)
+        async with anyio.create_task_group() as group:
+            for agent_id in page:
+                group.start_soon(visit, agent_id)
+        if len(page) < _SWEEP_PAGE_SIZE:
+            return
+        after_id = page[-1]
+
+
 async def push_default_skills_to_existing_agents():
     """Reconcile the default skills into the workspace of every existing agent.
 
-    Called at startup after seed_skills(). Per file: a missing copy is created; one already at the new content is left
-    alone; one still holding what the previous complete sync pushed (its checksum in the recorded setting) is replaced
-    through a version-conditional write read together with its bytes; any other copy was edited by its owner, or no
-    earlier push is recorded, and is kept. Files dropped from a default skill are never deleted. One agent's failure (a
-    storage quota or storage error) is logged and skipped; the setting is recorded only when every agent succeeded, so
-    the next startup retries the others against the same previous record.
+    Run by ``sync_default_skills`` as a Runtime-owned task after the startup seeds, so startup never waits for it.
+    Per file: a missing copy is created; one already at the new content is left alone; one still holding what the
+    previous complete sync pushed (its checksum in the recorded setting) is replaced through a version-conditional
+    write read together with its bytes; any other copy was edited by its owner, or no earlier push is recorded, and is
+    kept. Files dropped from a default skill are never deleted. Agents are read in keyset pages and at most
+    ``_SWEEP_CONCURRENCY`` are synced at once. One agent's failure (a storage quota or storage error) is logged and
+    skipped; the setting is recorded only when every agent succeeded, so the next startup retries the others against
+    the same previous record.
 
     No database transaction is open while the storage is read or written: the plan is read in one short transaction,
-    the sweep runs on storage alone, and the record is written in another, so ``idle_in_transaction_session_timeout``
-    cannot end a slow sweep before its record is saved.
+    the sweep runs on storage alone with each page read as its own short call, and the record is written in another,
+    so ``idle_in_transaction_session_timeout`` cannot end a slow sweep before its record is saved.
     """
-    from app.services.agent_manager import agent_manager
     from app.services.storage import get_storage_backend
 
     async with connection_ctx():
@@ -934,37 +999,13 @@ async def push_default_skills_to_existing_agents():
             )
             return
 
-        agent_ids = await agent_dao.list_all_ids()
+    sweep = _Sweep(default_skills, _recorded_checksums(previous_value), get_storage_backend())
+    await _sweep_agents(sweep)
 
-    previous_checksums = _recorded_checksums(previous_value)
-    pushed = 0
-    kept = 0
-    failed = 0
-    storage = get_storage_backend()
-    for agent_id in agent_ids:
-        agent_prefix = agent_manager._agent_storage_prefix(agent_id)
-        try:
-            for skill in default_skills:
-                for skill_file in skill.files:
-                    path = f"{skill.folder_name}/{skill_file.path}"
-                    outcome = await _sync_default_skill_file(
-                        storage, f"{agent_prefix}/skills/{path}", skill_file.content, previous_checksums.get(path)
-                    )
-                    if outcome in ("created", "updated"):
-                        pushed += 1
-                    elif outcome in ("edited", "conflict"):
-                        kept += 1
-                        logger.info(f"[SkillSeeder] Kept {path} for agent {agent_id} ({outcome})")
-        except Exception as exc:
-            failed += 1
-            logger.warning(
-                f"[SkillSeeder] Could not push default skills to agent {agent_id}: {type(exc).__name__}: {exc}"
-            )
-
-    if failed:
+    if sweep.failed:
         logger.warning(
-            f"[SkillSeeder] Default skills not pushed to {failed} of {len(agent_ids)} agents "
-            f"({pushed} files pushed); sync hash not recorded, so the next startup retries them"
+            f"[SkillSeeder] Default skills not pushed to {sweep.failed} of {sweep.agents} agents "
+            f"({sweep.pushed} files pushed); sync hash not recorded, so the next startup retries them"
         )
         return
 
@@ -979,4 +1020,6 @@ async def push_default_skills_to_existing_agents():
         else:
             _ = await system_setting_dao.create(obj_in={"key": _SYNC_SETTING_KEY, "value": sync_value})
 
-    logger.info(f"[SkillSeeder] Default skills reconciled: {pushed} files written, {kept} edited copies kept")
+    logger.info(
+        f"[SkillSeeder] Default skills reconciled: {sweep.pushed} files written, {sweep.kept} edited copies kept"
+    )
