@@ -1,4 +1,8 @@
 {
   "entryGzipBytes": 140000,
-  "initialGzipBytes": 144000
+  "initialGzipBytes": 144000,
+  "routeGzipBytes": {
+    "src/components/layout/app-shell.tsx": 192000,
+    "src/pages/app/agents-list.tsx": 176000
+  }
 }

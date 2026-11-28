@@ -45,7 +45,7 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
-      - name: Check entry bundle size budget
+      - name: Check entry and route bundle size budgets
         run: node ../.github/scripts/check-bundle-budget.mjs
       - name: Build final Caddy image
         run: docker build --tag maraclaw-${{ matrix.package }}:ci .

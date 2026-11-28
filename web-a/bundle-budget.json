@@ -1,4 +1,9 @@
 {
   "entryGzipBytes": 103000,
-  "initialGzipBytes": 224000
+  "initialGzipBytes": 224000,
+  "routeGzipBytes": {
+    "src/routes/session-shell.tsx": 182000,
+    "src/pages/overview.tsx": 221000,
+    "src/pages/payments.tsx": 177000
+  }
 }

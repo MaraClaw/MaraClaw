@@ -40,7 +40,8 @@ Scope: console navigation, notification entry point and shared screen chrome.
    Others call `onSelect(item.id)` through `SectionRailButton`; without `onSelect`, omit them.
    `itemProps` applies only to the button branch.
 10. Preserve reduced-motion branches: `AuthShell` suppresses entrance motion;
-    `NavIcon` substitutes a plain image for its animated state transition.
+    `NavIcon` renders one `<img>` without framer-motion; a state change remounts it with a `motion-safe:` CSS enter,
+    so reduced motion and first paint show the plain image.
 
 ## Gotchas
 

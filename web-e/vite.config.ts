@@ -20,6 +20,10 @@ export default defineConfig({
   optimizeDeps: {
     include: ['react', 'react-dom', '@tanstack/react-query'],
   },
+  build: {
+    // dist/.vite/manifest.json gives the CI bundle budget each route's static import closure.
+    manifest: true,
+  },
   server: {
     port: 5173,
     host: true,
