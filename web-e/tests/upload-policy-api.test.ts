@@ -5,6 +5,7 @@ import { ZodError } from 'zod'
 import { authSession } from '../src/lib/auth-session.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { chatUploadLimit, formatUploadLimit, getUploadPolicy, type UploadPolicy } from '../src/lib/upload-policy-api.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const policy: UploadPolicy = {
   chat_image_max_bytes: 17, chat_file_max_bytes: 31, workspace_file_max_bytes: 47,
@@ -13,18 +14,21 @@ const policy: UploadPolicy = {
 
 test('policy requests validated metadata through the central HTTP boundary', async (context) => {
   // Given
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, '/api/chat/upload-policy')
     assert.equal(init.method, 'GET')
     assert.equal(init.body, undefined)
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     return Response.json({ ...policy, internal_configuration: 'must not escape' })
   })
   // When
   const actual = await getUploadPolicy({ signal })
   // Then
   assert.deepEqual(actual, policy)
+  assertForwardsCancellation(forwarded, caller)
 })
 
 for (const malformed of [

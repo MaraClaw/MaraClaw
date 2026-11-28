@@ -8,6 +8,7 @@ import { getMyTransfer, getTransferQuote, listMyTransfers, listMyTransfersPage, 
 import { formatMoney } from '../src/lib/format-money.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { admissionSummarySchema } from '../src/lib/types/company-admissions.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const summary = {
   id: '3bf6007f-8e95-416d-bd6c-e2c72754edb7', applicant_user_id: '0b238ca6-ffec-4970-9db8-f963b023182d',
@@ -82,10 +83,12 @@ for (const operation of [
 ]) {
   test(`${operation.name} uses the exact endpoint, signal and parsed persisted response`, async (context) => {
     // Given
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       assert.equal(path, operation.path)
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       assert.equal(init.method, operation.name === 'withdraw' ? 'POST' : 'GET')
       assert.equal(init.body, undefined)
       return Response.json(operation.value)
@@ -94,6 +97,7 @@ for (const operation of [
     const result = await operation.run({ owner: authSession.capture(), signal })
     // Then
     assert.deepEqual(result, operation.value)
+    assertForwardsCancellation(forwarded, caller)
   })
 
   for (const status of [200, 401, 503]) {

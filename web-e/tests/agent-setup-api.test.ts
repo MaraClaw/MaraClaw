@@ -5,6 +5,7 @@ import { ZodError } from 'zod'
 import { getAgentSetup, retryAgentSetup } from '../src/lib/agent-setup-api.ts'
 import { authSession } from '../src/lib/auth-session.ts'
 import { StaleSessionError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 for (const state of [null, 'pending', 'running', 'succeeded', 'failed'] as const) {
   test(`setup status parses ${state} with owner and cancellation`, async (t) => {
@@ -21,7 +22,7 @@ for (const state of [null, 'pending', 'running', 'succeeded', 'failed'] as const
     // Then
     assert.deepEqual(result, setup)
     assert.equal(path, '/api/agents/id%2Fwith%20spaces/setup')
-    assert.equal(request?.signal, controller.signal)
+    assertForwardsCancellation([request?.signal], controller)
   })
 }
 

@@ -5,19 +5,23 @@ import { ZodError } from 'zod'
 import { authSession } from '../src/lib/auth-session.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { changePersonalConnection, getPersonalStatus, getWhatsAppMode, personalStatusSchema } from '../src/lib/whatsapp-api.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const id = '11111111-1111-4111-8111-111111111111'
 const status = { mode: 'personal_qr', generation: null, attempt_id: null, revision: 0, state: 'disconnected', expires_at: null, qr: null, account_hint: null, error_code: null } as const
 
 test('personal status parses the nullable pre-setup generation with no-store and cancellation', async (t) => {
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     assert.equal(String(input), `/api/agents/${id}/whatsapp-channel/personal`)
     assert.equal(init?.cache, 'no-store')
-    assert.equal(init?.signal, signal)
+    forwarded.push(init?.signal)
     return Response.json(status)
   })
   assert.deepEqual(await getPersonalStatus(id, { owner: authSession.capture(), signal }), status)
+  assertForwardsCancellation(forwarded, caller)
 })
 
 for (const command of [{ kind: 'start', generation: null }, { kind: 'relink', generation: id }, { kind: 'disconnect', generation: id }] as const) {

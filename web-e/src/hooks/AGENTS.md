@@ -6,7 +6,7 @@ Scope: auth/theme/translation context lifetimes, session-fenced query adapters, 
 
 ### Providers
 
-- `auth-provider.tsx`: `AuthProvider`, external auth-store subscription and context action wiring. It imports `lib/auth-api.ts` on demand (`retryingImport`), so the stored-session check and `login` wait for that chunk; a failed download fails the check like a failed request.
+- `auth-provider.tsx`: `AuthProvider`, external auth-store subscription and context action wiring. It imports `lib/auth-api.ts` on demand (`retryingImport`), so the stored-session check and `login` wait for that chunk; a failed download fails the check like a failed request. The check (`lib/auth-session-controller.ts`) expires the session only on a current 401 or member-audience rejection. Any other failure keeps the token: a validated identity stays, and an unvalidated one stays `loading` with no identity and is checked again (2 s doubling to 30 s, cancelled by `cancelRefresh`).
 - `theme-provider.tsx`: `ThemeProvider`, stored/system theme resolution and document updates.
 - `translation-provider.tsx`: `TranslationProvider`, persisted language, HTML `lang`, translation callbacks and locale-aware date/number formatting.
 

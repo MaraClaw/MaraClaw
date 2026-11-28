@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import { archiveNotification, archiveSelectedNotifications, listNotifications, markAllNotificationsRead, markSelectedNotificationsRead, markSelectedNotificationsUnread, NotificationKind, restoreNotification, restoreSelectedNotifications, unreadNotificationCount } from '../src/lib/notifications-api.ts'
 import { ApiError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 const page = (items: readonly unknown[], next_cursor: string | null = null) => ({ items, next_cursor })
 
 test('notification list preserves every canonical kind as its original wire string', async (t) => {
@@ -124,7 +125,7 @@ test('notification list and count requests preserve the supplied abort signal', 
   await listNotifications({ signal: controller.signal })
   await unreadNotificationCount('all', controller.signal)
   // Then
-  assert.deepEqual(signals, [controller.signal, controller.signal])
+  assertForwardsCancellation(signals, controller)
 })
 
 test('notification counts accept legacy count and prefer canonical unread_count', async (t) => {

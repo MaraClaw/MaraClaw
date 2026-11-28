@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { getCountries } from 'libphonenumber-js/max'
 import { DEFAULT_PHONE_COUNTRY, toE164 } from './phone.ts'
 
-import { ApiError, apiFormRequest, apiRequest } from './http.ts'
+import { ApiError, apiFormRequest, apiRequest, transferTimeoutMs } from './http.ts'
 import {
   OrganizationAdmissionAcknowledgmentSchema,
   OrganizationAdmissionQuoteRequestSchema,
@@ -58,6 +58,6 @@ export async function submitOrganizationAdmission(quoteToken: string, file: File
   form.append('quote_token', quoteToken)
   form.append('file', file)
   return OrganizationAdmissionAcknowledgmentSchema.parse(
-    await apiFormRequest<unknown>('/api/organization-admissions', form, { token: null }),
+    await apiFormRequest<unknown>('/api/organization-admissions', form, { token: null, timeoutMs: transferTimeoutMs(file.size) }),
   )
 }

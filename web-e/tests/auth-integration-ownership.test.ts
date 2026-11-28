@@ -54,10 +54,17 @@ test('replacement validation failure cannot supply an owner for success effects'
     clear: () => { token = null },
   })
   store.applySession(store.capture(), { access_token: 'original', user })
-  const controller = createAuthSessionController(store, async () => { throw new TypeError('network failure') })
+  const retries: number[] = []
+  const controller = createAuthSessionController(store, async () => { throw new TypeError('network failure') }, (_retry, delayMs) => {
+    retries.push(delayMs)
+    return () => undefined
+  })
   // When
   const installedOwner = await controller.refreshReplacement(store.capture(), 'replacement')
   // Then
   assert.equal(installedOwner, null)
-  assert.equal(store.getSnapshot().status, 'anonymous')
+  assert.equal(store.getSnapshot().status, 'loading')
+  assert.equal(store.getSnapshot().user, null)
+  assert.equal(token, 'replacement')
+  assert.deepEqual(retries, [2_000])
 })

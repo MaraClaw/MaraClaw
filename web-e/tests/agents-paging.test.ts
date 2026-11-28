@@ -16,6 +16,7 @@ import { listAgentsPage } from '../src/lib/agents-api.ts'
 import { agentExistenceOptions, agentPageOptions, distinctAgents } from '../src/lib/agents-query.ts'
 import { authSession } from '../src/lib/auth-session.ts'
 import { StaleSessionError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const agent = {
   id: '11111111-1111-4111-8111-111111111111', name: 'Assistant', role_description: '',
@@ -25,18 +26,21 @@ const agent = {
 const cursor = 'opaque+/=? page&company=other'
 
 test('agent pages encode opaque cursors, forward cancellation and parse nullable dates', async (context) => {
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     const url = new URL(path, 'https://fixture.test')
     assert.equal(url.pathname, '/api/agents/page')
     assert.deepEqual([...url.searchParams], [['limit', '50'], ['cursor', cursor]])
     assert.match(path, /opaque%2B%2F%3D%3F\+page%26company%3Dother/)
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     assert.equal(init.method, 'GET')
     return Response.json({ items: [agent], next_cursor: null, has_more: false })
   })
   const page = await listAgentsPage({ cursor, signal })
   assert.equal(page.items[0]?.created_at, null)
+  assertForwardsCancellation(forwarded, caller)
 })
 
 test('agent pages reject malformed rows and inconsistent continuation metadata', async (context) => {

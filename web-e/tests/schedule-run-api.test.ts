@@ -4,6 +4,7 @@ import { ZodError } from 'zod'
 
 import { cancelScheduleRun, getScheduleRun, runSchedule, type ScheduleRunReceipt } from '../src/lib/schedules-api.ts'
 import { ApiError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 const accepted = { status: 'triggered', schedule_id: 'schedule', run_id: 'durable-run' } as const
 const target = { agentId: 'agent', scheduleId: 'schedule', runId: 'durable-run' }
@@ -34,11 +35,12 @@ for (const operation of [getScheduleRun, cancelScheduleRun]) {
   test(`${operation.name} uses the scoped receipt endpoint, signal and no request body or intent header`, async (context) => {
     // Given
     const controller = new AbortController()
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       assert.equal(path, `/api/agents/agent/schedules/schedule/runs/durable-run${cancelling ? '/cancel' : ''}`)
       assert.equal(init.method, cancelling ? 'POST' : 'GET')
       assert.equal(init.body, undefined)
-      assert.equal(init.signal, controller.signal)
+      forwarded.push(init.signal)
       assert.equal(new Headers(init.headers).get('Idempotency-Key'), null)
       return Response.json(receipt)
     })
@@ -46,6 +48,7 @@ for (const operation of [getScheduleRun, cancelScheduleRun]) {
     const result = await operation(target, { signal: controller.signal })
     // Then
     assert.deepEqual(result, receipt)
+    assertForwardsCancellation(forwarded, controller)
   })
 
   for (const status of ['pending', 'running', 'success', 'failure', 'cancelled', 'unknown'] as const) {

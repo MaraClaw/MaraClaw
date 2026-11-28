@@ -96,8 +96,8 @@ export function createAuthSessionStore(storage: SessionStorage) {
     failRefresh(candidate: RefreshAttempt, failure?: number | 'member_audience_rejected'): boolean {
       if (attempt !== candidate || !isCurrent(candidate.owner)) return false
       attempt = null
-      if (failure === 401 || failure === 'member_audience_rejected' || snapshot.status === 'loading') return expire(candidate.owner)
-      // Transport, 5xx, and permission failures do not invalidate a validated identity.
+      if (failure === 401 || failure === 'member_audience_rejected') return expire(candidate.owner)
+      // Transport, timeout, 5xx, permission and schema failures prove nothing about the token, validated or not.
       return false
     },
     expire,

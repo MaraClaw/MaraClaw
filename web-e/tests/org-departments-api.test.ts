@@ -3,19 +3,23 @@ import { test } from 'node:test'
 import { ZodError } from 'zod'
 
 import { listOrgDepartmentMembers, listOrgDepartments, orgDepartmentNameSchema, renameOrgDepartment } from '../src/lib/org-departments-api.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 test('options parses only safe summaries from the own-tenant endpoint', async (context) => {
   // Given
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, '/api/departments/options')
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     return Response.json({ departments: [{ id: 'local', name: 'Engineering', tenant_id: 'private' }] })
   })
   // When
   const departments = await listOrgDepartments(signal)
   // Then
   assert.deepEqual(departments, [{ id: 'local', name: 'Engineering' }])
+  assertForwardsCancellation(forwarded, caller)
 })
 
 test('options rejects an invalid server response instead of rendering it', async (context) => {
@@ -29,7 +33,9 @@ test('options rejects an invalid server response instead of rendering it', async
 
 test('members encodes the id, forwards the signal, and strips private fields without merging duplicate names', async (context) => {
   // Given
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   const members = [
     { membership_id: '0c929328-fb2a-4b51-83fc-284bf606a040', display_name: 'Alex' },
     { membership_id: '91efb1f0-503b-4bb4-8a40-4792f8a8c029', display_name: 'Alex' },
@@ -37,7 +43,7 @@ test('members encodes the id, forwards the signal, and strips private fields wit
   ]
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, '/api/departments/local%2Fone%3F%23/members')
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     return Response.json({ members: members.map((member) => ({
       ...member, email: 'private@example.test', username: 'private', user_id: 'private', role: 'member', tenant_id: 'private',
     })) })
@@ -46,6 +52,7 @@ test('members encodes the id, forwards the signal, and strips private fields wit
   const roster = await listOrgDepartmentMembers('local/one?#', signal)
   // Then
   assert.deepEqual(roster, members)
+  assertForwardsCancellation(forwarded, caller)
 })
 
 for (const response of [

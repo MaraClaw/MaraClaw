@@ -8,24 +8,28 @@ import type { ChatJsonValue } from '../src/lib/chat/message.ts'
 import { mergeServerHistory, type ChatLine } from '../src/lib/chat/transcript.ts'
 import { ApiError, StaleSessionError } from '../src/lib/http.ts'
 import { historyCursor, historyPage, historyTarget } from './chat-history-fixture.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 for (const cursor of [null, historyCursor]) {
   test(`chat history requests a bounded scoped GET ${cursor === null ? 'without' : 'with'} an opaque cursor`, async (context) => {
     // Given
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       const url = new URL(path, 'https://fixture.test')
       assert.equal(url.pathname, `/api/agents/${historyTarget.agentId}/sessions/${historyTarget.sessionId}/messages/page`)
       assert.deepEqual([...url.searchParams], [['limit', '50'], ...(cursor === null ? [] : [['cursor', cursor]])])
       assert.equal(init.method, 'GET')
       assert.equal(init.body, undefined)
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       return Response.json(historyPage(10, 60, historyCursor))
     })
     // When
     const page = await listChatHistoryPage(historyTarget, { cursor, signal, owner: authSession.capture() })
     // Then
     assert.deepEqual(page, historyPage(10, 60, historyCursor))
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 
@@ -37,14 +41,17 @@ const refreshes: readonly ChatHistoryRefresh[] = [
 ]
 for (const refresh of refreshes) {
   test(`conditional history validates ${refresh.kind} independently of older-page cursor rules`, async (context) => {
-    const signal = new AbortController().signal
+    const caller = new AbortController()
+    const { signal } = caller
+    const forwarded: (AbortSignal | null | undefined)[] = []
     context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
       const params = new URL(path, 'https://fixture.test').searchParams
       assert.deepEqual([...params], [['limit', '50'], ['revision', held.revision], ['after_created_at', held.created_at], ['after_message_id', held.message_id]])
-      assert.equal(init.signal, signal)
+      forwarded.push(init.signal)
       return Response.json(refresh)
     })
     assert.deepEqual(await refreshChatHistory(historyTarget, held, { signal }), refresh)
+    assertForwardsCancellation(forwarded, caller)
   })
 }
 

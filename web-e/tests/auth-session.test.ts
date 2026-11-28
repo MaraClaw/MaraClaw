@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createAuthSessionStore } from '../src/lib/auth-session.ts'
 import { createAuthSessionController } from '../src/lib/auth-session-controller.ts'
-import { ApiError } from '../src/lib/http.ts'
+import { ApiError, RequestTimeoutError } from '../src/lib/http.ts'
 import type { UserOut } from '../src/lib/types/auth.ts'
 
 const user: UserOut = {
@@ -107,7 +107,7 @@ test('latest refresh attempt wins without replacing the owner', async () => {
   assert.equal(store.capture(), owner)
 })
 
-for (const failure of [new TypeError('offline'), Object.assign(new Error('unavailable'), { status: 503 })]) {
+for (const failure of [new TypeError('offline'), new RequestTimeoutError(90_000, null), Object.assign(new Error('unavailable'), { status: 503 })]) {
   test(`validated session survives ${failure.message}`, async () => {
     // Given
     const { store, storage, writes } = fixture()

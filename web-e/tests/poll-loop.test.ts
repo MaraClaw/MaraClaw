@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ApiError } from '../src/lib/http.ts'
+import { createAuthSessionStore } from '../src/lib/auth-session.ts'
+import { ApiError, createHttpClient } from '../src/lib/http.ts'
 import { startPollLoop, type PollLoopEnvironment } from '../src/lib/poll-loop.ts'
+import { nextPollDelay } from '../src/lib/poll-policy.ts'
 import { drain, manualClock, signal } from './socket-fixture.ts'
 
 function harness() {
@@ -156,6 +158,66 @@ test('a visibility change during a slow tick does not start a second request', a
   reply.resolve()
   await drain()
   assert.equal(clock.pending, 1)
+})
+
+/** A poll whose request never gets an answer; only its injected deadline, aborted by hand, can end it. */
+function hungPoll(clock: ReturnType<typeof manualClock>) {
+  const requests: number[] = []
+  const deadlines: AbortController[] = []
+  const client = createHttpClient(createAuthSessionStore({ read: () => null, write: () => undefined, clear: () => undefined }), {
+    fetch: () => {
+      requests.push(clock.now())
+      return new Promise<Response>(() => undefined)
+    },
+    url: (path) => path,
+    deadline: () => {
+      const deadline = new AbortController()
+      deadlines.push(deadline)
+      return deadline.signal
+    },
+  })
+  const tick = async () => { await client.apiRequest('/api/agents/a/sessions') }
+  const timeOut = (index: number) => { deadlines[index]?.abort(new DOMException('signal timed out', 'TimeoutError')) }
+  return { requests, tick, timeOut }
+}
+
+test('a hung request settles at its deadline and the loop ticks again after its failure backoff', async (t) => {
+  // Given
+  const { clock, env, elapse } = harness()
+  const { requests, tick, timeOut } = hungPoll(clock)
+  t.after(startPollLoop({ cadence: 1000, immediate: true, tick }, env))
+  await drain()
+  assert.deepEqual(requests, [0])
+  assert.equal(clock.pending, 0)
+  // When
+  timeOut(0)
+  await drain()
+  // Then
+  const backoff = nextPollDelay({ cadence: 1000, failures: 1, retryAfterMs: null }, env)
+  assert.ok(backoff !== false)
+  assert.equal(clock.pending, 1)
+  await elapse(backoff)
+  assert.deepEqual(requests, [0, backoff])
+})
+
+test('after a hung request times out, becoming visible starts the next tick at once', async (t) => {
+  // Given
+  const { clock, visibility, env } = harness()
+  const { requests, tick, timeOut } = hungPoll(clock)
+  t.after(startPollLoop({ cadence: 1000, immediate: true, tick }, env))
+  await drain()
+  visibility.set(false)
+  visibility.set(true)
+  await drain()
+  assert.equal(requests.length, 1)
+  visibility.set(false)
+  // When
+  timeOut(0)
+  await drain()
+  visibility.set(true)
+  await drain()
+  // Then
+  assert.equal(requests.length, 2)
 })
 
 test('stopping cancels the timer and the listener, and a tick finishing later schedules nothing', async () => {

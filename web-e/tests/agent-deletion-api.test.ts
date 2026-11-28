@@ -5,16 +5,19 @@ import { ZodError } from 'zod'
 import { getAgentDeletionRequest, listPendingAgentDeletions, pendingDeletionRequestId, requestAgentDeletion } from '../src/lib/agent-deletion-api.ts'
 import { ApiError } from '../src/lib/http.ts'
 import { agentId, deletionDetail, deletionSession, deletionSummary, requestId } from './agent-deletion-fixture.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 test('submission sends only the agent and trimmed reason and parses the persisted detail', async (t) => {
   // Given
   const { owner } = deletionSession(t)
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   t.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, '/api/agent-deletion-requests')
     assert.equal(init.method, 'POST')
     assert.equal(new Headers(init.headers).get('Authorization'), 'Bearer deletion-original')
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     assert.deepEqual(JSON.parse(String(init.body)), { agent_id: agentId, reason: 'x' })
     return Response.json(deletionDetail, { status: 201 })
   })
@@ -22,6 +25,7 @@ test('submission sends only the agent and trimmed reason and parses the persiste
   const result = await requestAgentDeletion({ agent_id: agentId, reason: ' \n x \t ' }, { owner, signal })
   // Then
   assert.deepEqual(result, deletionDetail)
+  assertForwardsCancellation(forwarded, caller)
 })
 
 for (const reason of ['', ' \n\t ', 'x'.repeat(1001)]) {
@@ -51,17 +55,20 @@ test('submission accepts the trimmed 1000-character boundary', async (t) => {
 test('pending collection preserves its opaque cursor and applies the agent/status filters and signal', async (t) => {
   // Given
   const { owner } = deletionSession(t)
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
+  const forwarded: (AbortSignal | null | undefined)[] = []
   t.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, `/api/agent-deletion-requests?agent_id=${agentId}&status=pending`)
     assert.equal(init.method, 'GET')
-    assert.equal(init.signal, signal)
+    forwarded.push(init.signal)
     return Response.json({ items: [deletionSummary], next_cursor: 'opaque/?+#=' })
   })
   // When
   const result = await listPendingAgentDeletions(agentId, { owner, signal })
   // Then
   assert.deepEqual(result, { items: [deletionSummary], next_cursor: 'opaque/?+#=' })
+  assertForwardsCancellation(forwarded, caller)
 })
 
 for (const status of ['pending', 'executed', 'cancelled'] as const) {

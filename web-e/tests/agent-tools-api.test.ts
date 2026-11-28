@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { z } from 'zod'
 import { patchAgentToolConfig, probeAgentTool, saveAgentToolConfig } from '../src/lib/agent-tools-api.ts'
+import { assertForwardsCancellation } from './cancellation-fixture.ts'
 
 test('agent additive save transports explicit operations separately from legacy replacement', async (context) => {
   const requests: { readonly path: string; readonly init: RequestInit }[] = []
@@ -26,11 +27,13 @@ test('member API refuses privileged set and unset operations before transport', 
 
 test('saved agent probe references its original agent and forwards only draft operations', async (context) => {
   const controller = new AbortController()
+  const forwarded: (AbortSignal | null | undefined)[] = []
   context.mock.method(globalThis, 'fetch', async (path: string, init: RequestInit) => {
     assert.equal(path, '/api/tools/test-email')
-    assert.equal(init.signal, controller.signal)
+    forwarded.push(init.signal)
     assert.deepEqual(JSON.parse(String(init.body)), { saved: { agent_id: 'agent', tool_id: 'tool' }, operations: { set: { smtp_port: 587 }, unset: [] } })
     return Response.json({ ok: true, message: 'Connected' })
   })
   assert.deepEqual(await probeAgentTool({ agentId: 'agent', toolId: 'tool', kind: 'email' }, { set: { smtp_port: 587 }, unset: [] }, controller.signal), { ok: true })
+  assertForwardsCancellation(forwarded, controller)
 })
