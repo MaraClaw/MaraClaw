@@ -2,6 +2,8 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from app.records.agent import AgentRecord
 from app.services import openclaw_hot_cache
 from app.services.llm.turn import ModelBundle
@@ -36,16 +38,22 @@ def test_api_key_lookup_does_not_store_plaintext() -> None:
     assert all("oc-secret" not in key for key in openclaw_hot_cache._store)
 
 
-def test_writes_above_the_sweep_size_evict_only_expired_entries(monkeypatch) -> None:
+def test_writes_above_sweep_size_remove_expired_and_enforce_a_live_entry_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = [100.0]
     monkeypatch.setattr(openclaw_hot_cache, "_now", lambda: clock[0])
     monkeypatch.setattr(openclaw_hot_cache, "_SWEEP_ABOVE", 3)
+    monkeypatch.setattr(openclaw_hot_cache, "_MAX_ENTRIES", 4)
     openclaw_hot_cache.cache_set("expired-a", True, ttl=1.0)
     openclaw_hot_cache.cache_set("expired-b", True, ttl=1.0)
     openclaw_hot_cache.cache_set("live", True, ttl=60.0)
     clock[0] = 102.0
     openclaw_hot_cache.cache_set("new", True, ttl=60.0)
     assert set(openclaw_hot_cache._store) == {"live", "new"}
+    for index in range(3):
+        openclaw_hot_cache.cache_set(f"new-{index}", True)
+    assert openclaw_hot_cache.cache_get("live") is None
+    assert openclaw_hot_cache.cache_get("new") is True
+    assert len(openclaw_hot_cache._store) == 4
 
 
 def test_drop_model_caches_and_agent_key() -> None:

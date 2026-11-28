@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from fastapi import HTTPException
 from httpx import HTTPError
@@ -40,6 +40,7 @@ from app.services.grok_oauth import XAI_OAUTH_CLIENT_ID
 from app.services.grok_subscription import AUTH_KIND_GROK_SUBSCRIPTION, ensure_fresh_access_token as ensure_grok_token
 from app.services.guest_admission import GuestStartPreflightError, assert_start_active, guest_admission
 from app.services.guest_identity import (
+    GUEST_STOP_TIMEOUT_SECONDS,
     GuestOwnershipError,
     guest_container_name,
     guest_resolutions,
@@ -220,6 +221,16 @@ def _clear_runtime(*records: AgentRecord) -> None:
         record.status = AgentStatus.ERROR
         record.container_id = None
         record.container_port = None
+
+
+def _preparation_failure_code(exc: Exception) -> Literal["runtime_failed", "configuration_failed"]:
+    """The code of a failed creation: only a restore error a later start may clear is retried; the rest park the start."""
+    from app.services.agent_materialize import WorkspaceRestoreError
+    from app.services.agent_state_snapshot_restore import AgentStateRestoreError
+
+    return (
+        "runtime_failed" if isinstance(exc, AgentStateRestoreError | WorkspaceRestoreError) else "configuration_failed"
+    )
 
 
 class ContainerStatus(TypedDict):
@@ -677,7 +688,7 @@ class AgentManager:
 
             try:
                 for guest in guests:
-                    await run_docker(partial(client.container.stop, guest.id, time=10))
+                    await run_docker(partial(client.container.stop, guest.id, time=GUEST_STOP_TIMEOUT_SECONDS))
                     _ = await run_docker(type(client.container).remove, client.container, [guest.id])
                 guest_resolutions.drop(agent.id)
                 agent.container_id = None
@@ -695,7 +706,9 @@ class AgentManager:
                         await assert_start_active(operation_id)
                 except (OSError, ValueError, HTTPError, HTTPException) as exc:
                     if not guests:
-                        raise GuestStartPreflightError("Guest start preparation failed") from exc
+                        raise GuestStartPreflightError(
+                            "Guest start preparation failed", code=_preparation_failure_code(exc)
+                        ) from exc
                     _clear_runtime(original, agent)
                     raise GuestStartPreflightError(
                         "Guest state could not be applied after the previous guest stopped", code="runtime_failed"
@@ -717,6 +730,7 @@ class AgentManager:
                         volumes=[guest_state_volume, *gogcli_volumes],
                         envs=container_envs,
                         restart="unless-stopped",
+                        stop_timeout=GUEST_STOP_TIMEOUT_SECONDS,
                         memory=limits.memory_bytes,
                         memory_swap=limits.memory_bytes,
                         cpus=limits.cpus,

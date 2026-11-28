@@ -71,6 +71,7 @@ class GatedObject:
     def backend(self, monkeypatch: pytest.MonkeyPatch) -> S3StorageBackend:
         storage = S3StorageBackend(bucket="bucket")
         monkeypatch.setattr(storage, "_client_or_raise", lambda: self)
+        monkeypatch.setattr(storage, "_read_client_or_raise", lambda: self)
         return storage
 
 

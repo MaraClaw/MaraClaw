@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 from pywhales.exceptions import NoSuchContainer
 
+from app.services.guest_identity import GUEST_STOP_TIMEOUT_SECONDS
+
 
 @dataclass(slots=True)
 class Guest:
@@ -38,7 +40,7 @@ class Containers:
     def stop(self, reference: str, *, time: int) -> None:
         import threading
 
-        assert time == 10
+        assert time == GUEST_STOP_TIMEOUT_SECONDS
         self.threads.append(threading.get_ident())
         self.calls.append(("stop", reference))
 

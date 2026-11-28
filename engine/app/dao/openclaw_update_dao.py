@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 from typing import ClassVar, final
-from uuid import UUID, uuid4
+from uuid import NIL, UUID, uuid4
 
 from app.core.json_types import int_from_row
 from app.core.notification_kinds import NotificationKind
@@ -194,8 +194,8 @@ class OpenClawUpdateRunDAO(BaseDAO[OpenClawUpdateRunRecord]):
             rows = await db.fetchall(
                 f"SELECT {self._select_list()} FROM openclaw_update_runs "
                 "WHERE state = 'succeeded' AND updated_at >= %(since)s "
-                "AND (%(after)s::uuid IS NULL OR id > %(after)s) ORDER BY id LIMIT %(limit)s",
-                {"since": since, "after": after, "limit": SUCCEEDED_SWEEP_LIMIT},
+                "AND id >= %(start)s AND id IS DISTINCT FROM %(after)s ORDER BY id LIMIT %(limit)s",
+                {"since": since, "start": after or NIL, "after": after, "limit": SUCCEEDED_SWEEP_LIMIT},
             )
             return [OpenClawUpdateRunRecord.from_row(row) for row in rows]
 

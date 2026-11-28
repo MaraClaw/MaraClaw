@@ -23,6 +23,8 @@ _COLUMNS = (
     "related_id",
     "created_at",
 )
+_BEFORE = "(created_at, id) < (%(before_created_at)s, %(before_id)s)"
+_PAGE_ORDER = "ORDER BY created_at DESC, id DESC LIMIT %(limit)s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +60,7 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
         action_type: ActivityAction | None = None,
         action_types: Sequence[ActivityAction] | None = None,
         limit: int = 50,
+        before: tuple[datetime, UUID] | None = None,
     ) -> Sequence[AgentActivityLogRecord]:
         params: dict[str, object] = {"agent_id": agent_id, "limit": limit}
         clauses = ["agent_id = %(agent_id)s"]
@@ -67,37 +70,31 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
         if action_types is not None and action_types:
             clauses.append("action_type = ANY(%(action_types)s)")
             params["action_types"] = [action.value for action in action_types]
+        if before is not None:
+            clauses.append(_BEFORE)
+            params["before_created_at"], params["before_id"] = before
         where = " AND ".join(clauses)
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM agent_activity_logs "
-                f"WHERE {where} ORDER BY created_at DESC LIMIT %(limit)s",
+                f"SELECT {self._select_list()} FROM agent_activity_logs WHERE {where} {_PAGE_ORDER}",
                 params,
             )
             return [AgentActivityLogRecord.from_row(row) for row in rows]
 
     async def list_timeline_page(self, query: ActivityTimelineQuery) -> list[ActivityTimelineEntry]:
-        """Order by ``created_at DESC NULLS LAST, id DESC``; the seek clause follows the same order."""
+        """Seek by timestamp and ID; stored timestamps are NOT NULL."""
         params: dict[str, object] = {"agent_id": query.agent_id, "limit": query.limit}
         clauses = ["agent_id = %(agent_id)s"]
         if query.action_type is not None:
             clauses.append("action_type::text = %(action_type)s")
             params["action_type"] = query.action_type
         if query.before is not None:
-            created_at, log_id = query.before
-            params["before_id"] = log_id
-            if created_at is None:
-                clauses.append("(created_at IS NULL AND id < %(before_id)s)")
-            else:
-                params["before_created_at"] = created_at
-                clauses.append(
-                    "(created_at < %(before_created_at)s "
-                    "OR (created_at = %(before_created_at)s AND id < %(before_id)s) OR created_at IS NULL)"
-                )
+            clauses.append(_BEFORE)
+            params["before_created_at"], params["before_id"] = query.before
         async with self.session() as db:
             rows = await db.fetchall(
                 "SELECT id, action_type, summary, created_at FROM agent_activity_logs "
-                f"WHERE {' AND '.join(clauses)} ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %(limit)s",
+                f"WHERE {' AND '.join(clauses)} {_PAGE_ORDER}",
                 params,
             )
             return [
@@ -133,20 +130,11 @@ class AgentActivityLogDAO(BaseDAO[AgentActivityLogRecord]):
             )
             params["outcome"] = outcome
         if before is not None:
-            created_at, log_id = before
-            params["before_id"] = log_id
-            if created_at is None:
-                clauses.append("(created_at IS NULL AND id < %(before_id)s)")
-            else:
-                params["before_created_at"] = created_at
-                clauses.append(
-                    "(created_at < %(before_created_at)s "
-                    "OR (created_at = %(before_created_at)s AND id < %(before_id)s) OR created_at IS NULL)"
-                )
+            clauses.append(_BEFORE)
+            params["before_created_at"], params["before_id"] = before
         async with self.session() as db:
             rows = await db.fetchall(
-                f"SELECT {self._select_list()} FROM agent_activity_logs WHERE {' AND '.join(clauses)} "
-                "ORDER BY created_at DESC NULLS LAST, id DESC LIMIT %(limit)s",
+                f"SELECT {self._select_list()} FROM agent_activity_logs WHERE {' AND '.join(clauses)} {_PAGE_ORDER}",
                 params,
             )
             return [AgentActivityLogRecord.from_row(row) for row in rows]

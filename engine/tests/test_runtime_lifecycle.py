@@ -1,8 +1,9 @@
 import asyncio
+import importlib
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from functools import partial
-from typing import override
+from typing import Final, Literal, override
 
 import anyio
 import httpx
@@ -20,6 +21,8 @@ from test_mcp_recovery import TOOL_RESULT, FakeMCPServer, call
 from worker_progress_fixtures import (
     CONNECTOR_BUDGETED_LOOPS,
     PROCESS_BUDGETED_LOOPS,
+    SUPERVISED_WORKER_LOOPS,
+    UNSUPERVISED_WORKER_LOOPS,
     WORKER_BUDGETED_LOOPS,
     Incarnations,
     Pacing,
@@ -1267,21 +1270,46 @@ async def test_supervised_loop_gives_up_after_its_restart_budget_and_logs_every_
     await tasks.stop()
 
 
-async def test_loops_that_do_not_opt_in_are_never_restarted() -> None:
-    # Given a plain required loop that crashes.
-    incarnations = Incarnations(RuntimeError("crash"))
+@pytest.mark.parametrize("exit_mode", ["crash", "return", "cancel"])
+async def test_an_unsupervised_loop_that_exits_before_shutdown_is_never_restarted_and_is_exhausted(
+    exit_mode: str,
+) -> None:
+    # Given a plain required loop that crashes, returns or is cancelled from outside.
+    outcomes: dict[str, BaseException | Literal["return"] | None] = {
+        "crash": RuntimeError("crash"),
+        "return": "return",
+        "cancel": None,
+    }
+    incarnations = Incarnations(outcomes[exit_mode])
     tasks = OwnedTasks()
     tasks.start("plain", incarnations(), requirement="loop", progress_budget_seconds=300)
     task, _ = tasks.required["plain"]
+    if exit_mode == "cancel":
+        await incarnations.running()
+        _ = task.cancel()
     # When it ends.
     _ = await asyncio.gather(task, return_exceptions=True)
-    # Then it stays dead: no supervisor, no restart state, readiness red.
+    # Then it stays dead: no supervisor, no restart state, never ready, and nothing will ever revive it, so the
+    # process is reported failed.
     assert tasks.tasks == set()
     assert tasks.restarts == {}
-    assert tasks.exhausted == set()
+    assert tasks.exhausted == {"plain"}
     assert len(incarnations.coroutines) == 1
     assert not tasks.ready()
     await tasks.stop()
+
+
+async def test_an_unsupervised_loop_cancelled_by_shutdown_is_not_exhausted() -> None:
+    # Given a running plain required loop.
+    incarnations = Incarnations(None)
+    tasks = OwnedTasks()
+    tasks.start("plain", incarnations(), requirement="loop", progress_budget_seconds=300)
+    await incarnations.running()
+    # When shutdown cancels it.
+    await tasks.stop()
+    # Then it is gone without counting as a dead loop.
+    assert tasks.exhausted == set()
+    assert not tasks.tasks
 
 
 async def test_before_restart_settles_leftovers_between_the_backoff_and_the_new_incarnation() -> None:
@@ -1330,82 +1358,54 @@ async def test_a_failing_restart_hook_leaves_the_loop_down_and_exhausted() -> No
     await tasks.stop()
 
 
-async def test_worker_start_supervises_only_the_mail_loops_with_the_configured_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given a worker runtime whose restart settings are one budget of three and a 1.5 s ceiling, and whose
-    # auth mail loop crashes on every incarnation.
-    from app.process_roles import parse_process_roles
-    from app.services import (
-        agent_resource_pressure_worker,
-        agent_setup,
-        agent_start_reconciler,
-        agent_state_snapshot_worker,
-        agent_workspace_quota_worker,
-        audit_logger,
-        auth_email_worker,
-        broadcast_email_worker,
-        broadcast_fanout_worker,
-        cache_invalidation_worker,
-        capacity_renewal_worker,
-        chat_history_retention_worker,
-        gateway_report_relay,
-        heartbeat,
-        openclaw_delayed_replies,
-        openclaw_dispatch_reconciler,
-        openclaw_update_worker,
-        operational_log_retention_worker,
-        organization_admission_email_worker,
-        scheduler,
-        task_lease,
-        trigger_daemon,
-        workspace_mirror_worker,
-    )
-    from app.services.tavily import export
+WORKER_LOOP_STARTS: Final = (
+    ("app.services.agent_resource_pressure_worker", "start_agent_resource_pressure_worker"),
+    ("app.services.agent_setup", "start_agent_setup_worker"),
+    ("app.services.agent_start_reconciler", "agent_start_reconciler_loop"),
+    ("app.services.agent_state_snapshot_worker", "start_agent_state_snapshot_worker"),
+    ("app.services.agent_workspace_quota_worker", "start_agent_workspace_quota_worker"),
+    ("app.services.auth_email_worker", "start_auth_email_worker"),
+    ("app.services.broadcast_email_worker", "start_broadcast_email_worker"),
+    ("app.services.broadcast_fanout_worker", "start_broadcast_fanout_worker"),
+    ("app.services.cache_invalidation_worker", "start_cache_invalidation_worker"),
+    ("app.services.capacity_renewal_worker", "start_capacity_renewal_worker"),
+    ("app.services.chat_history_retention_worker", "start_chat_history_retention_worker"),
+    ("app.services.gateway_report_relay", "start_gateway_report_relay"),
+    ("app.services.heartbeat", "start_heartbeat"),
+    ("app.services.openclaw_delayed_replies", "openclaw_delayed_reply_loop"),
+    ("app.services.openclaw_dispatch_reconciler", "openclaw_dispatch_reconciler_loop"),
+    ("app.services.openclaw_update_worker", "start_openclaw_update_worker"),
+    ("app.services.operational_log_retention_worker", "start_operational_log_retention_worker"),
+    ("app.services.organization_admission_email_worker", "start_organization_admission_email_worker"),
+    ("app.services.scheduler", "start_scheduler"),
+    ("app.services.task_lease", "task_lease_recovery_loop"),
+    ("app.services.tavily.export", "start_web_search_export_daemon"),
+    ("app.services.trigger_daemon", "start_trigger_daemon"),
+    ("app.services.workspace_mirror_worker", "start_workspace_mirror_worker"),
+)
 
-    pacing = Pacing()
+
+def worker_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    pacing: Pacing,
+    replaced: dict[str, Callable[[], Coroutine[object, object, object]]],
+) -> lifecycle.Runtime:
+    """A worker runtime on ``pacing`` whose every loop parks forever, except the start functions ``replaced`` names."""
+    from app.services import audit_logger
+
     runtime = lifecycle.Runtime()
     runtime.tasks = OwnedTasks(pacing.clock, pacing.wait)
     runtime.readiness = lifecycle.Readiness(runtime.tasks)
     fake_resources(monkeypatch, [])
-    settings = get_settings().model_copy(
-        update={"WORKER_LOOP_RESTART_BUDGET": 3, "WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS": 1.5}
-    )
-    monkeypatch.setattr(lifecycle, "get_settings", lambda: settings)
-    auth_crashes = Incarnations(*(RuntimeError("auth crash") for _ in range(4)))
 
     async def noop(*_args: object) -> None:
         return None
 
-    async def loop() -> None:
+    async def parked() -> None:
         await asyncio.Event().wait()
 
-    for module, attribute in (
-        (agent_resource_pressure_worker, "start_agent_resource_pressure_worker"),
-        (agent_setup, "start_agent_setup_worker"),
-        (agent_start_reconciler, "agent_start_reconciler_loop"),
-        (agent_workspace_quota_worker, "start_agent_workspace_quota_worker"),
-        (broadcast_email_worker, "start_broadcast_email_worker"),
-        (broadcast_fanout_worker, "start_broadcast_fanout_worker"),
-        (cache_invalidation_worker, "start_cache_invalidation_worker"),
-        (capacity_renewal_worker, "start_capacity_renewal_worker"),
-        (chat_history_retention_worker, "start_chat_history_retention_worker"),
-        (export, "start_web_search_export_daemon"),
-        (gateway_report_relay, "start_gateway_report_relay"),
-        (heartbeat, "start_heartbeat"),
-        (openclaw_delayed_replies, "openclaw_delayed_reply_loop"),
-        (openclaw_dispatch_reconciler, "openclaw_dispatch_reconciler_loop"),
-        (openclaw_update_worker, "start_openclaw_update_worker"),
-        (operational_log_retention_worker, "start_operational_log_retention_worker"),
-        (organization_admission_email_worker, "start_organization_admission_email_worker"),
-        (scheduler, "start_scheduler"),
-        (task_lease, "task_lease_recovery_loop"),
-        (trigger_daemon, "start_trigger_daemon"),
-        (workspace_mirror_worker, "start_workspace_mirror_worker"),
-        (agent_state_snapshot_worker, "start_agent_state_snapshot_worker"),
-    ):
-        monkeypatch.setattr(module, attribute, loop)
-    monkeypatch.setattr(auth_email_worker, "start_auth_email_worker", auth_crashes)
+    for module_path, attribute in WORKER_LOOP_STARTS:
+        monkeypatch.setattr(importlib.import_module(module_path), attribute, replaced.get(attribute, parked))
     monkeypatch.setattr(audit_logger, "write_audit_log", noop)
     monkeypatch.setattr(lifecycle, "configure_logging", lambda **_kwargs: None)
     monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
@@ -1414,23 +1414,142 @@ async def test_worker_start_supervises_only_the_mail_loops_with_the_configured_b
     monkeypatch.setattr(lifecycle, "get_redis", noop)
     monkeypatch.setattr(runtime.incidents, "start", lambda: None)
     monkeypatch.setattr(runtime.incidents, "stop", noop)
+    return runtime
+
+
+async def test_worker_start_supervises_the_audited_loops_with_the_configured_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a worker runtime whose restart settings are one budget of three and a 1.5 s ceiling, and whose
+    # auth mail loop crashes on every incarnation.
+    from app.process_roles import parse_process_roles
+
+    pacing = Pacing()
+    auth_crashes = Incarnations(*(RuntimeError("auth crash") for _ in range(4)))
+    runtime = worker_runtime(monkeypatch, pacing, {"start_auth_email_worker": auth_crashes})
+    settings = get_settings().model_copy(
+        update={"WORKER_LOOP_RESTART_BUDGET": 3, "WORKER_LOOP_RESTART_MAX_BACKOFF_SECONDS": 1.5}
+    )
+    monkeypatch.setattr(lifecycle, "get_settings", lambda: settings)
     # When the runtime starts and the auth loop keeps crashing through its budget.
     await runtime.start(parse_process_roles("worker"))
     try:
-        assert set(runtime.tasks.restarts) == {"auth_email", "broadcast_email"}
+        # Then every audited loop is supervised, and the ones whose exit a restart cannot repair are not.
+        assert set(runtime.tasks.restarts) == SUPERVISED_WORKER_LOOPS
+        assert set(runtime.tasks.required) >= UNSUPERVISED_WORKER_LOOPS
         supervisor = next(task for task in runtime.tasks.tasks if task.get_name() == "auth_email-supervisor")
         delays: list[float] = []
         for _ in range(3):
             delays.append(await pacing.next_wait())
             pacing.release()
         _ = await asyncio.wait_for(supervisor, 2)
-        # Then the settings drove the budget and the ceiling, and only the auth loop is down for good.
+        # And the settings drove the budget and the ceiling, and only the auth loop is down for good.
         assert delays == [1.0, 1.5, 1.5]
         assert runtime.tasks.exhausted == {"auth_email"}
-        assert runtime.tasks.restarts == {"auth_email": 3, "broadcast_email": 0}
+        assert runtime.tasks.restarts == {**dict.fromkeys(SUPERVISED_WORKER_LOOPS, 0), "auth_email": 3}
         assert not runtime.readiness.alive()
     finally:
         await runtime.stop()
+
+
+async def test_admission_email_restarts_only_after_the_abandoned_sends_settle(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a worker whose admission mail loop and heartbeat each crash once, and a hook standing in for the SMTP
+    # sends a crashed mail batch leaves behind.
+    from app.process_roles import parse_process_roles
+    from app.services import system_email_service
+
+    pacing = Pacing()
+    hook_entered, sends_settled = asyncio.Event(), asyncio.Event()
+    settled_waits: list[None] = []
+
+    async def wait_for_abandoned_sends() -> None:
+        settled_waits.append(None)
+        hook_entered.set()
+        await sends_settled.wait()
+
+    monkeypatch.setattr(system_email_service, "wait_for_abandoned_sends", wait_for_abandoned_sends)
+    admission = Incarnations(RuntimeError("smtp attempt timed out"), None)
+    heartbeat_loop = Incarnations(RuntimeError("tick crashed"), None)
+    runtime = worker_runtime(
+        monkeypatch,
+        pacing,
+        {"start_organization_admission_email_worker": admission, "start_heartbeat": heartbeat_loop},
+    )
+    await runtime.start(parse_process_roles("worker"))
+    try:
+        # When both backoffs end.
+        for _ in range(2):
+            assert await pacing.next_wait() == 1.0
+            pacing.release()
+        await heartbeat_loop.running()
+        await asyncio.wait_for(hook_entered.wait(), 2)
+        # Then the heartbeat restarted at once while the admission loop waits for the abandoned sends.
+        assert len(heartbeat_loop.coroutines) == 2
+        assert len(admission.coroutines) == 1
+        sends_settled.set()
+        await admission.running()
+        # And only the mail loop waited: the admission loop started its new incarnation after the hook.
+        assert len(admission.coroutines) == 2
+        assert len(settled_waits) == 1
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.parametrize(("role", "syncs"), [("bootstrap", True), ("api", False)])
+async def test_default_skill_sync_runs_as_an_owned_task_started_after_the_seeds_and_cancelled_on_stop(
+    monkeypatch: pytest.MonkeyPatch, role: str, syncs: bool
+) -> None:
+    # Given a runtime whose pool, seeds and default-skill sweep record their order, the sweep never finishing.
+    from app.process_roles import parse_process_roles
+    from app.services import audit_logger
+
+    events: list[str] = []
+    fake_resources(monkeypatch, events)
+    sync_started = asyncio.Event()
+
+    async def noop(*_args: object) -> None:
+        return None
+
+    async def init_pool() -> None:
+        events.append("pool")
+
+    async def bootstrap() -> None:
+        events.append("bootstrap")
+
+    async def sync() -> None:
+        events.append("sync")
+        sync_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            events.append("sync cancelled")
+
+    monkeypatch.setattr(lifecycle, "init_pool", init_pool)
+    monkeypatch.setattr(lifecycle, "bootstrap", bootstrap)
+    monkeypatch.setattr(lifecycle, "sync_default_skills", sync)
+    monkeypatch.setattr(lifecycle, "configure_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "intercept_standard_logging", lambda: None)
+    monkeypatch.setattr(lifecycle, "log_bwrap_startup_status", lambda: None)
+    monkeypatch.setattr(lifecycle, "get_redis", noop)
+    monkeypatch.setattr(lifecycle.realtime_router, "start", noop)
+    monkeypatch.setattr(audit_logger, "write_audit_log", noop)
+    runtime = lifecycle.Runtime()
+    monkeypatch.setattr(runtime.incidents, "start", lambda: None)
+    monkeypatch.setattr(runtime.incidents, "stop", noop)
+    # When the runtime starts and later stops.
+    await asyncio.wait_for(runtime.start(parse_process_roles(role)), 5)
+    try:
+        if syncs:
+            await asyncio.wait_for(sync_started.wait(), 5)
+        # Then startup finished without waiting for the sweep, which began after the pool and the seeds, and only
+        # in a process that runs the seeds.
+        assert events == (["pool", "bootstrap", "sync"] if syncs else ["pool"])
+    finally:
+        await runtime.stop()
+    # And stopping cancels the sweep before the database closes.
+    assert ("sync cancelled" in events) == syncs
+    if syncs:
+        assert events.index("sync cancelled") < events.index("database")
 
 
 async def test_runtime_runs_the_event_loop_lag_sampler_from_settings_and_cancels_it_before_the_pool_closes(

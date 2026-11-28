@@ -4,6 +4,7 @@ import hmac
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,9 @@ from app.api.metrics import build_metrics_router
 from app.config import Settings, get_settings
 from app.core import metrics
 from app.db import pool as pool_module
+from app.runtime.readiness import Readiness
+from app.runtime.tasks import OwnedTasks, RestartPolicy
+from worker_progress_fixtures import Incarnations, Pacing
 
 TOKEN = "s3cret-token"
 
@@ -218,7 +222,65 @@ async def test_the_metrics_route_serves_prometheus_text_to_the_right_token(schem
     assert response.status_code == 200
     assert response.headers["Content-Type"] == "text/plain; version=0.0.4; charset=utf-8"
     assert response.text.endswith("\n")
-    assert "# TYPE maraclaw_http_request_duration_seconds histogram" in response.text.splitlines()
+    assert {
+        "# TYPE maraclaw_http_request_duration_seconds histogram",
+        "# TYPE maraclaw_cache_redis_calls_total counter",
+        "# TYPE maraclaw_cache_redis_breaker_open gauge",
+        "# TYPE maraclaw_rate_limit_fail_open_total counter",
+        "# TYPE maraclaw_cache_invalidation_settled_total counter",
+        "# TYPE maraclaw_cache_invalidation_retried_total counter",
+        "# TYPE maraclaw_cache_invalidation_fenced_total counter",
+        "# TYPE maraclaw_cache_invalidation_last_batch_size gauge",
+        "# TYPE maraclaw_wecom_kf_budget_stopped_total counter",
+    } <= set(response.text.splitlines())
+
+
+async def test_a_scrape_reports_each_required_loop_by_name_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given a worker whose plain loop runs, whose second plain loop has died, and whose supervised loop was restarted
+    # once and has not beaten since.
+    pacing = Pacing()
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    running, died, crashing = Incarnations(None), Incarnations("return"), Incarnations(RuntimeError("crash"), None)
+    tasks.start("busy", running(), requirement="loop", progress_budget_seconds=300)
+    tasks.start("dead", died(), requirement="loop", progress_budget_seconds=300)
+    tasks.start_supervised("mail", crashing, progress_budget_seconds=300, policy=RestartPolicy(5, 30.0))
+    _ = await pacing.next_wait()
+    pacing.release()
+    await crashing.running()
+    await running.running()
+    pacing.now = 40.0
+    app = _app()
+    app.state.readiness = Readiness(tasks)
+
+    def no_health_probe(self: Readiness) -> None:
+        pytest.fail("the scrape must not log or mutate readiness transitions")
+
+    monkeypatch.setattr(Readiness, "observe_loops", no_health_probe)
+
+    # When scraped.
+    response = await _scrape(app, f"Bearer {TOKEN}")
+
+    # Then every loop has its own series, labelled by the loop name alone.
+    lines = set(response.text.splitlines())
+    assert {
+        'maraclaw_worker_loop_ready{loop="busy"} 1',
+        'maraclaw_worker_loop_ready{loop="dead"} 0',
+        'maraclaw_worker_loop_ready{loop="mail"} 0',
+        'maraclaw_worker_loop_stale{loop="busy"} 0',
+        'maraclaw_worker_loop_exhausted{loop="busy"} 0',
+        'maraclaw_worker_loop_exhausted{loop="dead"} 1',
+        'maraclaw_worker_loop_restarts_total{loop="busy"} 0',
+        'maraclaw_worker_loop_restarts_total{loop="mail"} 1',
+        'maraclaw_worker_loop_seconds_since_beat{loop="busy"} 40',
+        "# TYPE maraclaw_worker_loop_ready gauge",
+        "# TYPE maraclaw_worker_loop_restarts_total counter",
+    } <= lines
+    assert all(
+        re.fullmatch(r'maraclaw_worker_loop_\w+\{loop="[a-z]+"\} \S+', line)
+        for line in lines
+        if line.startswith("maraclaw_worker_loop_")
+    )
+    await tasks.stop()
 
 
 async def test_the_token_is_compared_in_constant_time(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -26,6 +26,7 @@ from app.services.agent_manager import (
     XAI_OAUTH_PROFILE_ID,
     AgentManager,
 )
+from app.services.guest_identity import GUEST_STOP_TIMEOUT_SECONDS
 from app.services.guest_limits import GuestLimits
 from app.services.tavily.tokens import parse_proxy_token
 
@@ -670,6 +671,7 @@ async def test_start_container_writes_openclaw_config_at_state_root_and_passes_e
     assert run_kwargs["networks"] == [settings.DOCKER_NETWORK]
     assert run_kwargs["publish"] == [(f"127.0.0.1:{agent.container_port}", settings.OPENCLAW_GATEWAY_PORT)]
     assert run_kwargs["restart"] == "unless-stopped"
+    assert run_kwargs["stop_timeout"] == GUEST_STOP_TIMEOUT_SECONDS
     assert run_kwargs["labels"] == {
         "maraclaw.agent_id": str(agent.id),
         "maraclaw.agent_name": agent.name,
@@ -788,7 +790,7 @@ async def test_stop_container_clears_status_and_container_id_when_container_miss
     assert stopped is True
     assert agent.status == "stopped"
     assert agent.container_id is None
-    assert docker_client.container.stop_calls == [("missing-container", {"time": 10})]
+    assert docker_client.container.stop_calls == [("missing-container", {"time": GUEST_STOP_TIMEOUT_SECONDS})]
 
 
 async def test_remove_container_clears_only_container_id_when_container_missing(monkeypatch):
@@ -821,7 +823,7 @@ async def test_remove_container_clears_only_container_id_when_container_missing(
     assert removed is True
     assert agent.container_id is None
     assert agent.container_port == 19876
-    assert docker_client.container.stop_calls == [("missing-container", {"time": 10})]
+    assert docker_client.container.stop_calls == [("missing-container", {"time": GUEST_STOP_TIMEOUT_SECONDS})]
 
 
 async def test_stop_and_remove_container_use_pywhales_api_stop_time_and_remove(monkeypatch):
@@ -850,8 +852,8 @@ async def test_stop_and_remove_container_use_pywhales_api_stop_time_and_remove(m
     assert stopped is True
     assert removed is True
     assert docker_client.container.stop_calls == [
-        ("running-container", {"time": 10}),
-        ("running-container", {"time": 10}),
+        ("running-container", {"time": GUEST_STOP_TIMEOUT_SECONDS}),
+        ("running-container", {"time": GUEST_STOP_TIMEOUT_SECONDS}),
     ]
     assert docker_client.container.remove_calls == [["running-container"]]
     assert agent.status == "stopped"

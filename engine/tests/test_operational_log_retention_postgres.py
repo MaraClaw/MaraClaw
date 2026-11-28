@@ -26,6 +26,7 @@ from psycopg.rows import DictRow, dict_row
 
 from app.config import MIN_CHANNEL_EVENT_RECEIPT_RETENTION_DAYS, MIN_GATEWAY_MESSAGE_RETENTION_DAYS, get_settings
 from app.dao.activity_log_dao import agent_activity_log_dao
+from app.dao.audit_log_dao import audit_log_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
@@ -146,6 +147,16 @@ async def add_activity(h: RetentionDatabase, created_at: datetime) -> UUID:
     await h.first.execute(
         "INSERT INTO agent_activity_logs (id, agent_id, action_type, summary, created_at) "
         "VALUES (%(id)s, %(agent)s, 'chat_reply', 'summary', %(at)s)",
+        {"id": log_id, "agent": h.agent_id, "at": created_at},
+    )
+    return log_id
+
+
+async def add_audit(h: RetentionDatabase, created_at: datetime) -> UUID:
+    log_id = uuid4()
+    await h.first.execute(
+        "INSERT INTO audit_logs (id, agent_id, action, details, created_at) "
+        "VALUES (%(id)s, %(agent)s, 'tool_call', '{}', %(at)s)",
         {"id": log_id, "agent": h.agent_id, "at": created_at},
     )
     return log_id
@@ -302,6 +313,10 @@ async def purge_activity(db: DbConnection, limit: int) -> int:
     return await agent_activity_log_dao.purge_older_than(older_than=CUTOFF, limit=limit)
 
 
+async def purge_audit(db: DbConnection, limit: int) -> int:
+    return await audit_log_dao.purge_older_than(older_than=CUTOFF, limit=limit)
+
+
 async def purge_executions(db: DbConnection, limit: int) -> int:
     return await trigger_execution_dao.purge_finished_before(finished_before=CUTOFF, limit=limit)
 
@@ -312,6 +327,10 @@ async def reclaim_gateway(db: DbConnection, limit: int) -> int:
 
 async def seed_expired_activity(h: RetentionDatabase, offset_minutes: int) -> UUID:
     return await add_activity(h, OLD + timedelta(minutes=offset_minutes))
+
+
+async def seed_expired_audit(h: RetentionDatabase, offset_minutes: int) -> UUID:
+    return await add_audit(h, OLD + timedelta(minutes=offset_minutes))
 
 
 async def seed_expired_execution(h: RetentionDatabase, offset_minutes: int) -> UUID:
@@ -363,6 +382,13 @@ TABLES = {
         seed_expired_activity,
         "SELECT id FROM agent_activity_logs",
         "ix_agent_activity_logs_created_at",
+    ),
+    "audit_logs": Table(
+        "audit_logs",
+        purge_audit,
+        seed_expired_audit,
+        "SELECT id FROM audit_logs",
+        "ix_audit_logs_created_at",
     ),
     "trigger_executions": Table(
         "trigger_executions",
@@ -440,6 +466,7 @@ async def test_baseline_creates_the_cutoff_indexes_idempotently(retention_db: Re
         rows = await h.first.fetchall(
             "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema() "
             "AND indexname IN ('ix_trigger_executions_finished_at', 'ix_agent_activity_logs_created_at', "
+            "'ix_audit_logs_created_at', "
             "'ix_gateway_messages_completed_at')"
         )
     # Then each cutoff index exists once, the execution one partial on the terminal statuses and the gateway one on
@@ -448,6 +475,7 @@ async def test_baseline_creates_the_cutoff_indexes_idempotently(retention_db: Re
     assert set(definitions) == {
         "ix_trigger_executions_finished_at",
         "ix_agent_activity_logs_created_at",
+        "ix_audit_logs_created_at",
         "ix_gateway_messages_completed_at",
     }
     finished = definitions["ix_trigger_executions_finished_at"]
@@ -455,6 +483,7 @@ async def test_baseline_creates_the_cutoff_indexes_idempotently(retention_db: Re
     assert "completed" in finished
     assert "failed" in finished
     assert "(created_at)" in definitions["ix_agent_activity_logs_created_at"]
+    assert "(created_at)" in definitions["ix_audit_logs_created_at"]
     reclaimable = definitions["ix_gateway_messages_completed_at"]
     assert "(completed_at)" in reclaimable
     assert "'completed'" in reclaimable
@@ -830,6 +859,13 @@ async def test_purge_statement_can_use_the_cutoff_index(
                 "INSERT INTO workspace_file_revisions (id, agent_id, path, operation, actor_type, content_hash, "
                 "created_at, updated_at) SELECT gen_random_uuid(), %(agent)s, 'file-' || (g %% 300), 'write', 'user', "
                 "'hash', %(at)s + g * interval '1 minute', %(at)s + g * interval '1 minute' FROM generate_series(1, 3000) g",
+                {"agent": h.agent_id, "at": OLD},
+            )
+        elif name == "audit_logs":
+            await h.first.execute(
+                "INSERT INTO audit_logs (id, agent_id, action, details, created_at) "
+                "SELECT gen_random_uuid(), %(agent)s, 'tool_call', '{}', %(at)s + g * interval '1 minute' "
+                "FROM generate_series(1, 3000) g",
                 {"agent": h.agent_id, "at": OLD},
             )
         else:

@@ -18,12 +18,12 @@ from app.core.json_types import (
 from app.core.redis_cache import (
     bump_version,
     cache_delete,
-    cache_get_json,
+    cache_fill_json,
     cache_key,
-    cache_set_json,
     ensure_version,
     has_pending_snapshot_writes,
-    read_version,
+    parse_json,
+    read_keys,
 )
 from app.records.organization_plan import OrganizationPlanId
 from app.records.tenant import TenantRecord
@@ -144,11 +144,12 @@ def _load(data: object) -> TenantRecord | None:
 async def get_cached_tenant(tenant_id: UUID) -> TenantRecord | None:
     if _ttl() <= 0 or has_pending_snapshot_writes():
         return None
-    cached: object = await cache_get_json(_row_key(tenant_id))
-    if not is_json_object(cached):
+    # The snapshot and the generation that gates it come back in one round trip.
+    values = await read_keys([_row_key(tenant_id), _ver_key(tenant_id)])
+    if values is None or values[0] is None or values[1] is None:
         return None
-    current = await read_version(_ver_key(tenant_id))
-    if current is None or current.value is None or cached.get("ver") != current.value:
+    cached = parse_json(values[0])
+    if not is_json_object(cached) or cached.get("ver") != values[1]:
         return None
     return _load(cached)
 
@@ -162,10 +163,9 @@ async def peek_tenant_version(tenant_id: UUID) -> str | None:
 async def set_cached_tenant(tenant: TenantRecord, *, observed_ver: str | None = None) -> None:
     if _ttl() <= 0 or has_pending_snapshot_writes() or observed_ver is None:
         return
-    ver = await read_version(_ver_key(tenant.id))
-    if ver is None or ver.value is None or ver.value != observed_ver:
-        return
-    _ = await cache_set_json(_row_key(tenant.id), _dump(tenant, observed_ver), ttl=_ttl())
+    _ = await cache_fill_json(
+        _row_key(tenant.id), _dump(tenant, observed_ver), ttl=_ttl(), fences=[(_ver_key(tenant.id), observed_ver)]
+    )
 
 
 async def bump_tenant_cache(tenant_id: UUID | None) -> None:

@@ -1,6 +1,6 @@
-"""Bounded, periodic deletion of old operational rows: agent activity logs, finished trigger executions, notifications,
-done tasks with their logs, channel event receipts, finished gateway report deliveries and superseded workspace file
-revisions, plus reclaim of the content and result of old completed gateway messages (the rows themselves stay).
+"""Bounded, periodic deletion of old operational rows: agent activity and audit logs, finished trigger executions,
+notifications, done tasks with their logs, channel event receipts, finished gateway report deliveries and superseded
+workspace file revisions. Old completed gateway messages lose their content and result but keep the row.
 
 Every table is opt-in through its own retention setting; 0 keeps its rows forever and issues no SQL for it."""
 
@@ -15,6 +15,7 @@ from psycopg import Error as PsycopgError
 from app.config import Settings, get_settings
 from app.core.logging import logger
 from app.dao.activity_log_dao import agent_activity_log_dao
+from app.dao.audit_log_dao import audit_log_dao
 from app.dao.channel_event_receipt_dao import channel_event_receipt_dao
 from app.dao.gateway_message_dao import gateway_message_dao
 from app.dao.gateway_report_delivery_dao import gateway_report_delivery_dao
@@ -85,6 +86,11 @@ _TABLES: Final = (
         "workspace revision",
         lambda settings: settings.WORKSPACE_REVISION_RETENTION_DAYS,
         lambda cutoff, limit: workspace_file_revision_dao.purge_superseded_before(created_before=cutoff, limit=limit),
+    ),
+    _Table(
+        "audit log",
+        lambda settings: settings.AUDIT_LOG_RETENTION_DAYS,
+        lambda cutoff, limit: audit_log_dao.purge_older_than(older_than=cutoff, limit=limit),
     ),
 )
 

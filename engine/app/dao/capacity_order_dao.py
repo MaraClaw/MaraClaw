@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import ClassVar, Final, final
-from uuid import UUID, uuid4
+from uuid import NIL, UUID, uuid4
 
 from app.core.json_types import uuid_from_row
 from app.dao.base import BaseDAO
@@ -236,11 +236,11 @@ class CapacityOrderDAO(BaseDAO[CapacityOrderRecord]):
             rows = await db.fetchall(
                 "SELECT DISTINCT o.tenant_id FROM capacity_orders o "
                 "WHERE o.billing_month = %(previous)s AND o.status = 'approved' "
-                "AND (%(after)s::uuid IS NULL OR o.tenant_id > %(after)s) "
+                "AND o.tenant_id >= %(start)s AND o.tenant_id IS DISTINCT FROM %(after)s "
                 "AND NOT EXISTS (SELECT 1 FROM capacity_orders p WHERE p.tenant_id = o.tenant_id "
                 "AND p.billing_month = %(month)s AND p.kind = 'renewal' AND p.source_order_id IS NULL) "
                 "ORDER BY o.tenant_id LIMIT %(limit)s",
-                {"previous": previous_month, "month": month, "after": after, "limit": limit},
+                {"previous": previous_month, "month": month, "start": after or NIL, "after": after, "limit": limit},
             )
             return [uuid_from_row(row["tenant_id"]) for row in rows]
 

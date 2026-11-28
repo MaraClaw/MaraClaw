@@ -21,6 +21,7 @@ from app.services.workspace_mirror_local import unsettled
 ROOT_FILES = frozenset({"AGENTS.md", "HEARTBEAT.md", "soul.md", "state.json"})
 SETTLE_SECONDS = 5
 MAX_ENTRIES = 20_000
+MAX_DEPTH = 64
 MAX_FILE_BYTES = int(max(OrganizationFileLimitBytes))
 
 _TREE_ROOTS = ("workspace", "memory", "daily_reports", "skills")
@@ -41,7 +42,6 @@ _EXCLUDED_NAMES = (
     "*.part",
 )
 _GUEST_ROOT = "/home/node/custom-state/"
-_MAX_DEPTH = 64
 _DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
@@ -216,8 +216,8 @@ def walk_local(
                 _ = levels.pop()
                 os.close(level.fd)
                 continue
-            if len(levels) > _MAX_DEPTH:
-                raise WalkLimitError(f"Directories nested deeper than {_MAX_DEPTH} levels")
+            if len(levels) > MAX_DEPTH:
+                raise WalkLimitError(f"Directories nested deeper than {MAX_DEPTH} levels")
             name = level.pending.pop()
             try:
                 fd = os.open(name, _DIRECTORY, dir_fd=level.fd)

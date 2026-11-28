@@ -12,7 +12,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 
 | Concern / symbol | Location and contract |
 |---|---|
-| `app`, `lifespan` | `app/main.py` assembles middleware, flat `app/api/` routers, health/version; imports lifespan from `app/runtime/lifecycle.py`. Read `app/runtime/AGENTS.md`. `/api/health` is a pool ping (503 if down); `/api/live` is the dependency-free container liveness (503 only after a required loop spent its restarts). |
+| `app`, `lifespan` | `app/main.py` assembles middleware, flat `app/api/` routers, health/version; imports lifespan from `app/runtime/lifecycle.py`. Read `app/runtime/AGENTS.md`. `/api/health` is a pool ping (503 if down); `/api/live` is the dependency-free container liveness (503 only after a supervised loop spent its restarts or an unsupervised required loop ended outside shutdown). |
 | `Settings`, `get_settings` | `app/config.py`, `.env.example`: case-sensitive settings, JWT/Tavily/genesis env. |
 | `init_pool`, `ping_pool`, `connection_ctx`, `BaseDAO` | `app/db/pool.py`, `app/db/session.py`, `app/dao/base.py`: global pool, commit-on-success/nested join, CRUD + `app/records/` dataclass defaults/`from_row`, no ORM. `app/core/events.py` owns Redis events. |
 | Auth / authorization | `app/core/security.py`: JWT/bcrypt, `load_user_from_access_token`, `load_user_principal`; `app/core/permissions.py`: `check_agent_access(user, agent_id)`, no DB placeholder. |
@@ -20,7 +20,7 @@ FastAPI multi-tenant digital employees: pure psycopg3/Postgres, Redis Pub/Sub, w
 | Additional admins / audit | `app/services/admin_provisioning.py`, `app/services/admin_audit.py`, `admin_audit_logs`; RBAC inventory: `docs/admin-apis.md`. |
 | Org departments | `app/api/departments.py`, `app/services/org_departments.py`, `app/dao/org_department_dao.py`: flat, manually managed tenant directory. Provider organization sync is retired. See `app/api/AGENTS.md`. |
 | `logger` | `app/core/logging/`: queued process logger facade. |
-| Metrics | `app/core/metrics.py` (Prometheus text, request latency by route template, pool and log-drop series), `app/api/metrics.py` (`GET /api/metrics`, Bearer `METRICS_TOKEN`, absent while it is empty), `app/runtime/loop_lag.py` (event-loop lag sampler), `app.db.pool.pool_stats()`. Contract: `app/core/AGENTS.md` (Metrics). |
+| Metrics | `app/core/metrics.py` (Prometheus text, request latency by route template, pool and log-drop series), `app/api/metrics.py` (`GET /api/metrics`, Bearer `METRICS_TOKEN`, absent while it is empty), `app/runtime/loop_lag.py` (event-loop lag sampler), `maraclaw_worker_loop_*` (per-loop readiness, rendered by `app/api/metrics.py` from `OwnedTasks.loop_snapshots()`), `app.db.pool.pool_stats()`. Contract: `app/core/AGENTS.md` (Metrics). |
 | Tools / `TOOL_HANDLERS` | Under `app/services/`: `agent_tool_exec/registry.py` (`@register`), `tool_definitions/`, `agent_tools_definitions/`, `tool_runtime/`; seed vs OpenAI catalogs. `read_webpage`, `search_x` (xAI); Tavily skills handle web search. |
 | LLM | `app/services/llm/`: `caller.py` orchestrates, `factory.py` builds registered protocol clients; shared types from `base.py` / `types.py`. |
 | Storage / sandbox / workers / channels | Under `app/services/`: mixed flat files + `storage_runtime/`, `sandbox/registry.py` (`get_sandbox_backend`), `trigger_runtime/`, `realtime_runtime/`, `channels/`, `tavily/`, `*_stream.py`, `*_gateway.py`; facades `storage.py`, `realtime.py`. |

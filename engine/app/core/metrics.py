@@ -104,6 +104,16 @@ def observe_event_loop_lag(seconds: float) -> None:
     EVENT_LOOP_LAG_SECONDS.observe(seconds)
 
 
+def counter_family(name: str, help_text: str, values: Iterable[tuple[Labels, float]]) -> Family:
+    """A counter family; ``_total`` is appended to ``name`` when it is absent. Counters live in the caller, per process."""
+    total = name if name.endswith("_total") else f"{name}_total"
+    return Family(total, "counter", help_text, tuple(Sample(total, labels, value) for labels, value in values))
+
+
+def gauge_family(name: str, help_text: str, values: Iterable[tuple[Labels, float]]) -> Family:
+    return Family(name, "gauge", help_text, tuple(Sample(name, labels, value) for labels, value in values))
+
+
 def _per_pool(
     name: str,
     kind: Literal["counter", "gauge"],
@@ -111,7 +121,8 @@ def _per_pool(
     readings: Sequence[PoolStats],
     value: Callable[[PoolStats], float],
 ) -> Family:
-    return Family(name, kind, help_text, tuple(Sample(name, (("pool", pool.name),), value(pool)) for pool in readings))
+    values = (((("pool", pool.name),), value(pool)) for pool in readings)
+    return counter_family(name, help_text, values) if kind == "counter" else gauge_family(name, help_text, values)
 
 
 def _pool_families() -> tuple[Family, ...]:
@@ -177,12 +188,10 @@ def _pool_families() -> tuple[Family, ...]:
 
 
 def _log_family() -> Family:
-    name = "maraclaw_log_records_dropped_total"
-    return Family(
-        name,
-        "counter",
+    return counter_family(
+        "maraclaw_log_records_dropped",
         "Log records rejected because the write queue was full.",
-        (Sample(name, (), get_logging_service().dropped_total),),
+        (((), get_logging_service().dropped_total),),
     )
 
 
@@ -216,6 +225,14 @@ def render(families: Iterable[Family]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_metrics() -> str:
-    """The whole scrape: request latency, event-loop lag, pool saturation and log drops, as Prometheus text."""
-    return render((HTTP_REQUEST_SECONDS.collect(), EVENT_LOOP_LAG_SECONDS.collect(), *_pool_families(), _log_family()))
+def render_metrics(additional: Iterable[Family] = ()) -> str:
+    """The whole scrape: request latency, event-loop lag, pool saturation and log drops, then the callers' families."""
+    return render(
+        (
+            HTTP_REQUEST_SECONDS.collect(),
+            EVENT_LOOP_LAG_SECONDS.collect(),
+            *_pool_families(),
+            _log_family(),
+            *additional,
+        )
+    )

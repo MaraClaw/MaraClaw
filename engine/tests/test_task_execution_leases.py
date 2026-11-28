@@ -11,6 +11,7 @@ from app.db.errors import DbError
 from app.records.task import TaskClaim, TaskRecord
 from app.services import activity_logger, agent_context, llm, task_executor, task_lease
 from app.services.llm.background_guard import BackgroundCallOutcome
+from loop_clock_fixtures import freeze_loop_clock
 from worker_progress_fixtures import WorkerHTTP, worker_http
 
 __all__ = ["worker_http"]
@@ -306,3 +307,43 @@ async def test_failed_recovery_pass_does_not_beat_so_readiness_goes_stale_then_r
     recover.side_effect = None
     await worker_http.pacing.step()
     await worker_http.ready(expected=True)
+
+
+async def test_spent_run_budget_releases_the_claim_with_the_budget_reason_before_the_lease_could_lapse(
+    monkeypatch, execution
+):
+    # Given a model call that never returns and a 100-second budget on a loop clock only the test moves.
+    task, claim, released, completed = execution
+    clock = freeze_loop_clock(monkeypatch)
+    monkeypatch.setattr(task_executor, "get_settings", lambda: SimpleNamespace(TASK_RUN_BUDGET_SECONDS=100.0))
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def model(**_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(llm, "call_agent_llm_with_tools", model)
+    run = asyncio.create_task(task_executor.execute_task(task.id, task.agent_id))
+    await started.wait()
+    # When the budget runs out inside the lease window.
+    await clock.advance(100)
+    assert run.done()
+    await run
+    # Then the work was cancelled and the claim released with the budget reason, while the lease was still valid.
+    assert task_lease.TASK_LEASE_SECONDS > 100
+    assert cancelled.is_set()
+    released.assert_awaited_once_with(claim, log=f"❌ {task_executor.RUN_TIMEOUT_ERROR}")
+    completed.assert_not_awaited()
+
+
+async def test_a_timeout_error_raised_by_the_work_releases_as_an_execution_error(monkeypatch, execution):
+    task, claim, released, completed = execution
+    monkeypatch.setattr(llm, "call_agent_llm_with_tools", AsyncMock(side_effect=TimeoutError("socket stalled")))
+
+    await task_executor.execute_task(task.id, task.agent_id)
+
+    released.assert_awaited_once_with(claim, log="❌ Execution error: socket stalled")
+    completed.assert_not_awaited()

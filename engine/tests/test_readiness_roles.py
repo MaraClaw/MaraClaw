@@ -9,7 +9,12 @@ from app.process_roles import parse_process_roles, role_enabled
 from app.runtime import connectors, lifecycle, readiness
 from app.runtime.tasks import OwnedTasks
 from producer_admission_fixtures import producer_admission
-from worker_progress_fixtures import CONNECTOR_BUDGETED_LOOPS, PROCESS_BUDGETED_LOOPS, WORKER_BUDGETED_LOOPS
+from worker_progress_fixtures import (
+    CONNECTOR_BUDGETED_LOOPS,
+    PROCESS_BUDGETED_LOOPS,
+    SUPERVISED_WORKER_LOOPS,
+    WORKER_BUDGETED_LOOPS,
+)
 
 __all__ = ["producer_admission"]
 
@@ -39,6 +44,8 @@ async def _background_admission() -> AsyncGenerator[None]:
         "openclaw_dispatch",
         "chat_history_retention",
         "operational_log_retention",
+        "organization_admission_email",
+        "openclaw_update",
         "whatsapp_personal",
     ],
 )
@@ -173,9 +180,7 @@ async def test_actual_start_registers_required_role_evidence(
                 task, finite = required[worker_name]
                 assert not finite
                 assert not task.done()
-        assert set(runtime.tasks.restarts) == (
-            {"auth_email", "broadcast_email"} if role_enabled(roles, "worker") else set()
-        )
+        assert set(runtime.tasks.restarts) == (SUPERVISED_WORKER_LOOPS if role_enabled(roles, "worker") else set())
         assert runtime.readiness.alive()
         serving = any(role_enabled(roles, serving_role) for serving_role in ("api", "worker", "connector"))
         assert ("event_loop_lag" in required) == serving
@@ -206,8 +211,10 @@ async def test_actual_start_registers_required_role_evidence(
             required[failed_worker][0].cancel()
             await asyncio.wait_for(asyncio.gather(required[failed_worker][0], return_exceptions=True), 5)
             assert not await runtime.readiness.check()
-            # A dead loop (restarting or not) turns readiness red; liveness fails only once a restart budget is spent.
-            assert runtime.readiness.alive()
+            # A dead loop turns readiness red. A supervised one is only waiting for its restart; one the runtime
+            # never restarts is down for good, so liveness fails.
+            assert runtime.readiness.alive() == (failed_worker in runtime.tasks.restarts)
+            assert (failed_worker in runtime.tasks.exhausted) == (failed_worker not in runtime.tasks.restarts)
     finally:
         await asyncio.wait_for(runtime.stop(), 5)
     assert runtime.readiness.draining

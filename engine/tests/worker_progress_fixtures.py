@@ -38,6 +38,10 @@ WORKER_BUDGETED_LOOPS: Final = frozenset(
         "capacity_renewal",
     }
 )
+# Worker loops the runtime never restarts: a restart cannot undo what their owners do at an exit (a cutover never
+# cancelled, a Docker start without a total deadline), so a dead one stays down and fails liveness.
+UNSUPERVISED_WORKER_LOOPS: Final = frozenset({"agent_start_reconciler", "openclaw_update"})
+SUPERVISED_WORKER_LOOPS: Final = WORKER_BUDGETED_LOOPS - UNSUPERVISED_WORKER_LOOPS
 CONNECTOR_BUDGETED_LOOPS: Final = frozenset({"whatsapp_personal", "zalo_personal", "transfer_cleanup"})
 # The loop every serving process (api, worker or connector role) runs, whatever else its roles add.
 PROCESS_BUDGETED_LOOPS: Final = frozenset({"event_loop_lag"})

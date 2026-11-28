@@ -81,6 +81,8 @@ async def test_required_loop_retains_unexpected_outcomes(outcome: str) -> None:
     await asyncio.gather(task, return_exceptions=True)
     assert not tasks.ready()
     assert "required" in tasks.required
+    # Nothing restarts a plain required loop, so its exit is final.
+    assert tasks.exhausted == {"required"}
     await tasks.stop()
 
 
@@ -478,6 +480,121 @@ async def test_liveness_fails_only_when_a_loop_exhausted_its_restarts(
     _ = await asyncio.wait_for(supervisor, 2)
     await worker_http.live(expected=False)
     assert (await worker_http.client.get("/api/ready")).status_code == 503
+
+
+async def test_liveness_fails_when_a_loop_nothing_restarts_dies(worker_http: WorkerHTTP) -> None:
+    # Given a running plain required loop.
+    incarnations = Incarnations(None)
+    task = worker_http.start_loop("plain", incarnations(), budget_seconds=300)
+    await incarnations.running()
+    await worker_http.live(expected=True)
+    await worker_http.ready(expected=True)
+    # When it dies outside shutdown.
+    _ = task.cancel()
+    _ = await asyncio.gather(task, return_exceptions=True)
+    # Then the process is failed and not ready, with the unchanged response bodies.
+    await worker_http.live(expected=False)
+    await worker_http.ready(expected=False)
+
+
+def recorded_warnings(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The readiness warnings only: the process-wide logger also carries the supervisor's own."""
+    messages: list[str] = []
+
+    def record(message: str, *args: object) -> None:
+        if message.startswith("[readiness]"):
+            messages.append(message.format(*args))
+
+    monkeypatch.setattr(readiness.logger, "warning", record)
+    return messages
+
+
+async def test_a_loop_turning_stale_logs_one_warning_per_red_transition(
+    probes: Probes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a ready worker whose budgeted loop is running.
+    messages = recorded_warnings(monkeypatch)
+    pacing = Pacing()
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    state = readiness.Readiness(tasks)
+    state.roles, state.initialized = frozenset({"worker"}), True
+    incarnations = Incarnations(None)
+    tasks.start("sampler", incarnations(), requirement="loop", progress_budget_seconds=60)
+    await incarnations.running()
+    assert await state.check()
+    assert messages == []
+    # When it goes stale and is probed over and over.
+    pacing.now = 61
+    for _ in range(3):
+        assert not await state.check()
+        assert state.alive()
+    # Then one warning names the loop and why, and recovery plus a new stale spell logs once more.
+    assert messages == ["[readiness] Required loop sampler is not ready: stale"]
+    tasks.progress["sampler"].beat()
+    assert await state.check()
+    pacing.now = 200
+    assert not await state.check()
+    assert messages == ["[readiness] Required loop sampler is not ready: stale"] * 2
+    await tasks.stop()
+
+
+@pytest.mark.parametrize(("supervised", "reason"), [(True, "ended"), (False, "exhausted")])
+async def test_the_warning_names_why_a_dead_loop_is_not_ready(
+    probes: Probes, monkeypatch: pytest.MonkeyPatch, supervised: bool, reason: str
+) -> None:
+    # Given a loop that crashes, either waiting for its restart or with nothing to restart it.
+    messages = recorded_warnings(monkeypatch)
+    pacing = Pacing()
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    state = readiness.Readiness(tasks)
+    state.roles, state.initialized = frozenset({"worker"}), True
+    incarnations = Incarnations(RuntimeError("crash"), None)
+    if supervised:
+        _ = start_mail(tasks, incarnations)
+        _ = await pacing.next_wait()
+    else:
+        tasks.start("mail", incarnations(), requirement="loop", progress_budget_seconds=300)
+        _ = await asyncio.gather(tasks.required["mail"][0], return_exceptions=True)
+    # When it is probed more than once.
+    assert not await state.check()
+    assert not await state.check()
+    # Then one warning names the loop and the reason.
+    assert messages == [f"[readiness] Required loop mail is not ready: {reason}"]
+    await tasks.stop()
+
+
+async def test_loop_snapshots_follow_a_supervised_loop_through_restart_beat_and_staleness() -> None:
+    # Given a supervised loop that crashes once, a plain loop, and a finite setup.
+    pacing = Pacing()
+    tasks = OwnedTasks(pacing.clock, pacing.wait)
+    crashing, plain = Incarnations(RuntimeError("crash"), None), Incarnations(None)
+    _ = start_mail(tasks, crashing)
+    tasks.start("sampler", plain(), requirement="loop", progress_budget_seconds=60)
+    tasks.start("setup", Incarnations("return")(), requirement="setup")
+    _ = await pacing.next_wait()
+    await plain.running()
+    # When the crash waits for its restart: only the ongoing loops are reported, the mail loop as ended.
+    pacing.now = 10
+    mail, sampler = tasks.loop_snapshots()
+    assert (mail.name, mail.reason, mail.restarts, mail.exhausted, mail.seconds_since_beat) == (
+        "mail",
+        "ended",
+        0,
+        False,
+        10,
+    )
+    assert (sampler.name, sampler.reason, sampler.stale, sampler.seconds_since_beat) == ("sampler", None, False, 10)
+    # And once restarted it stays ended until its first real beat, then goes stale with the budget.
+    pacing.release()
+    await crashing.running()
+    assert tasks.loop_snapshots()[0].reason == "ended"
+    assert tasks.loop_snapshots()[0].restarts == 1
+    tasks.progress["mail"].beat()
+    assert tasks.loop_snapshots()[0].ready
+    pacing.now = 10 + 301
+    stale = tasks.loop_snapshots()[0]
+    assert (stale.reason, stale.stale, stale.seconds_since_beat) == ("stale", True, 301)
+    await tasks.stop()
 
 
 async def test_liveness_answers_without_dependency_probes_or_runtime_state(probes: Probes) -> None:

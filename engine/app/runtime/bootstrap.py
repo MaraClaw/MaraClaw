@@ -3,6 +3,16 @@
 from app.core.logging import logger
 
 
+async def sync_default_skills() -> None:
+    """Push the default skills to existing agents; startup does not wait for it, so its failure only logs."""
+    try:
+        from app.services.skill_seeder import push_default_skills_to_existing_agents
+
+        _ = await push_default_skills_to_existing_agents()
+    except Exception as exc:
+        logger.warning("[startup] Default skill sync failed: {}", exc)
+
+
 async def bootstrap() -> None:
     from app.services.platform_admin_seeder import PlatformAdminSeedError, ensure_platform_admin
     from app.services.system_org_seeder import ensure_system_orgs
@@ -49,10 +59,9 @@ async def bootstrap() -> None:
     except Exception as exc:
         logger.warning("[startup] Agent templates seed failed: {}", exc)
     try:
-        from app.services.skill_seeder import push_default_skills_to_existing_agents, seed_skills
+        from app.services.skill_seeder import seed_skills
 
         _ = await seed_skills()
-        _ = await push_default_skills_to_existing_agents()
     except Exception as exc:
         logger.warning("[startup] Skills seed failed: {}", exc)
     try:

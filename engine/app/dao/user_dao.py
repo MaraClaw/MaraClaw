@@ -21,16 +21,13 @@ from app.core.json_types import (
 from app.core.session_cache import (
     bump_user_session,
     bump_user_sessions,
-    get_cached_user,
-    peek_identity_version,
-    peek_user_version,
+    lookup_cached_user,
     set_cached_user,
 )
 from app.core.single_flight import SingleFlight
 from app.dao.base import BaseDAO, as_uuid
 from app.dao.mention_patterns import like_patterns
 from app.dao.projection_contracts import UserGenerationsProjection, UserNameAvatarProjection
-from app.db.session import get_connection
 from app.records.identity import IdentityRecord
 from app.records.user import UserRecord
 
@@ -128,7 +125,7 @@ def _user_from_joined_row(row: Mapping[str, object]) -> UserRecord:
     return UserRecord.from_row(user_row, identity=identity)
 
 
-_loads: SingleFlight[tuple[UUID, str], UserRecord | None] = SingleFlight()
+_loads: SingleFlight[tuple[UUID, SessionCacheObservation], UserRecord | None] = SingleFlight()
 
 
 @final
@@ -221,41 +218,38 @@ class UserDAO(BaseDAO[UserRecord]):
             uid = as_uuid(user_id)
         except TypeError, ValueError:
             uid = None
-        observed_user_ver = None
-        if uid is not None and not fresh:
-            cached = await get_cached_user(uid)
-            if cached is not None:
-                return cached
-            observed_user_ver = await peek_user_version(uid)
-        if uid is not None and observed_user_ver is not None and get_connection() is None:
-            # Misses of one version share a load and a fill; inside a transaction the load must see its own writes.
-            return await _loads.run(
-                (uid, observed_user_ver), lambda: self._load_with_identity(user_id, uid, observed_user_ver, fresh)
-            )
-        return await self._load_with_identity(user_id, uid, observed_user_ver, fresh)
+        if uid is None or fresh:
+            return await self._load_with_identity(user_id, None, fresh)
+        lookup = await lookup_cached_user(uid, find_identity=self._identity_id_of)
+        if lookup.user is not None:
+            return lookup.user
+        observed = lookup.observation
+        if observed is not None:
+            return await _loads.run((uid, observed), lambda: self._load_with_identity(user_id, observed, fresh))
+        return await self._load_with_identity(user_id, None, fresh)
 
     async def _load_with_identity(
-        self, user_id: UUID, uid: UUID | None, observed_user_ver: str | None, fresh: bool
+        self, user_id: UUID, observed: SessionCacheObservation | None, fresh: bool
     ) -> UserRecord | None:
+        # Generations are observed before the row and the fill is written after the connection is back in the pool,
+        # so no Redis call runs while a checkout is held.
         async with self.session() as db:
-            observed = None
-            if observed_user_ver is not None:
-                identity_id = uuid_from_row_opt(
-                    await db.fetchval("SELECT identity_id FROM users WHERE id = %(id)s", {"id": uid})
-                )
-                identity_ver = await peek_identity_version(identity_id)
-                if identity_ver is not None:
-                    observed = SessionCacheObservation(identity_id, observed_user_ver, identity_ver)
             row = await db.fetchone(
                 f"SELECT {self._select_list('u')}, {self._identity_select()} "
                 "FROM users u LEFT JOIN identities i ON i.id = u.identity_id "
                 "WHERE u.id = %(user_id)s LIMIT 1",
                 {"user_id": user_id},
             )
-            user = _user_from_joined_row(row) if row is not None else None
-            if user is not None and not fresh:
-                await set_cached_user(user, observed=observed)
-            return user
+        user = _user_from_joined_row(row) if row is not None else None
+        if user is not None and not fresh:
+            await set_cached_user(user, observed=observed)
+        return user
+
+    async def _identity_id_of(self, user_id: UUID) -> UUID | None:
+        async with self.session() as db:
+            return uuid_from_row_opt(
+                await db.fetchval("SELECT identity_id FROM users WHERE id = %(id)s", {"id": user_id})
+            )
 
     async def charge_message_quota(self, user_id: UUID) -> int | None:
         """Atomically reset an elapsed period and admit one message below the limit."""

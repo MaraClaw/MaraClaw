@@ -14,14 +14,18 @@ __all__ = ["api", "history", "pool"]
 
 
 @pytest.mark.parametrize("outcome", ["all", "success", "failure", "cancelled", "unknown"])
-async def test_outcome_filters_before_limit_with_nulls_and_ties(api: _HTTP, history: _History, outcome: str) -> None:
+async def test_outcome_filters_before_limit_with_timestamp_ties(api: _HTTP, history: _History, outcome: str) -> None:
     # Given interleaved normalized outcomes, including malformed JSON status values.
     statuses: list[object] = ["success", "failed", "failure", "cancelled", None, [], {}, 1, True, "other"]
     expected: list[str] = []
     for index, value in enumerate(statuses):
         log_id = UUID(int=100 - index)
         history.add(
-            api.row.agent_id, api.row.id, log_id=log_id, created_at=NOW if index < 5 else None, detail={"status": value}
+            api.row.agent_id,
+            api.row.id,
+            log_id=log_id,
+            created_at=NOW if index < 5 else NOW - timedelta(seconds=1),
+            detail={"status": value},
         )
         normalized = (
             "failure" if value in ("failed", "failure") else value if value in ("success", "cancelled") else "unknown"
@@ -40,7 +44,7 @@ async def test_outcome_filters_before_limit_with_nulls_and_ties(api: _HTTP, hist
         cursor = result.next_cursor
         if cursor is None:
             break
-    # Then only the selected outcome is present, with stable NULL/tie ordering.
+    # Then only the selected outcome is present, with stable ordering across both groups of ties.
     assert observed == expected
 
 

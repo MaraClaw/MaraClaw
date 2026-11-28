@@ -341,7 +341,7 @@ async def test_recovered_generation_rejects_late_real_redis_snapshot_fill(
             async with connection_ctx():
                 await tenant_dao.update(db_obj=tenant, obj_in={"name": "Committed"})
         assert old_payload is not None
-        assert await worker.replay_cache_invalidations() >= 2
+        assert (await worker.replay_cache_invalidations()).claimed >= 2
         await client.set(key, old_payload, ex=60)
         row_memo.clear_row_memo()
         if kind == "user":
@@ -423,14 +423,15 @@ async def test_real_redis_serves_a_session_hit_as_one_write_naming_each_key(
     # When the next request loads the principal.
     loaded = await user_dao.get_with_identity(actor.id)
 
-    # Then the first write is one pipeline of three GETs, which alone serves a stored snapshot.
+    # Then the first pipeline names all three GETs and initializes only absent generations.
     assert loaded is not None
     assert loaded.id == actor.id
-    assert writes[0] == _gets(*keys)
+    assert writes[0].endswith(_gets(*keys))
+    assert writes[0].count(b"\r\nNX\r\n") == 2
     assert (len(writes) == 1) is (stored == "snapshot")
 
 
-async def test_real_redis_serves_the_first_read_of_a_membership_in_two_writes(
+async def test_real_redis_serves_a_cold_and_a_warm_snapshot_hit_in_one_round_trip_each(
     deletion_pg: DeletionPostgres, real_cache: tuple[Redis, list[bytes]]
 ) -> None:
     _, writes = real_cache
@@ -449,9 +450,11 @@ async def test_real_redis_serves_the_first_read_of_a_membership_in_two_writes(
     writes.clear()
     assert await user_dao.get_with_identity(actor.id) is not None
 
-    # Then only the first read pays a second write, for the identity generation the snapshot names.
-    assert first == [_gets(sess_key, user_version_key), _gets(identity_version_key)]
-    assert writes == [_gets(sess_key, user_version_key, identity_version_key)]
+    # Then neither read needs a second Redis write, even when a short SQL probe named the identity.
+    assert len(first) == len(writes) == 1
+    expected = _gets(sess_key, user_version_key, identity_version_key)
+    assert first[0].endswith(expected)
+    assert writes[0].endswith(expected)
 
 
 @pytest.mark.parametrize("hinted", [True, False])

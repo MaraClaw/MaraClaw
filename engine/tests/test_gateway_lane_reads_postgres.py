@@ -8,7 +8,7 @@ import pytest
 from psycopg import sql
 
 import test_shared_gateway_postgres as shared_fixtures
-from app.core.json_types import is_json_object
+from app.core.json_types import JsonObject, is_json_object
 from app.dao.gateway_message_dao import PendingDuplicateProbe, gateway_message_dao
 from app.db.connection import DbConnection, Params, Row
 from app.db.session import transaction
@@ -152,7 +152,7 @@ async def dao_statements[T](call: Callable[[], Awaitable[T]]) -> tuple[T, list[S
     return result, sent
 
 
-async def generic_plan(db: ReceiptDatabase, statement: Statement) -> Plan:
+async def generic_plan(db: ReceiptDatabase, statement: Statement) -> JsonObject:
     """EXPLAIN ANALYZE one DAO statement as the generic plan psycopg's prepared statement settles on."""
     query, params = statement
     names: list[str] = []

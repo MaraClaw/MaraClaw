@@ -17,6 +17,7 @@ from app.services import (
 from app.services.agent_runtime_loss import recovery_snapshot_id
 from app.services.guest_admission import GuestStartStoppedError
 from app.services.openclaw_update_snapshot import snapshot_path
+from host_disk_fakes import full_disk
 
 surface = lifecycle_http.surface
 CONFIGURED = "openclaw-local:configured"
@@ -136,6 +137,23 @@ async def test_vanished_pin_is_cleared_snapshotted_and_started(recovering, monke
     assert seen == [(None, True)]
     assert state.pins == [("unpin", PINNED)]
     assert not snapshot_path(agent_dir, recovery_snapshot_id(agent.id)).exists()
+
+
+async def test_a_short_host_disk_refuses_the_recovery_snapshot_before_any_pin_change_or_start(recovering, monkeypatch):
+    # Given the pinned image vanished and the host disk is one byte short of its headroom.
+    app, agent, agent_dir, state = recovering
+    forbid_start(monkeypatch)
+    disk = full_disk(monkeypatch)
+    # When a new container is requested.
+    response = await post(app, agent)
+    # Then the snapshot failed like any copy failure: the start is refused with the pin and the state untouched.
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "guest_start_failed"
+    assert state.pins == []
+    assert state.runtime.committed.openclaw_image_id == PINNED
+    assert (agent_dir / "state.txt").read_text() == "before"
+    assert not snapshot_path(agent_dir, recovery_snapshot_id(agent.id)).parent.exists()
+    assert disk.asked == [agent_dir.parent]
 
 
 async def test_failed_start_restores_snapshot_and_pin(recovering, monkeypatch):

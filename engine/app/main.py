@@ -14,6 +14,7 @@ from starlette.routing import Route
 from app.config import get_settings
 from app.core.incident_reporting import report_exception
 from app.core.middleware import TraceIdMiddleware
+from app.core.thread_slots import SlotsBusyError
 from app.db.errors import DbError, overload_error
 from app.db.session import bind_crud_connection
 from app.process_roles import parse_process_roles, role_enabled
@@ -66,6 +67,15 @@ async def docker_busy(_request: Request, exc: DockerBusyError) -> JSONResponse:
     return JSONResponse(
         status_code=503,
         content={"detail": {"code": "docker_busy", "message": "Docker is busy. Please retry shortly."}},
+        headers={"Retry-After": str(exc.retry_after_seconds)},
+    )
+
+
+@app.exception_handler(SlotsBusyError)
+async def storage_busy(_request: Request, exc: SlotsBusyError) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": {"code": "storage_busy", "message": "Storage is busy. Please retry shortly."}},
         headers={"Retry-After": str(exc.retry_after_seconds)},
     )
 

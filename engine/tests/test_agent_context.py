@@ -184,10 +184,13 @@ async def test_a_turn_reads_all_three_kinds_in_one_cache_round_trip(context_env:
     agent_id = uuid.uuid4()
 
     await _build(agent_id)
-    assert cache.round_trips == 1
+    # A cold turn batches the three reads and then checks and fills each fragment separately.
+    assert len(cache.pipelines) == 1
+    cold_round_trips = cache.round_trips
+    assert cold_round_trips == 1 + 3 * 2
 
     await _build(agent_id)
-    assert cache.round_trips == 2
+    assert cache.round_trips == cold_round_trips + 1
 
 
 async def test_a_dead_cache_costs_the_first_turn_one_timeout_and_later_turns_none(

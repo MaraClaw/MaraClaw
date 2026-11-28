@@ -192,8 +192,11 @@ class LoopProgress:
         finally:
             self._exempt -= 1
 
+    def seconds_since_beat(self) -> float:
+        return self._clock() - self._last_beat
+
     def stale(self) -> bool:
-        return self._exempt == 0 and self._clock() - self._last_beat > self.budget_seconds
+        return self._exempt == 0 and self.seconds_since_beat() > self.budget_seconds
 
 
 _loop_progress: ContextVar[LoopProgress | None] = ContextVar("loop_progress", default=None)
@@ -216,6 +219,26 @@ class RestartPolicy:
     budget: int
     max_backoff_seconds: float
     before_restart: Callable[[], Awaitable[None]] | None = None
+
+
+type LoopRedReason = Literal["stale", "ended", "exhausted"]
+"""Why a required loop is not ready: no beat within its budget, its task or incarnation ended, or it is down for good."""
+
+
+@dataclass(frozen=True, slots=True)
+class LoopSnapshot:
+    """Read-only state of one required ongoing loop as readiness, liveness and the metrics scrape see it."""
+
+    name: str
+    reason: LoopRedReason | None
+    stale: bool
+    seconds_since_beat: float | None
+    restarts: int
+    exhausted: bool
+
+    @property
+    def ready(self) -> bool:
+        return self.reason is None
 
 
 class OwnedTasks:
@@ -338,22 +361,50 @@ class OwnedTasks:
             if finite:
                 if not task.done() or task.cancelled() or task.exception() is not None:
                     return False
-            elif task.done() or (
-                (progress := self.progress.get(name)) is not None and (progress.stale() or progress.awaiting_beat())
-            ):
+            elif self._loop_reason(name, task) is not None:
                 return False
         return True
 
+    def loop_snapshots(self) -> tuple[LoopSnapshot, ...]:
+        """State of every required ongoing loop; reads in-process records only, never the pool, Redis or a lock."""
+        snapshots: list[LoopSnapshot] = []
+        for name, (task, finite) in self.required.items():
+            if finite:
+                continue
+            progress = self.progress.get(name)
+            snapshots.append(
+                LoopSnapshot(
+                    name=name,
+                    reason=self._loop_reason(name, task),
+                    stale=progress is not None and progress.stale(),
+                    seconds_since_beat=None if progress is None else progress.seconds_since_beat(),
+                    restarts=self.restarts.get(name, 0),
+                    exhausted=name in self.exhausted,
+                )
+            )
+        return tuple(snapshots)
+
+    def _loop_reason(self, name: str, task: asyncio.Task[object]) -> LoopRedReason | None:
+        """The one place that decides a required ongoing loop is not ready; `None` while it is."""
+        progress = self.progress.get(name)
+        if name in self.exhausted:
+            return "exhausted"
+        if task.done() or (progress is not None and progress.awaiting_beat()):
+            return "ended"
+        if progress is not None and progress.stale():
+            return "stale"
+        return None
+
     def _report(self, task: asyncio.Task[object]) -> None:
+        loop = next((name for name, (owned, finite) in self.required.items() if owned is task and not finite), None)
         if not task.cancelled() and (error := task.exception()) is not None:
             report_exception(error, source="runtime", operation="owned-task")
             logger.error("[runtime] Background task {} failed: {}", task.get_name(), error)
-        elif (
-            not task.cancelled()
-            and not self.closing
-            and any(required is task and not finite for required, finite in self.required.values())
-        ):
+        elif loop is not None and not task.cancelled() and not self.closing:
             report_exception(RequiredLoopExitedError(), source="runtime", operation="required-loop-exited")
+        if loop is not None and not self.closing and loop not in self.restarts:
+            # Nothing restarts an unsupervised required loop, so any exit before shutdown is final.
+            self.exhausted.add(loop)
 
     async def stop(self) -> None:
         self.closing = True

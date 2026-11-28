@@ -492,6 +492,7 @@ async def test_a_session_cache_hit_request_costs_one_redis_round_trip_and_one_sq
     )
     clear_row_memo()
     redis.commands.clear()
+    redis.round_trips = 0
 
     # When the bearer authenticates a request.
     with recording_user_writes(monkeypatch, user) as raw:

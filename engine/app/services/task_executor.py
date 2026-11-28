@@ -7,7 +7,11 @@ as the chat dialog. Supports tool-calling loop for autonomous execution.
 import asyncio
 import uuid
 from dataclasses import dataclass
+from typing import Final
 
+import anyio
+
+from app.config import get_settings
 from app.core.domain.activity import ActivityAction
 from app.core.domain.tasks import TaskStatus, TaskType
 from app.core.logging import logger
@@ -16,6 +20,8 @@ from app.dao.task_dao import task_dao
 from app.records.task import TaskClaim
 from app.services.agent_setup_lock import drain_on_cancel
 from app.services.task_lease import TaskLeaseGuard, TaskLeaseLostError, claim_task, run_under_lease
+
+RUN_TIMEOUT_ERROR: Final = "Task run ran out of its time budget"
 
 
 class _RunFailureError(Exception):
@@ -45,7 +51,7 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID, claim: TaskClaim
     Flow:
       - todo tasks: pending → doing → done
       - supervision tasks: pending → doing → pending (stays active, just logs result)
-      - any failure, or cancellation: back to pending with the reason in the task log
+      - any failure, a spent ``TASK_RUN_BUDGET_SECONDS`` or cancellation: back to pending, reason in the task log
     """
     if claim is None:
         claim = await claim_task(task_id, agent_id)
@@ -55,7 +61,7 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID, claim: TaskClaim
     logger.info(f"[TaskExec] Starting task {task_id} for agent {agent_id}")
 
     try:
-        outcome = await run_under_lease(claim, lambda guard: _run(claim, agent_id, guard))
+        outcome = await run_under_lease(claim, lambda guard: _run_within_budget(claim, agent_id, guard))
         await _complete(claim, agent_id, outcome)
     except TaskLeaseLostError:
         logger.warning(f"[TaskExec] Task {task_id} lost its lease; its run was cancelled")
@@ -72,6 +78,18 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID, claim: TaskClaim
         logger.error(f"[TaskExec] Error: {message}")
         await _release(claim, f"Execution error: {message[:150]}")
         return
+
+
+async def _run_within_budget(claim: TaskClaim, agent_id: uuid.UUID, guard: TaskLeaseGuard) -> _Outcome:
+    """Run the task's work, cancelling it once ``TASK_RUN_BUDGET_SECONDS`` have passed.
+
+    The budget runs inside the lease hold, so the lease is still renewed while the work is cancelled and the claim is
+    released at once with ``RUN_TIMEOUT_ERROR``; a lapsed lease is never how a run times out. A lost lease and outer
+    cancellation are not the budget: they cancel the enclosing scope and keep their own handling in ``execute_task``.
+    """
+    with anyio.move_on_after(get_settings().TASK_RUN_BUDGET_SECONDS):
+        return await _run(claim, agent_id, guard)
+    raise _RunFailureError(RUN_TIMEOUT_ERROR)
 
 
 async def _run(claim: TaskClaim, agent_id: uuid.UUID, guard: TaskLeaseGuard) -> _Outcome:
