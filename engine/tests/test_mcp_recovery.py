@@ -1,11 +1,13 @@
 import asyncio
 import inspect
+import json
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Literal, override
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -13,12 +15,17 @@ import pytest
 from app.core.json_types import JsonObject, JsonValue, is_json_object, json_loads_value
 from app.services import agent_tools as agent_tools_module, mcp_client
 from app.services.mcp_client import (
+    MCP_MAX_TOOL_TEXT_CHARS,
     MCP_SESSION_IDLE_TTL_SECONDS,
+    MCP_TOOL_CALL_DEADLINE_SECONDS,
+    MCP_TOOL_DEADLINE_EXCEEDED_TEXT,
+    MCP_TOOL_TEXT_TRUNCATION_MARKER,
     MCPClient,
     MCPClientError,
     MCPSessionPool,
     _StreamableUnsupportedError,
 )
+from loop_clock_fixtures import LoopClock, freeze_loop_clock
 
 type Handler = Callable[[httpx.Request], Awaitable[httpx.Response]]
 
@@ -978,3 +985,233 @@ async def test_raw_api_key_never_reaches_pool_keys_or_logs(
     await pool.shutdown()
     assert log_lines
     assert not [line for line in log_lines if secret in line]
+
+
+# ── Tool call deadline ───────────────────────────────────────
+
+MAX_PINGS = 100
+SSE_HEADERS = {"content-type": "text/event-stream"}
+SSE_ENDPOINT_EVENT = b"event: endpoint\ndata: /mcp/messages?session=1\n\n"
+SMITHERY_CONFIG = {"smithery_namespace": "team", "smithery_connection_id": "connection"}
+
+
+class PingStream:
+    """An event stream that answers every read with a keepalive ping and never ends.
+
+    Each ping moves the frozen loop clock on by 'tick'; 'finished' is set when the reader lets go of the stream, and a
+    deadline that never fires fails the test at MAX_PINGS instead of looping.
+    """
+
+    def __init__(self, clock: LoopClock, tick: float, head: bytes = b"") -> None:
+        self.clock = clock
+        self.tick = tick
+        self.head = head
+        self.pings = 0
+        self.finished = asyncio.Event()
+
+    async def body(self) -> AsyncIterator[bytes]:
+        try:
+            if self.head:
+                yield self.head
+            while True:
+                assert self.pings < MAX_PINGS, "the tool call deadline never fired"
+                await asyncio.sleep(0)
+                self.clock.jump(self.tick)
+                self.pings += 1
+                yield b": ping\n\n"
+        finally:
+            self.finished.set()
+
+    def handler(self) -> Handler:
+        async def send(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, headers=SSE_HEADERS, content=self.body())
+
+        return send
+
+
+async def test_pings_cannot_keep_a_pooled_tool_call_alive_past_its_deadline(
+    server: FakeMCPServer, pool: MCPSessionPool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given a streamable server that answers tools/call with an event stream of nothing but pings.
+    clock = freeze_loop_clock(monkeypatch)
+    pings = PingStream(clock, MCP_TOOL_CALL_DEADLINE_SECONDS / 3)
+    server.queue("tools/call", pings.handler())
+
+    # When the agent calls the tool.
+    result = await call(pool)
+
+    # Then the call failed at its deadline and its stream was let go, with one tools/call sent and none replayed.
+    assert result == MCP_TOOL_DEADLINE_EXCEEDED_TEXT
+    assert pings.finished.is_set()
+    assert server.rpcs() == [*HANDSHAKE, "tools/call"]
+
+    # And the session stays usable.
+    assert await call(pool) == TOOL_RESULT
+    assert server.rpcs() == [*HANDSHAKE, "tools/call", "tools/call"]
+
+
+async def test_pings_cannot_keep_an_unpooled_tool_call_alive_past_its_deadline(
+    server: FakeMCPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = freeze_loop_clock(monkeypatch)
+    pings = PingStream(clock, MCP_TOOL_CALL_DEADLINE_SECONDS / 3)
+    server.queue("tools/call", pings.handler())
+
+    result = await MCPClient(URL).call_tool("lookup", {})
+
+    assert result == MCP_TOOL_DEADLINE_EXCEEDED_TEXT
+    assert pings.finished.is_set()
+    assert server.rpcs() == [*HANDSHAKE, "tools/call"]
+    assert [client.is_closed for client in server.clients] == [True]
+
+
+async def test_pings_cannot_keep_a_legacy_sse_tool_call_alive_past_its_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a legacy SSE server that accepts the call, then answers only with pings on its event stream.
+    clock = freeze_loop_clock(monkeypatch)
+    server = FakeMCPServer(sse_only=True)
+    monkeypatch.setattr(mcp_client, "public_http_client", server.factory)
+    pings = PingStream(clock, MCP_TOOL_CALL_DEADLINE_SECONDS / 3, head=SSE_ENDPOINT_EVENT)
+    server.queue("GET", pings.handler())
+    server.queue("tools/call", reply(httpx.Response(202)))
+
+    # When the call is made.
+    result = await MCPClient(URL).call_tool("lookup", {})
+
+    # Then it failed at its deadline after one tools/call, which was not sent again.
+    assert result == MCP_TOOL_DEADLINE_EXCEEDED_TEXT
+    assert pings.finished.is_set()
+    assert server.rpcs().count("tools/call") == 1
+
+
+async def test_cancelling_a_tool_call_is_not_reported_as_a_deadline(
+    server: FakeMCPServer, pool: MCPSessionPool
+) -> None:
+    entered = asyncio.Event()
+
+    async def hang(_request: httpx.Request) -> httpx.Response:
+        entered.set()
+        await asyncio.Event().wait()
+        return httpx.Response(200)
+
+    server.queue("tools/call", hang)
+    calling = asyncio.create_task(call(pool))
+    await entered.wait()
+
+    _ = calling.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await calling
+
+
+async def test_shutdown_stays_bounded_while_a_tool_call_is_still_in_flight(server: FakeMCPServer, clock: Clock) -> None:
+    # Given a pooled session with a tool call parked on its server, and a server that never answers the DELETE.
+    sessions = MCPSessionPool(shutdown_timeout_seconds=0.05, clock=clock)
+    called, deleted = asyncio.Event(), asyncio.Event()
+
+    async def hang_call(_request: httpx.Request) -> httpx.Response:
+        called.set()
+        await asyncio.Event().wait()
+        return httpx.Response(200)
+
+    async def hang_delete(_request: httpx.Request) -> httpx.Response:
+        deleted.set()
+        await asyncio.Event().wait()
+        return httpx.Response(200)
+
+    server.queue("tools/call", hang_call)
+    server.queue("DELETE", hang_delete)
+    calling = asyncio.create_task(call(sessions))
+    await called.wait()
+    try:
+        # When shutdown runs under a guard far above its own bound.
+        async with asyncio.timeout(5):
+            await sessions.shutdown()
+
+        # Then the DELETE was attempted and abandoned at the bound, and the pooled client still closed.
+        assert deleted.is_set()
+        assert server.clients[0].is_closed
+    finally:
+        _ = calling.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await calling
+
+
+class HangingSmitheryClient(FakeSmitheryClient):
+    def __init__(self) -> None:
+        super().__init__(FakeSmitheryResponse(200, ""))
+        self.entered = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    @override
+    async def post(self, url: str, *, json: JsonObject, headers: dict[str, str]) -> FakeSmitheryResponse:
+        self.calls.append((url, json, headers))
+        self.entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.cancelled.set()
+        return self.response
+
+
+async def smithery_call() -> str:
+    from app.services.agent_tool_exec import mcp_smithery
+
+    return await mcp_smithery._execute_via_smithery_connect(
+        "https://example.run.tools/mcp", "fetch_issue", {}, dict(SMITHERY_CONFIG)
+    )
+
+
+@pytest.fixture
+def smithery_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import resource_discovery
+
+    async def get_api_key(_agent_id: uuid.UUID | None) -> str:
+        return "smithery-key"
+
+    monkeypatch.setattr(resource_discovery, "_get_smithery_api_key", get_api_key)
+
+
+@pytest.mark.usefixtures("smithery_key")
+async def test_smithery_connect_stops_at_the_tool_call_deadline_and_never_replays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.agent_tool_exec import mcp_smithery
+
+    # Given a Smithery Connect request that never answers, a recovery that must not run, and a frozen loop clock.
+    clock = freeze_loop_clock(monkeypatch)
+    hanging = HangingSmitheryClient()
+    recover = AsyncMock(return_value="recovered")
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_settings: hanging)
+    monkeypatch.setattr(mcp_smithery, "_smithery_auto_recover", recover)
+    calling = asyncio.create_task(smithery_call())
+    await hanging.entered.wait()
+
+    # When the overall deadline passes.
+    await clock.advance(MCP_TOOL_CALL_DEADLINE_SECONDS)
+
+    # Then the call failed, its request was cancelled, and nothing was sent again or recovered.
+    assert calling.done()
+    assert calling.result() == MCP_TOOL_DEADLINE_EXCEEDED_TEXT
+    assert hanging.cancelled.is_set()
+    assert len(hanging.calls) == 1
+    recover.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("smithery_key")
+@pytest.mark.parametrize("extra", [0, 1, 5_000])
+@pytest.mark.parametrize("shape", ["plain-result", "content-blocks"])
+async def test_smithery_connect_caps_returned_text_like_other_mcp_results(
+    monkeypatch: pytest.MonkeyPatch, shape: str, extra: int
+) -> None:
+    # Given Smithery text that is the cap plus 'extra' characters, as a plain result or as content blocks.
+    text = "a" * (MCP_MAX_TOOL_TEXT_CHARS + extra)
+    result: JsonValue = text if shape == "plain-result" else {"content": [{"type": "text", "text": text}]}
+    _ = _install_fake_smithery_http(monkeypatch, FakeSmitheryResponse(200, json.dumps({"result": result})))
+
+    # When the tool is called.
+    returned = await smithery_call()
+
+    # Then text within the cap is untouched; longer text keeps its first cap characters plus the marker line.
+    assert returned == (text if extra == 0 else f"{text[:MCP_MAX_TOOL_TEXT_CHARS]}\n{MCP_TOOL_TEXT_TRUNCATION_MARKER}")
