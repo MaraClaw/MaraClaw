@@ -1,7 +1,8 @@
 """Public organization pricing plan: wire shape and the snapshot stored with each admission request."""
 
+from datetime import timedelta
 from enum import IntEnum, StrEnum
-from typing import ClassVar
+from typing import ClassVar, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,6 +11,19 @@ class OrganizationPlanId(StrEnum):
     PRO = "pro"
     MAX = "max"
     ULTRA = "ultra"
+
+    @property
+    def state_snapshot_interval(self) -> timedelta:
+        """Minimum time between automatic state snapshots of an agent on this tier."""
+        match self:
+            case OrganizationPlanId.PRO:
+                return timedelta(days=15)
+            case OrganizationPlanId.MAX:
+                return timedelta(days=7)
+            case OrganizationPlanId.ULTRA:
+                return timedelta(days=1)
+            case _:
+                assert_never(self)
 
 
 class OrganizationPlanName(StrEnum):

@@ -1,4 +1,4 @@
-"""What one snapshot worker process remembers about each agent: its published digest, its lag and its failure backoff."""
+"""What one snapshot worker process remembers about each agent: its published snapshot, lag and failure backoff."""
 
 import time
 from dataclasses import dataclass, field
@@ -9,7 +9,7 @@ from uuid import UUID
 from app.config import get_settings
 from app.core.logging import logger
 from app.runtime.tasks import capped_backoff
-from app.services.agent_state_snapshot import list_snapshots
+from app.services.agent_state_snapshot import SnapshotName, list_snapshots
 from app.services.storage_runtime.base import StorageBackend
 
 STARVED_INTERVALS: Final = 3
@@ -20,6 +20,7 @@ _monotonic = time.monotonic
 
 class SnapshotOutcome(StrEnum):
     NO_STATE = "no_state"
+    NOT_DUE = "not_due"
     UNCHANGED = "unchanged"
     BUSY = "busy"
     INELIGIBLE = "ineligible"
@@ -37,23 +38,25 @@ class _Backoff:
 
 @dataclass(slots=True)
 class SnapshotTracker:
-    """In process memory only: each agent's last published digest, since when it has lacked one, and its backoff."""
+    """In process memory only: each agent's last published snapshot for its tenant, lag and backoff."""
 
-    digests: dict[UUID, str] = field(default_factory=dict)
+    _published: dict[UUID, tuple[str, SnapshotName | None]] = field(default_factory=dict)
     behind_since: dict[UUID, float] = field(default_factory=dict)
     backoffs: dict[UUID, _Backoff] = field(default_factory=dict)
 
-    async def published_digest(self, store: StorageBackend, agent_id: UUID) -> str:
-        """The digest of the agent's newest snapshot; a miss is seeded by one listing, an empty string when none."""
-        if agent_id not in self.digests:
-            newest = (await list_snapshots(store, agent_id)).newest()
-            self.digests[agent_id] = "" if newest is None else newest.digest
-        return self.digests[agent_id]
+    async def published_snapshot(self, store: StorageBackend, agent_id: UUID, tenant: str) -> SnapshotName | None:
+        """The last recovery point; seed it from storage on first sight or after a company transfer."""
+        cached = self._published.get(agent_id)
+        if cached is not None and cached[0] == tenant:
+            return cached[1]
+        newest = (await list_snapshots(store, agent_id)).restorable(tenant)
+        self._published[agent_id] = (tenant, newest)
+        return newest
 
-    def current(self, agent_id: UUID, digest: str | None = None) -> None:
+    def current(self, agent_id: UUID, snapshot: SnapshotName | None = None) -> None:
         """Note an agent whose snapshot is current: its lag and its failure backoff end."""
-        if digest is not None:
-            self.digests[agent_id] = digest
+        if snapshot is not None:
+            self._published[agent_id] = (snapshot.tenant, snapshot)
         _ = self.behind_since.pop(agent_id, None)
         _ = self.backoffs.pop(agent_id, None)
 

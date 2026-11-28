@@ -66,13 +66,13 @@ class SnapshotDeleteError(RuntimeError):
 class SnapshotName:
     """One snapshot object; names order by creation time."""
 
-    stamp: str
+    created_at: datetime
     digest: str
     tenant: str
 
     @property
     def file_name(self) -> str:
-        return f"{self.stamp}Z_{self.digest}_{self.tenant}.tar.gz"
+        return f"{self.created_at:{_STAMP}}Z_{self.digest}_{self.tenant}.tar.gz"
 
     def key(self, agent_id: UUID) -> str:
         return agent_prefix(agent_id) + self.file_name
@@ -107,7 +107,7 @@ def tenant_token(tenant_id: UUID | None) -> str:
 
 
 def new_snapshot_name(digest: str, tenant: str, now: datetime) -> SnapshotName:
-    return SnapshotName(now.astimezone(UTC).strftime(_STAMP), digest, tenant)
+    return SnapshotName(now.astimezone(UTC), digest, tenant)
 
 
 def parse_name(file_name: str) -> tuple[SnapshotName, bool] | None:
@@ -117,10 +117,10 @@ def parse_name(file_name: str) -> tuple[SnapshotName, bool] | None:
         return None
     stamp, digest, tenant, held = match.group(1, 2, 3, 4)
     try:
-        _ = datetime.strptime(f"{stamp}+0000", "%Y%m%dT%H%M%S%f%z")
+        created_at = datetime.strptime(stamp, _STAMP).replace(tzinfo=UTC)
     except ValueError:
         return None
-    return SnapshotName(stamp, digest, tenant), held is not None
+    return SnapshotName(created_at, digest, tenant), held is not None
 
 
 async def list_snapshots(store: StorageBackend, agent_id: UUID) -> SnapshotListing:

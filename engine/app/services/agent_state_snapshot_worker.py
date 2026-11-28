@@ -2,7 +2,7 @@
 
 import shutil
 from contextlib import AsyncExitStack, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Final
@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.core.logging import logger, new_trace_id
 from app.core.row_memo import memo_drop
 from app.dao.agent_dao import agent_dao
+from app.dao.tenant_dao import tenant_dao
 from app.db.errors import DbError
 from app.records.agent import AgentRecord
 from app.runtime.tasks import capped_backoff, loop_progress
@@ -73,7 +74,7 @@ def progress_budget_seconds() -> float:
 
 
 async def start_agent_state_snapshot_worker() -> None:
-    """Snapshot each changed agent page by page, one agent at a time, then sleep the interval.
+    """Snapshot due agents with changed state page by page, one agent at a time, then sleep the poll interval.
 
     It beats after every agent and every page, a logged agent failure included. A database error reading a page is
     retried in place with capped backoff and never beats. Without a store to snapshot into (local storage, the mirror
@@ -93,16 +94,27 @@ async def start_agent_state_snapshot_worker() -> None:
             continue
         try:
             page = await agent_dao.list_workspace_mirror_page(cursor, PAGE_SIZE)
+            tenant_ids = {agent.tenant_id for agent in page if agent.tenant_id is not None}
+            tiers = await tenant_dao.tiers_for(sorted(tenant_ids))
         except (DbError, PsycopgError, OSError) as exc:
-            logger.warning("[StateSnapshot] listing agents failed; will retry: {}", type(exc).__name__)
+            logger.warning("[StateSnapshot] reading agent page failed; will retry: {}", type(exc).__name__)
             await sleep(capped_backoff(failures, base_seconds=DB_RETRY_BASE_SECONDS, cap_seconds=DB_RETRY_CAP_SECONDS))
             failures += 1
             continue
         failures = 0
         for agent in page:
-            outcome = await snapshot_agent(client, agent, tracker)
-            if outcome not in (SnapshotOutcome.NO_STATE, SnapshotOutcome.UNCHANGED, SnapshotOutcome.PUBLISHED):
-                tracker.behind(agent.id)
+            tier = tiers.get(agent.tenant_id) if agent.tenant_id is not None else None
+            # A vanished organization can race the page read. Skip its agents rather than apply tenantless policy.
+            if agent.tenant_id is None or tier is not None:
+                cadence = tier.state_snapshot_interval if tier is not None else None
+                outcome = await snapshot_agent(client, agent, tracker, cadence=cadence)
+                if outcome not in (
+                    SnapshotOutcome.NO_STATE,
+                    SnapshotOutcome.NOT_DUE,
+                    SnapshotOutcome.UNCHANGED,
+                    SnapshotOutcome.PUBLISHED,
+                ):
+                    tracker.behind(agent.id)
             progress.beat()
         progress.beat()
         if len(page) == PAGE_SIZE:
@@ -129,7 +141,9 @@ def _remove_backup_containers(client: DockerClient) -> None:
             client.container.remove(listed.id, force=True)
 
 
-async def snapshot_agent(client: DockerClient, agent: AgentRecord, tracker: SnapshotTracker) -> SnapshotOutcome:
+async def snapshot_agent(
+    client: DockerClient, agent: AgentRecord, tracker: SnapshotTracker, *, cadence: timedelta | None
+) -> SnapshotOutcome:
     """Run one pass over the agent unless its failure backoff is still running.
 
     The backoff is checked before the digest and before any lock. A FAILED pass, an error included, and a REJECTED one,
@@ -138,7 +152,7 @@ async def snapshot_agent(client: DockerClient, agent: AgentRecord, tracker: Snap
     if tracker.backing_off(agent.id):
         return SnapshotOutcome.BACKING_OFF
     try:
-        outcome = await _attempt(client, agent, tracker)
+        outcome = await _attempt(client, agent, tracker, cadence=cadence)
     except WalkLimitError as exc:
         logger.warning("[StateSnapshot] agent={} has more state than a restore can place: {}", agent.id, exc)
         outcome = SnapshotOutcome.REJECTED
@@ -150,8 +164,10 @@ async def snapshot_agent(client: DockerClient, agent: AgentRecord, tracker: Snap
     return outcome
 
 
-async def _attempt(client: DockerClient, agent: AgentRecord, tracker: SnapshotTracker) -> SnapshotOutcome:
-    """Publish a new snapshot of the agent when its state changed and no turn is running; the current one stays otherwise.
+async def _attempt(
+    client: DockerClient, agent: AgentRecord, tracker: SnapshotTracker, *, cadence: timedelta | None
+) -> SnapshotOutcome:
+    """Publish a new snapshot of the agent when it is due, its state changed and no turn is running.
 
     Lock order is the exclusive setup lock, taken without waiting, then the snapshot flock. The backup runs under both;
     the checks, the upload and the prune run under the snapshot flock alone, so turns wait only for the backup. The host
@@ -162,8 +178,12 @@ async def _attempt(client: DockerClient, agent: AgentRecord, tracker: SnapshotTr
     if store is None or not await to_thread.run_sync(has_host_state, agent_dir):
         return SnapshotOutcome.NO_STATE
     tenant = tenant_token(agent.tenant_id)
+    previous = await tracker.published_snapshot(store, agent.id, tenant)
+    if previous is not None and cadence is not None and datetime.now(UTC) - previous.created_at < cadence:
+        tracker.current(agent.id)
+        return SnapshotOutcome.NOT_DUE
     digest = await to_thread.run_sync(state_digest, agent_dir, tenant)
-    if digest == await tracker.published_digest(store, agent.id):
+    if previous is not None and digest == previous.digest:
         tracker.current(agent.id)
         return SnapshotOutcome.UNCHANGED
     out: Path | None = None
@@ -245,7 +265,7 @@ async def _publish(
     if not result.ok:
         logger.warning("[StateSnapshot] snapshot key already taken agent={} key={}", agent_id, name.file_name)
         return SnapshotOutcome.FAILED
-    tracker.current(agent_id, digest)
+    tracker.current(agent_id, name)
     await _prune(store, agent_id, name)
     logger.info("[StateSnapshot] published agent={} snapshot={} bytes={}", agent_id, name.file_name, source.size)
     return SnapshotOutcome.PUBLISHED
