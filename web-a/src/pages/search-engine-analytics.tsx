@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useReducedMotion } from 'framer-motion'
 import { useId, useMemo } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import {
   Area,
   AreaChart,
@@ -15,23 +15,19 @@ import {
 import { CompanyPicker, useCompanyPicker } from '@/components/companies/company-picker'
 import { Badge } from '@/components/ui/badge'
 import { ErrorToast } from '@/components/error-toast'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
 import { ApiError } from '@/lib/http'
 import {
   getSearchAnalyticsDashboard,
   getSearchAnalyticsExportStatus,
-  getSearchAnalyticsOrgs,
-  getSearchAnalyticsSummary,
   type SearchAnalyticsOrg,
   type SearchAnalyticsPoint,
   type SearchAnalyticsSummary,
 } from '@/lib/search-analytics-api'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/use-translation'
-
-type RangeKey = '7' | '30' | '90'
+import { pct, rangeFor, useAnalyticsFormatting, type RangeKey } from '@/pages/search-analytics-snapshot'
 
 const KIND_COLORS = [
   'var(--chart-1)',
@@ -41,29 +37,9 @@ const KIND_COLORS = [
   'var(--chart-5)',
 ]
 
-function rangeFor(key: RangeKey): { start: string; end: string } {
-  const end = new Date()
-  const start = new Date(end.getTime() - Number(key) * 24 * 60 * 60 * 1000)
-  return { start: start.toISOString(), end: end.toISOString() }
-}
-
 function asRange(value: string | null): RangeKey {
   if (value === '30' || value === '90') return value
   return '7'
-}
-
-function pct(part: number, total: number): number {
-  if (!total) return 0
-  return Math.round((part / total) * 1000) / 10
-}
-
-function useAnalyticsFormatting() {
-  const { number, date } = useTranslation()
-  return {
-    formatCount: (value: number | undefined) => value == null ? '—' : number(value),
-    shortDate: (value: string) => date(`${value}T00:00:00Z`, { month: 'short', day: 'numeric', timeZone: 'UTC' }),
-    rateLabel: (part: number, total: number) => number(pct(part, total) / 100, { style: 'percent', maximumFractionDigits: 1 }),
-  }
 }
 
 function padSeries(points: SearchAnalyticsPoint[], startIso: string, endIso: string): SearchAnalyticsPoint[] {
@@ -319,67 +295,6 @@ export function SearchEngineAnalytics() {
   )
 }
 
-export function SearchAnalyticsSnapshot() {
-  const { t } = useTranslation()
-  const { formatCount, rateLabel } = useAnalyticsFormatting()
-  const window = useMemo(() => rangeFor('7'), [])
-  const summary = useQuery({
-    queryKey: ['admin-search-analytics-summary', window, 'system'],
-    queryFn: ({ signal }) => getSearchAnalyticsSummary(window, signal),
-  })
-  const orgs = useQuery({
-    queryKey: ['admin-search-analytics-orgs', window],
-    queryFn: ({ signal }) => getSearchAnalyticsOrgs(window, signal),
-  })
-  const data = summary.data
-  const top = (orgs.data ?? []).slice(0, 3)
-
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div>
-          <CardTitle>{t('Search analytics')}</CardTitle>
-          <CardDescription>{t('Last 7 days across the entire system.')}</CardDescription>
-        </div>
-        <Button variant="ghost" size="sm" asChild>
-          <Link to="/search-engine?tab=analytics">{t('Open dashboard')}</Link>
-        </Button>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {orgs.isError ? <ErrorToast error={orgs.error} message={t('Could not load organization search analytics.')} /> : null}
-        {summary.isLoading || orgs.isLoading ? (
-          <p className="text-sm text-muted-foreground">{t('Loading last 7 days…')}</p>
-        ) : summary.error ? (
-          <ErrorToast error={summary.error} message={summary.error instanceof ApiError ? summary.error.message : t('Failed to load search analytics')} />
-        ) : (
-          <>
-            <div className="grid gap-3 sm:grid-cols-4">
-              <MiniStat label={t('Searches')} value={formatCount(data?.event_count)} />
-              <MiniStat label={t('Error rate')} value={data ? rateLabel(data.error_count, data.event_count) : '—'} />
-              <MiniStat
-                label={t('Quota pressure')}
-                value={data ? rateLabel(data.quota_count, data.event_count) : '—'}
-              />
-              <MiniStat label={t('Companies')} value={formatCount(data?.unique_orgs)} />
-            </div>
-            {(data?.event_count ?? 0) === 0 ? (
-              <p className="text-sm text-muted-foreground">{t('No search requests yet this week.')}</p>
-            ) : top.length > 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t('Busiest: {names}.', { names: top.map((org) => org.name).join(', ') })}
-              </p>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {t('{count} searches, none attributed to a company.', { count: formatCount(data?.event_count) })}
-              </p>
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
 function useInsights({
   systemWide,
   companyName,
@@ -457,15 +372,6 @@ function KpiCard({
       </CardHeader>
       <CardContent className="text-xs text-muted-foreground">{loading ? t('Loading') : hint}</CardContent>
     </Card>
-  )
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="font-display text-lg font-semibold tabular-nums">{value}</p>
-    </div>
   )
 }
 
