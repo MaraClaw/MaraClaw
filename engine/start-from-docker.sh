@@ -202,9 +202,8 @@ RUN_ARGS=(
     # Same-path mount: agent_manager passes host paths to `docker run -v`.
     -v "${DATA_DIR}:${DATA_DIR}"
     -v "${SCRIPT_DIR}/entrypoint.sh:/app/entrypoint.sh:ro"
-    # Setuid bwrap (non-root uvicorn) capsets a mask that includes NET_ADMIN
-    # and SYS_PTRACE. Without those, the probe dies: "capset failed: Operation
-    # not permitted". Do not pass --privileged or grant every capability.
+    # The image's non-setuid Bubblewrap requires usable user namespaces.
+    # Keep an explicit capability allowlist instead of using --privileged.
     --cap-add=SYS_ADMIN
     --cap-add=SETUID
     --cap-add=SETGID
@@ -305,7 +304,7 @@ else
 fi
 
 echo "[docker-run] Starting container $CONTAINER_NAME on http://localhost:${PORT}"
-echo "[docker-run] Warning: setuid bwrap needs SYS_ADMIN/SETUID/SETGID/SYS_CHROOT/SETPCAP/NET_ADMIN/SYS_PTRACE and seccomp=unconfined. A sandbox escape can reach the host."
+echo "[docker-run] Warning: this launcher adds Linux capabilities, disables the default seccomp profile, and can mount the host Docker socket. A sandbox escape can reach the host."
 if [ "${#EXTRA_RUN_ARGS[@]}" -gt 0 ]; then
     exec "$ENGINE" run "${RUN_ARGS[@]}" "${EXTRA_RUN_ARGS[@]}" "$IMAGE_NAME"
 else
