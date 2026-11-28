@@ -114,6 +114,13 @@ def _require_tenant_id(user: UserRecord) -> uuid.UUID:
     return tenant_id
 
 
+def _parse_iso_date(value: str, field: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(422, f"{field} must be a valid date") from exc
+
+
 async def _get_or_create_settings(tenant_id: uuid.UUID) -> OKRSettingsRecord:
     """Return the OKRSettings row for this tenant, creating it if missing."""
     return await okr_settings_dao.get_or_create(tenant_id)
@@ -467,8 +474,8 @@ async def list_objectives(
         settings = await _get_or_create_settings(_require_tenant_id(user))
         ps, pe = _compute_current_period(settings.period_frequency, settings.period_length_days)
     else:
-        ps = date.fromisoformat(period_start)
-        pe = date.fromisoformat(period_end)
+        ps = _parse_iso_date(period_start, "period_start")
+        pe = _parse_iso_date(period_end, "period_end")
 
     objectives = await okr_objective_dao.list_for_period(_require_tenant_id(user), period_start=ps, period_end=pe)
     obj_ids = [o.id for o in objectives]
@@ -785,7 +792,9 @@ async def list_member_daily_reports(
     """List all member daily reports for a specific date plus missing members."""
     from app.services.okr_reporting import list_member_daily_reports_for_date
 
-    target_day = date.fromisoformat(report_date) if report_date not in (None, "") else datetime.now(UTC).date()
+    target_day = (
+        _parse_iso_date(report_date, "report_date") if report_date not in (None, "") else datetime.now(UTC).date()
+    )
     items = await list_member_daily_reports_for_date(_require_tenant_id(user), target_day)
     return [
         MemberDailyReportOut(
@@ -828,7 +837,7 @@ async def upsert_member_daily_report(
     ):
         raise HTTPException(403, "You can only submit your own daily report")
 
-    report_date = date.fromisoformat(body.report_date)
+    report_date = _parse_iso_date(body.report_date, "report_date")
     report = await _upsert(
         tenant_id=_require_tenant_id(user),
         member_type=target_member_type,
@@ -885,7 +894,7 @@ async def regenerate_company_report(
         generate_company_weekly_report,
     )
 
-    period_start = date.fromisoformat(body.period_start)
+    period_start = _parse_iso_date(body.period_start, "period_start")
     if body.report_type == "daily":
         report = await generate_company_daily_report(_require_tenant_id(user), period_start)
     elif body.report_type == "weekly":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
@@ -25,6 +26,7 @@ AGENT_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
 MEMBER_ID = uuid.UUID("44444444-4444-4444-8444-444444444444")
 OBJECTIVE_ID = uuid.UUID("55555555-5555-4555-8555-555555555555")
 KR_ID = uuid.UUID("66666666-6666-4666-8666-666666666666")
+BAD_DATE = "2026-02-30"
 
 
 def _admin() -> UserRecord:
@@ -396,3 +398,87 @@ async def test_regenerate_http_keeps_auth_parsing_and_serialization(
             "updated_at": timestamp.isoformat(),
         }
         generate.assert_awaited_once_with(TENANT_ID, day)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "call"),
+    [
+        pytest.param(
+            "period_start",
+            lambda: okr_api.list_objectives(period_start=BAD_DATE, period_end="2026-03-31", user=_member()),
+            id="objectives-period_start",
+        ),
+        pytest.param(
+            "period_end",
+            lambda: okr_api.list_objectives(period_start="2026-01-01", period_end=BAD_DATE, user=_member()),
+            id="objectives-period_end",
+        ),
+        pytest.param(
+            "report_date",
+            lambda: okr_api.list_member_daily_reports(report_date=BAD_DATE, user=_member()),
+            id="daily-reports-read",
+        ),
+        pytest.param(
+            "report_date",
+            lambda: okr_api.upsert_member_daily_report(
+                okr_api.MemberDailyReportUpsert(report_date=BAD_DATE, content="Done"), user=_member()
+            ),
+            id="daily-reports-write",
+        ),
+        pytest.param(
+            "period_start",
+            lambda: okr_api.regenerate_company_report(
+                okr_api.CompanyReportRegenerate(report_type="daily", period_start=BAD_DATE), user=_admin()
+            ),
+            id="company-report-regenerate",
+        ),
+    ],
+)
+async def test_okr_routes_when_date_is_not_a_calendar_date_name_the_field(
+    monkeypatch: pytest.MonkeyPatch, field: str, call: Callable[[], Awaitable[object]]
+) -> None:
+    reached = AsyncMock()
+    monkeypatch.setattr(okr_api, "_get_or_create_settings", reached)
+    monkeypatch.setattr(okr_api.okr_objective_dao, "list_for_period", reached)
+    for service in (
+        "list_member_daily_reports_for_date",
+        "upsert_member_daily_report",
+        "generate_company_daily_report",
+    ):
+        monkeypatch.setattr(f"app.services.okr_reporting.{service}", reached)
+
+    with pytest.raises(HTTPException) as exc:
+        await call()
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == f"{field} must be a valid date"
+    reached.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda: okr_api.upsert_member_daily_report(
+                okr_api.MemberDailyReportUpsert(report_date=BAD_DATE, content="Done", member_id=str(MEMBER_ID)),
+                user=_member(),
+            ),
+            id="daily-reports-write-other-member",
+        ),
+        pytest.param(
+            lambda: okr_api.regenerate_company_report(
+                okr_api.CompanyReportRegenerate(report_type="daily", period_start=BAD_DATE), user=_member()
+            ),
+            id="company-report-regenerate-member",
+        ),
+    ],
+)
+async def test_okr_routes_when_caller_is_forbidden_reject_before_parsing_date(
+    call: Callable[[], Awaitable[object]],
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        await call()
+
+    assert exc.value.status_code == 403
