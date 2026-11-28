@@ -912,20 +912,20 @@ from [the schema baseline](../scripts/schema_baseline.sql), before deploying API
 and worker code that uses them. Include the associated constraints/indexes and
 `agent_start_retry_state_changed` trigger with its
 `sync_agent_start_retry_metadata` function; the table names alone are not the
-complete prerequisite. The workspace quota (`agent_workspace_usage`, cascading from
-`agents`) and resource-pressure (`agent_resource_pressure_episodes`, cascading from
-`tenants`) tables are also fresh-baseline `CREATE TABLE IF NOT EXISTS` additions: no
-existing table is altered and no upgrade patch is supplied, so existing installations
-need operator-coordinated provisioning before the two worker loops can store results.
+complete prerequisite. The baseline creates missing workspace quota
+(`agent_workspace_usage`, cascading from `agents`) and resource-pressure
+(`agent_resource_pressure_episodes`, cascading from `tenants`) tables.
+[Bootstrap](../app/scripts/AGENTS.md#supported-legacy-upgrades) also upgrades an
+existing legacy workspace quota table in place: it preserves measurements, makes
+`measured_at` nullable, and adds the walk-failure and remeasure-request timestamps.
 Upgrade notice/run tables and `agents.openclaw_image_id`
 have [additional deployment requirements](openclaw-updates.md#existing-installations-deployment-warning).
 
 Schema initialization belongs to [bootstrap](../app/scripts/bootstrap_db.py), not
-process lifespan. The baseline is fresh-only and rerunnable; it is not an upgrade
-migration for existing installations. Existing production databases need
-operator-coordinated schema provisioning. Neither a code deployment nor rerunning
-bootstrap is an automatic existing-schema upgrade, and this change supplies no
-production upgrade patch.
+process lifespan. The baseline is rerunnable and upgrades only the specific
+[supported legacy shapes](../app/scripts/AGENTS.md#supported-legacy-upgrades).
+Other schema differences still need operator-coordinated provisioning before
+starting the affected API or workers.
 
 ## Durable Deletion Cleanup
 
