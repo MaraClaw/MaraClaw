@@ -30,6 +30,7 @@ from app.services.llm.base import (
     ToolDefinition,
 )
 from app.services.llm.retry_policy import StreamDelivery, call_with_retry, raise_for_status, stream_http_error
+from app.services.llm.stream_deadline import deadline_lines
 from app.services.llm.types import LLMMessage, LLMResponse, LLMToolCall, LLMUsage
 
 
@@ -294,7 +295,7 @@ class AnthropicClient(LLMClient):
 
             current_event = None
 
-            async for line in resp.aiter_lines():
+            async for line in deadline_lines(resp.aiter_lines(), request_timeout=self.timeout):
                 if not line.strip():
                     continue
 

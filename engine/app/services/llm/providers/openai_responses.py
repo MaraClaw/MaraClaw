@@ -23,6 +23,7 @@ from app.core.json_types import (
 from app.core.logging import logger
 from app.services.llm.base import ChunkCallback, LLMClient, LLMError, ThinkingCallback, ToolCallback, ToolDefinition
 from app.services.llm.retry_policy import StreamDelivery, call_with_retry, raise_for_status, stream_http_error
+from app.services.llm.stream_deadline import deadline_lines
 from app.services.llm.types import LLMContentPart, LLMMessage, LLMResponse, LLMRole, LLMToolCall, LLMUsage
 
 
@@ -534,7 +535,7 @@ class OpenAIResponsesClient(LLMClient):
         async with client.stream("POST", url, json=payload, headers=self._get_headers()) as resp:
             if resp.status_code >= 400:
                 raise await stream_http_error(resp)
-            async for line in resp.aiter_lines():
+            async for line in deadline_lines(resp.aiter_lines(), request_timeout=self.timeout):
                 if not line.startswith("data:"):
                     continue
                 raw = line.removeprefix("data:").strip()

@@ -33,6 +33,7 @@ from app.services.llm.base import (
     ToolDefinition,
 )
 from app.services.llm.retry_policy import StreamDelivery, call_with_retry, raise_for_status, stream_http_error
+from app.services.llm.stream_deadline import deadline_lines
 from app.services.llm.types import LLMMessage, LLMResponse, LLMStreamChunk, LLMToolCall, LLMUsage
 
 
@@ -472,7 +473,7 @@ class OpenAICompatibleClient(LLMClient):
             if resp.status_code >= 400:
                 raise await stream_http_error(resp)
 
-            async for line in resp.aiter_lines():
+            async for line in deadline_lines(resp.aiter_lines(), request_timeout=self.timeout):
                 chunk, in_think, tag_buffer, json_buffer = self._parse_stream_line(
                     line, in_think, tag_buffer, json_buffer
                 )
