@@ -3,8 +3,22 @@ import test from 'node:test'
 
 import { createAuthSession } from '../src/lib/auth-session.ts'
 import { TOKEN_KEY } from '../src/lib/auth-storage.ts'
-import { ApiError, createApiRequest, formatApiDetail } from '../src/lib/http.ts'
-import { adminUser, createFixture, tokenResponse } from './helpers.ts'
+import { ApiError, createApiRequest, DEFAULT_REQUEST_TIMEOUT_MS, formatApiDetail, RequestTimeoutError } from '../src/lib/http.ts'
+import { DeferredBodyResponse, adminUser, createFixture, tokenResponse } from './helpers.ts'
+
+/** One injected deadline per request, expired by hand instead of waited for. */
+function deadlines() {
+  const issued: Array<{ readonly timeoutMs: number; readonly controller: AbortController }> = []
+  return {
+    issued,
+    deadline: (timeoutMs: number) => {
+      const controller = new AbortController()
+      issued.push({ timeoutMs, controller })
+      return controller.signal
+    },
+    timeOut: () => { for (const { controller } of issued) controller.abort(new DOMException('signal timed out', 'TimeoutError')) },
+  }
+}
 
 for (const body of [
   '<html><head><title>502 Bad Gateway</title></head><body>load-balancer</body></html>',
@@ -60,7 +74,7 @@ for (const status of [200, 401] as const) {
     // Then
     await result
     assert.equal(new Headers(init?.headers).has('Authorization'), false)
-    assert.equal(init?.signal, undefined)
+    assert.equal(init?.signal?.aborted, false)
     assert.equal(storage.getItem(TOKEN_KEY), 'token-b')
     assert.strictEqual(auth.getSnapshot(), retained)
   })
@@ -114,6 +128,62 @@ test('the HTTP adapter preserves JSON writes, bearer auth, and 204 results', asy
   assert.equal(init?.body, JSON.stringify({ name: 'Company A' }))
   assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer token-a')
   assert.equal(new Headers(init?.headers).get('Content-Type'), 'application/json')
+})
+
+test('a hung request rejects with a timeout, not an abort, and keeps credentials and auth', async (t) => {
+  // Given
+  const { policy, storage } = createFixture()
+  const auth = createAuthSession(policy, {
+    fetchCurrentUser: async () => adminUser(), loginRequest: async () => tokenResponse(),
+  })
+  t.after(auth.connect())
+  await auth.refreshUser()
+  const retained = auth.getSnapshot()
+  const { issued, deadline, timeOut } = deadlines()
+  let signal: AbortSignal | null | undefined
+  const request = createApiRequest(policy, {
+    url: (path) => path, deadline,
+    fetch: (_url, init) => { signal = init?.signal; return new Promise<Response>(() => undefined) },
+  })
+  const rejected = assert.rejects(request('/api/admin/companies'), (error) =>
+    error instanceof RequestTimeoutError && error.name === 'RequestTimeoutError' && error.timeoutMs === DEFAULT_REQUEST_TIMEOUT_MS)
+  // When
+  timeOut()
+  // Then
+  await rejected
+  assert.deepEqual(issued.map(({ timeoutMs }) => timeoutMs), [DEFAULT_REQUEST_TIMEOUT_MS])
+  assert.equal(signal?.aborted, true)
+  assert.equal(storage.getItem(TOKEN_KEY), 'token-a')
+  assert.strictEqual(auth.getSnapshot(), retained)
+})
+
+test('a 401 body that stalls past the deadline times out without expiring the session', async () => {
+  // Given
+  const { policy, storage } = createFixture()
+  const response = new DeferredBodyResponse(401, new Promise<string>(() => undefined))
+  const { deadline, timeOut } = deadlines()
+  const request = createApiRequest(policy, { url: (path) => path, deadline, fetch: async () => response })
+  const rejected = assert.rejects(request('/api/admin/companies'), RequestTimeoutError)
+  await response.bodyStarted.promise
+  const generation = policy.capture().generation
+  // When
+  timeOut()
+  // Then
+  await rejected
+  assert.equal(storage.getItem(TOKEN_KEY), 'token-a')
+  assert.equal(policy.capture().generation, generation)
+})
+
+test('a per-call deadline replaces the default, and a public request gets one too', async () => {
+  // Given
+  const { policy } = createFixture()
+  const { issued, deadline } = deadlines()
+  const request = createApiRequest(policy, { url: (path) => path, deadline, fetch: async () => Response.json({}) })
+  // When
+  await request('/api/admin/resource-pressure/export.csv', { timeoutMs: 5_000 })
+  await request('/api/auth/login', { token: null })
+  // Then
+  assert.deepEqual(issued.map(({ timeoutMs }) => timeoutMs), [5_000, DEFAULT_REQUEST_TIMEOUT_MS])
 })
 
 test('a current transport failure is preserved without clearing credentials', async () => {

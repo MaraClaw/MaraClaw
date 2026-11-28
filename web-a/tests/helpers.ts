@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict'
+
 import { TOKEN_KEY } from '../src/lib/auth-storage.ts'
 import { createSessionPolicy } from '../src/lib/session-policy.ts'
 import type { TokenResponse, UserOut } from '../src/lib/types/auth.ts'
@@ -22,6 +24,14 @@ export function createFixture(token: string | null = 'token-a') {
     clear: () => storage.removeItem(TOKEN_KEY),
   })
   return { storage, policy }
+}
+
+/** Cancellation reaches the transport: the signal it received aborts, with the caller's reason, when the caller does. */
+export function assertForwardsCancellation(received: AbortSignal | null | undefined, caller: AbortController) {
+  assert.equal(received?.aborted, false)
+  caller.abort()
+  assert.equal(received?.aborted, true)
+  assert.equal(received?.reason, caller.signal.reason)
 }
 
 export function adminUser(id = 'admin-a'): UserOut {

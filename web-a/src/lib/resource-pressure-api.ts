@@ -13,6 +13,8 @@ import {
 export const RESOURCE_PRESSURE_EPISODE_PAGE_SIZE = 25
 export const RESOURCE_PRESSURE_CSV_FILENAME = 'resource-pressure-episodes.csv'
 const MAX_CURSOR_LENGTH = 512
+// The export streams every matching episode with no row cap, so it gets far longer than a page request.
+const CSV_EXPORT_TIMEOUT_MS = 10 * 60_000
 
 /** `since` is inclusive and `until` exclusive, both RFC 3339 instants; the episode-only fields are ignored by the summary. */
 export const resourcePressureFiltersSchema = z.strictObject({
@@ -89,5 +91,5 @@ export async function exportResourcePressureCsv(filters: ResourcePressureFilters
   const parsed = resourcePressureFiltersSchema.parse(filters)
   const query = resourcePressureEpisodeParams(parsed).toString()
   const suffix = query ? `?${query}` : ''
-  return apiRequest(`/api/admin/resource-pressure/export.csv${suffix}`, { schema: csvSchema, signal })
+  return apiRequest(`/api/admin/resource-pressure/export.csv${suffix}`, { schema: csvSchema, signal, timeoutMs: CSV_EXPORT_TIMEOUT_MS })
 }

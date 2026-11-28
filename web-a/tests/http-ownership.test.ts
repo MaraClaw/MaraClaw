@@ -114,6 +114,48 @@ test('a stale explicit token cannot start a request in the current generation', 
   assert.equal(requests, 0)
 })
 
+for (const stage of ['fetch', 'body'] as const) {
+  for (const order of ['retire, then time out', 'time out, then retire'] as const) {
+    test(`a retired session wins over a deadline that expires with it during ${stage} (${order})`, async () => {
+      // Given
+      const { policy, storage } = createFixture()
+      const deadline = new AbortController()
+      const response = new DeferredBodyResponse(401, new Promise<string>(() => undefined))
+      const request = createApiRequest(policy, {
+        url: (path) => path, deadline: () => deadline.signal,
+        fetch: async () => stage === 'body' ? response : new Promise<Response>(() => undefined),
+      })
+      const rejected = assert.rejects(request('/api/admin/companies'), StaleSessionError)
+      if (stage === 'body') await response.bodyStarted.promise
+      // When
+      if (order === 'time out, then retire') deadline.abort(new DOMException('signal timed out', 'TimeoutError'))
+      policy.replace('token-b')
+      if (order === 'retire, then time out') deadline.abort(new DOMException('signal timed out', 'TimeoutError'))
+      // Then
+      await rejected
+      assert.equal(storage.getItem(TOKEN_KEY), 'token-b')
+    })
+  }
+}
+
+test('a caller abort wins over a deadline that expires with it', async () => {
+  // Given
+  const { policy, storage } = createFixture()
+  const caller = new AbortController()
+  const deadline = new AbortController()
+  const request = createApiRequest(policy, {
+    url: (path) => path, deadline: () => deadline.signal, fetch: () => new Promise<Response>(() => undefined),
+  })
+  const rejected = assert.rejects(request('/api/admin/companies', { signal: caller.signal }),
+    (error) => error instanceof DOMException && error.name === 'AbortError')
+  // When
+  deadline.abort(new DOMException('signal timed out', 'TimeoutError'))
+  caller.abort()
+  // Then
+  await rejected
+  assert.equal(storage.getItem(TOKEN_KEY), 'token-a')
+})
+
 test('authenticated transport consumes caller cancellation without expiring auth', async () => {
   // Given
   const { policy, storage } = createFixture()

@@ -11,7 +11,7 @@ import {
 } from '../src/lib/capacity-api.ts'
 import { ApiError, BinaryLimitError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
-import { MemoryStorage } from './helpers.ts'
+import { MemoryStorage, assertForwardsCancellation } from './helpers.ts'
 import { capacityOrderId, capacityTenantId, cappedOverview, purchaseOrder, submittedOrder } from './capacity-fixtures.ts'
 
 type Call = readonly [url: RequestInfo | URL, init?: RequestInit]
@@ -38,7 +38,7 @@ test('the overview reads the named company with a cancellation signal', async (t
   const [url, init] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, `/api/capacity/overview?tenant_id=${capacityTenantId}`)
   assert.equal(init?.method, 'GET')
-  assert.equal(init?.signal, controller.signal)
+  assertForwardsCancellation(init?.signal, controller)
   assert.deepEqual(result, cappedOverview)
   assert.equal(Object.isFrozen(result), true)
 })

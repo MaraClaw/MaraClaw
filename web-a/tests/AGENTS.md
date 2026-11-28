@@ -31,7 +31,7 @@ npm test
   - `roster-export-fixtures.ts`: owned session and download-document doubles for roster export.
   - `company-deletion-authorization-fixture.tsx`: browser-only React mounting fixture.
 - Ownership tests (`http-ownership`, `mutation-ownership`, `query-ownership`, `session-*`, `*-session`) pin the session contracts: a retired owner's success, failure or 401 has no effect; a current 401 clears credentials and notifies auth. Extend them when touching `src/lib/session-policy.ts`, `http.ts` or `src/hooks/session-*`.
-- `entry-imports.test.ts` walks the static imports of `src/main.tsx` and fails when zod, react-query, framer-motion, date-fns, tailwind-merge, the auth client or the shell enter the entry chunk.
+- `entry-imports.test.ts` walks the static imports of `src/main.tsx` and fails when zod, react-query, framer-motion, date-fns, tailwind-merge, the auth client or the shell enter the entry chunk; a second walk from `AdminShell` fails when framer-motion returns to the shell.
 - Review/transfer/deletion query tests assert that disabled gates send no request and that decisions are guarded before any POST.
 - The `.browser.mjs` suffix does not mean runnable. Read the header and imports first:
   - Executable entrypoints run scenarios at top level and have a header or README usage.

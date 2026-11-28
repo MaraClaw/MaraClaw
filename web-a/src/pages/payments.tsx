@@ -1,15 +1,18 @@
 import { useSearchParams } from 'react-router-dom'
-import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { Suspense, useEffect, useRef, type KeyboardEvent } from 'react'
 
 import { SectionRail, type SectionRailItem } from '@/components/layout/section-rail'
 import { useAuth } from '@/hooks/use-auth'
 import { useCapacityAccess } from '@/hooks/use-capacity'
 import { useTranslation } from '@/hooks/use-translation'
+import { retryingLazy } from '@/lib/retrying-import'
 import { canReviewOrganizationAdmissions } from '@/lib/types/auth-guards'
-import { CapacityPaymentSettingsSection } from '@/pages/capacity-payment-settings'
-import { CapacityPaymentsPanel } from '@/pages/capacity-payments'
-import { OrganizationAdmissionsPanel } from '@/pages/organization-admissions'
-import { TransferPaymentsPanel } from '@/pages/transfer-payments'
+
+// Each panel downloads when its tab opens: admissions alone pulls the phone-number metadata.
+const TransferPaymentsPanel = retryingLazy(() => import('@/pages/transfer-payments').then((module) => module.TransferPaymentsPanel))
+const CapacityPaymentsPanel = retryingLazy(() => import('@/pages/capacity-payments').then((module) => module.CapacityPaymentsPanel))
+const OrganizationAdmissionsPanel = retryingLazy(() => import('@/pages/organization-admissions').then((module) => module.OrganizationAdmissionsPanel))
+const CapacityPaymentSettingsSection = retryingLazy(() => import('@/pages/capacity-payment-settings').then((module) => module.CapacityPaymentSettingsSection))
 
 const sections = [
   { id: 'transfers', label: 'Organization transfers', icon: 'users' },
@@ -39,6 +42,7 @@ export function PaymentsPage() {
   const tab = visibleSections.find((item) => item.id === searchParams.get('tab'))?.id ?? 'transfers'
   const description = descriptions[tab]
   const focusSelectedTab = useRef(false)
+  const panelFallback = <p role="status" className="text-sm text-muted-foreground">{t('Loading…')}</p>
 
   useEffect(() => {
     if (!focusSelectedTab.current) return
@@ -105,25 +109,33 @@ export function PaymentsPage() {
       <div className="min-h-0 overflow-y-auto overscroll-y-contain p-6 md:col-start-2 md:row-start-2">
         {tab === 'transfers' ? (
           <div id="payments-panel-transfers" role="tabpanel" aria-labelledby="payments-tab-transfers">
-            <TransferPaymentsPanel />
+            <Suspense fallback={panelFallback}>
+              <TransferPaymentsPanel />
+            </Suspense>
           </div>
         ) : null}
 
         {tab === 'capacity' ? (
           <div id="payments-panel-capacity" role="tabpanel" aria-labelledby="payments-tab-capacity">
-            <CapacityPaymentsPanel />
+            <Suspense fallback={panelFallback}>
+              <CapacityPaymentsPanel />
+            </Suspense>
           </div>
         ) : null}
 
         {tab === 'admissions' ? (
           <div id="payments-panel-admissions" role="tabpanel" aria-labelledby="payments-tab-admissions">
-            <OrganizationAdmissionsPanel />
+            <Suspense fallback={panelFallback}>
+              <OrganizationAdmissionsPanel />
+            </Suspense>
           </div>
         ) : null}
 
         {tab === 'settings' ? (
           <div id="payments-panel-settings" role="tabpanel" aria-labelledby="payments-tab-settings" className="admission-content mx-auto w-full max-w-3xl">
-            <CapacityPaymentSettingsSection />
+            <Suspense fallback={panelFallback}>
+              <CapacityPaymentSettingsSection />
+            </Suspense>
           </div>
         ) : null}
       </div>

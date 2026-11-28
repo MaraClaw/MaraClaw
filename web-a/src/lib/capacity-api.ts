@@ -5,7 +5,7 @@ import {
   CapacityOrderStatusValues, CapacityOverviewOutSchema, CapacityPaymentSettingsOutSchema, CapacityPaymentSettingsRequestSchema,
 } from './engine-contracts.generated.ts'
 import { MAX_CAPACITY_EXTRAS } from './capacity-pricing.ts'
-import { ApiError, apiBinaryRequest, apiFormRequest, apiRequest } from './http.ts'
+import { ApiError, apiBinaryRequest, apiFormRequest, apiRequest, transferTimeoutMs } from './http.ts'
 
 export const CAPACITY_ORDERS_PAGE_SIZE = 50
 export const CAPACITY_RECENT_ORDERS_LIMIT = 10
@@ -99,7 +99,9 @@ export async function submitCapacityEvidence(id: CapacityOrderId, file: Blob, fi
   capacityOrderIdSchema.parse(id)
   const form = new FormData()
   form.append('file', file, filename)
-  return capacityOrderSchema.parse(await apiFormRequest<unknown>(`/api/capacity/orders/${id}/evidence`, form))
+  return capacityOrderSchema.parse(await apiFormRequest<unknown>(`/api/capacity/orders/${id}/evidence`, form, {
+    timeoutMs: transferTimeoutMs(file.size),
+  }))
 }
 
 /** Bearer-authenticated evidence bytes; the engine sniffs the type and sends it with `nosniff` and a CSP sandbox. */

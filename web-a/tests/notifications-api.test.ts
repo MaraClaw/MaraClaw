@@ -8,6 +8,7 @@ import {
   fetchNotifications, fetchNotificationUnreadCount, markNotificationRead, markAllNotificationsRead,
   archiveNotification, restoreNotification, markSelectedNotificationsRead, markSelectedNotificationsUnread, archiveSelectedNotifications, restoreSelectedNotifications, NotificationKind, notificationSchema,
 } from '../src/lib/notifications-api.ts'
+import { assertForwardsCancellation } from './helpers.ts'
 
 const notification = {
   id: '2c7ef86c-ec7e-4fe2-a9b1-3eb2c4359cf5', type: NotificationKind.Broadcast, title: 'Maintenance', body: 'Details\nNext line',
@@ -78,7 +79,7 @@ test('archived notifications preserve unread state and forward view, cursor and 
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/notifications/page?limit=50&view=archived&cursor=older')
-  assert.equal(options?.signal, controller.signal)
+  assertForwardsCancellation(options?.signal, controller)
   assert.deepEqual(result, page([archived]))
 })
 

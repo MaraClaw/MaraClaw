@@ -8,7 +8,7 @@ import {
   decideOrganizationAdmission, fetchOrganizationAdmissionEvidence, fetchOrganizationAdmissions, retryOrganizationAdmissionEmail,
 } from '../src/lib/organization-admissions-api.ts'
 import { canReviewAdmissions, canReviewOrganizationAdmissions } from '../src/lib/types/auth-guards.ts'
-import { adminUser } from './helpers.ts'
+import { adminUser, assertForwardsCancellation } from './helpers.ts'
 import { approvedOrganizationAdmission, organizationAdmission } from './organization-admission-fixtures.ts'
 
 test('organization review access requires an active genesis platform administrator', () => {
@@ -31,7 +31,7 @@ for (const status of ['pending', 'approved', 'rejected'] as const) {
     const controller = new AbortController()
     const result = await fetchOrganizationAdmissions(status, 50, controller.signal)
     assert.equal(fetch.mock.calls[0]?.arguments[0], `/api/admin/organization-admissions?status=${status}&limit=50&offset=50`)
-    assert.equal(fetch.mock.calls[0]?.arguments[1]?.signal, controller.signal)
+    assertForwardsCancellation(fetch.mock.calls[0]?.arguments[1]?.signal, controller)
     assert.deepEqual(result, page)
     assert.equal(Object.isFrozen(result.items[0]?.plan), true)
   })

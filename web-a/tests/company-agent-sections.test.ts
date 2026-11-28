@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { companyAgentSectionsOptions } from '../src/hooks/company-options.ts'
 import { fetchCompanyAgentSections, updateCompanyAgentSections } from '../src/lib/companies-api.ts'
 import { ApiError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './helpers.ts'
 
 const body = { sections: ['chat', 'files', 'skills'], hidden_sections: ['files'] }
 
@@ -19,7 +20,7 @@ test('agent sections read uses an encoded GET, forwards cancellation and keeps t
   const [url, init] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/admin/companies/company%2Fa%20%2B%3F/agent-sections')
   assert.equal(init?.method, 'GET')
-  assert.strictEqual(init?.signal, controller.signal)
+  assertForwardsCancellation(init?.signal, controller)
   assert.deepEqual(result, body)
 })
 

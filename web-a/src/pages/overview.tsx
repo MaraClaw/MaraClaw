@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/hooks/use-auth'
 import { isPlatformAdminUser } from '@/lib/types/auth-guards'
-import { SearchAnalyticsSnapshot } from '@/pages/search-engine-analytics'
+import { SearchAnalyticsSnapshot } from '@/pages/search-analytics-snapshot'
 import { useTranslation } from '@/hooks/use-translation'
 
 const placeholders = [

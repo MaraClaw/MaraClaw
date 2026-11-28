@@ -1,6 +1,20 @@
 import { apiUrl } from './api.ts'
 import { adminSession } from './admin-session.ts'
-import { StaleSessionError, type SessionPolicy } from './session-policy.ts'
+import type { SessionPolicy } from './session-policy.ts'
+import type { MessageKey } from './translations.ts'
+
+export const REQUEST_TIMEOUT_MESSAGE = 'The server took too long to respond. Check your connection and try again.' satisfies MessageKey
+
+/** The request outlived its deadline. Unlike a caller's abort it is shown and retryable, and it says nothing about the session. */
+export class RequestTimeoutError extends Error {
+  readonly name = 'RequestTimeoutError'
+  readonly timeoutMs: number
+
+  constructor(timeoutMs: number, cause: unknown) {
+    super(REQUEST_TIMEOUT_MESSAGE, { cause })
+    this.timeoutMs = timeoutMs
+  }
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -48,6 +62,8 @@ export type RequestOptions = {
   readonly token?: string | null
   readonly signal?: AbortSignal
   readonly idempotencyKey?: string
+  /** Replaces the default deadline; covers the response body as well as the headers. */
+  readonly timeoutMs?: number
 }
 
 export type ResponseSchema<T> = {
@@ -61,9 +77,31 @@ export type SchemaRequestOptions<T> = RequestOptions & {
 type Transport = {
   readonly fetch: typeof globalThis.fetch
   readonly url: (path: string) => string
+  /** The deadline signal for one request (default `AbortSignal.timeout`); tests inject one they abort themselves. */
+  readonly deadline?: (timeoutMs: number) => AbortSignal
 }
 
 export const MAX_PREVIEW_BYTES = 20 * 1024 * 1024
+
+/** Below the proxy's 120 s upstream read timeout and above every engine-side upstream call it may wait on (60 s at most). */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 90_000
+/** The slowest sustained transfer a payload deadline allows for: a congested office uplink. */
+const MIN_TRANSFER_BYTES_PER_SECOND = 64 * 1024
+
+/** A deadline for moving `bytes`: the default for the server's part plus the payload at the slowest rate allowed for. */
+export function transferTimeoutMs(bytes: number): number {
+  return DEFAULT_REQUEST_TIMEOUT_MS + Math.ceil(bytes / MIN_TRANSFER_BYTES_PER_SECOND) * 1000
+}
+
+/** Settles like `work`, or rejects with the signal's reason once it aborts, even when the transport ignores the signal. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { reject(signal.reason) }
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+    work.then(resolve, reject).finally(() => { signal.removeEventListener('abort', abort) })
+  })
+}
 
 export class BinaryLimitError extends Error {
   readonly name = 'BinaryLimitError'
@@ -72,7 +110,7 @@ export class BinaryLimitError extends Error {
 
 type Bytes = Uint8Array<ArrayBuffer>
 
-async function readPreviewBytes(response: Response, assertActive: () => void): Promise<Bytes> {
+async function readPreviewBytes(response: Response, assertActive: () => void, signal: AbortSignal): Promise<Bytes> {
   const reader = response.body?.getReader()
   if (!reader) return new Uint8Array()
   const chunks: Uint8Array[] = []
@@ -81,7 +119,7 @@ async function readPreviewBytes(response: Response, assertActive: () => void): P
     if (Number(response.headers.get('Content-Length')) > MAX_PREVIEW_BYTES) throw new BinaryLimitError()
     while (true) {
       assertActive()
-      const chunk = await reader.read()
+      const chunk = await untilAborted(reader.read(), signal)
       assertActive()
       if (chunk.done) break
       size += chunk.value.byteLength
@@ -117,9 +155,12 @@ async function execute(
   const token = options.token === undefined ? current.token : options.token
   const owner = token ? { ...current, token } : null
   if (owner) policy.assertCurrent(owner)
-  const signal = owner
-    ? (options.signal ? AbortSignal.any([owner.signal, options.signal]) : owner.signal)
-    : options.signal
+  // Binary bodies are capped at MAX_PREVIEW_BYTES, so their default deadline is sized for that payload.
+  const timeoutMs = options.timeoutMs ?? (options.binary ? transferTimeoutMs(MAX_PREVIEW_BYTES) : DEFAULT_REQUEST_TIMEOUT_MS)
+  const deadline = transport.deadline?.(timeoutMs) ?? AbortSignal.timeout(timeoutMs)
+  const signal = AbortSignal.any([
+    deadline, ...(owner ? [owner.signal] : []), ...(options.signal ? [options.signal] : []),
+  ])
   if (token) headers.Authorization = `Bearer ${token}`
   if (options.idempotencyKey !== undefined) headers['Idempotency-Key'] = options.idempotencyKey
 
@@ -130,33 +171,35 @@ async function execute(
     body = JSON.stringify(options.body)
   }
 
-  function assertOwner() {
+  // Precedence: a retired session, then the caller's own abort, then the deadline.
+  function assertActive() {
     if (owner) policy.assertCurrent(owner)
-    signal?.throwIfAborted()
+    options.signal?.throwIfAborted()
+    if (deadline.aborted) throw new RequestTimeoutError(timeoutMs, deadline.reason)
   }
 
   try {
-    assertOwner()
-    const response = await transport.fetch(transport.url(path), {
+    assertActive()
+    const response = await untilAborted(transport.fetch(transport.url(path), {
       method: options.method ?? (form || options.body !== undefined ? 'POST' : 'GET'),
       headers,
       body,
       signal,
       ...(options.binary ? { cache: 'no-store', redirect: 'error' } : {}),
-    })
-    assertOwner()
+    }), signal)
+    assertActive()
     if (response.status === 204) return options.binary ? new Uint8Array() : undefined
 
     let text: string
     if (options.binary) {
-      const bytes = await readPreviewBytes(response, assertOwner)
-      assertOwner()
+      const bytes = await readPreviewBytes(response, assertActive, signal)
+      assertActive()
       if (response.ok) return bytes
       text = new TextDecoder().decode(bytes)
     } else {
-      text = await response.text()
+      text = await untilAborted(response.text(), signal)
     }
-    assertOwner()
+    assertActive()
     let data: unknown = null
     if (text) {
       try {
@@ -176,8 +219,7 @@ async function execute(
   } catch (error) {
     // Expiry has already notified auth; preserve that request's ApiError.
     if (error instanceof ApiError && error.status === 401) throw error
-    if (owner && !policy.isCurrent(owner)) throw new StaleSessionError()
-    signal?.throwIfAborted()
+    assertActive()
     throw error
   }
 }

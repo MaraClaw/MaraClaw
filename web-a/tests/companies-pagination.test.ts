@@ -15,6 +15,7 @@ import {
   createCompany, getCompanyStats, listCompanies, listCompaniesPage, listCompanyOptions, type CompanyOption,
 } from '../src/lib/companies-api.ts'
 import { ApiError } from '../src/lib/http.ts'
+import { assertForwardsCancellation } from './helpers.ts'
 
 const row = {
   id: 'alpha', name: 'Zebra Company', slug: 'zebra', is_active: true,
@@ -30,7 +31,8 @@ test('company page encodes search and opaque cursor and forwards cancellation', 
   // Given
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) =>
     Response.json({ items: [row], next_cursor: 'opaque/next +?=' }))
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
   // When
   const result = await listCompaniesPage({ search: ' %_Case+? ', cursor: 'opaque/cursor +?=' }, signal)
   // Then
@@ -38,7 +40,7 @@ test('company page encodes search and opaque cursor and forwards cancellation', 
   const request = new URL(String(url), 'https://example.test')
   assert.equal(request.pathname, '/api/admin/companies/page')
   assert.deepEqual(Object.fromEntries(request.searchParams), { limit: '50', q: '%_Case+?', cursor: 'opaque/cursor +?=' })
-  assert.strictEqual(init?.signal, signal)
+  assertForwardsCancellation(init?.signal, caller)
   assert.deepEqual(result, { items: [row], next_cursor: 'opaque/next +?=' })
 })
 
@@ -112,7 +114,8 @@ test('picker options send search or an opaque cursor, parse stats-free pages and
   // Given
   const page = { items: [option(1, 'Zebra'), option(2, 'Alpha')], next_cursor: 'opaque/next +?=' }
   const fetch = t.mock.method(globalThis, 'fetch', async (_url: RequestInfo | URL, _init?: RequestInit) => Response.json(page))
-  const signal = new AbortController().signal
+  const caller = new AbortController()
+  const { signal } = caller
   // When
   const browsed = await listCompanyOptions({ q: '', cursor: 'opaque/cursor +?=' }, signal)
   const searched = await listCompanyOptions({ q: ' %_Zeb+? ', cursor: null })
@@ -121,7 +124,7 @@ test('picker options send search or an opaque cursor, parse stats-free pages and
   assert.equal(first?.pathname, '/api/admin/companies/options')
   assert.deepEqual(Object.fromEntries(first?.searchParams ?? []), { limit: '50', cursor: 'opaque/cursor +?=' })
   assert.deepEqual(Object.fromEntries(second?.searchParams ?? []), { limit: '50', q: '%_Zeb+?' })
-  assert.strictEqual(fetch.mock.calls[0]?.arguments[1]?.signal, signal)
+  assertForwardsCancellation(fetch.mock.calls[0]?.arguments[1]?.signal, caller)
   assert.deepEqual([browsed, searched], [page, page])
 })
 

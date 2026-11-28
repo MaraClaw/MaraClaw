@@ -8,7 +8,7 @@ import { createDepartment, deleteDepartment, listDepartments, mergeDepartment, p
 import { ApiError } from '../src/lib/http.ts'
 import { StaleSessionError } from '../src/lib/session-policy.ts'
 import { deleteDepartmentOptions } from '../src/pages/users-department-mutations.ts'
-import { createFixture } from './helpers.ts'
+import { createFixture, assertForwardsCancellation } from './helpers.ts'
 
 const department = { id: 'department/a +?', tenant_id: 'tenant &a', name: 'Operations', description: '  Escalations\nBilling questions  ', created_at: '2026-10-18T00:00:00Z' }
 const input = { tenantId: department.tenant_id, departmentId: department.id }
@@ -67,7 +67,7 @@ test('merge preview validates all association counts and forwards the scoped sel
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, `/api/departments/department%2Fa%20%2B%3F/merge-preview?tenant_id=${mergeSelection.tenantId}&destination_id=${mergeSelection.destinationId}`)
-  assert.equal(options?.signal, controller.signal)
+  assertForwardsCancellation(options?.signal, controller)
   assert.deepEqual(result, mergeResult)
 })
 
@@ -104,7 +104,7 @@ test('deletion preview parses association counts and forwards encoded scope and 
   // Then
   const [url, options] = fetch.mock.calls[0]?.arguments ?? []
   assert.equal(url, '/api/departments/department%2Fa%20%2B%3F/deletion-preview?tenant_id=tenant+%26a')
-  assert.equal(options?.signal, controller.signal)
+  assertForwardsCancellation(options?.signal, controller)
   assert.deepEqual(result, { membership_count: 0, agent_grant_count: 12 })
 })
 
