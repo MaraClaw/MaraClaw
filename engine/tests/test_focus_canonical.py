@@ -1,3 +1,4 @@
+import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
@@ -109,6 +110,95 @@ async def test_focus_update_merges_metadata_and_reopens_item(monkeypatch: pytest
         None,
     )
     assert result["metadata"] == {"kept": 1, "added": 2}
+
+
+MULTILINGUAL_PAIRS = [
+    pytest.param("Gửi báo cáo tuần", "Gọi báo cáo tuần", id="vietnamese"),
+    pytest.param("주간 보고서 보내기", "고객에게 전화하기", id="korean"),
+    pytest.param("Gửi báo cáo 12", "Gửi báo cáo 1 2", id="number-runs"),
+    pytest.param("रिपोर्ट भेजें", "रीपोर्ट भेजें", id="combining-marks"),
+]
+
+
+@pytest.mark.parametrize("kind", [FocusKind.NORMAL, FocusKind.SYSTEM])
+@pytest.mark.parametrize(("sent", "other"), MULTILINGUAL_PAIRS)
+async def test_keyless_multilingual_descriptions_keep_separate_rows(
+    monkeypatch: pytest.MonkeyPatch, sent: str, other: str, kind: FocusKind
+) -> None:
+    # Given: an empty store and two different non-ASCII descriptions saved without a key.
+    agent_id = uuid4()
+    dao = FocusDAO()
+    monkeypatch.setattr(focus_service, "agent_focus_item_dao", dao)
+    # When: both are upserted.
+    first = await focus_service.upsert_focus_item(agent_id, key=None, description=sent, kind=kind)
+    second = await focus_service.upsert_focus_item(agent_id, key=None, description=other, kind=kind)
+    # Then: neither overwrites the other, and the system namespace is kept.
+    assert first["id"] != second["id"]
+    assert {row.description for row in dao.rows} == {sent, other}
+    assert all(row.key.startswith("system:") == (kind == "system") for row in dao.rows)
+
+
+@pytest.mark.parametrize(("sent", "other"), MULTILINGUAL_PAIRS)
+async def test_keyless_multilingual_repeat_keeps_row_and_key(
+    monkeypatch: pytest.MonkeyPatch, sent: str, other: str
+) -> None:
+    # Given: an old lossy-slug row holds a different description, then the first description is saved.
+    agent_id = uuid4()
+    legacy = AgentFocusItemRecord(uuid4(), agent_id, focus_service.slugify_focus_key(sent), description=other)
+    dao = FocusDAO([legacy])
+    monkeypatch.setattr(focus_service, "agent_focus_item_dao", dao)
+    first = await focus_service.upsert_focus_item(agent_id, key=None, description=sent)
+    # When: the colliding legacy row is deleted and the description is repeated with other case, spacing,
+    # punctuation and form.
+    dao.rows.remove(legacy)
+    variant = unicodedata.normalize("NFD", f"  {sent.upper().replace(' ', '  ')}. ")
+    repeated = await focus_service.upsert_focus_item(agent_id, key=None, description=variant)
+    # Then: the same row and key are updated instead of creating a second row.
+    assert (repeated["id"], repeated["key"]) == (first["id"], first["key"])
+    assert len(dao.rows) == 1
+
+
+@pytest.mark.parametrize(("sent", "other"), MULTILINGUAL_PAIRS)
+async def test_keyless_multilingual_reuses_only_its_own_legacy_row(
+    monkeypatch: pytest.MonkeyPatch, sent: str, other: str
+) -> None:
+    # Given: a completed row that the old lossy slug stored for the first description.
+    agent_id = uuid4()
+    key = focus_service.slugify_focus_key(sent)
+    legacy = AgentFocusItemRecord(uuid4(), agent_id, key, description=sent, status=FocusStatus.COMPLETED)
+    monkeypatch.setattr(focus_service, "agent_focus_item_dao", FocusDAO([legacy]))
+    # When: that description is repeated with other spacing and punctuation, then a different one is saved.
+    variant = f" {sent.replace(' ', '  ')}. "
+    reused = await focus_service.upsert_focus_item(agent_id, key=None, description=variant)
+    separate = await focus_service.upsert_focus_item(agent_id, key=None, description=other)
+    # Then: the legacy row keeps its key and description and reopens; the other description gets its own row.
+    assert (reused["id"], reused["key"], reused["status"]) == (str(legacy.id), key, "in_progress")
+    assert separate["id"] != reused["id"]
+    assert legacy.description == variant.strip()
+
+
+@pytest.mark.parametrize("description", ["Ship the release!", "发布版本 2"])
+async def test_keyless_ascii_and_cjk_descriptions_keep_the_legacy_address(
+    monkeypatch: pytest.MonkeyPatch, description: str
+) -> None:
+    # Given: an empty store.
+    monkeypatch.setattr(focus_service, "agent_focus_item_dao", FocusDAO())
+    # When: a description fully covered by the legacy slug allowlist is saved without a key.
+    result = await focus_service.upsert_focus_item(uuid4(), key=None, description=description)
+    # Then: its address is still the plain legacy slug.
+    assert result["key"] == focus_service.slugify_focus_key(description)
+
+
+async def test_explicit_key_controls_a_multilingual_description(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: an item stored under an explicit key.
+    agent_id = uuid4()
+    item = AgentFocusItemRecord(uuid4(), agent_id, "weekly", description="old")
+    dao = FocusDAO([item])
+    monkeypatch.setattr(focus_service, "agent_focus_item_dao", dao)
+    # When: it is updated with a non-ASCII description and the same key.
+    result = await focus_service.upsert_focus_item(agent_id, key="weekly", description="Gửi báo cáo tuần")
+    # Then: the explicit key still addresses that row.
+    assert (result["id"], result["key"], len(dao.rows)) == (str(item.id), "weekly", 1)
 
 
 async def test_complete_focus_scopes_the_update(monkeypatch: pytest.MonkeyPatch) -> None:

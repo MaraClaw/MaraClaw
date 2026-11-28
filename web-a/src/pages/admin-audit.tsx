@@ -25,6 +25,7 @@ const emptyFilters = { action: '', target_type: '', tenant_id: '', actor_id: '',
 const timeFormat = { dateStyle: 'medium', timeStyle: 'short' } as const satisfies Intl.DateTimeFormatOptions
 const buttonClass = 'h-auto min-h-11 max-w-full whitespace-normal'
 const pageButtonClass = `${buttonClass} aria-disabled:pointer-events-none aria-disabled:opacity-50`
+const windowPresets = [['Last 24 hours', 24], ['Last 7 days', 7 * 24]] as const
 
 export function AdminAuditPage() {
   const { t, owned, number, date } = useTranslation()
@@ -49,6 +50,13 @@ export function AdminAuditPage() {
   function clearFilters() {
     form.reset(emptyFilters)
     applyFilters(emptyFilters)
+  }
+
+  function fillWindow(hours: number) {
+    const end = Date.now()
+    form.setValue('start_at', new Date(end - hours * 3_600_000).toISOString())
+    form.setValue('end_at', new Date(end).toISOString())
+    form.clearErrors(['start_at', 'end_at'])
   }
 
   function refreshActivity() {
@@ -88,6 +96,9 @@ export function AdminAuditPage() {
             <fieldset className="flex min-w-0 flex-col gap-3">
               <legend className="mb-2 text-sm font-medium">{t('Time window (optional)')}</legend>
               <p id={`${id}-window-help`} className="text-sm text-muted-foreground">{t('Use RFC 3339 with an offset, such as 2026-10-21T12:30:00Z or 2026-10-21T20:30:00+08:00. Start is inclusive; end is exclusive. Leave either blank for an open bound.')}</p>
+              <div className="flex flex-wrap gap-3">
+                {windowPresets.map(([label, hours]) => <Button key={label} type="button" variant="secondary" className={buttonClass} onClick={() => fillWindow(hours)}>{t(label)}</Button>)}
+              </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 {(['start_at', 'end_at'] as const).map((field) => (
                   <div key={field} className="flex min-w-0 flex-col gap-2">

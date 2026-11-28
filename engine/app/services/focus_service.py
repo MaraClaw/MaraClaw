@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 from typing import TypedDict
@@ -29,12 +31,50 @@ class SerializedFocusItem(TypedDict):
     updated_at: str | None
 
 
+_KEY_SEPARATORS = re.compile(r"[^a-z0-9\u4e00-\u9fff]+")
+_MAX_SLUG_LENGTH = 80
+_DIGEST_LENGTH = 16
+_MAX_KEY_LENGTH = 200
+
+
 def slugify_focus_key(value: str, *, fallback: str = "focus") -> str:
     """Create a stable ASCII-ish key usable as focus_ref."""
     raw = (value or "").strip().lower()
-    raw = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "_", raw)
+    raw = _KEY_SEPARATORS.sub("_", raw)
     raw = re.sub(r"_+", "_", raw).strip("_")
-    return (raw or fallback)[:80]
+    return (raw or fallback)[:_MAX_SLUG_LENGTH]
+
+
+def _is_word_character(char: str) -> bool:
+    return unicodedata.category(char)[0] in "LMN"
+
+
+def _normalize_description(description: str) -> str:
+    folded = unicodedata.normalize("NFC", description).casefold()
+    return " ".join("".join(char if _is_word_character(char) else " " for char in folded).split())
+
+
+def _slug_drops_letters(description: str) -> bool:
+    dropped = _KEY_SEPARATORS.finditer(description.strip().lower())
+    return any(_is_word_character(char) for match in dropped for char in match.group())
+
+
+def _holds_description(item: AgentFocusItemRecord | None, description: str) -> bool:
+    return item is not None and _normalize_description(item.description) == _normalize_description(description)
+
+
+def _digest_focus_key(description: str) -> str:
+    text = _normalize_description(description)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:_DIGEST_LENGTH]
+    prefix = slugify_focus_key(text)[: _MAX_SLUG_LENGTH - 1 - _DIGEST_LENGTH].rstrip("_")
+    return f"{prefix}_{digest}"
+
+
+def _scoped_key(key: str, kind: FocusKind) -> str:
+    key = key[:_MAX_KEY_LENGTH]
+    if kind == "system" and not key.startswith("system:"):
+        key = f"system:{key}"[:_MAX_KEY_LENGTH]
+    return key
 
 
 def is_focus_file_path(path: str | None) -> bool:
@@ -77,12 +117,13 @@ async def upsert_focus_item(
     metadata: JsonObject | None = None,
 ) -> SerializedFocusItem:
     desc = (description or "").strip()
-    item_key = (key or "").strip() or slugify_focus_key(desc)
-    item_key = item_key[:200]
-    if kind == "system" and not item_key.startswith("system:"):
-        item_key = f"system:{item_key}"[:200]
-
+    explicit_key = (key or "").strip()
+    item_key = _scoped_key(explicit_key or slugify_focus_key(desc), kind)
     item = await agent_focus_item_dao.get_by_key(agent_id, item_key)
+    if not explicit_key and _slug_drops_letters(desc) and not _holds_description(item, desc):
+        # Distinct non-ASCII texts collapse to one slug: only a legacy row holding this very text keeps the slug key.
+        item_key = _scoped_key(_digest_focus_key(desc), kind)
+        item = await agent_focus_item_dao.get_by_key(agent_id, item_key)
     if item:
         updates: dict[str, str | datetime | JsonObject | None] = {
             "description": desc or item.description or item_key,

@@ -418,7 +418,7 @@ async def send_email(
                 _ = outgoing.write(msg.as_bytes(policy=_WIRE_POLICY))
             _ = outgoing.seek(0)
             # Never abandoned on cancel: `outgoing` closes when this block ends, and a half-written DATA must finish.
-            _ = await AGENT_EMAIL_LANE.run(
+            refused = await AGENT_EMAIL_LANE.run(
                 partial(
                     send_smtp_stream,
                     host=cfg["smtp_host"],
@@ -431,6 +431,15 @@ async def send_email(
                     use_ssl=cfg.get("smtp_ssl", True),
                     timeout=_EXCHANGE_TIMEOUT_SECONDS,
                 )
+            )
+
+        if refused:
+            unique = list(dict.fromkeys(recipients))
+            return (
+                "⚠️ Email partially sent. Accepted by the SMTP relay: "
+                f"{', '.join(r for r in unique if r not in refused)}. "
+                f"Refused: {', '.join(r for r in unique if r in refused)}. "
+                "Do not resend to the accepted recipients."
             )
 
         return f"✅ Email sent to {to}" + (f" (CC: {cc})" if cc not in (None, "") else "")

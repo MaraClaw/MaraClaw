@@ -9,6 +9,7 @@ export const vietnamese = {
   'Platform search volume, quota pressure, and queries that appear across companies.': 'Lượng tìm kiếm, mức sử dụng hạn mức và các truy vấn xuất hiện ở nhiều công ty trên nền tảng.',
   'This company’s share of platform search, errors, and what its agents look up.': 'Tỷ trọng tìm kiếm của công ty trên nền tảng, các lỗi và nội dung trợ lý tra cứu.',
   'Range': 'Khoảng thời gian',
+  'Last 24 hours': '24 giờ qua',
   'Last 7 days': '7 ngày qua',
   'Last 30 days': '30 ngày qua',
   'Last 90 days': '90 ngày qua',
