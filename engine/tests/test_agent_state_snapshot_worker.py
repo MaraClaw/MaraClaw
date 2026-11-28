@@ -5,6 +5,7 @@ import fcntl
 import os
 import shutil
 import tarfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
@@ -18,6 +19,7 @@ from pywhales import DockerClient
 
 from app.config import get_settings
 from app.records.agent import AgentRecord
+from app.records.organization_plan import OrganizationPlanId
 from app.services import (
     agent_state_snapshot as snapshots,
     agent_state_snapshot_tracker as tracking,
@@ -94,7 +96,7 @@ class World:
         return self.root / "_setup_locks" / f"{self.agent.id}{suffix}"
 
     async def snapshot(self) -> SnapshotOutcome:
-        return await worker.snapshot_agent(cast("DockerClient", self.docker), self.agent, self.tracker)
+        return await worker.snapshot_agent(cast("DockerClient", self.docker), self.agent, self.tracker, cadence=None)
 
     def names(self) -> list[str]:
         prefix = agent_prefix(self.agent.id)
@@ -485,27 +487,25 @@ async def test_the_loop_clears_its_own_leftovers_then_snapshots_every_agent_and_
     second = AgentRecord(id=uuid4(), name="Stopped", creator_id=uuid4())
     world.agents.rows[second.id] = second
     monkeypatch.setattr(worker.agent_manager, "docker_client", world.docker)
-    sleeps: list[float] = []
 
-    async def paced(seconds: float) -> None:
-        sleeps.append(seconds)
-        await worker_http.pacing.wait(seconds)
+    async def pro_tiers(tenant_ids: Sequence[UUID]) -> dict[UUID, OrganizationPlanId]:
+        return dict.fromkeys(tenant_ids, OrganizationPlanId.PRO)
 
-    monkeypatch.setattr(worker, "sleep", paced)
+    monkeypatch.setattr(worker, "sleep", worker_http.pacing.wait)
+    monkeypatch.setattr(worker.tenant_dao, "tiers_for", pro_tiers)
     # When the loop starts and finishes its first pass.
     task = worker_http.start_loop(
         "agent_state_snapshot",
         worker.start_agent_state_snapshot_worker(),
         budget_seconds=worker.progress_budget_seconds(),
     )
-    await worker_http.pacing.paused()
+    assert await worker_http.pacing.next_wait() == get_settings().AGENT_STATE_SNAPSHOT_INTERVAL_SECONDS
     # Then only the backup leftovers were removed, the agent with state was published, and the loop slept the interval.
     assert world.docker.container.removed == [("stale-backup", True)]
     assert (create.exists(), restore.exists()) == (False, True)
     assert len(world.names()) == 1
     assert not (world.root / str(second.id)).exists()
     assert world.agents.pages == [None]
-    assert sleeps == [get_settings().AGENT_STATE_SNAPSHOT_INTERVAL_SECONDS]
     worker_http.pacing.now += worker.progress_budget_seconds() - 1
     await worker_http.ready(expected=True)
     assert not task.done()
