@@ -27,6 +27,6 @@ Backend application boundary. Nested `AGENTS.md` files own local contracts.
 
 ## Avoid
 
-- Do not use `create_all` or Alembic. Edit only `../scripts/schema_baseline.sql`; initialization is fresh-only, with no upgrade patches beyond the eight explicit exceptions in `scripts/AGENTS.md` (including the `telegram` / `zalo` channel enum additions and the guarded gateway report plan-check replacement).
+- Do not use `create_all` or Alembic. Put schema definitions in `../scripts/schema_baseline.sql`. Initialization supports fresh installs and only the explicit legacy upgrades in `scripts/AGENTS.md`.
 - Use `app.core.logging`; `logging.getLogger` is restricted to `core/logging/intercept.py`.
 - Do not inherit process `HTTP_PROXY` into sandbox guests.
