@@ -2,8 +2,9 @@
 
 The only supported legacy upgrades are the explicit guarded ``DO`` blocks in the baseline (``tasks`` lease columns,
 organization admission provisioning, ``approval_requests.execution_args``, ``gateway_messages.reply_binding_id``,
-``chat_history_changes.recorded_at``, ``users.membership_generation``, gateway report plan versions),
-plus the Telegram/Zalo channel enum additions.
+``chat_history_changes.recorded_at``, ``users.membership_generation``, gateway report plan versions,
+workspace usage, trigger due times, gateway delivery failures, and workspace file revisions),
+plus the Telegram/Zalo channel enum additions. The trigger upgrade also backfills due times in this transaction.
 Schema errors are fatal, except lock timeouts and deadlocks: those retry the whole transaction a few times.
 """
 
@@ -11,10 +12,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from uuid import NIL, UUID
 
 import anyio
 import psycopg
 
+from app.core.json_types import uuid_from_row
+from app.dao.trigger_dao import agent_trigger_dao
+from app.db.connection import DbConnection
 from app.db.errors import DbError
 from app.db.pool import close_pool, init_pool
 from app.db.session import connection_ctx, long_running_statement
@@ -35,6 +40,8 @@ _MAX_ATTEMPTS = 5
 _RETRY_DELAY_SECONDS = 1.0
 _LOCK_NOT_AVAILABLE = "55P03"
 _DEADLOCK_DETECTED = "40P01"
+_TRIGGER_DUE_UPGRADE = "maraclaw.trigger_due_upgrade"
+_TRIGGER_DUE_BATCH_SIZE = 1_000
 
 
 def _clean_statement(stmt: str) -> str:
@@ -166,14 +173,37 @@ def _is_retryable(exc: DbError | psycopg.Error) -> bool:
     return isinstance(cause, psycopg.Error) and cause.sqlstate in (_LOCK_NOT_AVAILABLE, _DEADLOCK_DETECTED)
 
 
-async def _apply_once(bodies: list[str]) -> None:
+async def _backfill_trigger_due_times(conn: DbConnection) -> None:
+    after: UUID | None = None
+    while True:
+        rows = await conn.fetchall(
+            "SELECT id FROM agent_triggers WHERE is_enabled IS TRUE "
+            "AND id >= %(start)s AND id IS DISTINCT FROM %(after)s ORDER BY id LIMIT %(limit)s",
+            {"start": after or NIL, "after": after, "limit": _TRIGGER_DUE_BATCH_SIZE},
+        )
+        if not rows:
+            return
+        ids = [uuid_from_row(row["id"]) for row in rows]
+        _ = await agent_trigger_dao.reschedule(ids)
+        after = ids[-1]
+
+
+async def _apply_once(bodies: list[str], *, schema_baseline: bool) -> None:
     # Lifting statement_timeout comes first so waiting for a peer's run is not cut off by it. The advisory lock then
     # precedes the lock bound, so the wait for the peer is unbounded and only waits on the schema itself are not.
     async with connection_ctx() as conn, long_running_statement(conn):
         await conn.execute(_ADVISORY_LOCK_SQL, {"key": _ADVISORY_LOCK_KEY})
         await conn.execute(_LOCK_TIMEOUT_SQL, {"milliseconds": str(_LOCK_TIMEOUT_MS)})
+        if schema_baseline:
+            await conn.execute("SELECT set_config(%(key)s, 'ready', true)", {"key": _TRIGGER_DUE_UPGRADE})
         for body in bodies:
             await conn.execute(body)
+        if schema_baseline:
+            upgrade = await conn.fetchone(
+                "SELECT current_setting(%(key)s, true) AS trigger_due_upgrade", {"key": _TRIGGER_DUE_UPGRADE}
+            )
+            if upgrade is not None and upgrade["trigger_due_upgrade"] == "added":
+                await _backfill_trigger_due_times(conn)
 
 
 async def _apply_sql_script(path: Path) -> None:
@@ -181,7 +211,7 @@ async def _apply_sql_script(path: Path) -> None:
     bodies = _statement_bodies(sql)
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            await _apply_once(bodies)
+            await _apply_once(bodies, schema_baseline=path == SCHEMA_BASELINE)
         except (DbError, psycopg.Error) as exc:
             if attempt == _MAX_ATTEMPTS or not _is_retryable(exc):
                 raise
