@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator, model_validator
 
 from app.api.agent_credential_validation import CredentialSafeRoute
+from app.api.agentbay_interaction_lock import InteractionEntry, InteractionKey, InteractionLock
 from app.core.domain.control import ControlEnvironment, ControlStatus
 from app.core.logging import logger
 from app.core.permissions import check_agent_access
@@ -90,15 +91,11 @@ def _mapping_str(value: object, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
-_tc_interaction_locks: dict[str, asyncio.Lock] = {}
+_tc_interaction_locks: dict[InteractionKey, InteractionEntry] = {}
 
 
-def _get_interaction_lock(agent_id: uuid.UUID, session_id: str) -> asyncio.Lock:
-    """Get or create the per-session asyncio.Lock for TC interactions."""
-    key = f"{agent_id}:{session_id}"
-    if key not in _tc_interaction_locks:
-        _tc_interaction_locks[key] = asyncio.Lock()
-    return _tc_interaction_locks[key]
+def _get_interaction_lock(agent_id: uuid.UUID, session_id: str) -> InteractionLock:
+    return InteractionLock(_tc_interaction_locks, (agent_id, session_id))
 
 
 class ControlRequest(BaseModel):

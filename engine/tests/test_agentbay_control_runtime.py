@@ -207,3 +207,41 @@ async def test_action_rechecks_ownership_after_queue_wait(surface: ControlSurfac
 
     assert responses == [409]
     assert surface.store.remotes[0].executed == []
+    assert not control._tc_interaction_locks
+
+
+async def test_interaction_lock_cancellation_and_handoff_retire_only_the_last_user(surface: ControlSurface) -> None:
+    agent = uuid.UUID(surface.key.agent_id)
+    first = control._get_interaction_lock(agent, "chat")
+    await first.acquire()
+    entered = anyio.Event()
+    leave = anyio.Event()
+    scope = anyio.CancelScope()
+
+    async def cancelled_waiter() -> None:
+        with scope:
+            async with control._get_interaction_lock(agent, "chat"):
+                pytest.fail("the first lock still holds the session")
+
+    async def next_holder() -> None:
+        async with control._get_interaction_lock(agent, "chat"):
+            entered.set()
+            await leave.wait()
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(cancelled_waiter)
+        tasks.start_soon(next_holder)
+        await anyio.wait_all_tasks_blocked()
+        scope.cancel()
+        await anyio.wait_all_tasks_blocked()
+        assert not entered.is_set()
+        first.release()
+        with anyio.fail_after(2):
+            await entered.wait()
+        assert first.locked()
+        assert len(control._tc_interaction_locks) == 1
+        leave.set()
+    assert not control._tc_interaction_locks
+    async with first:
+        assert control._get_interaction_lock(agent, "chat").locked()
+    assert not control._tc_interaction_locks
